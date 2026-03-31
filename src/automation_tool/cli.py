@@ -296,6 +296,12 @@ def cmd_mt5_trade(args: argparse.Namespace) -> None:
     print(out.message)
     if out.request:
         print("request/preview:", out.request)
+    if out.last_error is not None:
+        print("mt5.last_error:", out.last_error)
+    if out.trade_check is not None:
+        print("order_check (trade_check):", out.trade_check)
+    if out.trade_result is not None:
+        print("order_send (trade_result):", out.trade_result)
     if not out.ok:
         raise SystemExit(1)
 

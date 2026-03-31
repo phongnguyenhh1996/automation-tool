@@ -26,6 +26,11 @@ class MT5ExecutionResult:
     order: Optional[int] = None
     deal: Optional[int] = None
     request: Optional[dict[str, Any]] = None
+    # Tuple (code, message) từ mt5.last_error() sau thao tác lỗi (nếu có)
+    last_error: Optional[tuple[Any, ...]] = None
+    # Cấu trúc server trả về (order_send / order_check) khi có
+    trade_check: Optional[dict[str, Any]] = None
+    trade_result: Optional[dict[str, Any]] = None
 
 
 @dataclass
@@ -67,8 +72,7 @@ def check_mt5_login(
         )
 
     if not mt5.initialize(**kwargs):
-        err = mt5.last_error()
-        lines.append(f"mt5.initialize thất bại: {err}")
+        lines.append(f"mt5.initialize thất bại: {format_last_error(mt5)}")
         return MT5LoginResult(ok=False, lines=lines)
 
     try:
@@ -80,7 +84,10 @@ def check_mt5_login(
             )
         ai = mt5.account_info()
         if ai is None:
-            lines.append("account_info trả về None — chưa có tài khoản kết nối hoặc lỗi.")
+            lines.append(
+                f"account_info trả về None — chưa có tài khoản kết nối hoặc lỗi. "
+                f"{format_last_error(mt5)}",
+            )
             return MT5LoginResult(ok=False, lines=lines)
 
         lines.append("Đăng nhập OK — account_info:")
@@ -113,6 +120,92 @@ def _load_mt5():
     return mt5
 
 
+def _last_error_tuple(mt5: Any) -> Optional[tuple[Any, ...]]:
+    try:
+        t = mt5.last_error()
+        if t is None:
+            return None
+        if isinstance(t, tuple) and len(t) == 0:
+            return None
+        return t
+    except Exception:
+        return None
+
+
+def format_last_error(mt5: Any) -> str:
+    """Chuỗi mô tả ``mt5.last_error()`` (thường là ``(code, message)``)."""
+    t = _last_error_tuple(mt5)
+    if t is None:
+        return "last_error=None"
+    if isinstance(t, tuple) and len(t) >= 2:
+        code, msg = t[0], t[1]
+        return f"code={code} message={msg!r}"
+    return f"last_error={t!r}"
+
+
+def _retcode_label(mt5: Any, code: Optional[int]) -> str:
+    if code is None:
+        return "None"
+    try:
+        ic = int(code)
+    except (TypeError, ValueError):
+        return str(code)
+    for name in dir(mt5):
+        if not name.startswith("TRADE_RETCODE_"):
+            continue
+        try:
+            if int(getattr(mt5, name)) == ic:
+                return f"{name}({ic})"
+        except (TypeError, ValueError):
+            continue
+    return str(ic)
+
+
+def _object_fields_dict(obj: Any, names: tuple[str, ...]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for name in names:
+        if hasattr(obj, name):
+            try:
+                out[name] = getattr(obj, name)
+            except Exception as exc:  # noqa: BLE001
+                out[name] = f"<{exc}>"
+    return out
+
+
+def _trade_check_dict(chk: Any) -> dict[str, Any]:
+    return _object_fields_dict(
+        chk,
+        (
+            "retcode",
+            "balance",
+            "equity",
+            "profit",
+            "margin",
+            "margin_free",
+            "margin_level",
+            "comment",
+        ),
+    )
+
+
+def _trade_result_dict(ret: Any) -> dict[str, Any]:
+    return _object_fields_dict(
+        ret,
+        (
+            "retcode",
+            "deal",
+            "order",
+            "volume",
+            "price",
+            "bid",
+            "ask",
+            "comment",
+            "request_id",
+            "retcode_external",
+        ),
+    )
+
+
 def _filling_for_symbol(mt5: Any, symbol: str) -> int:
     info = mt5.symbol_info(symbol)
     if info is None:
@@ -141,7 +234,10 @@ def _order_type_for_pending(trade: ParsedTrade, mt5: Any) -> int:
 
 def _ensure_symbol(mt5: Any, symbol: str) -> Optional[str]:
     if not mt5.symbol_select(symbol, True):
-        return f"Không chọn được symbol {symbol!r} (không có trong Market Watch?)."
+        return (
+            f"symbol_select({symbol!r}) thất bại (không có trong Market Watch?). "
+            f"{format_last_error(mt5)}"
+        )
     return None
 
 
@@ -162,7 +258,9 @@ def build_request(
     if trade.kind == "MARKET":
         tick = mt5.symbol_info_tick(sym)
         if tick is None:
-            raise RuntimeError(f"Không lấy được tick cho {sym}.")
+            raise RuntimeError(
+                f"symbol_info_tick({sym!r}) trả về None. {format_last_error(mt5)}",
+            )
         price = tick.ask if trade.side == "BUY" else tick.bid
         otype = mt5.ORDER_TYPE_BUY if trade.side == "BUY" else mt5.ORDER_TYPE_SELL
         return {
@@ -256,10 +354,11 @@ def execute_trade(
         kwargs["server"] = server_s
 
     if not mt5.initialize(**kwargs):
-        err = mt5.last_error()
+        le = _last_error_tuple(mt5)
         return MT5ExecutionResult(
             ok=False,
-            message=f"mt5.initialize thất bại: {err}",
+            message=f"mt5.initialize thất bại: {format_last_error(mt5)}",
+            last_error=le,
         )
 
     try:
@@ -271,48 +370,77 @@ def execute_trade(
                 magic=mag,
             )
         except RuntimeError as e:
-            return MT5ExecutionResult(ok=False, message=str(e))
+            le = _last_error_tuple(mt5)
+            return MT5ExecutionResult(
+                ok=False,
+                message=f"{e}",
+                last_error=le,
+            )
 
         chk = mt5.order_check(request)
         if chk is None:
+            le = _last_error_tuple(mt5)
             return MT5ExecutionResult(
                 ok=False,
-                message=f"order_check failed: {mt5.last_error()}",
+                message=f"order_check trả về None. {format_last_error(mt5)}",
+                last_error=le,
                 request=request,
             )
         chk_rc = getattr(chk, "retcode", None)
+        chk_d = _trade_check_dict(chk)
         if chk_rc is not None and chk_rc != mt5.TRADE_RETCODE_DONE:
+            le = _last_error_tuple(mt5)
             return MT5ExecutionResult(
                 ok=False,
-                message=f"order_check retcode={chk_rc} balance={getattr(chk, 'balance', None)}",
+                message=(
+                    f"order_check không đạt: retcode={_retcode_label(mt5, chk_rc)} "
+                    f"trade_check={chk_d!r} {format_last_error(mt5)}"
+                ),
+                retcode=int(chk_rc) if chk_rc is not None else None,
+                last_error=le,
+                trade_check=chk_d,
                 request=request,
             )
         ret = mt5.order_send(request)
         if ret is None:
+            le = _last_error_tuple(mt5)
             return MT5ExecutionResult(
                 ok=False,
-                message=f"order_send None: {mt5.last_error()}",
+                message=f"order_send trả về None. {format_last_error(mt5)}",
+                last_error=le,
                 request=request,
             )
         rc = getattr(ret, "retcode", None)
+        rd = _trade_result_dict(ret)
         ok_codes = {mt5.TRADE_RETCODE_DONE}
         placed = getattr(mt5, "TRADE_RETCODE_PLACED", None)
         if placed is not None:
             ok_codes.add(placed)
         if rc not in ok_codes:
+            le = _last_error_tuple(mt5)
             return MT5ExecutionResult(
                 ok=False,
-                message=f"Lỗi retcode={rc} comment={getattr(ret, 'comment', '')!r}{extra}",
+                message=(
+                    f"order_send thất bại: retcode={_retcode_label(mt5, rc)} "
+                    f"trade_result={rd!r} {format_last_error(mt5)}{extra}"
+                ),
                 retcode=int(rc) if rc is not None else None,
+                last_error=le,
+                trade_result=rd,
                 request=request,
             )
+        rc_int = int(rc) if rc is not None else None
         return MT5ExecutionResult(
             ok=True,
-            message=f"OK: order={getattr(ret, 'order', None)} deal={getattr(ret, 'deal', None)}{extra}",
-            retcode=int(rc) if rc is not None else None,
+            message=(
+                f"OK: {_retcode_label(mt5, rc)} order={getattr(ret, 'order', None)} "
+                f"deal={getattr(ret, 'deal', None)} trade_result={rd!r}{extra}"
+            ),
+            retcode=rc_int,
             order=getattr(ret, "order", None),
             deal=getattr(ret, "deal", None),
             request=request,
+            trade_result=rd,
         )
     finally:
         mt5.shutdown()
