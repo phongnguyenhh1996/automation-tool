@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import Optional, Tuple
 
-from playwright.sync_api import Browser, BrowserContext, Playwright
+from playwright.sync_api import Browser, BrowserContext, Error as PlaywrightError, Playwright
 
 # Google Chrome installed on the system (not Playwright's bundled Chromium).
 _CHROME_CHANNEL = "chrome"
@@ -25,8 +26,25 @@ def chrome_user_data_dir_from_env() -> Optional[Path]:
 
 
 def launch_chrome(p: Playwright, *, headless: bool) -> Browser:
-    """Launch Chrome with a fresh temporary profile (isolated from your daily Chrome)."""
-    return p.chromium.launch(channel=_CHROME_CHANNEL, headless=headless)
+    """
+    Launch a Chromium-based browser with a fresh temporary profile.
+
+    Preference order:
+    1) Channel from PLAYWRIGHT_CHANNEL or "chrome"
+    2) Bundled Playwright Chromium (fallback when channel is unavailable)
+    """
+    channel = (os.getenv("PLAYWRIGHT_CHANNEL") or _CHROME_CHANNEL).strip()
+    try:
+        return p.chromium.launch(channel=channel, headless=headless)
+    except PlaywrightError as exc:
+        # Common on locked-down VPS where Chrome/Edge channel is missing.
+        print(
+            f"[playwright_browser] channel='{channel}' unavailable; "
+            f"falling back to bundled Chromium. Details: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return p.chromium.launch(headless=headless)
 
 
 def launch_chrome_context(
@@ -50,21 +68,44 @@ def launch_chrome_context(
     """
     viewport = {"width": viewport_width, "height": viewport_height}
 
+    channel = (os.getenv("PLAYWRIGHT_CHANNEL") or _CHROME_CHANNEL).strip()
     user_data = chrome_user_data_dir_from_env()
     if user_data is not None:
         user_data.mkdir(parents=True, exist_ok=True)
         # launch_persistent_context does not accept storage_state in this Playwright API;
         # session data lives in user_data_dir only.
-        ctx = p.chromium.launch_persistent_context(
-            str(user_data),
-            channel=_CHROME_CHANNEL,
-            headless=headless,
-            viewport=viewport,
-        )
+        try:
+            ctx = p.chromium.launch_persistent_context(
+                str(user_data),
+                channel=channel,
+                headless=headless,
+                viewport=viewport,
+            )
+        except PlaywrightError as exc:
+            print(
+                f"[playwright_browser] persistent channel='{channel}' unavailable; "
+                f"falling back to bundled Chromium. Details: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
+            ctx = p.chromium.launch_persistent_context(
+                str(user_data),
+                headless=headless,
+                viewport=viewport,
+            )
         return None, ctx
 
     ss = str(storage_state_path) if storage_state_path and storage_state_path.exists() else None
-    browser = p.chromium.launch(channel=_CHROME_CHANNEL, headless=headless)
+    try:
+        browser = p.chromium.launch(channel=channel, headless=headless)
+    except PlaywrightError as exc:
+        print(
+            f"[playwright_browser] channel='{channel}' unavailable; "
+            f"falling back to bundled Chromium. Details: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+        browser = p.chromium.launch(headless=headless)
     ctx = browser.new_context(viewport=viewport, storage_state=ss)
     return browser, ctx
 
