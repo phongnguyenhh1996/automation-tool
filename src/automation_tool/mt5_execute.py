@@ -12,8 +12,10 @@ với ``--execute``. Nếu không đặt ``MT5_LOGIN`` / ``MT5_PASSWORD`` / ``MT
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Optional
+
+import automation_tool.config  # noqa: F401 — nạp .env từ root project khi chỉ import mt5_execute
 
 from automation_tool.mt5_openai_parse import ParsedTrade
 
@@ -380,7 +382,14 @@ def execute_trade(
     Gửi lệnh qua MetaTrader5. MT5 chỉ có một TP trên lệnh; TP2 được in ra nếu có.
 
     Credentials: env ``MT5_LOGIN``, ``MT5_PASSWORD``, ``MT5_SERVER`` hoặc tham số.
+
+    Nếu đặt ``MT5_SYMBOL`` trong ``.env`` (vd. ``XAUUSDm``), luôn dùng tên đó khi gửi lệnh
+    (ghi đè symbol đã parse từ markdown).
     """
+    env_sym = (os.getenv("MT5_SYMBOL") or "").strip()
+    if env_sym:
+        trade = replace(trade, symbol=env_sym)
+
     login_i = login if login is not None else _env_int("MT5_LOGIN", 0)
     password_s = password if password is not None else (os.getenv("MT5_PASSWORD") or "")
     server_s = server if server is not None else (os.getenv("MT5_SERVER") or "")

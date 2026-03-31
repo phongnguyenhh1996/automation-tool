@@ -8,6 +8,12 @@ from automation_tool.mt5_openai_parse import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_mt5_symbol_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Không để MT5_SYMBOL trong .env máy dev làm sai kết quả test."""
+    monkeypatch.delenv("MT5_SYMBOL", raising=False)
+
+
 def test_parse_sample_output_md() -> None:
     text = """
 [OUTPUT_NGAN_GON]

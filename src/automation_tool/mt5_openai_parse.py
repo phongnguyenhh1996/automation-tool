@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import re
+
+import automation_tool.config  # noqa: F401 — nạp .env từ root project (MT5_SYMBOL, …)
 from dataclasses import dataclass
 from typing import Literal, Optional
 

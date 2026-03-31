@@ -7,6 +7,9 @@ from typing import List, Optional
 
 from dotenv import load_dotenv
 
+# Nạp .env trong thư mục gốc project (không phụ thuộc cwd — tránh mất MT5_SYMBOL khi chạy từ VPS path khác).
+_ROOT = Path(__file__).resolve().parents[2]
+load_dotenv(_ROOT / ".env")
 load_dotenv()
 
 
@@ -48,7 +51,7 @@ class Settings:
 
 
 def _root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    return _ROOT
 
 
 def default_data_dir() -> Path:
