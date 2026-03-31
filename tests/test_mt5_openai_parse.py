@@ -1,18 +1,9 @@
 from __future__ import annotations
 
-import pytest
-
 from automation_tool.mt5_openai_parse import (
     parse_openai_output_md,
     parse_trade_line,
 )
-
-
-@pytest.fixture(autouse=True)
-def _isolate_mt5_symbol_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Không để MT5_SYMBOL trong env hoặc file .env máy dev làm sai kết quả test."""
-    monkeypatch.delenv("MT5_SYMBOL", raising=False)
-    monkeypatch.setattr("automation_tool.config.read_dotenv_value", lambda _key: "")
 
 
 def test_parse_sample_output_md() -> None:
@@ -28,7 +19,7 @@ Hành động: VÀO LỆNH
     trade, err = parse_openai_output_md(text, default_symbol="XAUUSD")
     assert err is None
     assert trade is not None
-    assert trade.symbol == "XAUUSD"
+    assert trade.symbol == "XAUUSDm"
     assert trade.side == "SELL"
     assert trade.kind == "LIMIT"
     assert trade.price == 3360.0
@@ -38,9 +29,8 @@ Hành động: VÀO LỆNH
     assert trade.lot == 0.02
 
 
-def test_mt5_symbol_env_overrides_markdown_hint(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Broker chỉ có XAUUSDm: MT5_SYMBOL thắng hint 📊 XAUUSD trong markdown."""
-    monkeypatch.setenv("MT5_SYMBOL", "XAUUSDm")
+def test_markdown_xauusd_hint_becomes_xauusdm() -> None:
+    """Hint 📊 XAUUSD trong markdown được chuẩn hóa thành XAUUSDm."""
     text = """
 📊 XAUUSD – PHÂN TÍCH
 [OUTPUT_NGAN_GON]
@@ -53,7 +43,7 @@ Hành động: VÀO LỆNH
     assert trade.symbol == "XAUUSDm"
 
 
-def test_symbol_override() -> None:
+def test_symbol_override_xauusd_normalized() -> None:
     text = """
 [OUTPUT_NGAN_GON]
 BUY LIMIT 100.0 | SL 99.0 | TP1 101.0 | Lot 0.01
@@ -62,7 +52,7 @@ Hành động: VÀO LỆNH
     trade, err = parse_openai_output_md(
         text,
         default_symbol="XAUUSD",
-        symbol_override="XAUUSDm",
+        symbol_override="XAUUSD",
     )
     assert err is None
     assert trade is not None
@@ -109,4 +99,5 @@ Hành động: VÀO LỆNH
     trade, err = parse_openai_output_md(text, default_symbol="XAUUSD")
     assert err is None
     assert trade is not None
+    assert trade.symbol == "XAUUSDm"
     assert trade.side == "SELL"

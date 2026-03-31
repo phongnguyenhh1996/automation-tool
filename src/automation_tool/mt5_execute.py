@@ -13,15 +13,11 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, replace
-from pathlib import Path
 from typing import Any, Optional
 
-from dotenv import load_dotenv
-
 import automation_tool.config  # noqa: F401 — nạp .env khi import
-from automation_tool.config import effective_mt5_symbol, load_all_dotenv
 
-from automation_tool.mt5_openai_parse import ParsedTrade
+from automation_tool.mt5_openai_parse import ParsedTrade, normalize_broker_xau_symbol
 
 
 @dataclass
@@ -37,7 +33,7 @@ class MT5ExecutionResult:
     # Cấu trúc server trả về (order_send / order_check) khi có
     trade_check: Optional[dict[str, Any]] = None
     trade_result: Optional[dict[str, Any]] = None
-    # Symbol thực tế dùng sau khi áp CLI / MT5_SYMBOL / .env
+    # Symbol thực tế dùng sau khi áp CLI và chuẩn hóa XAUUSD → XAUUSDm
     resolved_symbol: Optional[str] = None
 
 
@@ -327,8 +323,7 @@ def _ensure_symbol(mt5: Any, symbol: str) -> Optional[str]:
         tail = _format_last_error_if_meaningful(mt5)
         return (
             f"symbol_info({symbol!r}) không tồn tại trên broker — không thể giao dịch tên này. "
-            f"Đặt MT5_SYMBOL trong .env đúng tên trong Market Watch (vd. XAUUSDm), "
-            f"hoặc chạy từ thư mục có file .env (hoặc --symbol XAUUSDm). "
+            f"Đối chiếu tên trong Market Watch (vàng thường là XAUUSDm); có thể ``--symbol <tên đúng>``. "
             f"{sug}{tail}"
         )
 
@@ -418,17 +413,12 @@ def _normalize_symbol_str(val: Optional[str]) -> str:
 
 def resolve_mt5_trade_symbol(trade: ParsedTrade, symbol_override: Optional[str]) -> ParsedTrade:
     """
-    Thứ tự: ``--symbol`` CLI > ``MT5_SYMBOL`` (env + đọc trực tiếp ``.env``) > giữ symbol đã parse.
+    ``--symbol`` CLI (nếu có) thay symbol đã parse; sau đó ``XAUUSD`` → ``XAUUSDm`` (broker).
     """
-    load_all_dotenv()
-    load_dotenv(Path.cwd() / ".env", override=True)
     ovr = _normalize_symbol_str(symbol_override)
-    env_sym = _normalize_symbol_str(effective_mt5_symbol())
-    if ovr:
-        return replace(trade, symbol=ovr)
-    if env_sym:
-        return replace(trade, symbol=env_sym)
-    return trade
+    base = ovr if ovr else trade.symbol
+    sym = normalize_broker_xau_symbol(base)
+    return replace(trade, symbol=sym)
 
 
 def execute_trade(
@@ -448,7 +438,7 @@ def execute_trade(
 
     Credentials: env ``MT5_LOGIN``, ``MT5_PASSWORD``, ``MT5_SERVER`` hoặc tham số.
 
-    Symbol: ``symbol_override`` (CLI ``--symbol``) > ``MT5_SYMBOL`` trong ``.env`` > symbol đã parse.
+    Symbol: ``symbol_override`` (CLI ``--symbol``) nếu có, không thì symbol đã parse; luôn chuẩn hóa ``XAUUSD`` → ``XAUUSDm``.
     """
     trade = resolve_mt5_trade_symbol(trade, symbol_override)
 

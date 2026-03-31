@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import re
 
-import automation_tool.config  # noqa: F401 — nạp .env từ root project (MT5_SYMBOL, …)
-from automation_tool.config import effective_mt5_symbol
+import automation_tool.config  # noqa: F401 — nạp .env khi import (OPENAI_*, …)
 from dataclasses import dataclass
 from typing import Literal, Optional
 
@@ -36,6 +35,20 @@ _RE_SYMBOL_HEADING = re.compile(
     r"📊\s*([A-Z0-9]+)\s*[–\-—]",
     re.UNICODE,
 )
+
+
+def normalize_broker_xau_symbol(symbol: str) -> str:
+    """
+    Broker MetaTrader thường dùng ``XAUUSDm``; markdown hay ghi ``XAUUSD``.
+    Chỉ đổi khi đúng mã ``XAUUSD`` (không đụng ``XAUUSDm`` hay tên khác).
+    """
+    s = (symbol or "").strip().strip('"').strip("'")
+    if not s:
+        return s
+    if s.upper() == "XAUUSD":
+        xau_on_broker = "XAUUSDm"
+        return xau_on_broker
+    return s
 
 
 @dataclass(frozen=True)
@@ -161,14 +174,9 @@ def parse_openai_output_md(
     Returns:
         (ParsedTrade or None, error message or None)
     """
-    # --symbol > MT5_SYMBOL (.env + đọc file) > hint từ text (📊 XAUUSD) > default_symbol.
-    # Nhiều broker chỉ có XAUUSDm: đặt MT5_SYMBOL=XAUUSDm để không bị hint "XAUUSD" ghi đè.
-    sym = (
-        (symbol_override or "").strip()
-        or effective_mt5_symbol()
-        or extract_symbol_hint(text)
-        or default_symbol
-    )
+    # --symbol CLI > hint từ text (📊 XAUUSD) > default_symbol; ``XAUUSD`` → ``XAUUSDm`` (broker).
+    sym = (symbol_override or "").strip() or extract_symbol_hint(text) or default_symbol
+    sym = normalize_broker_xau_symbol(sym)
     block = extract_output_ngan_gon_block(text)
     if not block:
         return None, "Không tìm thấy [OUTPUT_NGAN_GON]."
