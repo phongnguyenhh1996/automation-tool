@@ -28,6 +28,79 @@ class MT5ExecutionResult:
     request: Optional[dict[str, Any]] = None
 
 
+@dataclass
+class MT5LoginResult:
+    """Kết quả ``mt5-login``: initialize + ``account_info``."""
+
+    ok: bool
+    lines: list[str]
+
+
+def check_mt5_login(
+    login: Optional[int] = None,
+    password: Optional[str] = None,
+    server: Optional[str] = None,
+) -> MT5LoginResult:
+    """
+    Gọi ``initialize()`` (session terminal hoặc ``MT5_*`` trong env), in phiên bản gói,
+    terminal, và ``account_info``. Luôn ``shutdown()`` ở cuối.
+    """
+    mt5 = _load_mt5()
+    login_i = login if login is not None else _env_int("MT5_LOGIN", 0)
+    password_s = password if password is not None else (os.getenv("MT5_PASSWORD") or "")
+    server_s = server if server is not None else (os.getenv("MT5_SERVER") or "")
+
+    lines: list[str] = [
+        f"MetaTrader5 (pip): {mt5.__version__}",
+    ]
+    kwargs: dict[str, Any] = {}
+    if login_i and password_s and server_s:
+        kwargs["login"] = login_i
+        kwargs["password"] = password_s
+        kwargs["server"] = server_s
+        lines.append(
+            f"Chế độ: đăng nhập qua API (login={login_i}, server={server_s!r}).",
+        )
+    else:
+        lines.append(
+            "Chế độ: initialize() không đối số — dùng phiên MT5 đang mở (đã login trong terminal).",
+        )
+
+    if not mt5.initialize(**kwargs):
+        err = mt5.last_error()
+        lines.append(f"mt5.initialize thất bại: {err}")
+        return MT5LoginResult(ok=False, lines=lines)
+
+    try:
+        ti = mt5.terminal_info()
+        if ti is not None:
+            lines.append(
+                f"Terminal: build={getattr(ti, 'build', '?')} "
+                f"name={getattr(ti, 'name', '?')!r}",
+            )
+        ai = mt5.account_info()
+        if ai is None:
+            lines.append("account_info trả về None — chưa có tài khoản kết nối hoặc lỗi.")
+            return MT5LoginResult(ok=False, lines=lines)
+
+        lines.append("Đăng nhập OK — account_info:")
+        lines.append(f"  login:    {ai.login}")
+        lines.append(f"  server:   {ai.server}")
+        lines.append(f"  company:  {getattr(ai, 'company', '')}")
+        lines.append(f"  name:     {getattr(ai, 'name', '')}")
+        lines.append(f"  currency: {ai.currency}")
+        lines.append(f"  balance:  {ai.balance}")
+        lines.append(f"  equity:   {ai.equity}")
+        lines.append(f"  margin:   {getattr(ai, 'margin', '')}")
+        lev = getattr(ai, "leverage", None)
+        if lev is not None:
+            lines.append(f"  leverage: 1:{lev}")
+        lines.append(f"  trade_allowed: {getattr(ai, 'trade_allowed', '?')}")
+        return MT5LoginResult(ok=True, lines=lines)
+    finally:
+        mt5.shutdown()
+
+
 def _load_mt5():
     try:
         import MetaTrader5 as mt5  # type: ignore

@@ -24,7 +24,7 @@ from automation_tool.openai_prompt_flow import (
 from automation_tool.images import CHART_IMAGE_ORDER, ordered_chart_openai_payloads
 from automation_tool.telegram_bot import send_message, send_openai_output_to_telegram
 from automation_tool.mt5_openai_parse import parse_openai_output_md
-from automation_tool.mt5_execute import execute_trade
+from automation_tool.mt5_execute import check_mt5_login, execute_trade
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -168,6 +168,20 @@ def _parser() -> argparse.ArgumentParser:
     )
     mt5.set_defaults(func=cmd_mt5_trade)
 
+    mt5l = sub.add_parser(
+        "mt5-login",
+        help="Kiểm tra kết nối MetaTrader5 (initialize + account_info). Windows + pip MetaTrader5.",
+    )
+    mt5l.add_argument(
+        "--login",
+        type=int,
+        default=None,
+        help="Ghi đè MT5_LOGIN (kèm --password và --server)",
+    )
+    mt5l.add_argument("--password", default=None, help="Ghi đè MT5_PASSWORD")
+    mt5l.add_argument("--server", default=None, help="Ghi đè MT5_SERVER")
+    mt5l.set_defaults(func=cmd_mt5_login)
+
     return p
 
 
@@ -283,6 +297,17 @@ def cmd_mt5_trade(args: argparse.Namespace) -> None:
     if out.request:
         print("request/preview:", out.request)
     if not out.ok:
+        raise SystemExit(1)
+
+
+def cmd_mt5_login(args: argparse.Namespace) -> None:
+    r = check_mt5_login(
+        login=args.login,
+        password=args.password,
+        server=args.server,
+    )
+    print("\n".join(r.lines))
+    if not r.ok:
         raise SystemExit(1)
 
 
