@@ -161,6 +161,12 @@ tradingview_capture:
   # Optional: CSS for the sign-in entry (default: exact text match)
   login_sign_in_selector: ""
   login_after_sign_in_click_ms: 1500
+  # Optional extra step for auth method picker (e.g. click "Email" before fields appear).
+  # Priority: selector first; if empty, exact text match.
+  login_email_method_selector: 'button[name="Email"]'
+  login_email_method_text: "Email"
+  login_method_visible_timeout_ms: 8000
+  login_after_method_click_ms: 1000
   login_email_selector: ""
   login_password_selector: ""
   login_submit_selector: ""

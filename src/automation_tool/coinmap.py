@@ -1203,6 +1203,8 @@ def _maybe_tradingview_login(
     open_ms = int(tv.get("login_menu_open_ms", 500))
     sign_timeout = int(tv.get("login_sign_in_visible_timeout_ms", 5_000))
     after_sign_ms = int(tv.get("login_after_sign_in_click_ms", 1_500))
+    method_timeout = int(tv.get("login_method_visible_timeout_ms", 8_000))
+    after_method_ms = int(tv.get("login_after_method_click_ms", 1_000))
     post_submit_ms = int(tv.get("login_post_submit_settle_ms", 800))
 
     email_sel = (tv.get("login_email_selector") or "").strip() or (
@@ -1216,6 +1218,8 @@ def _maybe_tradingview_login(
 
     sign_in_custom = (tv.get("login_sign_in_selector") or "").strip()
     sign_in_text = (tv.get("login_sign_in_text") or "Đăng nhập").strip()
+    login_method_sel = (tv.get("login_email_method_selector") or "").strip()
+    login_method_text = (tv.get("login_email_method_text") or "").strip()
     iframe_sel = (tv.get("login_iframe_selector") or "").strip()
 
     menu_opened = False
@@ -1242,10 +1246,34 @@ def _maybe_tradingview_login(
 
         if iframe_sel:
             fl = page.frame_locator(iframe_sel)
+            if login_method_sel:
+                method_loc = fl.locator(login_method_sel).first
+                method_loc.wait_for(state="visible", timeout=method_timeout)
+                method_loc.click(timeout=15_000)
+                if after_method_ms > 0:
+                    page.wait_for_timeout(after_method_ms)
+            elif login_method_text:
+                method_loc = fl.get_by_text(login_method_text, exact=True).first
+                method_loc.wait_for(state="visible", timeout=method_timeout)
+                method_loc.click(timeout=15_000)
+                if after_method_ms > 0:
+                    page.wait_for_timeout(after_method_ms)
             email_loc = fl.locator(email_sel).first
             pass_loc = fl.locator(pass_sel).first
             sub_loc = fl.locator(submit_sel).first
         else:
+            if login_method_sel:
+                method_loc = page.locator(login_method_sel).first
+                method_loc.wait_for(state="visible", timeout=method_timeout)
+                method_loc.click(timeout=15_000)
+                if after_method_ms > 0:
+                    page.wait_for_timeout(after_method_ms)
+            elif login_method_text:
+                method_loc = page.get_by_text(login_method_text, exact=True).first
+                method_loc.wait_for(state="visible", timeout=method_timeout)
+                method_loc.click(timeout=15_000)
+                if after_method_ms > 0:
+                    page.wait_for_timeout(after_method_ms)
             email_loc = page.locator(email_sel).first
             pass_loc = page.locator(pass_sel).first
             sub_loc = page.locator(submit_sel).first
