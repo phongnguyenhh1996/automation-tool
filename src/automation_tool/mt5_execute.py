@@ -245,16 +245,25 @@ def _trade_result_dict(ret: Any) -> dict[str, Any]:
     )
 
 
+# Bitmask ``symbol_info.filling_mode`` (MQL5 ENUM_SYMBOL_FILLING_MODE). Gói Python
+# thường không có ``SYMBOL_FILLING_*`` trên module — chỉ dùng số cho phép AND.
+_SYM_FILL_FOK = 1
+_SYM_FILL_IOC = 2
+_SYM_FILL_RETURN = 4
+
+
 def _filling_for_symbol(mt5: Any, symbol: str) -> int:
     info = mt5.symbol_info(symbol)
     if info is None:
-        return mt5.ORDER_FILLING_IOC
+        return int(mt5.ORDER_FILLING_IOC)
     mode = int(info.filling_mode)
-    if mode & int(mt5.SYMBOL_FILLING_IOC):
-        return mt5.ORDER_FILLING_IOC
-    if mode & int(mt5.SYMBOL_FILLING_FOK):
-        return mt5.ORDER_FILLING_FOK
-    return mt5.ORDER_FILLING_RETURN
+    if mode & _SYM_FILL_IOC:
+        return int(mt5.ORDER_FILLING_IOC)
+    if mode & _SYM_FILL_FOK:
+        return int(mt5.ORDER_FILLING_FOK)
+    if mode & _SYM_FILL_RETURN:
+        return int(mt5.ORDER_FILLING_RETURN)
+    return int(mt5.ORDER_FILLING_RETURN)
 
 
 def _order_type_for_pending(trade: ParsedTrade, mt5: Any) -> int:
