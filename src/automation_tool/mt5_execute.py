@@ -19,6 +19,7 @@ from typing import Any, Optional
 from dotenv import load_dotenv
 
 import automation_tool.config  # noqa: F401 — nạp .env khi import
+from automation_tool.config import effective_mt5_symbol, load_all_dotenv
 
 from automation_tool.mt5_openai_parse import ParsedTrade
 
@@ -36,6 +37,8 @@ class MT5ExecutionResult:
     # Cấu trúc server trả về (order_send / order_check) khi có
     trade_check: Optional[dict[str, Any]] = None
     trade_result: Optional[dict[str, Any]] = None
+    # Symbol thực tế dùng sau khi áp CLI / MT5_SYMBOL / .env
+    resolved_symbol: Optional[str] = None
 
 
 @dataclass
@@ -179,6 +182,26 @@ def _retcode_label(mt5: Any, code: Optional[int]) -> str:
         except (TypeError, ValueError):
             continue
     return str(ic)
+
+
+def _balance_margin_hint(mt5: Any, retcode: Optional[int]) -> str:
+    """Gợi ý khi retcode = NO_MONEY / thiếu margin (chuẩn MT5 thường là 10019)."""
+    if retcode is None:
+        return ""
+    try:
+        rc = int(retcode)
+    except (TypeError, ValueError):
+        return ""
+    nm = getattr(mt5, "TRADE_RETCODE_NO_MONEY", None)
+    if nm is not None and rc == int(nm):
+        return (
+            " | Gợi ý: không đủ tiền/margin (NO_MONEY) — thử giảm lot, "
+            "kiểm tra leverage & margin trong MT5 (Symbol properties), nạp thêm balance, "
+            "hoặc đóng lệnh/vị thế đang chiếm margin."
+        )
+    if rc == 10019:
+        return " | Gợi ý: retcode 10019 = không đủ margin/free margin cho yêu cầu này."
+    return ""
 
 
 def _object_fields_dict(obj: Any, names: tuple[str, ...]) -> dict[str, Any]:
@@ -387,6 +410,27 @@ def _env_int(name: str, default: int = 0) -> int:
     return int(raw)
 
 
+def _normalize_symbol_str(val: Optional[str]) -> str:
+    if not val:
+        return ""
+    return str(val).strip().strip('"').strip("'")
+
+
+def resolve_mt5_trade_symbol(trade: ParsedTrade, symbol_override: Optional[str]) -> ParsedTrade:
+    """
+    Thứ tự: ``--symbol`` CLI > ``MT5_SYMBOL`` (env + đọc trực tiếp ``.env``) > giữ symbol đã parse.
+    """
+    load_all_dotenv()
+    load_dotenv(Path.cwd() / ".env", override=True)
+    ovr = _normalize_symbol_str(symbol_override)
+    env_sym = _normalize_symbol_str(effective_mt5_symbol())
+    if ovr:
+        return replace(trade, symbol=ovr)
+    if env_sym:
+        return replace(trade, symbol=env_sym)
+    return trade
+
+
 def execute_trade(
     trade: ParsedTrade,
     *,
@@ -406,14 +450,7 @@ def execute_trade(
 
     Symbol: ``symbol_override`` (CLI ``--symbol``) > ``MT5_SYMBOL`` trong ``.env`` > symbol đã parse.
     """
-    # Nạp lại .env từ cwd ngay trước khi đọc MT5_SYMBOL (wheel install / cwd ≠ lúc import).
-    load_dotenv(Path.cwd() / ".env", override=True)
-    ovr = (symbol_override or "").strip()
-    env_sym = (os.getenv("MT5_SYMBOL") or "").strip()
-    if ovr:
-        trade = replace(trade, symbol=ovr)
-    elif env_sym:
-        trade = replace(trade, symbol=env_sym)
+    trade = resolve_mt5_trade_symbol(trade, symbol_override)
 
     login_i = login if login is not None else _env_int("MT5_LOGIN", 0)
     password_s = password if password is not None else (os.getenv("MT5_PASSWORD") or "")
@@ -439,6 +476,7 @@ def execute_trade(
             ok=True,
             message=f"[DRY-RUN] Sẽ gửi: {req_preview}{extra}",
             request=req_preview,
+            resolved_symbol=trade.symbol,
         )
 
     mt5 = _load_mt5()
@@ -454,6 +492,7 @@ def execute_trade(
             ok=False,
             message=f"mt5.initialize thất bại: {format_last_error(mt5)}",
             last_error=le,
+            resolved_symbol=trade.symbol,
         )
 
     try:
@@ -470,6 +509,7 @@ def execute_trade(
                 ok=False,
                 message=f"{e}",
                 last_error=le,
+                resolved_symbol=trade.symbol,
             )
 
         chk = mt5.order_check(request)
@@ -480,21 +520,24 @@ def execute_trade(
                 message=f"order_check trả về None. {format_last_error(mt5)}",
                 last_error=le,
                 request=request,
+                resolved_symbol=trade.symbol,
             )
         chk_rc = getattr(chk, "retcode", None)
         chk_d = _trade_check_dict(chk)
         if chk_rc is not None and chk_rc != mt5.TRADE_RETCODE_DONE:
             le = _last_error_tuple(mt5)
+            hint = _balance_margin_hint(mt5, chk_rc)
             return MT5ExecutionResult(
                 ok=False,
                 message=(
                     f"order_check không đạt: retcode={_retcode_label(mt5, chk_rc)} "
-                    f"trade_check={chk_d!r} {format_last_error(mt5)}"
+                    f"trade_check={chk_d!r} {format_last_error(mt5)}{hint}"
                 ),
                 retcode=int(chk_rc) if chk_rc is not None else None,
                 last_error=le,
                 trade_check=chk_d,
                 request=request,
+                resolved_symbol=trade.symbol,
             )
         ret = mt5.order_send(request)
         if ret is None:
@@ -504,6 +547,7 @@ def execute_trade(
                 message=f"order_send trả về None. {format_last_error(mt5)}",
                 last_error=le,
                 request=request,
+                resolved_symbol=trade.symbol,
             )
         rc = getattr(ret, "retcode", None)
         rd = _trade_result_dict(ret)
@@ -513,16 +557,18 @@ def execute_trade(
             ok_codes.add(placed)
         if rc not in ok_codes:
             le = _last_error_tuple(mt5)
+            hint = _balance_margin_hint(mt5, rc)
             return MT5ExecutionResult(
                 ok=False,
                 message=(
                     f"order_send thất bại: retcode={_retcode_label(mt5, rc)} "
-                    f"trade_result={rd!r} {format_last_error(mt5)}{extra}"
+                    f"trade_result={rd!r} {format_last_error(mt5)}{hint}{extra}"
                 ),
                 retcode=int(rc) if rc is not None else None,
                 last_error=le,
                 trade_result=rd,
                 request=request,
+                resolved_symbol=trade.symbol,
             )
         rc_int = int(rc) if rc is not None else None
         return MT5ExecutionResult(
@@ -536,6 +582,7 @@ def execute_trade(
             deal=getattr(ret, "deal", None),
             request=request,
             trade_result=rd,
+            resolved_symbol=trade.symbol,
         )
     finally:
         mt5.shutdown()

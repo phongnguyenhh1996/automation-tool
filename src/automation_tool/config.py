@@ -24,6 +24,42 @@ def load_all_dotenv() -> None:
 load_all_dotenv()
 
 
+def read_dotenv_value(key: str) -> str:
+    """
+    Đọc ``KEY=value`` trực tiếp từ ``.env`` (repo root hoặc cwd) khi ``os.environ`` chưa có
+    hoặc python-dotenv không nạp được — tránh mất ``MT5_SYMBOL`` trên Windows/VPS.
+    """
+    for base in (_ROOT, Path.cwd()):
+        p = base / ".env"
+        if not p.is_file():
+            continue
+        try:
+            raw = p.read_text(encoding="utf-8-sig")
+        except OSError:
+            continue
+        for line in raw.splitlines():
+            s = line.strip()
+            if not s or s.startswith("#"):
+                continue
+            if "=" not in s:
+                continue
+            k, v = s.split("=", 1)
+            if k.strip() != key:
+                continue
+            return v.strip().strip('"').strip("'")
+    return ""
+
+
+def effective_mt5_symbol() -> str:
+    """
+    Giá trị ``MT5_SYMBOL`` sau khi đã ``load_dotenv``; nếu env trống thì đọc trực tiếp từ file ``.env``.
+    """
+    v = (os.getenv("MT5_SYMBOL") or "").strip().strip('"').strip("'")
+    if v:
+        return v
+    return read_dotenv_value("MT5_SYMBOL")
+
+
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = os.getenv(name)
     if raw is None:
