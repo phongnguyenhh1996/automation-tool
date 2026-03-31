@@ -211,14 +211,22 @@ def _is_mt5_trade_success_retcode(mt5: Any, rc: Optional[int]) -> bool:
     return False
 
 
-def _balance_margin_hint(mt5: Any, retcode: Optional[int]) -> str:
-    """Gợi ý khi retcode = NO_MONEY / thiếu margin (chuẩn MT5 thường là 10019)."""
+def _trade_retcode_hint(mt5: Any, retcode: Optional[int]) -> str:
+    """Gợi ý tiếng Việt cho retcode phổ biến (AutoTrading, margin, …)."""
     if retcode is None:
         return ""
     try:
         rc = int(retcode)
     except (TypeError, ValueError):
         return ""
+    dis_at = getattr(mt5, "TRADE_RETCODE_CLIENT_DISABLES_AT", None)
+    if (dis_at is not None and rc == int(dis_at)) or rc == 10027:
+        return (
+            " | Gợi ý: AutoTrading/Algo Trading đang TẮT — trong MT5 bật nút \"Algo Trading\" "
+            "trên thanh công cụ (biểu tượng play trong tam giác), hoặc "
+            "Tools → Options → Expert Advisors → bật \"Allow Algo Trading\" / giao dịch thuật toán, "
+            "rồi chạy lại lệnh."
+        )
     nm = getattr(mt5, "TRADE_RETCODE_NO_MONEY", None)
     if nm is not None and rc == int(nm):
         return (
@@ -560,7 +568,7 @@ def execute_trade(
         chk_d = _trade_check_dict(chk)
         if chk_rc is not None and not _is_mt5_trade_success_retcode(mt5, chk_rc):
             le = _last_error_tuple(mt5)
-            hint = _balance_margin_hint(mt5, chk_rc)
+            hint = _trade_retcode_hint(mt5, chk_rc)
             return MT5ExecutionResult(
                 ok=False,
                 message=(
@@ -587,7 +595,7 @@ def execute_trade(
         rd = _trade_result_dict(ret)
         if not _is_mt5_trade_success_retcode(mt5, rc):
             le = _last_error_tuple(mt5)
-            hint = _balance_margin_hint(mt5, rc)
+            hint = _trade_retcode_hint(mt5, rc)
             return MT5ExecutionResult(
                 ok=False,
                 message=(
