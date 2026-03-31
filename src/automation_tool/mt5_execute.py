@@ -232,12 +232,73 @@ def _order_type_for_pending(trade: ParsedTrade, mt5: Any) -> int:
     raise ValueError(f"Loại lệnh không hỗ trợ pending: {kind}")
 
 
+def _suggest_symbol_names(mt5: Any, wanted: str) -> str:
+    """Một vài tên symbol trên server gần với ``wanted`` (ví dụ XAUUSD → XAUUSDm)."""
+    try:
+        raw = mt5.symbols_get()
+        if not raw:
+            return "symbols_get() rỗng."
+        names = [s.name for s in raw if hasattr(s, "name")]
+        wu = wanted.upper()
+        # Ưu tiên: chứa đủ chuỗi, hoặc cùng prefix 6 ký tự (XAUUSD / XAUUSDm)
+        pref = wu[:6] if len(wu) >= 6 else wu
+        hit = [n for n in names if wu in n.upper() or (pref and pref in n.upper())]
+        hit = sorted(set(hit))[:25]
+        if hit:
+            return "symbol trên server gần giống: " + ", ".join(hit)
+        return f"không lọc được tên gần {wanted!r} (tổng {len(names)} symbol)."
+    except Exception as exc:  # noqa: BLE001
+        return f"symbols_get lỗi: {exc}"
+
+
+def _is_call_failed(last_err: Optional[tuple[Any, ...]]) -> bool:
+    if not last_err or len(last_err) < 2:
+        return False
+    code, msg = last_err[0], last_err[1]
+    try:
+        ic = int(code)
+    except (TypeError, ValueError):
+        ic = code
+    if ic == -1:
+        return True
+    m = str(msg).lower()
+    return "call failed" in m or "terminal" in m
+
+
 def _ensure_symbol(mt5: Any, symbol: str) -> Optional[str]:
-    if not mt5.symbol_select(symbol, True):
+    ti = mt5.terminal_info()
+    if ti is None:
         return (
-            f"symbol_select({symbol!r}) thất bại (không có trong Market Watch?). "
+            "terminal_info() trả về None — Python không nối được terminal MT5. "
             f"{format_last_error(mt5)}"
         )
+    if getattr(ti, "connected", True) is False:
+        return (
+            "terminal connected=False — chưa nối server trong MT5 (kiểm tra đăng nhập / mạng). "
+            f"{format_last_error(mt5)}"
+        )
+
+    info = mt5.symbol_info(symbol)
+    if info is None:
+        sug = _suggest_symbol_names(mt5, symbol)
+        return (
+            f"symbol_info({symbol!r}) không tồn tại trên broker — không thể giao dịch tên này. "
+            f"Đặt MT5_SYMBOL trong .env đúng tên trong Market Watch (vd. XAUUSDm). "
+            f"{sug} | {format_last_error(mt5)}"
+        )
+
+    if not mt5.symbol_select(symbol, True):
+        le = _last_error_tuple(mt5)
+        base = f"symbol_select({symbol!r}) thất bại. {format_last_error(mt5)}"
+        if _is_call_failed(le):
+            base += (
+                " | Gợi ý lỗi IPC (code=-1 / Terminal: Call failed): "
+                "để MT5 đang mở và đã login; bật AutoTrading; chạy Python cùng user/session với terminal; "
+                "thử chạy terminal không portable; tắt chặn từ antivirus/RDP."
+            )
+        else:
+            base += " | Thử thêm symbol vào Market Watch thủ công trong MT5."
+        return base
     return None
 
 
