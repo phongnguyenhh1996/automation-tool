@@ -23,6 +23,7 @@ from automation_tool.openai_prompt_flow import (
 )
 from automation_tool.images import CHART_IMAGE_ORDER, ordered_chart_openai_payloads
 from automation_tool.telegram_bot import send_message, send_openai_output_to_telegram
+from automation_tool.config import load_all_dotenv
 from automation_tool.mt5_openai_parse import parse_openai_output_md
 from automation_tool.mt5_execute import check_mt5_login, execute_trade
 
@@ -282,6 +283,7 @@ def cmd_mt5_trade(args: argparse.Namespace) -> None:
     path = args.file.expanduser()
     if not path.is_file():
         raise SystemExit(f"File not found: {path}")
+    load_all_dotenv()
     text = path.read_text(encoding="utf-8")
     default_sym = (os.getenv("MT5_SYMBOL") or "XAUUSD").strip()
     trade, err = parse_openai_output_md(
@@ -292,7 +294,7 @@ def cmd_mt5_trade(args: argparse.Namespace) -> None:
     if err or trade is None:
         raise SystemExit(err or "Không parse được lệnh.")
     dry = not args.execute
-    out = execute_trade(trade, dry_run=dry)
+    out = execute_trade(trade, dry_run=dry, symbol_override=args.symbol)
     print(out.message)
     if out.request:
         print("request/preview:", out.request)

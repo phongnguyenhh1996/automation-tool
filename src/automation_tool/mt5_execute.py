@@ -13,9 +13,12 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any, Optional
 
-import automation_tool.config  # noqa: F401 — nạp .env từ root project khi chỉ import mt5_execute
+from dotenv import load_dotenv
+
+import automation_tool.config  # noqa: F401 — nạp .env khi import
 
 from automation_tool.mt5_openai_parse import ParsedTrade
 
@@ -143,6 +146,21 @@ def format_last_error(mt5: Any) -> str:
         code, msg = t[0], t[1]
         return f"code={code} message={msg!r}"
     return f"last_error={t!r}"
+
+
+def _format_last_error_if_meaningful(mt5: Any) -> str:
+    """Không nối ``(1, 'Success')`` vào cuối thông báo lỗi nghiệp vụ — dễ gây hiểu nhầm."""
+    t = _last_error_tuple(mt5)
+    if t is None or len(t) < 2:
+        return ""
+    try:
+        code = int(t[0])
+    except (TypeError, ValueError):
+        return f" | {format_last_error(mt5)}"
+    msg_l = str(t[1]).lower()
+    if code == 1 and "success" in msg_l:
+        return ""
+    return f" | {format_last_error(mt5)}"
 
 
 def _retcode_label(mt5: Any, code: Optional[int]) -> str:
@@ -283,10 +301,12 @@ def _ensure_symbol(mt5: Any, symbol: str) -> Optional[str]:
     info = mt5.symbol_info(symbol)
     if info is None:
         sug = _suggest_symbol_names(mt5, symbol)
+        tail = _format_last_error_if_meaningful(mt5)
         return (
             f"symbol_info({symbol!r}) không tồn tại trên broker — không thể giao dịch tên này. "
-            f"Đặt MT5_SYMBOL trong .env đúng tên trong Market Watch (vd. XAUUSDm). "
-            f"{sug} | {format_last_error(mt5)}"
+            f"Đặt MT5_SYMBOL trong .env đúng tên trong Market Watch (vd. XAUUSDm), "
+            f"hoặc chạy từ thư mục có file .env (hoặc --symbol XAUUSDm). "
+            f"{sug}{tail}"
         )
 
     if not mt5.symbol_select(symbol, True):
@@ -377,17 +397,22 @@ def execute_trade(
     deviation: int = 20,
     magic: Optional[int] = None,
     log_tp2: bool = True,
+    symbol_override: Optional[str] = None,
 ) -> MT5ExecutionResult:
     """
     Gửi lệnh qua MetaTrader5. MT5 chỉ có một TP trên lệnh; TP2 được in ra nếu có.
 
     Credentials: env ``MT5_LOGIN``, ``MT5_PASSWORD``, ``MT5_SERVER`` hoặc tham số.
 
-    Nếu đặt ``MT5_SYMBOL`` trong ``.env`` (vd. ``XAUUSDm``), luôn dùng tên đó khi gửi lệnh
-    (ghi đè symbol đã parse từ markdown).
+    Symbol: ``symbol_override`` (CLI ``--symbol``) > ``MT5_SYMBOL`` trong ``.env`` > symbol đã parse.
     """
+    # Nạp lại .env từ cwd ngay trước khi đọc MT5_SYMBOL (wheel install / cwd ≠ lúc import).
+    load_dotenv(Path.cwd() / ".env", override=True)
+    ovr = (symbol_override or "").strip()
     env_sym = (os.getenv("MT5_SYMBOL") or "").strip()
-    if env_sym:
+    if ovr:
+        trade = replace(trade, symbol=ovr)
+    elif env_sym:
         trade = replace(trade, symbol=env_sym)
 
     login_i = login if login is not None else _env_int("MT5_LOGIN", 0)

@@ -7,10 +7,21 @@ from typing import List, Optional
 
 from dotenv import load_dotenv
 
-# Nạp .env trong thư mục gốc project (không phụ thuộc cwd — tránh mất MT5_SYMBOL khi chạy từ VPS path khác).
+# Thư mục chứa package (editable: trùng repo; wheel: site-packages/...).
 _ROOT = Path(__file__).resolve().parents[2]
-load_dotenv(_ROOT / ".env")
-load_dotenv()
+
+
+def load_all_dotenv() -> None:
+    """
+    1) .env cạnh mã nguồn (pip install -e).
+    2) .env ở thư mục làm việc hiện tại — **ghi đè** (1); cần khi chạy từ thư mục project
+    nhưng package cài non-editable (_ROOT không có .env).
+    """
+    load_dotenv(_ROOT / ".env")
+    load_dotenv(Path.cwd() / ".env", override=True)
+
+
+load_all_dotenv()
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
