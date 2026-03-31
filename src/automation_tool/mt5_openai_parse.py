@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from typing import Literal, Optional
@@ -158,7 +159,14 @@ def parse_openai_output_md(
     Returns:
         (ParsedTrade or None, error message or None)
     """
-    sym = (symbol_override or "").strip() or extract_symbol_hint(text) or default_symbol
+    # --symbol > MT5_SYMBOL (.env) > hint từ text (📊 XAUUSD) > default_symbol.
+    # Nhiều broker chỉ có XAUUSDm: đặt MT5_SYMBOL=XAUUSDm để không bị hint "XAUUSD" ghi đè.
+    sym = (
+        (symbol_override or "").strip()
+        or (os.getenv("MT5_SYMBOL") or "").strip()
+        or extract_symbol_hint(text)
+        or default_symbol
+    )
     block = extract_output_ngan_gon_block(text)
     if not block:
         return None, "Không tìm thấy [OUTPUT_NGAN_GON]."

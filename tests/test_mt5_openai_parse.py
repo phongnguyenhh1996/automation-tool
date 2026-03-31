@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from automation_tool.mt5_openai_parse import (
     parse_openai_output_md,
     parse_trade_line,
@@ -27,6 +29,21 @@ Hành động: VÀO LỆNH
     assert trade.tp1 == 3354.5
     assert trade.tp2 == 3350.5
     assert trade.lot == 0.02
+
+
+def test_mt5_symbol_env_overrides_markdown_hint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Broker chỉ có XAUUSDm: MT5_SYMBOL thắng hint 📊 XAUUSD trong markdown."""
+    monkeypatch.setenv("MT5_SYMBOL", "XAUUSDm")
+    text = """
+📊 XAUUSD – PHÂN TÍCH
+[OUTPUT_NGAN_GON]
+SELL LIMIT 1.0 | SL 2.0 | TP1 0.5 | Lot 0.01
+Hành động: VÀO LỆNH
+"""
+    trade, err = parse_openai_output_md(text, default_symbol="XAUUSD")
+    assert err is None
+    assert trade is not None
+    assert trade.symbol == "XAUUSDm"
 
 
 def test_symbol_override() -> None:
