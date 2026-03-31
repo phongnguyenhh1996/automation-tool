@@ -28,6 +28,17 @@ from automation_tool.mt5_openai_parse import parse_openai_output_md
 from automation_tool.mt5_execute import check_mt5_login, execute_trade
 
 
+def _configure_stdio_utf8() -> None:
+    """Windows consoles often use cp1252; OpenAI/Vietnamese output triggers UnicodeEncodeError."""
+    if sys.platform != "win32":
+        return
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError, ValueError):
+            pass
+
+
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Coinmap chart capture → OpenAI Responses (prompt id) → Telegram bot",
@@ -398,6 +409,7 @@ def cmd_all(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    _configure_stdio_utf8()
     parser = _parser()
     args = parser.parse_args()
     args.func(args)
