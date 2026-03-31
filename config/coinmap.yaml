@@ -1,0 +1,231 @@
+# Selectors and URLs — adjust after inspecting coinmap.tech with DevTools or Playwright codegen.
+# Delete existing images in data/charts before each capture run (keeps .gitkeep)
+clear_charts_before_capture: true
+base_url: "https://coinmap.tech"
+login_url: "https://coinmap.tech/login"
+# CSS selectors
+email_selector: 'input[type="email"], input[name="email"], input#email'
+password_selector: 'input[type="password"]'
+submit_selector: 'button[type="submit"], button:has-text("Sign in"), button:has-text("Log in")'
+# Wait for this selector after login (empty = skip)
+post_login_wait_selector: "main, [data-testid='chart'], canvas, .chart"
+
+# After login: open chart page — multi-shot via right sidebar (3 images), or one fullscreen of whatever is already open
+chart_download:
+  enabled: true
+  chart_page_url: "https://coinmap.tech/chart"
+  # Coinmap often auto-opens symbol search on /chart — close it (automation no longer uses that modal).
+  dismiss_symbol_search_modal: true
+  symbol_search_modal_escape_presses: 2
+  symbol_modal_escape_gap_ms: 180
+  after_symbol_modal_dismiss_ms: 350
+  # Optional: e.g. .ant-modal-close, button[aria-label="Close"] if Escape is not enough
+  symbol_search_modal_close_selector: ""
+  # Right sidebar → watchlist category → symbol → close → interval → pan chart → fullscreen → screenshot → Esc
+  multi_shot_enabled: true
+  capture_plan:
+    # symbol = watchlist id trên Coinmap; export_symbol = nhãn giống TradingView (file JSON/PNG + trường symbol).
+    - symbol: USDINDEX
+      export_symbol: DXY
+      interval: "15m"
+      watchlist_category: "forex 1"
+    - symbol: XAUUSD
+      interval: "15m"
+      watchlist_category: "forex 1"
+    - symbol: XAUUSD
+      interval: "5m"
+  right_sidebar_container_class_prefix: "ChartDesktopPage_rightSidebar__"
+  # Chart SVG can sit on top and block hit-testing — force click the sidebar toggle.
+  right_sidebar_toggle_click_force: true
+  right_sidebar_action_button_class_prefix: "ChartDesktopPage_actionButton"
+  # Optional full selector if layout differs
+  right_sidebar_toggle_button_selector: ""
+  # Open watchlist: click toggle until title row is visible (some UIs need 2+ toggles from rail state)
+  right_sidebar_already_open_check_ms: 2000
+  right_sidebar_open_max_toggles: 4
+  watchlist_title_class_prefix: "ChartWatchList_title__"
+  watchlist_title_visible_timeout_ms: 20000
+  watchlist_ant_select_visible_timeout_ms: 15000
+  watchlist_symbol_name_class_prefix: "TableData_symbolNameContent__"
+  interval_select_class_prefix: "IntervalSelect_intervalSelect__"
+  sidebar_toggle_after_click_ms: 450
+  watchlist_dropdown_open_ms: 350
+  # Ant Select: options use div.ant-select-item-option[title] + .ant-select-item-option-content
+  watchlist_option_visible_timeout_ms: 15000
+  after_watchlist_category_ms: 400
+  after_watchlist_symbol_click_ms: 700
+  interval_dropdown_open_ms: 350
+  interval_option_visible_timeout_ms: 15000
+  after_interval_select_ms: 800
+  after_interval_change_settle_ms: 2000
+  after_fullscreen_escape_ms: 600
+  # Exit fullscreen after screenshot: button in SectionHeader_rightControls + SectionHeader_actionButton (index often differs from enter).
+  coinmap_fullscreen_exit_use_toolbar_click: true
+  coinmap_fullscreen_exit_action_button_index: 0
+  coinmap_fullscreen_exit_click_force: true
+  coinmap_fullscreen_exit_after_toolbar_click_ms: 450
+  # Optional Escape presses after toolbar click (0 = toolbar only).
+  coinmap_fullscreen_exit_escape_after_toolbar_presses: 0
+  coinmap_fullscreen_exit_escape_gap_ms: 200
+  # Each multi-shot loop start: Escape only (safe if not fullscreen; toolbar would wrongly enter fullscreen).
+  coinmap_fullscreen_loop_start_escape_presses: 1
+  # Dark mode: if theme button has no span.anticon-sun, click it (before light-theme confirm)
+  dark_mode_enabled: true
+  dark_mode_theme_button_selector: '[class*="Header_menuIconTheme"]'
+  dark_mode_sun_icon_selector: "span.anticon-sun"
+  dark_mode_after_click_ms: 400
+  # Optional: modal asking to use light theme — click Confirm if it appears (no-op if absent)
+  light_theme_confirm_enabled: true
+  light_theme_confirm_selector: 'button:has-text("Confirm"), button:has-text("OK"), button:has-text("Continue")'
+  light_theme_modal_wait_ms: 2500
+  # Fullscreen enter vs exit: different 0-based indices under SectionHeader_rightControls
+  section_header_action_class_prefix: "SectionHeader_actionButton"
+  section_header_action_parent_selector: '[class*="SectionHeader_rightControls"]'
+  action_button_index: 1
+  # Enter fullscreen: set true if chart blocks the header button hit-test.
+  fullscreen_action_button_click_force: false
+  fullscreen_screenshot_settle_ms: 1500
+  # Viewport-only capture usually looks cleaner than full-page scroll at large sizes.
+  fullscreen_screenshot_full_page: false
+  # After fullscreen: edge drags (same as chart drag; cursor on time axis = bottom, on price = right), then main pan.
+  chart_view_adjustments_enabled: true
+  # Interactive chart surface (SVG). Avoid canvas#bg — crosshair SVG sits on top and breaks hover().
+  chart_interaction_selector: "svg.react-stockchart-canvas, svg[class*='react-stockchart']"
+  chart_between_pan_ms: 200
+  chart_edge_pan_drag_steps: 12
+  # Time (X): horizontal drag with cursor on bottom edge (center-bottom). Repeat N times.
+  chart_time_edge_pan_enabled: true
+  chart_time_edge_pan_repeats: 1
+  chart_time_edge_pan_y_ratio: 0.98
+  chart_time_edge_pan_start_x_ratio: 0.1
+  chart_time_edge_pan_end_x_ratio: 0.8
+  # Price (Y): vertical drag with cursor on right edge (center-right).
+  chart_price_edge_pan_enabled: true
+  chart_price_edge_pan_x_ratio: 0.98
+  chart_price_edge_pan_start_y_ratio: 0.42
+  chart_price_edge_pan_end_y_ratio: 0.38
+  # Main chart area: horizontal pan (middle of SVG).
+  chart_pan_start_x_ratio: 0.28
+  chart_pan_end_x_ratio: 0.4
+  chart_pan_y_ratio: 0.52
+  chart_pan_drag_steps: 14
+  chart_after_adjust_ms: 800
+  # false = không chụp PNG Coinmap, chỉ lưu JSON API (vẫn pan chart để merge response). TradingView không đổi.
+  coinmap_screenshot_enabled: false
+  # Before screenshot: if layer tooltip is open (height > threshold), click layer-list toggle.
+  layer_tooltip_toggle_before_screenshot: true
+  layer_tooltip_selector: '[class*="layerTooltip"]'
+  layer_list_toggle_button_selector: '[class*="buttonToggleLayerList"]'
+  layer_tooltip_min_height_px: 19
+  after_layer_toggle_click_ms: 400
+
+  # Lưu phản hồi 3 API do chính trang chart gọi (bắt response), không tự replay request → tránh 401 Unauthorized.
+  # Mỗi shot → một file JSON cạnh PNG: {stamp}_coinmap_{SYMBOL}_{interval}.json (single-chart: {stamp}_chart_fullscreen.json).
+  # Trong file: getcandlehistory / getorderflowhistory / getindicatorsvwap = payload JSON thô (hoặc null nếu lỗi/thiếu), không bọc ok/status.
+  # mode: network_capture (mặc định) | request (tự gọi context.request + query_template)
+  api_data_export:
+    enabled: true
+    mode: network_capture
+    # Gộp các response cùng endpoint trong một shot (kéo chart → API gọi lại): merge theo ``t``, bản sau ghi đè trùng.
+    merge_repeated_endpoint_responses: true
+    # Chỉ xét N lần gọi đầu tiên mỗi endpoint (tránh gộp quá nhiều lần → data quá dài). 0 = không giới hạn.
+    # Giá trị 1 dễ bỏ sót: response đầu getcandlehistory đôi khi rỗng trước khi chart load xong; cần gộp thêm lần gọi sau.
+    network_capture_max_responses_per_endpoint: 0
+    # Nếu sau lọc symbol+interval không còn dòng (ví dụ nến dùng mã khác orderflow), thử chỉ lọc theo interval.
+    relax_symbol_filter_if_empty: true
+    # Ghi JSON đã cắt gọn (5m/15m: số nến + footprint + VWAP theo doc). false = file đĩa đầy đủ như API.
+    slim_export_on_disk: true
+    network_capture_wait_ms: 12000
+    network_capture_poll_ms: 300
+    fail_on_api_error: false
+    max_nonjson_body_chars: 8000
+    http_method: GET
+    request_headers: {}
+    endpoints:
+      getcandlehistory: "https://gw.coinmap.tech/cm-api/api/v1/getcandlehistory"
+      getorderflowhistory: "https://gw.coinmap.tech/cm-api/api/v1/getorderflowhistory"
+      getindicatorsvwap: "https://gw.coinmap.tech/cm-api/api/v1/getindicatorsvwap"
+    query_template: {}
+    extra_query: {}
+
+# Second browser tab after Coinmap chart step: [TradingView Vietnam XAUUSD](https://vn.tradingview.com/chart/?symbol=OANDA%3AXAUUSD)
+tradingview_capture:
+  enabled: true
+  # Viewport: same as session `viewport_width` / `viewport_height` below (omit per-tab sizes).
+  chart_url: "https://vn.tradingview.com/chart/?symbol=OANDA%3AXAUUSD"
+  # Uses COINMAP_EMAIL + TRADINGVIEW_PASSWORD (.env). Opens top-left menu; if "Đăng nhập" is visible, logs in.
+  login_enabled: true
+  login_menu_open_ms: 500
+  login_sign_in_visible_timeout_ms: 5000
+  login_sign_in_text: "Đăng nhập"
+  # Optional: CSS for the sign-in entry (default: exact text match)
+  login_sign_in_selector: ""
+  login_after_sign_in_click_ms: 1500
+  login_email_selector: ""
+  login_password_selector: ""
+  login_submit_selector: ""
+  # If the form is inside an iframe, set e.g. iframe[src*="accounts"]
+  login_iframe_selector: ""
+  # After submit the login layer closes; wait for chart (default: same as intervals_toolbar_id)
+  login_chart_ready_selector: ""
+  login_chart_ready_timeout_ms: 90000
+  # Short pause after chart is visible (ms); set 0 to skip
+  login_post_submit_settle_ms: 800
+  # Top-left app menu: open → if theme-switcher has no checked input, click for dark → close menu
+  dark_mode_enabled: true
+  dark_mode_menu_button_class_prefix: "topLeftButton-"
+  theme_switcher_label_for: "theme-switcher"
+  # Relative to that label; real DOM is switchWrap > span > input#theme-switcher (not first div)
+  theme_switch_input_selector: "input#theme-switcher"
+  dark_mode_menu_open_ms: 500
+  dark_mode_after_theme_click_ms: 600
+  intervals_toolbar_id: "header-toolbar-intervals"
+  # Multi-shot: watchlist → symbol → each interval → fullscreen → screenshot → Esc (7 images default: DXY×3 + XAUUSD×4)
+  multi_shot_enabled: true
+  capture_plan:
+    - symbol: DXY
+      intervals:
+        - "4 giờ"
+        - "1 giờ"
+        - "15 phút"
+    - symbol: XAUUSD
+      intervals:
+        - "4 giờ"
+        - "1 giờ"
+        - "15 phút"
+        - "5 phút"
+  watchlist_button_aria_label: "Danh sách theo dõi, thông tin chi tiết và tin tức"
+  watchlist_open_ms: 500
+  symbol_name_class_prefix: "symbolNameText-"
+  after_symbol_select_ms: 1500
+  after_fullscreen_escape_ms: 800
+  # Inactive timeframe radios stay in DOM but hidden
+  interval_button_click_force: true
+  # Legacy single-shot only when multi_shot_enabled: false
+  interval_button_aria_label: "15 phút"
+  fullscreen_button_selector: "#header-toolbar-fullscreen"
+  # Wait for fullscreen "panels hidden" toast (container-default + notice-*) to hide before screenshot
+  tradingview_fullscreen_notice_selector: 'div[class*="container-default-"][class*="notice-"]'
+  tradingview_fullscreen_notice_visible_timeout_ms: 10000
+  tradingview_fullscreen_notice_hide_timeout_ms: 45000
+  # tradingview_fullscreen_notice_wait_disabled: false
+  initial_settle_ms: 3000
+  after_interval_select_ms: 2000
+  fullscreen_settle_ms: 2000
+  fullscreen_screenshot_full_page: true
+
+# If true, still run the legacy canvas screenshot loop after the chart page screenshot
+screenshot_after_chart_download: false
+# Screenshot each matching element (Playwright locator); add more as needed
+chart_selectors:
+  - "canvas"
+# If no elements match, fall back to one full-page screenshot (set false to disable)
+fallback_full_page: true
+# Browser viewport for the whole capture session (Coinmap tab + TradingView tab): Full HD.
+viewport_width: 1920
+viewport_height: 1080
+
+# Milliseconds to wait after navigation before screenshots
+settle_ms: 2000
+# Max charts to capture (0 = no limit) — applies to screenshot loop only
+max_charts: 50

@@ -1,0 +1,1651 @@
+from __future__ import annotations
+
+import json
+import re
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable, Optional
+from urllib.parse import urlparse
+
+import yaml
+from playwright.sync_api import Playwright, sync_playwright
+
+from automation_tool.coinmap_openai_slim import slim_coinmap_export_for_openai
+from automation_tool.playwright_browser import close_browser_and_context, launch_chrome_context
+
+
+def load_coinmap_yaml(path: Path) -> dict[str, Any]:
+    raw = path.read_text(encoding="utf-8")
+    return yaml.safe_load(raw) or {}
+
+
+def _ensure_dir(p: Path) -> None:
+    p.mkdir(parents=True, exist_ok=True)
+
+
+def _clear_charts_dir(charts_dir: Path) -> None:
+    """Delete existing image files in charts_dir (keeps .gitkeep and non-image files)."""
+    if not charts_dir.is_dir():
+        return
+    exts = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".json"}
+    for p in charts_dir.iterdir():
+        if not p.is_file():
+            continue
+        if p.suffix.lower() not in exts:
+            continue
+        try:
+            p.unlink()
+        except OSError:
+            pass
+
+
+_DEFAULT_COINMAP_GW_ENDPOINTS: dict[str, str] = {
+    "getcandlehistory": "https://gw.coinmap.tech/cm-api/api/v1/getcandlehistory",
+    "getorderflowhistory": "https://gw.coinmap.tech/cm-api/api/v1/getorderflowhistory",
+    "getindicatorsvwap": "https://gw.coinmap.tech/cm-api/api/v1/getindicatorsvwap",
+}
+
+_COINMAP_API_KEYS: tuple[str, ...] = (
+    "getcandlehistory",
+    "getorderflowhistory",
+    "getindicatorsvwap",
+)
+
+
+def _api_export_mode(api_cd: dict[str, Any]) -> str:
+    raw = (api_cd.get("mode") or "network_capture").strip().lower()
+    if raw in ("request", "http", "fetch"):
+        return "request"
+    return "network_capture"
+
+
+def _coinmap_endpoint_key_from_response_url(url: str) -> Optional[str]:
+    try:
+        path = urlparse(url).path or ""
+    except Exception:
+        return None
+    path = path.rstrip("/")
+    for key in _COINMAP_API_KEYS:
+        if path.endswith(key) or path.endswith("/" + key):
+            return key
+    return None
+
+
+def _merge_coinmap_bar_arrays(bodies: list[Any]) -> list[Any]:
+    """
+    Merge multiple JSON array responses for the same endpoint (e.g. repeated getcandlehistory
+    when the user pans the chart). Deduplicate by bar timestamp ``t``; later responses win
+    for the same ``t``. Output order: newest first (descending ``t``), matching Coinmap arrays.
+    """
+    by_t: dict[Any, dict[str, Any]] = {}
+    for body in bodies:
+        if not isinstance(body, list):
+            continue
+        for item in body:
+            if not isinstance(item, dict):
+                continue
+            t = item.get("t")
+            if t is None:
+                continue
+            by_t[t] = item
+    if not by_t:
+        return []
+    return [by_t[t] for t in sorted(by_t.keys(), reverse=True)]
+
+
+def _filter_coinmap_api_array_by_step(
+    body: Any,
+    *,
+    symbol: Optional[str],
+    interval: Optional[str],
+    relax_symbol_if_empty: bool = False,
+) -> Any:
+    """
+    Keep only array rows whose ``i`` matches the chart step interval (and ``s`` matches symbol
+    when both are set). Stops merged captures from mixing e.g. 5m and 15m in one export file.
+
+    When ``relax_symbol_if_empty`` is true and the strict filter yields no rows, retry with
+    interval-only matching (same ``i``). Helps when candle rows use a different ``s`` string than
+    orderflow (e.g. index naming) while still avoiding mixed intervals.
+    """
+    if body is None or not interval:
+        return body
+    if not isinstance(body, list):
+        return body
+    iv = str(interval).strip()
+    sym = (symbol or "").strip() or None
+    out: list[Any] = []
+    for item in body:
+        if not isinstance(item, dict):
+            continue
+        if item.get("i") != iv:
+            continue
+        if sym:
+            it_s = item.get("s")
+            if it_s is not None and it_s != sym:
+                continue
+        out.append(item)
+    if not out and relax_symbol_if_empty and sym and iv:
+        for item in body:
+            if not isinstance(item, dict):
+                continue
+            if item.get("i") != iv:
+                continue
+            out.append(item)
+    return out
+
+
+def _relax_symbol_filter_from_api_cd(api_cd: Optional[dict[str, Any]]) -> bool:
+    if api_cd is None:
+        return False
+    return bool(api_cd.get("relax_symbol_filter_if_empty", True))
+
+
+def _coinmap_apply_export_symbol_to_payload(
+    payload: dict[str, Any],
+    *,
+    internal_symbol: Optional[str],
+    export_symbol: Optional[str],
+) -> dict[str, Any]:
+    """
+    Set top-level ``symbol`` (and per-bar ``s``) to the TradingView-style label when
+    ``export_symbol`` is set; keep ``coinmap_symbol`` when it differs from the watchlist id.
+    """
+    internal = (internal_symbol or "").strip() or None
+    export = (export_symbol or "").strip() or None
+    if not export or export == internal:
+        return payload
+    out = dict(payload)
+    out["symbol"] = export
+    if internal:
+        out["coinmap_symbol"] = internal
+    for key in _COINMAP_API_KEYS:
+        block = out.get(key)
+        if not isinstance(block, list):
+            continue
+        for row in block:
+            if isinstance(row, dict) and row.get("s") == internal:
+                row["s"] = export
+    return out
+
+
+class CoinmapNetworkCapture:
+    """
+    Records JSON bodies from chart-originated gateway responses (Authorization headers
+    from the page), unlike context.request replay which often gets 401.
+    """
+
+    def __init__(self, page, api_cd: dict[str, Any]) -> None:
+        self.page = page
+        self.api_cd = api_cd
+        self._records: list[dict[str, Any]] = []
+        self._handler: Optional[Callable[..., None]] = None
+
+    def install(self) -> None:
+        def handler(response) -> None:
+            self._on_response(response)
+
+        self._handler = handler
+        self.page.on("response", self._handler)
+
+    def uninstall(self) -> None:
+        if self._handler is not None:
+            try:
+                self.page.remove_listener("response", self._handler)
+            except Exception:
+                pass
+            self._handler = None
+
+    def _on_response(self, response) -> None:
+        url = response.url
+        if "gw.coinmap.tech" not in url and not self.api_cd.get("capture_any_host", False):
+            return
+        key = _coinmap_endpoint_key_from_response_url(url)
+        if not key:
+            return
+        max_ch = max(256, int(self.api_cd.get("max_nonjson_body_chars") or 8000))
+        try:
+            status = response.status
+            ok = 200 <= status < 300
+            try:
+                body: Any = response.json()
+            except Exception:
+                text = response.text()
+                body = text if len(text) <= max_ch else text[:max_ch] + "...(truncated)"
+            self._records.append(
+                {"key": key, "url": url, "status": status, "ok": ok, "body": body}
+            )
+        except Exception as e:
+            self._records.append(
+                {"key": key, "url": url, "status": 0, "ok": False, "body": str(e)}
+            )
+
+    def consume_shot(
+        self, start_index: int, step_ctx: Optional[dict[str, Any]] = None
+    ) -> dict[str, Any]:
+        wait_ms = max(0, int(self.api_cd.get("network_capture_wait_ms") or 12_000))
+        poll_ms = max(50, int(self.api_cd.get("network_capture_poll_ms") or 300))
+        deadline = time.monotonic() + wait_ms / 1000.0
+        while time.monotonic() < deadline:
+            if self._shot_has_all_keys(start_index):
+                break
+            self.page.wait_for_timeout(poll_ms)
+        slice_ = self._records[start_index:]
+        return self._last_body_per_key(slice_, step_ctx=step_ctx)
+
+    def _shot_has_all_keys(self, start_index: int) -> bool:
+        slice_ = self._records[start_index:]
+        seen = {r["key"] for r in slice_}
+        return all(k in seen for k in _COINMAP_API_KEYS)
+
+    def _last_body_per_key(
+        self,
+        slice_: list[dict[str, Any]],
+        step_ctx: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        sym = (step_ctx or {}).get("symbol")
+        iv = (step_ctx or {}).get("interval")
+        merge = bool(self.api_cd.get("merge_repeated_endpoint_responses", True))
+        max_per = int(self.api_cd.get("network_capture_max_responses_per_endpoint", 2))
+        relax = _relax_symbol_filter_from_api_cd(self.api_cd)
+        out: dict[str, Any] = {}
+        for key in _COINMAP_API_KEYS:
+            matching = [r for r in slice_ if r.get("key") == key]
+            if max_per > 0 and len(matching) > max_per:
+                matching = matching[:max_per]
+            if not matching:
+                out[key] = {
+                    "ok": False,
+                    "status": 0,
+                    "body": "no matching response captured (timeout or chart did not call this endpoint)",
+                }
+                continue
+
+            if merge:
+                ok_lists: list[Any] = []
+                last_list_record: Optional[dict[str, Any]] = None
+                for r in matching:
+                    if r.get("ok") and isinstance(r.get("body"), list):
+                        filtered = _filter_coinmap_api_array_by_step(
+                            r["body"],
+                            symbol=sym,
+                            interval=iv,
+                            relax_symbol_if_empty=relax,
+                        )
+                        ok_lists.append(filtered)
+                        last_list_record = r
+                if ok_lists:
+                    merged = _merge_coinmap_bar_arrays(ok_lists)
+                    last = last_list_record or matching[-1]
+                    entry: dict[str, Any] = {
+                        "ok": True,
+                        "status": int(last.get("status") or 200),
+                        "body": merged,
+                    }
+                    if last.get("url"):
+                        entry["url"] = last["url"]
+                    out[key] = entry
+                    continue
+
+            last = matching[-1]
+            raw_body = last.get("body")
+            if isinstance(raw_body, list):
+                raw_body = _filter_coinmap_api_array_by_step(
+                    raw_body,
+                    symbol=sym,
+                    interval=iv,
+                    relax_symbol_if_empty=relax,
+                )
+            entry = {
+                "ok": bool(last.get("ok")),
+                "status": int(last.get("status") or 0),
+                "body": raw_body,
+            }
+            if last.get("url"):
+                entry["url"] = last["url"]
+            out[key] = entry
+        return out
+
+
+def _api_export_config(cd: dict[str, Any]) -> Optional[dict[str, Any]]:
+    raw = cd.get("api_data_export")
+    if not isinstance(raw, dict) or not raw.get("enabled"):
+        return None
+    return raw
+
+
+def _format_api_query_placeholders(template: str, step: dict[str, Any]) -> str:
+    mapping = {
+        "symbol": str(step.get("symbol") or ""),
+        "interval": str(step.get("interval") or ""),
+        "watchlist_category": str(step.get("watchlist_category") or ""),
+    }
+    out = template
+    for key, val in mapping.items():
+        out = out.replace("{" + key + "}", val)
+    return out
+
+
+def _merge_api_query_params(api_cd: dict[str, Any], step: dict[str, Any]) -> dict[str, str]:
+    merged: dict[str, Any] = {}
+    for part in (api_cd.get("query_template"), api_cd.get("extra_query"), step.get("api_query")):
+        if isinstance(part, dict):
+            merged.update(part)
+    out: dict[str, str] = {}
+    for k, v in merged.items():
+        if v is None:
+            continue
+        key = str(k)
+        if isinstance(v, bool):
+            out[key] = "true" if v else "false"
+        elif isinstance(v, (int, float)):
+            out[key] = str(v)
+        elif isinstance(v, str):
+            out[key] = _format_api_query_placeholders(v, step)
+        else:
+            out[key] = _format_api_query_placeholders(str(v), step)
+    return out
+
+
+def _merged_coinmap_api_endpoints(api_cd: dict[str, Any]) -> dict[str, str]:
+    d = dict(_DEFAULT_COINMAP_GW_ENDPOINTS)
+    over = api_cd.get("endpoints")
+    if isinstance(over, dict):
+        for k, v in over.items():
+            if isinstance(v, str) and v.strip():
+                d[str(k)] = v.strip()
+    return d
+
+
+def _coinmap_api_request_one(
+    context,
+    *,
+    url: str,
+    method: str,
+    params: dict[str, str],
+    headers: Optional[dict[str, str]],
+    max_nonjson_body_chars: int,
+) -> dict[str, Any]:
+    method_u = (method or "GET").strip().upper() or "GET"
+    req = context.request
+    hdrs = {str(a): str(b) for a, b in (headers or {}).items()} if headers else None
+    try:
+        if method_u == "GET":
+            r = req.get(url, params=params or None, headers=hdrs, timeout=90_000)
+        elif method_u == "POST":
+            r = req.post(url, params=params or None, headers=hdrs, timeout=90_000)
+        else:
+            return {"ok": False, "status": 0, "body": f"unsupported http_method {method_u!r}"}
+        status = r.status
+        text = r.text()
+        ok = 200 <= status < 300
+        try:
+            body: Any = json.loads(text)
+        except json.JSONDecodeError:
+            lim = max(256, int(max_nonjson_body_chars))
+            body = text if len(text) <= lim else text[:lim] + "...(truncated)"
+        return {"ok": ok, "status": status, "body": body}
+    except Exception as e:
+        return {"ok": False, "status": 0, "body": str(e)}
+
+
+def _coinmap_collect_one_shot_api_data(page, api_cd: dict[str, Any], step: dict[str, Any]) -> dict[str, Any]:
+    context = page.context
+    endpoints = _merged_coinmap_api_endpoints(api_cd)
+    q = _merge_api_query_params(api_cd, step)
+    method = str(api_cd.get("http_method") or "GET")
+    rh = api_cd.get("request_headers")
+    headers: Optional[dict[str, str]] = None
+    if isinstance(rh, dict):
+        headers = {str(a): str(b) for a, b in rh.items()}
+    max_ch = int(api_cd.get("max_nonjson_body_chars") or 8000)
+    fail = bool(api_cd.get("fail_on_api_error"))
+    out: dict[str, Any] = {
+        "symbol": step.get("symbol"),
+        "interval": step.get("interval"),
+        "watchlist_category": step.get("watchlist_category"),
+    }
+    ex = step.get("export_symbol")
+    if isinstance(ex, str) and ex.strip():
+        out["export_symbol"] = ex.strip()
+    for key in _COINMAP_API_KEYS:
+        url = endpoints.get(key)
+        if not url:
+            out[key] = {"ok": False, "status": 0, "body": "missing endpoint in api_data_export.endpoints"}
+            continue
+        res = _coinmap_api_request_one(
+            context,
+            url=url,
+            method=method,
+            params=q,
+            headers=headers,
+            max_nonjson_body_chars=max_ch,
+        )
+        out[key] = res
+        if fail and not res["ok"]:
+            raise SystemExit(
+                f"api_data_export: request {key!r} failed status={res['status']} body={res['body']!r}"
+            )
+    return out
+
+
+def _coinmap_shot_from_network(
+    net_capture: CoinmapNetworkCapture, start_idx: int, step_ctx: dict[str, Any]
+) -> dict[str, Any]:
+    grouped = net_capture.consume_shot(start_idx, step_ctx)
+    out: dict[str, Any] = {
+        "symbol": step_ctx.get("symbol"),
+        "interval": step_ctx.get("interval"),
+        "watchlist_category": step_ctx.get("watchlist_category"),
+    }
+    ex = step_ctx.get("export_symbol")
+    if isinstance(ex, str) and ex.strip():
+        out["export_symbol"] = ex.strip()
+    out.update(grouped)
+    return out
+
+
+def _coinmap_maybe_fail_api_shot(api_cd: dict[str, Any], shot: dict[str, Any]) -> None:
+    if not api_cd.get("fail_on_api_error"):
+        return
+    for key in _COINMAP_API_KEYS:
+        block = shot.get(key)
+        if isinstance(block, dict) and not block.get("ok"):
+            raise SystemExit(f"api_data_export: {key!r} failed: {block!r}")
+
+
+def _api_export_simplify_shot(
+    shot: dict[str, Any], api_cd: Optional[dict[str, Any]] = None
+) -> dict[str, Any]:
+    """Strip ok/status/url; each API key maps to parsed body on success, else null."""
+    out: dict[str, Any] = {}
+    for k in ("symbol", "interval", "watchlist_category", "export_symbol"):
+        if k in shot:
+            out[k] = shot[k]
+    sym = shot.get("symbol")
+    iv = shot.get("interval")
+    relax = _relax_symbol_filter_from_api_cd(api_cd)
+    for key in _COINMAP_API_KEYS:
+        block = shot.get(key)
+        if isinstance(block, dict) and block.get("ok"):
+            body = block.get("body")
+            out[key] = _filter_coinmap_api_array_by_step(
+                body, symbol=sym, interval=iv, relax_symbol_if_empty=relax
+            )
+        else:
+            out[key] = None
+    return out
+
+
+def _api_export_slim_disk_enabled(api_cd: Optional[dict[str, Any]]) -> bool:
+    """When true, trim 5m/15m arrays before writing JSON (see coinmap_openai_slim)."""
+    if api_cd is None:
+        return True
+    return bool(api_cd.get("slim_export_on_disk", True))
+
+
+def _write_coinmap_api_shot_json(
+    charts_dir: Path,
+    *,
+    file_stem: str,
+    stamp: str,
+    shot: dict[str, Any],
+    api_cd: Optional[dict[str, Any]] = None,
+) -> Path:
+    """One JSON per chart shot, same stem as the PNG (e.g. {stamp}_coinmap_USDINDEX_15m)."""
+    _ensure_dir(charts_dir)
+    path = charts_dir / f"{file_stem}.json"
+    simplified = _api_export_simplify_shot(shot, api_cd=api_cd)
+    payload: dict[str, Any] = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "stamp": stamp,
+        **simplified,
+    }
+    ex = shot.get("export_symbol")
+    if isinstance(ex, str) and ex.strip():
+        payload = _coinmap_apply_export_symbol_to_payload(
+            payload,
+            internal_symbol=shot.get("symbol"),
+            export_symbol=ex.strip(),
+        )
+    payload.pop("export_symbol", None)
+    if _api_export_slim_disk_enabled(api_cd):
+        payload = slim_coinmap_export_for_openai(payload, path=path)
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"Coinmap API export: {path.resolve()}", flush=True)
+    return path
+
+
+def _maybe_switch_to_dark_mode(page, cd: dict[str, Any]) -> None:
+    """
+    Prefer dark mode: if the theme control does not contain a sun icon span, click it once.
+    Runs before the light-theme confirmation modal.
+    """
+    if not cd.get("dark_mode_enabled", True):
+        return
+    btn_sel = (cd.get("dark_mode_theme_button_selector") or "").strip()
+    if not btn_sel:
+        btn_sel = '[class*="Header_menuIconTheme"]'
+    sun_sel = (cd.get("dark_mode_sun_icon_selector") or "span.anticon-sun").strip()
+    try:
+        btn = page.locator(btn_sel).first
+        btn.wait_for(state="visible", timeout=15_000)
+        if btn.locator(sun_sel).count() == 0:
+            btn.click(timeout=10_000)
+            page.wait_for_timeout(int(cd.get("dark_mode_after_click_ms", 400)))
+    except Exception:
+        pass
+
+
+def _maybe_dismiss_light_theme_modal(page, cd: dict[str, Any]) -> None:
+    """If a 'use light theme' (or similar) confirmation appears, click Confirm and continue."""
+    if not cd.get("light_theme_confirm_enabled", True):
+        return
+    sel = (cd.get("light_theme_confirm_selector") or "").strip()
+    if not sel:
+        sel = 'button:has-text("Confirm"), button:has-text("OK"), button:has-text("Continue")'
+    wait_ms = int(cd.get("light_theme_modal_wait_ms", 2500))
+    try:
+        loc = page.locator(sel).first
+        loc.wait_for(state="visible", timeout=wait_ms)
+        loc.click(timeout=10_000)
+        page.wait_for_timeout(400)
+    except Exception:
+        pass
+
+
+def _maybe_dismiss_coinmap_symbol_search_modal(page, cd: dict[str, Any]) -> None:
+    """
+    Coinmap may auto-open the symbol search modal on /chart. That layer blocks the
+    right sidebar watchlist; we no longer open that modal from automation.
+    """
+    if not cd.get("dismiss_symbol_search_modal", True):
+        return
+    close_sel = (cd.get("symbol_search_modal_close_selector") or "").strip()
+    after = int(cd.get("after_symbol_modal_dismiss_ms", 350))
+    gap = int(cd.get("symbol_modal_escape_gap_ms", 180))
+    if close_sel:
+        try:
+            page.locator(close_sel).first.click(timeout=5_000)
+            page.wait_for_timeout(after)
+        except Exception:
+            pass
+    presses = max(0, int(cd.get("symbol_search_modal_escape_presses", 2)))
+    for _ in range(presses):
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(gap)
+    page.wait_for_timeout(after)
+
+
+def _coinmap_press_escape_n(page, cd: dict[str, Any], *, presses: int) -> None:
+    """Send Escape `presses` times with configurable gap (no-op if presses <= 0)."""
+    n = max(0, int(presses))
+    if n <= 0:
+        return
+    gap = max(0, int(cd.get("coinmap_fullscreen_exit_escape_gap_ms", 200)))
+    for _ in range(n):
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(gap)
+
+
+def _coinmap_exit_fullscreen_after_capture(page, cd: dict[str, Any]) -> None:
+    """
+    After a fullscreen screenshot, leave Coinmap chart fullscreen so the next step can
+    use the header and right-sidebar toggle. Coinmap may use a different header action
+    index for exit than for enter (see coinmap_fullscreen_exit_action_button_index).
+    """
+    if bool(cd.get("coinmap_fullscreen_exit_use_toolbar_click", True)):
+        exit_idx = int(cd.get("coinmap_fullscreen_exit_action_button_index", 0))
+        _coinmap_click_fullscreen_button(
+            page,
+            cd,
+            button_index=exit_idx,
+            force=bool(cd.get("coinmap_fullscreen_exit_click_force", True)),
+        )
+        page.wait_for_timeout(int(cd.get("coinmap_fullscreen_exit_after_toolbar_click_ms", 450)))
+    else:
+        only = max(1, int(cd.get("coinmap_fullscreen_exit_escape_only_presses", 2)))
+        _coinmap_press_escape_n(page, cd, presses=only)
+        return
+    extra = int(cd.get("coinmap_fullscreen_exit_escape_after_toolbar_presses", 0))
+    _coinmap_press_escape_n(page, cd, presses=extra)
+
+
+def _coinmap_unstick_fullscreen_loop_start(page, cd: dict[str, Any]) -> None:
+    """
+    Start of each multi-shot iteration: Escape only. Do not click the fullscreen toolbar
+    button here — if we are not fullscreen, that would enter fullscreen and break the flow.
+    """
+    presses = max(0, int(cd.get("coinmap_fullscreen_loop_start_escape_presses", 1)))
+    _coinmap_press_escape_n(page, cd, presses=presses)
+
+
+def _login_form_is_visible(page, email_sel: str, password_sel: str, timeout_ms: int = 8000) -> bool:
+    """True if email + password fields are on screen (user still needs to log in)."""
+    try:
+        page.locator(email_sel).first.wait_for(state="visible", timeout=timeout_ms)
+        return page.locator(password_sel).first.is_visible()
+    except Exception:
+        return False
+
+
+def _chart_drag_in_box(
+    page,
+    box: dict[str, float],
+    *,
+    x0r: float,
+    y0r: float,
+    x1r: float,
+    y1r: float,
+    drag_steps: int,
+) -> None:
+    x0 = box["x"] + box["width"] * x0r
+    y0 = box["y"] + box["height"] * y0r
+    x1 = box["x"] + box["width"] * x1r
+    y1 = box["y"] + box["height"] * y1r
+    page.mouse.move(x0, y0)
+    page.mouse.down()
+    page.mouse.move(x1, y1, steps=max(1, drag_steps))
+    page.mouse.up()
+
+
+def _apply_coinmap_chart_view_adjustments(page, cd: dict[str, Any]) -> None:
+    """
+    After fullscreen: optional drags — time pan at bottom edge (horizontal), price pan at
+    right edge (vertical), then main chart pan — same gesture as chart drag, cursor position differs.
+
+    Uses bounding_box + mouse.move instead of locator.hover(): Coinmap stacks react-stockcharts
+    SVG/crosshair layers above the background canvas, so hovering the canvas times out.
+    """
+    if not cd.get("chart_view_adjustments_enabled", True):
+        return
+    sel = (cd.get("chart_interaction_selector") or "").strip()
+    if not sel:
+        sel = (
+            "svg.react-stockchart-canvas, svg[class*='react-stockchart-canvas'], "
+            "svg[class*='react-stockchart']"
+        )
+    try:
+        chart = page.locator(sel).first
+        chart.wait_for(state="visible", timeout=25_000)
+    except Exception:
+        return
+
+    box = chart.bounding_box()
+    if not box:
+        page.wait_for_timeout(400)
+        box = chart.bounding_box()
+    if not box:
+        return
+
+    between_ms = int(cd.get("chart_between_pan_ms", 200))
+    pan_y_default = float(cd.get("chart_pan_y_ratio", 0.52))
+    edge_drag_steps = int(cd.get("chart_edge_pan_drag_steps", 12))
+
+    if cd.get("chart_time_edge_pan_enabled", True):
+        ty = float(cd.get("chart_time_edge_pan_y_ratio", 0.96))
+        tsx = float(cd.get("chart_time_edge_pan_start_x_ratio", 0.38))
+        tex = float(cd.get("chart_time_edge_pan_end_x_ratio", 0.58))
+        time_repeats = max(1, int(cd.get("chart_time_edge_pan_repeats", 2)))
+        for i in range(time_repeats):
+            _chart_drag_in_box(
+                page,
+                box,
+                x0r=tsx,
+                y0r=ty,
+                x1r=tex,
+                y1r=ty,
+                drag_steps=edge_drag_steps,
+            )
+            if between_ms and i < time_repeats - 1:
+                page.wait_for_timeout(between_ms)
+        if between_ms:
+            page.wait_for_timeout(between_ms)
+
+    if cd.get("chart_price_edge_pan_enabled", True):
+        px = float(cd.get("chart_price_edge_pan_x_ratio", 0.93))
+        psy = float(cd.get("chart_price_edge_pan_start_y_ratio", 0.22))
+        pey = float(cd.get("chart_price_edge_pan_end_y_ratio", 0.32))
+        _chart_drag_in_box(
+            page,
+            box,
+            x0r=px,
+            y0r=psy,
+            x1r=px,
+            y1r=pey,
+            drag_steps=edge_drag_steps,
+        )
+        if between_ms:
+            page.wait_for_timeout(between_ms)
+
+    sx = float(cd.get("chart_pan_start_x_ratio", 0.28))
+    ex = float(cd.get("chart_pan_end_x_ratio", 0.62))
+    y_ratio = float(cd.get("chart_pan_y_ratio", pan_y_default))
+    main_steps = int(cd.get("chart_pan_drag_steps", 14))
+    _chart_drag_in_box(
+        page,
+        box,
+        x0r=sx,
+        y0r=y_ratio,
+        x1r=ex,
+        y1r=y_ratio,
+        drag_steps=main_steps,
+    )
+    page.wait_for_timeout(int(cd.get("chart_after_adjust_ms", 700)))
+
+
+def _maybe_click_layer_toggle_if_tooltip_tall(page, cd: dict[str, Any]) -> None:
+    """
+    If a layer tooltip div is taller than the threshold, click the layer-list toggle
+    (e.g. collapse open panel) before screenshot.
+    """
+    if not cd.get("layer_tooltip_toggle_before_screenshot", True):
+        return
+    tooltip_sel = (cd.get("layer_tooltip_selector") or '[class*="layerTooltip"]').strip()
+    toggle_sel = (cd.get("layer_list_toggle_button_selector") or '[class*="buttonToggleLayerList"]').strip()
+    min_h = float(cd.get("layer_tooltip_min_height_px", 19))
+    try:
+        if page.locator(tooltip_sel).count() == 0:
+            return
+        tip = page.locator(tooltip_sel).first
+        box = tip.bounding_box()
+        if not box or box["height"] <= min_h:
+            return
+        page.locator(toggle_sel).first.click(timeout=15_000)
+        page.wait_for_timeout(int(cd.get("after_layer_toggle_click_ms", 400)))
+    except Exception:
+        pass
+
+
+def _coinmap_default_capture_plan() -> list[dict[str, Any]]:
+    return [
+        {
+            "symbol": "USDINDEX",
+            "export_symbol": "DXY",
+            "interval": "15m",
+            "watchlist_category": "forex 1",
+        },
+        {"symbol": "XAUUSD", "interval": "15m", "watchlist_category": "forex 1"},
+        {"symbol": "XAUUSD", "interval": "5m"},
+    ]
+
+
+def _coinmap_parse_capture_plan(cd: dict[str, Any]) -> Optional[list[dict[str, Any]]]:
+    raw = cd.get("capture_plan")
+    if not isinstance(raw, list) or not raw:
+        return None
+    out: list[dict[str, Any]] = []
+    for row in raw:
+        if not isinstance(row, dict):
+            continue
+        sym = str(row.get("symbol") or "").strip()
+        iv = str(row.get("interval") or "").strip()
+        if not sym or not iv:
+            continue
+        cat = row.get("watchlist_category")
+        if cat is not None:
+            cat = str(cat).strip()
+            if not cat:
+                cat = None
+        entry: dict[str, Any] = {"symbol": sym, "interval": iv, "watchlist_category": cat}
+        ex = row.get("export_symbol")
+        if isinstance(ex, str) and ex.strip():
+            entry["export_symbol"] = ex.strip()
+        aq = row.get("api_query")
+        if isinstance(aq, dict) and aq:
+            entry["api_query"] = aq
+        out.append(entry)
+    return out or None
+
+
+def _coinmap_resolve_capture_plan(cd: dict[str, Any]) -> Optional[list[dict[str, Any]]]:
+    if not cd.get("multi_shot_enabled", False):
+        return None
+    parsed = _coinmap_parse_capture_plan(cd)
+    if parsed:
+        return parsed
+    return _coinmap_default_capture_plan()
+
+
+def _coinmap_toggle_right_sidebar(page, cd: dict[str, Any]) -> None:
+    """One click on the sidebar control (open or close depending on current state)."""
+    prefix = (cd.get("right_sidebar_container_class_prefix") or "ChartDesktopPage_rightSidebar__").strip()
+    ms = int(cd.get("sidebar_toggle_after_click_ms", 450))
+    force = bool(cd.get("right_sidebar_toggle_click_force", True))
+    custom = (cd.get("right_sidebar_toggle_button_selector") or "").strip()
+    if custom:
+        btn = page.locator(custom).first
+    else:
+        action_pf = (cd.get("right_sidebar_action_button_class_prefix") or "ChartDesktopPage_actionButton").strip()
+        btn = page.locator(f'[class*="{prefix}"] [class*="{action_pf}"]').first
+    btn.wait_for(state="visible", timeout=30_000)
+    btn.click(timeout=15_000, force=force)
+    page.wait_for_timeout(ms)
+
+
+def _coinmap_ensure_right_sidebar_open(page, cd: dict[str, Any]) -> None:
+    """
+    Keep clicking the sidebar toggle until ChartWatchList title is visible.
+    Handles: sidebar starts closed, narrow rail needs a second click, or wrong initial state.
+    """
+    wt = (cd.get("watchlist_title_class_prefix") or "ChartWatchList_title__").strip()
+    title = page.locator(f'[class*="{wt}"]').first
+    quick_ms = int(cd.get("right_sidebar_already_open_check_ms", 2_000))
+    max_toggles = max(1, int(cd.get("right_sidebar_open_max_toggles", 4)))
+    final_timeout = int(cd.get("watchlist_title_visible_timeout_ms", 20_000))
+
+    for _ in range(max_toggles):
+        try:
+            title.wait_for(state="visible", timeout=quick_ms)
+            return
+        except Exception:
+            pass
+        _coinmap_toggle_right_sidebar(page, cd)
+
+    title.wait_for(state="visible", timeout=final_timeout)
+
+
+def _coinmap_click_ant_select_item_option(page, label: str, *, visible_timeout_ms: int = 15_000) -> None:
+    """
+    Ant Design / rc-select: options are div.ant-select-item-option with title=… and
+    .ant-select-item-option-content text — not always exposed as role=option with name.
+    """
+    by_title = page.locator(f'.ant-select-item-option[title="{label}"]').first
+    try:
+        by_title.wait_for(state="visible", timeout=visible_timeout_ms)
+        by_title.click(timeout=15_000)
+        return
+    except Exception:
+        pass
+    opt = page.locator(".ant-select-item-option").filter(
+        has=page.locator(".ant-select-item-option-content").get_by_text(label, exact=True)
+    ).first
+    opt.wait_for(state="visible", timeout=visible_timeout_ms)
+    opt.click(timeout=15_000)
+
+
+def _coinmap_select_watchlist_category(page, cd: dict[str, Any], category_text: str) -> None:
+    title_prefix = (cd.get("watchlist_title_class_prefix") or "ChartWatchList_title__").strip()
+    after_open = int(cd.get("watchlist_dropdown_open_ms", 350))
+    title = page.locator(f'[class*="{title_prefix}"]').first
+    title.wait_for(state="visible", timeout=int(cd.get("watchlist_title_visible_timeout_ms", 20_000)))
+    sel = title.locator(".ant-select").first
+    sel.wait_for(state="visible", timeout=int(cd.get("watchlist_ant_select_visible_timeout_ms", 15_000)))
+    sel.click(timeout=15_000)
+    page.wait_for_timeout(after_open)
+    opt_sel = (cd.get("watchlist_category_option_selector") or "").strip()
+    if opt_sel:
+        page.locator(opt_sel.format(text=category_text)).first.click(timeout=15_000)
+    else:
+        _coinmap_click_ant_select_item_option(
+            page, category_text, visible_timeout_ms=int(cd.get("watchlist_option_visible_timeout_ms", 15_000))
+        )
+    page.wait_for_timeout(int(cd.get("after_watchlist_category_ms", 400)))
+
+
+def _coinmap_select_watchlist_symbol(page, cd: dict[str, Any], symbol: str) -> None:
+    name_prefix = (cd.get("watchlist_symbol_name_class_prefix") or "TableData_symbolNameContent__").strip()
+    custom = (cd.get("watchlist_symbol_row_selector") or "").strip()
+    if custom:
+        page.locator(custom.format(symbol=symbol)).first.click(timeout=15_000)
+    else:
+        page.locator(f'[class*="{name_prefix}"]').get_by_text(symbol, exact=True).first.click(
+            timeout=15_000
+        )
+    page.wait_for_timeout(int(cd.get("after_watchlist_symbol_click_ms", 700)))
+
+
+def _coinmap_select_interval(page, cd: dict[str, Any], interval_text: str) -> None:
+    iv_prefix = (cd.get("interval_select_class_prefix") or "IntervalSelect_intervalSelect__").strip()
+    after_open = int(cd.get("interval_dropdown_open_ms", 350))
+    root = page.locator(f'[class*="{iv_prefix}"]').first
+    root.click(timeout=15_000)
+    page.wait_for_timeout(after_open)
+    opt_sel = (cd.get("interval_option_selector") or "").strip()
+    if opt_sel:
+        page.locator(opt_sel.format(text=interval_text)).first.click(timeout=15_000)
+    else:
+        _coinmap_click_ant_select_item_option(
+            page, interval_text, visible_timeout_ms=int(cd.get("interval_option_visible_timeout_ms", 15_000))
+        )
+    page.wait_for_timeout(int(cd.get("after_interval_select_ms", 800)))
+
+
+def _coinmap_click_fullscreen_button(
+    page,
+    cd: dict[str, Any],
+    *,
+    button_index: Optional[int] = None,
+    force: Optional[bool] = None,
+) -> None:
+    action_prefix = cd.get("section_header_action_class_prefix") or "SectionHeader_actionButton"
+    if button_index is not None:
+        idx = int(button_index)
+    else:
+        idx = int(cd.get("action_button_index", 1))
+    parent = (cd.get("section_header_action_parent_selector") or "").strip()
+    if parent:
+        action_loc = page.locator(parent).locator(f'[class*="{action_prefix}"]')
+    else:
+        action_loc = page.locator(f'[class*="{action_prefix}"]')
+    btn = action_loc.nth(idx)
+    btn.wait_for(state="visible", timeout=30_000)
+    if force is None:
+        force = bool(cd.get("fullscreen_action_button_click_force", False))
+    btn.click(timeout=15_000, force=force)
+
+
+def _coinmap_one_capture_fullscreen_esc(
+    page,
+    cd: dict[str, Any],
+    charts_dir: Path,
+    stamp: str,
+    symbol_slug: str,
+    interval_slug: str,
+) -> Path:
+    """Pan/zoom chart, optional layer toggle, fullscreen, screenshot, exit fullscreen."""
+    _apply_coinmap_chart_view_adjustments(page, cd)
+    _maybe_click_layer_toggle_if_tooltip_tall(page, cd)
+    _coinmap_click_fullscreen_button(page, cd)  # enter fullscreen
+    page.wait_for_timeout(int(cd.get("fullscreen_screenshot_settle_ms", 1500)))
+    full_page = bool(cd.get("fullscreen_screenshot_full_page", True))
+    dest = charts_dir / f"{stamp}_coinmap_{symbol_slug}_{interval_slug}.png"
+    page.screenshot(path=str(dest), full_page=full_page)
+    _coinmap_exit_fullscreen_after_capture(page, cd)
+    page.wait_for_timeout(int(cd.get("after_fullscreen_escape_ms", 600)))
+    return dest
+
+
+def _run_coinmap_multi_shot_flow(
+    page,
+    *,
+    charts_dir: Path,
+    stamp: str,
+    settle_ms: int,
+    cd: dict[str, Any],
+    plan: list[dict[str, Any]],
+    api_cd: Optional[dict[str, Any]] = None,
+    net_capture: Optional[CoinmapNetworkCapture] = None,
+) -> list[Path]:
+    written: list[Path] = []
+    prev_symbol: Optional[str] = None
+    for step in plan:
+        net_start = len(net_capture._records) if net_capture is not None else 0
+        # If exit-after-capture missed, Escape only (toolbar click would toggle ON when not fullscreen).
+        _coinmap_unstick_fullscreen_loop_start(page, cd)
+        sym = step["symbol"]
+        interval = step["interval"]
+        cat = step.get("watchlist_category")
+        need_pick = cat is not None or prev_symbol != sym
+        if need_pick:
+            _coinmap_ensure_right_sidebar_open(page, cd)
+            if cat:
+                _coinmap_select_watchlist_category(page, cd, cat)
+            _coinmap_select_watchlist_symbol(page, cd, sym)
+            _coinmap_toggle_right_sidebar(page, cd)
+
+        _coinmap_select_interval(page, cd, interval)
+        page.wait_for_timeout(int(cd.get("after_interval_change_settle_ms", settle_ms)))
+
+        step_ctx: dict[str, Any] = {
+            "symbol": sym,
+            "interval": interval,
+            "watchlist_category": cat,
+            "api_query": step.get("api_query"),
+        }
+        ex = step.get("export_symbol")
+        if isinstance(ex, str) and ex.strip():
+            step_ctx["export_symbol"] = ex.strip()
+        label = (ex.strip() if isinstance(ex, str) and ex.strip() else sym)
+        sym_slug = re.sub(r"[^\w.-]+", "_", label).strip("_")[:40] or "sym"
+        iv_slug = re.sub(r"[^\w]+", "_", interval).strip("_")[:20] or "iv"
+        json_path: Optional[Path] = None
+        if net_capture is not None and api_cd is not None:
+            shot = _coinmap_shot_from_network(net_capture, net_start, step_ctx)
+            _coinmap_maybe_fail_api_shot(api_cd, shot)
+            stem = f"{stamp}_coinmap_{sym_slug}_{iv_slug}"
+            json_path = _write_coinmap_api_shot_json(
+                charts_dir, file_stem=stem, stamp=stamp, shot=shot, api_cd=api_cd
+            )
+        elif api_cd is not None:
+            shot = _coinmap_collect_one_shot_api_data(page, api_cd, step_ctx)
+            stem = f"{stamp}_coinmap_{sym_slug}_{iv_slug}"
+            json_path = _write_coinmap_api_shot_json(
+                charts_dir, file_stem=stem, stamp=stamp, shot=shot, api_cd=api_cd
+            )
+
+        shot_enabled = bool(cd.get("coinmap_screenshot_enabled", True))
+        if shot_enabled:
+            written.append(
+                _coinmap_one_capture_fullscreen_esc(
+                    page, cd, charts_dir, stamp, sym_slug, iv_slug
+                )
+            )
+        else:
+            _apply_coinmap_chart_view_adjustments(page, cd)
+            page.wait_for_timeout(int(cd.get("chart_after_adjust_ms", 800)))
+            if json_path is not None:
+                written.append(json_path)
+            else:
+                written.append(
+                    _coinmap_one_capture_fullscreen_esc(
+                        page, cd, charts_dir, stamp, sym_slug, iv_slug
+                    )
+                )
+        prev_symbol = sym
+    return written
+
+
+def _run_chart_screenshot_flow(
+    page,
+    *,
+    charts_dir: Path,
+    stamp: str,
+    settle_ms: int,
+    cd: dict[str, Any],
+) -> list[Path]:
+    """Open chart: multi-shot watchlist sidebar flow, or single fullscreen on current symbol (no modal search)."""
+    api_cd = _api_export_config(cd)
+    net_capture: Optional[CoinmapNetworkCapture] = None
+    if api_cd is not None and _api_export_mode(api_cd) != "request":
+        net_capture = CoinmapNetworkCapture(page, api_cd)
+        net_capture.install()
+
+    url = cd.get("chart_page_url") or "https://coinmap.tech/chart"
+    try:
+        page.goto(url, wait_until="domcontentloaded", timeout=90_000)
+        page.wait_for_timeout(settle_ms)
+        _maybe_dismiss_coinmap_symbol_search_modal(page, cd)
+        _maybe_switch_to_dark_mode(page, cd)
+        _maybe_dismiss_light_theme_modal(page, cd)
+        _maybe_dismiss_coinmap_symbol_search_modal(page, cd)
+
+        plan = _coinmap_resolve_capture_plan(cd)
+        if plan:
+            paths = _run_coinmap_multi_shot_flow(
+                page,
+                charts_dir=charts_dir,
+                stamp=stamp,
+                settle_ms=settle_ms,
+                cd=cd,
+                plan=plan,
+                api_cd=api_cd,
+                net_capture=net_capture,
+            )
+            return paths
+
+        json_path: Optional[Path] = None
+        if net_capture is not None and api_cd is not None:
+            shot = _coinmap_shot_from_network(
+                net_capture,
+                0,
+                {"symbol": "", "interval": "", "watchlist_category": None},
+            )
+            _coinmap_maybe_fail_api_shot(api_cd, shot)
+            json_path = _write_coinmap_api_shot_json(
+                charts_dir,
+                file_stem=f"{stamp}_chart_fullscreen",
+                stamp=stamp,
+                shot=shot,
+                api_cd=api_cd,
+            )
+        elif api_cd is not None:
+            shot = _coinmap_collect_one_shot_api_data(
+                page,
+                api_cd,
+                {"symbol": "", "interval": "", "watchlist_category": None},
+            )
+            json_path = _write_coinmap_api_shot_json(
+                charts_dir,
+                file_stem=f"{stamp}_chart_fullscreen",
+                stamp=stamp,
+                shot=shot,
+                api_cd=api_cd,
+            )
+
+        shot_enabled = bool(cd.get("coinmap_screenshot_enabled", True))
+        if not shot_enabled:
+            _apply_coinmap_chart_view_adjustments(page, cd)
+            page.wait_for_timeout(int(cd.get("chart_after_adjust_ms", 800)))
+            if json_path is not None:
+                return [json_path]
+            _coinmap_click_fullscreen_button(page, cd)
+            fs_wait = int(cd.get("fullscreen_screenshot_settle_ms", 2000))
+            page.wait_for_timeout(fs_wait)
+            _apply_coinmap_chart_view_adjustments(page, cd)
+            _maybe_click_layer_toggle_if_tooltip_tall(page, cd)
+            full_page = bool(cd.get("fullscreen_screenshot_full_page", True))
+            dest = charts_dir / f"{stamp}_chart_fullscreen.png"
+            page.screenshot(path=str(dest), full_page=full_page)
+            return [dest]
+
+        _coinmap_click_fullscreen_button(page, cd)
+        fs_wait = int(cd.get("fullscreen_screenshot_settle_ms", 2000))
+        page.wait_for_timeout(fs_wait)
+        _apply_coinmap_chart_view_adjustments(page, cd)
+        _maybe_click_layer_toggle_if_tooltip_tall(page, cd)
+        full_page = bool(cd.get("fullscreen_screenshot_full_page", True))
+        dest = charts_dir / f"{stamp}_chart_fullscreen.png"
+        page.screenshot(path=str(dest), full_page=full_page)
+        return [dest]
+    finally:
+        if net_capture is not None:
+            net_capture.uninstall()
+
+
+def _maybe_tradingview_dark_mode(page, tv: dict[str, Any]) -> None:
+    """
+    TradingView: open top-left menu (class prefix topLeftButton-*), then if the
+    theme row's switch input does not have aria-checked="true", click the label row
+    to enable dark theme. The real input is under label > … > div.switchWrap > span
+    > input#theme-switcher (not the first label child div, which is labelRow only).
+    Uses force=True on the label click because TradingView sets aria-disabled on
+    the switch while the menu is open.
+    """
+    if not tv.get("dark_mode_enabled", True):
+        return
+    prefix = (tv.get("dark_mode_menu_button_class_prefix") or "topLeftButton-").strip()
+    label_for = (tv.get("theme_switcher_label_for") or "theme-switcher").strip()
+    switch_sel = (tv.get("theme_switch_input_selector") or "input#theme-switcher").strip()
+    open_ms = int(tv.get("dark_mode_menu_open_ms", 500))
+    after_ms = int(tv.get("dark_mode_after_theme_click_ms", 600))
+    menu_sel = f'[class*="{prefix}"]'
+    menu_opened = False
+    try:
+        menu_btn = page.locator(menu_sel).first
+        menu_btn.wait_for(state="visible", timeout=20_000)
+        menu_btn.click(timeout=15_000)
+        menu_opened = True
+        page.wait_for_timeout(open_ms)
+        label = page.locator(f'label[for="{label_for}"]').first
+        label.wait_for(state="visible", timeout=10_000)
+        switch_input = label.locator(switch_sel).first
+        switch_input.wait_for(state="attached", timeout=10_000)
+        aria_checked = (switch_input.get_attribute("aria-checked") or "").lower()
+        if aria_checked != "true":
+            label.click(timeout=10_000, force=True)
+            page.wait_for_timeout(after_ms)
+    except Exception:
+        pass
+    finally:
+        if menu_opened:
+            try:
+                page.locator(menu_sel).first.click(timeout=15_000)
+                page.wait_for_timeout(after_ms)
+            except Exception:
+                pass
+
+
+def _maybe_tradingview_login(
+    page,
+    tv: dict[str, Any],
+    email: Optional[str],
+    password: Optional[str],
+) -> None:
+    """
+    After chart load: open top-left menu, click "Đăng nhập" if shown (else already
+    logged in), fill COINMAP_EMAIL + TRADINGVIEW_PASSWORD, submit. Login UI closes
+    on its own; we then wait until the chart UI (intervals toolbar) is visible again.
+    Closes the menu if it stays open after skipping login.
+    """
+    if not tv.get("login_enabled", True):
+        return
+    if not email or not password:
+        return
+
+    intervals_id = (tv.get("intervals_toolbar_id") or "header-toolbar-intervals").strip().lstrip("#")
+    chart_ready_sel = (tv.get("login_chart_ready_selector") or "").strip() or f"#{intervals_id}"
+    chart_ready_timeout_ms = int(tv.get("login_chart_ready_timeout_ms", 90_000))
+
+    prefix = (tv.get("dark_mode_menu_button_class_prefix") or "topLeftButton-").strip()
+    menu_sel = f'[class*="{prefix}"]'
+    open_ms = int(tv.get("login_menu_open_ms", 500))
+    sign_timeout = int(tv.get("login_sign_in_visible_timeout_ms", 5_000))
+    after_sign_ms = int(tv.get("login_after_sign_in_click_ms", 1_500))
+    post_submit_ms = int(tv.get("login_post_submit_settle_ms", 800))
+
+    email_sel = (tv.get("login_email_selector") or "").strip() or (
+        'input[type="email"], input#id_username, input[name="username"], '
+        'input[name="email"], input[autocomplete="username"]'
+    )
+    pass_sel = (tv.get("login_password_selector") or 'input[type="password"]').strip()
+    submit_sel = (tv.get("login_submit_selector") or "").strip() or (
+        'button[type="submit"], button:has-text("Đăng nhập"), button:has-text("Sign in")'
+    )
+
+    sign_in_custom = (tv.get("login_sign_in_selector") or "").strip()
+    sign_in_text = (tv.get("login_sign_in_text") or "Đăng nhập").strip()
+    iframe_sel = (tv.get("login_iframe_selector") or "").strip()
+
+    menu_opened = False
+    try:
+        menu_btn = page.locator(menu_sel).first
+        menu_btn.wait_for(state="visible", timeout=45_000)
+        menu_btn.click(timeout=15_000)
+        menu_opened = True
+        page.wait_for_timeout(open_ms)
+
+        if sign_in_custom:
+            sign_loc = page.locator(sign_in_custom).first
+        else:
+            sign_loc = page.get_by_text(sign_in_text, exact=True).first
+
+        try:
+            sign_loc.wait_for(state="visible", timeout=sign_timeout)
+        except Exception:
+            return
+
+        sign_loc.click(timeout=15_000)
+        menu_opened = False
+        page.wait_for_timeout(after_sign_ms)
+
+        if iframe_sel:
+            fl = page.frame_locator(iframe_sel)
+            email_loc = fl.locator(email_sel).first
+            pass_loc = fl.locator(pass_sel).first
+            sub_loc = fl.locator(submit_sel).first
+        else:
+            email_loc = page.locator(email_sel).first
+            pass_loc = page.locator(pass_sel).first
+            sub_loc = page.locator(submit_sel).first
+
+        email_loc.wait_for(state="visible", timeout=45_000)
+        email_loc.fill(email, timeout=15_000)
+        pass_loc.fill(password, timeout=15_000)
+        sub_loc.click(timeout=15_000)
+
+        page.locator(chart_ready_sel).first.wait_for(
+            state="visible",
+            timeout=chart_ready_timeout_ms,
+        )
+        if post_submit_ms > 0:
+            page.wait_for_timeout(post_submit_ms)
+
+    finally:
+        if menu_opened:
+            try:
+                page.locator(menu_sel).first.click(timeout=10_000)
+                page.wait_for_timeout(open_ms)
+            except Exception:
+                pass
+
+
+def _tradingview_interval_slug(label: str, tv: dict[str, Any]) -> str:
+    overrides = tv.get("interval_filename_slugs")
+    if isinstance(overrides, dict) and label in overrides:
+        return str(overrides[label]).strip() or "interval"
+    defaults: dict[str, str] = {
+        "4 giờ": "4h",
+        "1 giờ": "1h",
+        "15 phút": "15m",
+        "5 phút": "5m",
+    }
+    if label in defaults:
+        return defaults[label]
+    slug = re.sub(r"[^\w]+", "_", label.strip()).strip("_")[:40]
+    return slug or "interval"
+
+
+def _tradingview_parse_capture_plan(tv: dict[str, Any]) -> Optional[list[tuple[str, list[str]]]]:
+    raw = tv.get("capture_plan")
+    if not isinstance(raw, list) or not raw:
+        return None
+    out: list[tuple[str, list[str]]] = []
+    for row in raw:
+        if not isinstance(row, dict):
+            continue
+        sym = str(row.get("symbol") or "").strip()
+        intervals = row.get("intervals") or row.get("intervals_aria")
+        if not sym or not isinstance(intervals, list):
+            continue
+        labels = [str(x).strip() for x in intervals if str(x).strip()]
+        if labels:
+            out.append((sym, labels))
+    return out or None
+
+
+def _tradingview_default_capture_plan() -> list[tuple[str, list[str]]]:
+    return [
+        ("DXY", ["4 giờ", "1 giờ", "15 phút"]),
+        ("XAUUSD", ["4 giờ", "1 giờ", "15 phút", "5 phút"]),
+    ]
+
+
+def _tradingview_resolve_capture_plan(tv: dict[str, Any]) -> Optional[list[tuple[str, list[str]]]]:
+    if not tv.get("multi_shot_enabled", True):
+        return None
+    parsed = _tradingview_parse_capture_plan(tv)
+    if parsed:
+        return parsed
+    return _tradingview_default_capture_plan()
+
+
+def _tradingview_ensure_watchlist_open(page, tv: dict[str, Any]) -> None:
+    aria = (tv.get("watchlist_button_aria_label") or "").strip()
+    if not aria:
+        aria = "Danh sách theo dõi, thông tin chi tiết và tin tức"
+    ms = int(tv.get("watchlist_open_ms", 500))
+    btn = page.locator(f'button[aria-label="{aria}"]').first
+    btn.wait_for(state="visible", timeout=30_000)
+    pressed = (btn.get_attribute("aria-pressed") or "").lower()
+    if pressed != "true":
+        btn.click(timeout=15_000)
+        page.wait_for_timeout(ms)
+
+
+def _tradingview_select_symbol(page, tv: dict[str, Any], symbol: str) -> None:
+    custom = (tv.get("symbol_list_item_selector") or "").strip()
+    if custom:
+        loc = page.locator(custom.format(symbol=symbol)).first
+    else:
+        prefix = (tv.get("symbol_name_class_prefix") or "symbolNameText-").strip()
+        loc = page.locator(f'[class*="{prefix}"]').get_by_text(symbol, exact=True).first
+    loc.wait_for(state="visible", timeout=25_000)
+    loc.click(timeout=15_000)
+    page.wait_for_timeout(int(tv.get("after_symbol_select_ms", 1_500)))
+
+
+def _tradingview_select_interval(
+    page,
+    toolbar,
+    tv: dict[str, Any],
+    interval_aria: str,
+    settle_ms: int,
+) -> None:
+    interval_btn = toolbar.locator(f'button[aria-label="{interval_aria}"]').first
+    interval_btn.wait_for(state="attached", timeout=30_000)
+    use_force = bool(tv.get("interval_button_click_force", True))
+    interval_btn.click(timeout=15_000, force=use_force)
+    page.wait_for_timeout(int(tv.get("after_interval_select_ms", settle_ms)))
+
+
+def _tradingview_fullscreen_screenshot_then_escape(
+    page,
+    tv: dict[str, Any],
+    charts_dir: Path,
+    stamp: str,
+    symbol_key: str,
+    interval_slug: str,
+    *,
+    dest_path: Optional[Path] = None,
+) -> Path:
+    fs_sel = (tv.get("fullscreen_button_selector") or "#header-toolbar-fullscreen").strip()
+    page.locator(fs_sel).first.wait_for(state="visible", timeout=45_000)
+    page.locator(fs_sel).first.click(timeout=15_000)
+    _wait_tradingview_fullscreen_notice_gone(page, tv)
+    fs_wait = int(tv.get("fullscreen_settle_ms", 2000))
+    page.wait_for_timeout(fs_wait)
+    full_page = bool(tv.get("fullscreen_screenshot_full_page", True))
+    dest = dest_path or (charts_dir / f"{stamp}_tradingview_{symbol_key}_{interval_slug}.png")
+    page.screenshot(path=str(dest), full_page=full_page)
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(int(tv.get("after_fullscreen_escape_ms", 800)))
+    return dest
+
+
+def _run_tradingview_multi_shot_flow(
+    page,
+    *,
+    charts_dir: Path,
+    stamp: str,
+    settle_ms: int,
+    tv: dict[str, Any],
+    plan: list[tuple[str, list[str]]],
+) -> list[Path]:
+    intervals_id = (tv.get("intervals_toolbar_id") or "header-toolbar-intervals").strip()
+    toolbar = page.locator(f"#{intervals_id}")
+    written: list[Path] = []
+    for symbol, intervals in plan:
+        _tradingview_ensure_watchlist_open(page, tv)
+        _tradingview_select_symbol(page, tv, symbol)
+        toolbar.wait_for(state="visible", timeout=60_000)
+        sym_key = re.sub(r"[^\w.-]+", "_", symbol).strip("_")[:40] or "sym"
+        for aria in intervals:
+            slug = _tradingview_interval_slug(aria, tv)
+            _tradingview_select_interval(page, toolbar, tv, aria, settle_ms)
+            path = _tradingview_fullscreen_screenshot_then_escape(
+                page, tv, charts_dir, stamp, sym_key, slug
+            )
+            written.append(path)
+    return written
+
+
+def _wait_tradingview_fullscreen_notice_gone(page, tv: dict[str, Any]) -> None:
+    """After TV fullscreen, wait for the 'panels hidden' toast container to disappear before screenshot."""
+    notice_sel = (tv.get("tradingview_fullscreen_notice_selector") or "").strip()
+    if not notice_sel:
+        notice_sel = 'div[class*="container-default-"][class*="notice-"]'
+    if tv.get("tradingview_fullscreen_notice_wait_disabled", False):
+        return
+    loc = page.locator(notice_sel).first
+    visible_ms = int(tv.get("tradingview_fullscreen_notice_visible_timeout_ms", 10_000))
+    hide_ms = int(tv.get("tradingview_fullscreen_notice_hide_timeout_ms", 45_000))
+    try:
+        loc.wait_for(state="visible", timeout=visible_ms)
+    except Exception:
+        pass
+    try:
+        loc.wait_for(state="hidden", timeout=hide_ms)
+    except Exception:
+        pass
+
+
+def _run_tradingview_screenshot_flow(
+    page,
+    *,
+    charts_dir: Path,
+    stamp: str,
+    settle_ms: int,
+    tv: dict[str, Any],
+    coinmap_email: Optional[str] = None,
+    tradingview_password: Optional[str] = None,
+) -> list[Path]:
+    """
+    Open TradingView: optional login, dark mode, then either multi-shot (watchlist →
+    symbol → interval → fullscreen → screenshot → Esc, per capture_plan) or legacy
+    single fullscreen frame.
+    """
+    tw = int(tv.get("viewport_width", 0) or 0)
+    th = int(tv.get("viewport_height", 0) or 0)
+    if tw > 0 and th > 0:
+        page.set_viewport_size({"width": tw, "height": th})
+
+    url = tv.get("chart_url") or "https://vn.tradingview.com/chart/?symbol=OANDA%3AXAUUSD"
+    page.goto(url, wait_until="domcontentloaded", timeout=120_000)
+    init_wait = int(tv.get("initial_settle_ms", settle_ms))
+    page.wait_for_timeout(init_wait)
+
+    _maybe_tradingview_login(page, tv, coinmap_email, tradingview_password)
+
+    intervals_id = (tv.get("intervals_toolbar_id") or "header-toolbar-intervals").strip()
+    toolbar = page.locator(f"#{intervals_id}")
+    toolbar.wait_for(state="visible", timeout=90_000)
+
+    _maybe_tradingview_dark_mode(page, tv)
+
+    plan = _tradingview_resolve_capture_plan(tv)
+    if plan:
+        return _run_tradingview_multi_shot_flow(
+            page,
+            charts_dir=charts_dir,
+            stamp=stamp,
+            settle_ms=settle_ms,
+            tv=tv,
+            plan=plan,
+        )
+
+    interval_aria = (tv.get("interval_button_aria_label") or "15 phút").strip()
+    interval_btn = toolbar.locator(f'button[aria-label="{interval_aria}"]').first
+    interval_btn.wait_for(state="attached", timeout=30_000)
+    use_force = bool(tv.get("interval_button_click_force", True))
+    interval_btn.click(timeout=15_000, force=use_force)
+    page.wait_for_timeout(int(tv.get("after_interval_select_ms", settle_ms)))
+
+    legacy_path = charts_dir / f"{stamp}_tradingview_fullscreen.png"
+    dest = _tradingview_fullscreen_screenshot_then_escape(
+        page,
+        tv,
+        charts_dir,
+        stamp,
+        "fullscreen",
+        "single",
+        dest_path=legacy_path,
+    )
+    return [dest]
+
+
+def capture_charts(
+    *,
+    coinmap_yaml: Path,
+    charts_dir: Path,
+    storage_state_path: Optional[Path],
+    email: Optional[str],
+    password: Optional[str],
+    tradingview_password: Optional[str] = None,
+    save_storage_state: bool = True,
+    headless: bool = True,
+) -> list[Path]:
+    """
+    Optionally clear prior images in charts_dir, then log in (if credentials given),
+    optionally run chart screenshot flow (see config chart_download), then optionally
+    screenshot canvas elements. Saves files under charts_dir.
+    """
+    cfg = load_coinmap_yaml(coinmap_yaml)
+    login_url = cfg.get("login_url") or "https://coinmap.tech/login"
+    post_wait = (cfg.get("post_login_wait_selector") or "").strip()
+    chart_selectors: list[str] = list(cfg.get("chart_selectors") or ["canvas"])
+    fallback_full = bool(cfg.get("fallback_full_page", True))
+    settle_ms = int(cfg.get("settle_ms", 2000))
+    max_charts = int(cfg.get("max_charts", 0))
+
+    email_sel = cfg.get("email_selector") or 'input[type="email"]'
+    password_sel = cfg.get("password_selector") or 'input[type="password"]'
+    submit_sel = cfg.get("submit_selector") or 'button[type="submit"]'
+
+    has_storage = bool(storage_state_path and storage_state_path.exists())
+    if bool(email) != bool(password):
+        raise SystemExit("Set both COINMAP_EMAIL and COINMAP_PASSWORD, or leave both empty and use storage state.")
+    if not email and not password and not has_storage:
+        raise SystemExit(
+            "Coinmap capture needs COINMAP_EMAIL and COINMAP_PASSWORD in .env, "
+            f"or an existing Playwright storage state file (e.g. {storage_state_path})."
+        )
+
+    _ensure_dir(charts_dir)
+    if bool(cfg.get("clear_charts_before_capture", True)):
+        _clear_charts_dir(charts_dir)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    written: list[Path] = []
+
+    vw = int(cfg.get("viewport_width", 1920))
+    vh = int(cfg.get("viewport_height", 1080))
+
+    with sync_playwright() as p:
+        browser, context = launch_chrome_context(
+            p,
+            headless=headless,
+            storage_state_path=storage_state_path,
+            viewport_width=vw,
+            viewport_height=vh,
+        )
+        page = context.new_page()
+        try:
+            page.goto(login_url, wait_until="domcontentloaded", timeout=60_000)
+            page.wait_for_timeout(settle_ms)
+
+            if email and password:
+                if _login_form_is_visible(page, email_sel, password_sel):
+                    page.locator(email_sel).first.fill(email, timeout=15_000)
+                    page.locator(password_sel).first.fill(password, timeout=15_000)
+                    page.locator(submit_sel).first.click(timeout=15_000)
+                    page.wait_for_load_state("networkidle", timeout=60_000)
+                    page.wait_for_timeout(settle_ms)
+                else:
+                    print(
+                        "Already logged in (no login form visible); skipping credential submit.",
+                        flush=True,
+                    )
+
+            if post_wait:
+                try:
+                    page.locator(post_wait).first.wait_for(state="visible", timeout=30_000)
+                except Exception:
+                    pass
+
+            cd = cfg.get("chart_download") or {}
+            if not isinstance(cd, dict):
+                cd = {}
+            if cd.get("enabled", False):
+                try:
+                    dl_paths = _run_chart_screenshot_flow(
+                        page,
+                        charts_dir=charts_dir,
+                        stamp=stamp,
+                        settle_ms=settle_ms,
+                        cd=cd,
+                    )
+                    written.extend(dl_paths)
+                except Exception as e:
+                    raise SystemExit(
+                        "chart_download flow failed. Check selectors in config/coinmap.yaml "
+                        f"(multi_shot sidebar/watchlist/interval or single fullscreen). Error: {e}"
+                    ) from e
+
+            tv = cfg.get("tradingview_capture") or {}
+            if isinstance(tv, dict) and tv.get("enabled", False):
+                tv_page = context.new_page()
+                try:
+                    tv_paths = _run_tradingview_screenshot_flow(
+                        tv_page,
+                        charts_dir=charts_dir,
+                        stamp=stamp,
+                        settle_ms=settle_ms,
+                        tv=tv,
+                        coinmap_email=email,
+                        tradingview_password=tradingview_password,
+                    )
+                    written.extend(tv_paths)
+                except Exception as e:
+                    raise SystemExit(
+                        "tradingview_capture failed. Check config/coinmap.yaml "
+                        f"(capture_plan, watchlist, symbols, intervals, fullscreen). Error: {e}"
+                    ) from e
+                finally:
+                    tv_page.close()
+
+            screenshot_after = bool(cfg.get("screenshot_after_chart_download", True))
+            skip_canvas = bool(cd.get("enabled")) and not screenshot_after
+
+            if not skip_canvas:
+                idx = 0
+                for sel in chart_selectors:
+                    if max_charts and idx >= max_charts:
+                        break
+                    locs = page.locator(sel)
+                    n = locs.count()
+                    for i in range(n):
+                        if max_charts and idx >= max_charts:
+                            break
+                        path = charts_dir / f"{stamp}_chart_{idx:03d}.png"
+                        try:
+                            locs.nth(i).screenshot(path=str(path), timeout=20_000)
+                            written.append(path)
+                            idx += 1
+                        except Exception:
+                            continue
+
+                if not written and fallback_full:
+                    path = charts_dir / f"{stamp}_fullpage.png"
+                    page.screenshot(path=str(path), full_page=True)
+                    written.append(path)
+
+            if save_storage_state and storage_state_path:
+                _ensure_dir(storage_state_path.parent)
+                context.storage_state(path=str(storage_state_path))
+        finally:
+            close_browser_and_context(browser, context)
+
+    return written
+
+

@@ -1,0 +1,125 @@
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from pathlib import Path
+from typing import List, Optional
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _parse_include() -> List[str]:
+    raw = os.getenv("OPENAI_RESPONSES_INCLUDE")
+    if raw is None or not raw.strip():
+        return [
+            "reasoning.encrypted_content",
+            "web_search_call.action.sources",
+        ]
+    return [p.strip() for p in raw.split(",") if p.strip()]
+
+
+@dataclass
+class Settings:
+    coinmap_email: Optional[str]
+    coinmap_password: Optional[str]
+    tradingview_password: Optional[str]
+    openai_api_key: str
+    openai_prompt_id: str
+    openai_prompt_version: Optional[str]
+    openai_vector_store_ids: list[str]
+    openai_responses_store: bool
+    openai_responses_include: List[str]
+    telegram_bot_token: str
+    telegram_chat_id: str
+    # Optional second chat: receives [OUTPUT_NGAN_GON] when model uses dual markers (see telegram_bot.split_output_chi_tiet_ngan_gon).
+    telegram_output_ngan_gon_chat_id: Optional[str]
+    # Telegram sendMessage parse_mode: None = plain text. Use Markdown, MarkdownV2, or HTML for formatting.
+    telegram_parse_mode: Optional[str]
+    coinmap_base_url: str
+
+
+def _root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def default_data_dir() -> Path:
+    return _root() / "data"
+
+
+def default_charts_dir() -> Path:
+    return default_data_dir() / "charts"
+
+
+def default_coinmap_data_json_path() -> Path:
+    """Single combined file is no longer written; JSON exports live next to PNGs in charts_dir."""
+    return default_data_dir() / "coinmap_data.json"
+
+
+def default_coinmap_config_path() -> Path:
+    return _root() / "config" / "coinmap.yaml"
+
+
+def default_storage_state_path() -> Path:
+    return default_data_dir() / "storage_state.json"
+
+
+def _parse_vector_store_ids() -> list[str]:
+    raw = os.getenv("OPENAI_VECTOR_STORE_IDS") or os.getenv("OPENAI_VECTOR_STORE_ID") or ""
+    return [p.strip() for p in raw.split(",") if p.strip()]
+
+
+def _parse_telegram_parse_mode() -> Optional[str]:
+    raw = (os.getenv("TELEGRAM_PARSE_MODE") or "").strip()
+    if not raw:
+        return None
+    allowed = {"HTML", "Markdown", "MarkdownV2"}
+    if raw not in allowed:
+        raise SystemExit(
+            f"TELEGRAM_PARSE_MODE must be one of {sorted(allowed)} or empty; got {raw!r}."
+        )
+    return raw
+
+
+def load_settings() -> Settings:
+    ver = (os.getenv("OPENAI_PROMPT_VERSION") or "").strip()
+    return Settings(
+        coinmap_email=os.getenv("COINMAP_EMAIL") or None,
+        coinmap_password=os.getenv("COINMAP_PASSWORD") or None,
+        tradingview_password=os.getenv("TRADINGVIEW_PASSWORD") or None,
+        openai_api_key=os.getenv("OPENAI_API_KEY", ""),
+        openai_prompt_id=(os.getenv("OPENAI_PROMPT_ID") or "").strip(),
+        openai_prompt_version=ver if ver else None,
+        openai_vector_store_ids=_parse_vector_store_ids(),
+        openai_responses_store=_env_bool("OPENAI_RESPONSES_STORE", True),
+        openai_responses_include=_parse_include(),
+        telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
+        telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
+        telegram_output_ngan_gon_chat_id=(
+            (os.getenv("TELEGRAM_OUTPUT_NGAN_GON_CHAT_ID") or "").strip() or None
+        ),
+        telegram_parse_mode=_parse_telegram_parse_mode(),
+        coinmap_base_url=os.getenv("COINMAP_BASE_URL", "https://coinmap.tech"),
+    )
+
+
+def require_openai(s: Settings) -> None:
+    if not s.openai_api_key:
+        raise SystemExit("OPENAI_API_KEY is required.")
+    if not s.openai_prompt_id:
+        raise SystemExit("OPENAI_PROMPT_ID is required (dashboard prompt id, e.g. pmpt_...).")
+
+
+def require_telegram(s: Settings) -> None:
+    if not s.telegram_bot_token:
+        raise SystemExit("TELEGRAM_BOT_TOKEN is required.")
+    if not s.telegram_chat_id:
+        raise SystemExit("TELEGRAM_CHAT_ID is required.")

@@ -1,0 +1,472 @@
+from __future__ import annotations
+
+import html
+import json
+import re
+import sys
+from dataclasses import dataclass
+from typing import Any, Optional
+
+import httpx
+
+TELEGRAM_MAX_MESSAGE = 4096
+
+_RE_OUTPUT_CHI_TIET = re.compile(r"\[OUTPUT_CHI_TIET\]", re.IGNORECASE)
+_RE_OUTPUT_NGAN_GON = re.compile(r"\[OUTPUT_NGAN_GON\]", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class TelegramChunk:
+    """One outbound Telegram message parsed from OpenAI JSON output."""
+
+    text: str
+    parse_mode: Optional[str]  # None = use caller default (e.g. TELEGRAM_PARSE_MODE)
+    html_ready: bool = False  # True: skip markdown_like → HTML conversion for HTML mode
+
+# Characters that must be escaped in MarkdownV2 outside of entities.
+# https://core.telegram.org/bots/api#markdownv2-style
+_MARKDOWN_V2_SPECIAL = r"_*[]()~`>#+-=|{}.!"
+
+
+def line_to_telegram_html(line: str) -> str:
+    """
+    Balanced ``**...**`` → ``<b>...</b>`` via split (no regex — avoids broken/nested tags).
+
+    If ``**`` is unbalanced, return the whole line HTML-escaped (no partial <b>).
+    """
+    parts = line.split("**")
+    if len(parts) % 2 == 0:
+        return html.escape(line)
+    out: list[str] = []
+    for i, seg in enumerate(parts):
+        esc = html.escape(seg)
+        if i % 2 == 1:
+            if seg:
+                out.append(f"<b>{esc}</b>")
+        else:
+            out.append(esc)
+    return "".join(out)
+
+
+def markdown_like_to_telegram_html(text: str) -> str:
+    """
+    Turn common LLM markdown into Telegram HTML (subset: b, code).
+
+    Handles: ``##``/``###`` headings, ``**bold**``, inline `` `code` ``.
+    Escapes ``<``, ``>``, ``&`` everywhere else. Multiline ``**...**`` is OK.
+    """
+    if not text:
+        return ""
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    codes: list[str] = []
+
+    def code_repl(m: re.Match[str]) -> str:
+        codes.append(html.escape(m.group(1)))
+        return f"\x00C{len(codes) - 1}\x00"
+
+    text = re.sub(r"`([^`]+)`", code_repl, text)
+
+    lines = text.split("\n")
+    out_lines: list[str] = []
+    for line in lines:
+        hm = re.match(r"^(#{1,6})\s+(.*)$", line)
+        if hm:
+            title = hm.group(2).strip()
+            # One <b> for the whole heading; inner `**` is rare — if present, strip # and
+            # use same bold splitter without wrapping (avoids nested <b>).
+            if "**" in title:
+                out_lines.append(line_to_telegram_html(title))
+            else:
+                out_lines.append("<b>" + html.escape(title) + "</b>")
+            continue
+        out_lines.append(line_to_telegram_html(line))
+
+    result = "\n".join(out_lines)
+    for i, escaped_inner in enumerate(codes):
+        result = result.replace(f"\x00C{i}\x00", "<code>" + escaped_inner + "</code>")
+    return result
+
+
+def escape_markdown_v2(text: str) -> str:
+    """
+    Make arbitrary UTF-8 text safe for Telegram ``MarkdownV2``.
+
+    Escapes backslashes first, then reserved characters. Result renders as plain
+    text (no inline bold/italic from unescaped ``*``/``_`` in the source).
+    """
+    text = text.replace("\\", "\\\\")
+    for c in _MARKDOWN_V2_SPECIAL:
+        text = text.replace(c, "\\" + c)
+    return text
+
+
+def _strip_json_code_fence(text: str) -> str:
+    t = text.strip()
+    if not t.startswith("```"):
+        return t
+    first_nl = t.find("\n")
+    if first_nl == -1:
+        return t
+    body = t[first_nl + 1 :]
+    body = body.rstrip()
+    if body.endswith("```"):
+        body = body[:-3].rstrip()
+    return body
+
+
+def _msg_body(d: dict[str, Any]) -> str | None:
+    for k in ("text", "body", "content"):
+        v = d.get(k)
+        if isinstance(v, str) and v.strip():
+            return v
+    return None
+
+
+def _chunk_from_message_dict(d: dict[str, Any], *, default_parse_mode: Optional[str]) -> TelegramChunk | None:
+    body = _msg_body(d)
+    if body is None:
+        return None
+    if "parse_mode" in d:
+        pm = d.get("parse_mode")
+        parse_mode: Optional[str]
+        if pm is None or pm == "":
+            parse_mode = None
+        else:
+            parse_mode = str(pm)
+    else:
+        parse_mode = default_parse_mode
+    hr = bool(d.get("html_ready", False))
+    return TelegramChunk(text=body, parse_mode=parse_mode, html_ready=hr)
+
+
+def _try_parse_one_json_object(s: str) -> list[TelegramChunk] | None:
+    """Return chunks if ``s`` is a JSON object with the Telegram contract; else None."""
+    try:
+        data = json.loads(s)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    inner: dict[str, Any]
+    if "telegram" in data:
+        tg = data["telegram"]
+        if not isinstance(tg, dict):
+            return None
+        inner = tg
+    else:
+        inner = data
+
+    default_pm: Optional[str] = None
+    if "parse_mode" in inner and isinstance(inner.get("parse_mode"), str):
+        default_pm = inner["parse_mode"] or None
+
+    if "messages" in inner:
+        raw_list = inner["messages"]
+        if not isinstance(raw_list, list):
+            return None
+        out: list[TelegramChunk] = []
+        for item in raw_list:
+            if not isinstance(item, dict):
+                return None
+            ch = _chunk_from_message_dict(item, default_parse_mode=default_pm)
+            if ch is None:
+                return None
+            out.append(ch)
+        return out if out else None
+
+    ch = _chunk_from_message_dict(inner, default_parse_mode=default_pm)
+    return [ch] if ch else None
+
+
+def parse_openai_telegram_payload(
+    raw: str,
+) -> list[TelegramChunk] | None:
+    """
+    Parse OpenAI step-2 output when the model returns JSON meant for Telegram.
+
+    Supported shapes (also inside `` ```json `` fences):
+
+    - ``{"telegram": {"text": "...", "parse_mode": "HTML", "html_ready": false}}``
+    - ``{"telegram": {"messages": [{"text": "..."}, ...]}}``
+    - ``{"text": "...", "parse_mode": "HTML"}`` (shorthand without ``telegram``)
+
+    Per-message keys: ``text`` / ``body`` / ``content``. Optional ``html_ready``:
+    if true and ``parse_mode`` is HTML, text is sent as-is (already valid Telegram HTML).
+
+    If step 2 was split into several API batches, the model may emit one JSON per batch
+    separated by ``\\n\\n---\\n\\n`` — those are merged in order.
+
+    Returns ``None`` if the string is not structured JSON (caller should send it as
+    legacy plain / markdown-like text).
+    """
+    if not raw or not raw.strip():
+        return None
+
+    raw_stripped = raw.strip()
+
+    for candidate in (raw_stripped, _strip_json_code_fence(raw_stripped)):
+        got = _try_parse_one_json_object(candidate)
+        if got is not None:
+            return got
+
+    segments = [s.strip() for s in raw_stripped.split("\n\n---\n\n") if s.strip()]
+    if len(segments) <= 1:
+        return None
+
+    merged: list[TelegramChunk] = []
+    for seg in segments:
+        got = None
+        for candidate in (seg, _strip_json_code_fence(seg)):
+            got = _try_parse_one_json_object(candidate)
+            if got is not None:
+                break
+        if got is None:
+            return None
+        merged.extend(got)
+    return merged if merged else None
+
+
+def split_output_chi_tiet_ngan_gon(raw: str) -> tuple[str, str] | None:
+    """
+    Parse model output that contains both markers::
+
+        [OUTPUT_CHI_TIET]
+        ... detailed text ...
+        [OUTPUT_NGAN_GON]
+        ... short summary ...
+
+    Returns ``(chi_tiet, ngan_gon)`` with markers stripped, or ``None`` if either
+    marker is missing (caller should fall back to legacy single-message send).
+    """
+    if not raw or not raw.strip():
+        return None
+    t = raw.replace("\r\n", "\n").replace("\r", "\n")
+    m1 = _RE_OUTPUT_CHI_TIET.search(t)
+    if not m1:
+        return None
+    after_first = t[m1.end() :]
+    m2 = _RE_OUTPUT_NGAN_GON.search(after_first)
+    if not m2:
+        return None
+    chi_tiet = after_first[: m2.start()].strip()
+    ngan_gon = after_first[m2.end() :].strip()
+    if not chi_tiet and not ngan_gon:
+        return None
+    return (chi_tiet, ngan_gon)
+
+
+def internal_chat_id_for_t_me_c_link(chat_id: str) -> Optional[str]:
+    """
+    ``t.me/c/<internal>/<msg>`` uses the numeric id without the ``-100`` prefix
+    for supergroups/channels (e.g. ``-1003428716385`` → ``3428716385``).
+    Positive numeric ids (some setups) are passed through when all-digit.
+    """
+    s = chat_id.strip()
+    if s.startswith("-100"):
+        inner = s[4:]
+        return inner if inner.isdigit() else None
+    if s.isdigit() and len(s) >= 8:
+        return s
+    return None
+
+
+def build_t_me_c_message_url(detail_chat_id: str, message_id: int) -> Optional[str]:
+    internal = internal_chat_id_for_t_me_c_link(detail_chat_id)
+    if not internal:
+        return None
+    return f"https://t.me/c/{internal}/{message_id}"
+
+
+def _should_fallback_summary_to_main(err: RuntimeError) -> bool:
+    """True when the summary channel is missing, wrong id, or bot cannot post there."""
+    s = str(err).lower()
+    return any(
+        part in s
+        for part in (
+            "chat not found",
+            "peer_id_invalid",
+            "chat_id is empty",
+            "bot is not a member",
+            "have no rights to send",
+        )
+    )
+
+
+def enrich_ngan_gon_with_detail_link(
+    ngan_gon: str,
+    *,
+    detail_chat_id: str,
+    detail_message_id: int,
+) -> tuple[str, Optional[str], bool]:
+    """
+    Append a permalink to the detailed post. Returns
+    ``(text, parse_mode, html_ready)``. When a link is added, body is converted
+    to Telegram HTML and ``parse_mode`` is ``\"HTML\"`` with ``html_ready=True``
+    so the link is always clickable (works even if the default global mode is MarkdownV2).
+    """
+    url = build_t_me_c_message_url(detail_chat_id, detail_message_id)
+    if not url:
+        return ngan_gon, None, False
+    body = markdown_like_to_telegram_html(ngan_gon)
+    link = f'<a href="{html.escape(url)}">📊 Xem phân tích chi tiết</a>'
+    return body + "\n\n" + link, "HTML", True
+
+
+def chunk_text(text: str, max_len: int = TELEGRAM_MAX_MESSAGE) -> list[str]:
+    """Split for Telegram length limit; prefer ``\\n`` then space so HTML tags are less often torn."""
+    if not text:
+        return [""]
+    if len(text) <= max_len:
+        return [text]
+    chunks: list[str] = []
+    start = 0
+    while start < len(text):
+        end = min(start + max_len, len(text))
+        if end < len(text):
+            nl = text.rfind("\n", start, end)
+            if nl != -1 and nl > start:
+                end = nl + 1
+            else:
+                sp = text.rfind(" ", start, end)
+                if sp != -1 and sp > start:
+                    end = sp + 1
+        chunks.append(text[start:end])
+        start = end
+    return chunks
+
+
+def send_message(
+    *,
+    bot_token: str,
+    chat_id: str,
+    text: str,
+    parse_mode: Optional[str] = None,
+    html_ready: bool = False,
+    timeout: float = 120.0,
+) -> Optional[int]:
+    """
+    Returns the ``message_id`` of the **first** chunk (for permalinks when the
+    message was split). Returns ``None`` if the API response has no message id.
+    """
+    base = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    if parse_mode == "HTML":
+        if not html_ready:
+            text = markdown_like_to_telegram_html(text)
+    elif parse_mode == "MarkdownV2":
+        text = escape_markdown_v2(text)
+    chunks = chunk_text(text)
+    first_message_id: Optional[int] = None
+    with httpx.Client(timeout=timeout) as client:
+        for i, part in enumerate(chunks):
+            data: dict[str, str] = {"chat_id": chat_id, "text": part}
+            if parse_mode:
+                data["parse_mode"] = parse_mode
+            r = client.post(base, data=data)
+            if r.status_code != 200:
+                body = r.text
+                raise RuntimeError(f"Telegram sendMessage failed: {r.status_code} {body}")
+            j = r.json()
+            if not j.get("ok"):
+                raise RuntimeError(f"Telegram API error: {j}")
+            if i == 0:
+                res = j.get("result")
+                if isinstance(res, dict):
+                    mid = res.get("message_id")
+                    if isinstance(mid, int):
+                        first_message_id = mid
+    return first_message_id
+
+
+def send_openai_output_to_telegram(
+    *,
+    bot_token: str,
+    chat_id: str,
+    raw: str,
+    default_parse_mode: Optional[str],
+    summary_chat_id: Optional[str] = None,
+) -> None:
+    """
+    Send OpenAI multimodal step output: either structured JSON (see
+    :func:`parse_openai_telegram_payload`) or legacy free-form text using
+    ``default_parse_mode`` (same behavior as before JSON contract).
+
+    If ``summary_chat_id`` is set and the text contains both ``[OUTPUT_CHI_TIET]``
+    and ``[OUTPUT_NGAN_GON]`` (and the payload is not JSON), detailed text is
+    sent to ``chat_id`` and the short block to ``summary_chat_id``, with a link
+    in the short message pointing at the first detailed message (``t.me/c/...``).
+    """
+    parsed = parse_openai_telegram_payload(raw)
+    if parsed is None:
+        dual: tuple[str, str] | None = None
+        if summary_chat_id and summary_chat_id.strip():
+            dual = split_output_chi_tiet_ngan_gon(raw)
+        if dual is not None:
+            chi_tiet, ngan_gon = dual
+            detail_msg_id: Optional[int] = None
+            if chi_tiet:
+                detail_msg_id = send_message(
+                    bot_token=bot_token,
+                    chat_id=chat_id,
+                    text=chi_tiet,
+                    parse_mode=default_parse_mode,
+                    html_ready=False,
+                )
+            if ngan_gon:
+                text_out = ngan_gon
+                pm_out: Optional[str] = default_parse_mode
+                hr_out = False
+                if detail_msg_id is not None:
+                    text_out, pm2, hr_out = enrich_ngan_gon_with_detail_link(
+                        ngan_gon,
+                        detail_chat_id=chat_id,
+                        detail_message_id=detail_msg_id,
+                    )
+                    if pm2 is not None:
+                        pm_out = pm2
+                target = summary_chat_id.strip()
+                try:
+                    send_message(
+                        bot_token=bot_token,
+                        chat_id=target,
+                        text=text_out,
+                        parse_mode=pm_out,
+                        html_ready=hr_out,
+                    )
+                except RuntimeError as e:
+                    if not _should_fallback_summary_to_main(e):
+                        raise
+                    print(
+                        f"Warning: could not send OUTPUT_NGAN_GON to TELEGRAM_OUTPUT_NGAN_GON_CHAT_ID "
+                        f"({target!r}): {e}\n"
+                        "Fix: add the bot to that channel/group and use the correct id (often -100... for "
+                        "channels). Sending the short summary to TELEGRAM_CHAT_ID instead.",
+                        file=sys.stderr,
+                    )
+                    send_message(
+                        bot_token=bot_token,
+                        chat_id=chat_id,
+                        text=text_out,
+                        parse_mode=pm_out,
+                        html_ready=hr_out,
+                    )
+            return
+        send_message(
+            bot_token=bot_token,
+            chat_id=chat_id,
+            text=raw,
+            parse_mode=default_parse_mode,
+            html_ready=False,
+        )
+        return
+    for chunk in parsed:
+        pm = chunk.parse_mode if chunk.parse_mode is not None else default_parse_mode
+        send_message(
+            bot_token=bot_token,
+            chat_id=chat_id,
+            text=chunk.text,
+            parse_mode=pm,
+            html_ready=chunk.html_ready,
+        )
+

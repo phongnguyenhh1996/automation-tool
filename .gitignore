@@ -1,0 +1,16 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+src/*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+data/charts/*
+!data/charts/.gitkeep
+data/conversation.json
+data/storage_state.json
+data/coinmap_data.json
+data/chrome_user_data/
