@@ -167,6 +167,13 @@ def _parser() -> argparse.ArgumentParser:
             "Mặc định dry-run (Mac dev không cần MetaTrader5)."
         ),
     )
+    mt5.add_argument(
+        "--lot",
+        type=float,
+        default=None,
+        metavar="SIZE",
+        help="Ghi đè khối lượng từ file .md (vd. 0.01 để test nhỏ hơn 0.02).",
+    )
     mt5.set_defaults(func=cmd_mt5_trade)
 
     mt5l = sub.add_parser(
@@ -294,7 +301,12 @@ def cmd_mt5_trade(args: argparse.Namespace) -> None:
     if err or trade is None:
         raise SystemExit(err or "Không parse được lệnh.")
     dry = not args.execute
-    out = execute_trade(trade, dry_run=dry, symbol_override=args.symbol)
+    out = execute_trade(
+        trade,
+        dry_run=dry,
+        symbol_override=args.symbol,
+        lot_override=args.lot,
+    )
     if out.resolved_symbol:
         print("Symbol MT5 (đã resolve):", out.resolved_symbol)
     print(out.message)

@@ -180,6 +180,37 @@ def _retcode_label(mt5: Any, code: Optional[int]) -> str:
     return str(ic)
 
 
+def _is_mt5_trade_success_retcode(mt5: Any, rc: Optional[int]) -> bool:
+    """
+    ``order_check`` / ``order_send`` thành công thường là ``TRADE_RETCODE_DONE`` (10009)
+    hoặc ``TRADE_RETCODE_PLACED``.
+
+    Một số bản MetaTrader5 Python / broker trả ``retcode=0`` kèm ``comment='Done'`` —
+    nếu chỉ so với ``TRADE_RETCODE_DONE`` sẽ từ chối nhầm và không gọi ``order_send``.
+    """
+    if rc is None:
+        return False
+    try:
+        irc = int(rc)
+    except (TypeError, ValueError):
+        return False
+    try:
+        if irc == int(mt5.TRADE_RETCODE_DONE):
+            return True
+    except (TypeError, ValueError):
+        pass
+    if irc == 0:
+        return True
+    placed = getattr(mt5, "TRADE_RETCODE_PLACED", None)
+    if placed is not None:
+        try:
+            if irc == int(placed):
+                return True
+        except (TypeError, ValueError):
+            pass
+    return False
+
+
 def _balance_margin_hint(mt5: Any, retcode: Optional[int]) -> str:
     """Gợi ý khi retcode = NO_MONEY / thiếu margin (chuẩn MT5 thường là 10019)."""
     if retcode is None:
@@ -441,6 +472,7 @@ def execute_trade(
     magic: Optional[int] = None,
     log_tp2: bool = True,
     symbol_override: Optional[str] = None,
+    lot_override: Optional[float] = None,
 ) -> MT5ExecutionResult:
     """
     Gửi lệnh qua MetaTrader5. MT5 chỉ có một TP trên lệnh; TP2 được in ra nếu có.
@@ -448,8 +480,11 @@ def execute_trade(
     Credentials: env ``MT5_LOGIN``, ``MT5_PASSWORD``, ``MT5_SERVER`` hoặc tham số.
 
     Symbol: ``symbol_override`` (CLI ``--symbol``) nếu có, không thì symbol đã parse; luôn chuẩn hóa ``XAUUSD`` → ``XAUUSDm``.
+    Lot: ``lot_override`` ghi đè volume từ file (tiện test với lot nhỏ).
     """
     trade = resolve_mt5_trade_symbol(trade, symbol_override)
+    if lot_override is not None:
+        trade = replace(trade, lot=float(lot_override))
 
     login_i = login if login is not None else _env_int("MT5_LOGIN", 0)
     password_s = password if password is not None else (os.getenv("MT5_PASSWORD") or "")
@@ -523,7 +558,7 @@ def execute_trade(
             )
         chk_rc = getattr(chk, "retcode", None)
         chk_d = _trade_check_dict(chk)
-        if chk_rc is not None and chk_rc != mt5.TRADE_RETCODE_DONE:
+        if chk_rc is not None and not _is_mt5_trade_success_retcode(mt5, chk_rc):
             le = _last_error_tuple(mt5)
             hint = _balance_margin_hint(mt5, chk_rc)
             return MT5ExecutionResult(
@@ -550,11 +585,7 @@ def execute_trade(
             )
         rc = getattr(ret, "retcode", None)
         rd = _trade_result_dict(ret)
-        ok_codes = {mt5.TRADE_RETCODE_DONE}
-        placed = getattr(mt5, "TRADE_RETCODE_PLACED", None)
-        if placed is not None:
-            ok_codes.add(placed)
-        if rc not in ok_codes:
+        if not _is_mt5_trade_success_retcode(mt5, rc):
             le = _last_error_tuple(mt5)
             hint = _balance_margin_hint(mt5, rc)
             return MT5ExecutionResult(
