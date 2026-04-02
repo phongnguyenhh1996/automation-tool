@@ -14,9 +14,9 @@ if errorlevel 1 (
   exit /b 1
 )
 
-REM Run full pipeline and append logs
-echo [%date% %time%] INFO: Starting coinmap-automation all>> "logs\daily.log"
-coinmap-automation all >> "logs\daily.log" 2>&1
+REM Run full pipeline (headed: TradingView alert sync reliable vs headless)
+echo [%date% %time%] INFO: Starting coinmap-automation all --headed>> "logs\daily.log"
+coinmap-automation all --headed >> "logs\daily.log" 2>&1
 set "EXIT_CODE=%ERRORLEVEL%"
 echo [%date% %time%] INFO: Finished with exit code %EXIT_CODE%>> "logs\daily.log"
 
