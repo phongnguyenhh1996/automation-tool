@@ -2,7 +2,7 @@
 
 2: HÃY PHÂN TÍCH THEO QUY TRÌNH TỪNG BƯỚC. SAU KHI TÔI YÊU CẦU CHẠY QUY TRÌNH PHÂN TÍCH. HÃY YÊU CẦU TÔI GỬI TỔNG 10 HÌNH 1 CUỘC TRÒ CHUYỆN GỒM: DXY (H4,H1,M15 VÀ FOOTPRINT M15) ,CẤU TRÚC CẶP CHÍNH (H4,H1,M15,M5) , FOOTPRINT CẶP CHÍNH (M15,M5)
 
-3: LỆNH ĐỀ XUẤT PHẢI CÓ TÍNH DỄ KHỚP DỄ TP + THÊM SPEED CẶP CHÍNH, hợp lưu cao , nếu không phù hợp báo ĐỨNG NGOÀI, hoặc ĐỀ XUẤT VÙNG CHỜ đợi tín hiệu không limit ngay nếu tỉ lệ hợp lưu thấp . Tính khối lượng LOT VÀO LỆNH VỚI SL 7$.
+3: LỆNH ĐỀ XUẤT PHẢI CÓ TÍNH DỄ KHỚP DỄ TP + THÊM SPEED CẶP CHÍNH, hợp lưu cao , nếu không phù hợp báo ĐỨNG NGOÀI, hoặc ĐỀ XUẤT VÙNG CHỜ đợi tín hiệu không limit ngay nếu tỉ lệ hợp lưu thấp .
 
 4: Yêu cầu check toàn bộ quy tắc, bài học đã lưu, các backtest được lưu trong tài khoản, ghi rõ trend M15 hiện tại là tăng hay giảm đang đánh ngược trend hay thuận trend , trước khi đề xuất lệnh, sau khi check hãy ghi rõ câu: "ĐÃ CHECK QUY TẮC" để trader có thể quan sát.
 
@@ -54,3 +54,55 @@ Giá dưới VWAP/POC mà bạn đang muốn BUY (hoặc ngược lại).
 Vào sát phiên mở cửa (Âu/Mỹ) mà chưa có volume xác nhận.
 
 Chỉ thấy trap nhỏ nhưng không có follow-through.
+
+---
+
+## 9. ĐỊNH DẠNG OUTPUT BẮT BUỘC (tham khảo output cũ output.md) (JSON — dùng với automation / API)
+
+Sau khi hoàn tất phân tích theo quy trình, **chỉ trả về một JSON object hợp lệ** (có thể bọc trong khối ` ```json `). **Không** dùng marker `[OUTPUT_CHI_TIET]` / `[OUTPUT_NGAN_GON]` làm định dạng chính; toàn bộ nội dung chi tiết và tóm tắt đặt **trong các field string** bên dưới.
+
+### Schema (khóa `snake_case`)
+
+| Field | Kiểu | Mô tả |
+|-------|------|--------|
+| `out_chi_tiet` | string | Phân tích đầy đủ (có thể chứa markdown, emoji, xuống dòng — escape đúng chuẩn JSON). Tương đương nội dung cũ sau `[OUTPUT_CHI_TIET]`. |
+| `output_ngan_gon` | string | Tóm tắt ngắn. Tương đương nội dung cũ sau `[OUTPUT_NGAN_GON]`. |
+| `prices` | array | Đúng **3** phần tử, mỗi phần tử chỉ cần `label` (`"plan_chinh"` \| `"plan_phu"` \| `"scalp"`) và `value` (float) — mức giá đại diện vùng chờ. |
+| `intraday_hanh_dong` | string hoặc null | Chỉ cho luồng Nhật ký intraday: `"chờ"` \| `"loại"` \| `"VÀO LỆNH"`. Phân tích sáng thường gửi `null` hoặc bỏ key. |
+| `trade_line` | string | Một dòng lệnh đúng format pipe (xem dưới). Nếu không vào lệnh: `""`. |
+| `no_change` | boolean hoặc bỏ qua | Chỉ rõ trong luồng **update** intraday so với baseline sáng: `true` = ba vùng không đổi; `false` = có thay đổi. Phân tích sáng có thể `false` hoặc không gửi key. |
+
+### `trade_line` (khi đủ điều kiện vào lệnh)
+
+Một dòng duy nhất, số dùng dấu chấm thập phân, không ký tự lạ giữa các phần:
+
+- LIMIT/STOP: `SELL LIMIT 4565.0 | SL 4592.0 | TP1 4550.0 | TP2 4545.0 | Lot 0.02` (TP2 có thể bỏ).
+- MARKET: `BUY MARKET | SL 99.0 | TP1 101.0 | Lot 0.01`
+
+Thứ tự: entry (LIMIT/STOP/MARKET) → `|` → `SL` → `|` → `TP1` → (tuỳ chọn) `| TP2` → `|` → `Lot`.
+
+### Hành động tổng (trong `output_ngan_gon` hoặc văn bản tóm tắt)
+
+Với **MT5 / đứng ngoài**, vẫn có thể kết thúc `output_ngan_gon` bằng một trong:
+
+- `Hành động: VÀO LỆNH` (khi có `trade_line` hợp lệ), hoặc
+- `Hành động: ĐỨNG NGOÀI`
+
+Hoặc thể hiện qua `intraday_hanh_dong` + `trade_line` khi automation đọc JSON.
+
+### Ví dụ tối thiểu (rút gọn)
+
+```json
+{
+  "out_chi_tiet": "… nội dung phân tích dài …",
+  "output_ngan_gon": "… tóm tắt …\nHành động: ĐỨNG NGOÀI",
+  "prices": [
+    {"label": "plan_chinh", "value": 2650.5},
+    {"label": "plan_phu", "value": 2648.0},
+    {"label": "scalp", "value": 2652.0}
+  ],
+  "intraday_hanh_dong": null,
+  "trade_line": "",
+  "no_change": false
+}
+```

@@ -17,11 +17,10 @@ from automation_tool.config import (
 )
 from automation_tool.openai_errors import re_raise_unless_openai
 from automation_tool.openai_prompt_flow import (
-    DEFAULT_FIRST_PROMPT,
-    DEFAULT_FOLLOW_UP_PROMPT,
+    DEFAULT_ANALYSIS_PROMPT,
     DEFAULT_UPDATE_PROMPT_TEMPLATE,
     PromptTwoStepResult,
-    run_prompt_two_step_flow,
+    run_analysis_responses_flow,
     run_single_followup_responses,
 )
 from automation_tool.images import (
@@ -78,20 +77,14 @@ def _parser() -> argparse.ArgumentParser:
 
     a = sub.add_parser(
         "analyze",
-        help="OpenAI: text step then vision with charts (no capture; uses OPENAI_PROMPT_ID)",
+        help="OpenAI: một lần gọi multimodal với chart (no capture; uses OPENAI_PROMPT_ID)",
     )
     a.add_argument("--charts-dir", type=Path, default=None)
     a.add_argument(
         "--prompt",
         type=str,
-        default=DEFAULT_FIRST_PROMPT,
-        help="Bước 1 — chỉ gửi text (mặc định: quy trình XAUUSD)",
-    )
-    a.add_argument(
-        "--follow-up",
-        type=str,
-        default=DEFAULT_FOLLOW_UP_PROMPT,
-        help="Bước 2 — kèm ảnh chart",
+        default=DEFAULT_ANALYSIS_PROMPT,
+        help="User message kèm hướng dẫn JSON (mặc định: quy trình XAUUSD + schema)",
     )
     a.add_argument(
         "--max-images-per-call",
@@ -108,7 +101,7 @@ def _parser() -> argparse.ArgumentParser:
 
     al = sub.add_parser(
         "all",
-        help="capture then OpenAI (2 steps); parse 3 zone prices from step 2 → persist + sync TradingView alerts",
+        help="capture then OpenAI (multimodal); parse 3 zone prices → persist + sync TradingView alerts",
     )
     al.add_argument("--config", type=Path, default=None)
     al.add_argument("--charts-dir", type=Path, default=None)
@@ -118,14 +111,8 @@ def _parser() -> argparse.ArgumentParser:
     al.add_argument(
         "--prompt",
         type=str,
-        default=DEFAULT_FIRST_PROMPT,
-        help="Bước 1 — chỉ gửi text trước; sau khi OpenAI trả lời mới gửi chart",
-    )
-    al.add_argument(
-        "--follow-up",
-        type=str,
-        default=DEFAULT_FOLLOW_UP_PROMPT,
-        help="Bước 2 — kèm ảnh chart sau bước 1",
+        default=DEFAULT_ANALYSIS_PROMPT,
+        help="Một prompt user kèm hướng dẫn JSON (mặc định: quy trình + schema)",
     )
     al.add_argument(
         "--max-images-per-call",
@@ -257,19 +244,13 @@ def _parser() -> argparse.ArgumentParser:
 
     g = sub.add_parser(
         "chatgpt-project",
-        help="Same as analyze: prompt id + two-step Responses API (text then charts)",
+        help="Same as analyze: prompt id + multimodal Responses API",
     )
     g.add_argument(
         "--prompt",
         type=str,
-        default=DEFAULT_FIRST_PROMPT,
-        help="First user message (text-only)",
-    )
-    g.add_argument(
-        "--follow-up",
-        type=str,
-        default=DEFAULT_FOLLOW_UP_PROMPT,
-        help="Second user message sent with the chart images",
+        default=DEFAULT_ANALYSIS_PROMPT,
+        help="User message (default: analysis + JSON schema)",
     )
     g.add_argument("--charts-dir", type=Path, default=None)
     g.add_argument(
@@ -349,19 +330,17 @@ def _parser() -> argparse.ArgumentParser:
 def _run_openai_flow(
     s,
     charts_dir: Path,
-    first_prompt: str,
-    follow_up: str,
+    analysis_prompt: str,
     max_images: int,
     chart_paths: list[Path] | None = None,
     chart_payloads: list[tuple[str, Path]] | None = None,
 ) -> PromptTwoStepResult:
-    return run_prompt_two_step_flow(
+    return run_analysis_responses_flow(
         api_key=s.openai_api_key,
         prompt_id=s.openai_prompt_id,
         prompt_version=s.openai_prompt_version,
         charts_dir=charts_dir,
-        first_prompt=first_prompt,
-        follow_up_prompt=follow_up,
+        analysis_prompt=analysis_prompt,
         max_images_per_call=max_images,
         vector_store_ids=s.openai_vector_store_ids,
         store=s.openai_responses_store,
@@ -418,7 +397,6 @@ def cmd_analyze(args: argparse.Namespace) -> None:
             s,
             charts_dir,
             args.prompt,
-            args.follow_up,
             args.max_images_per_call,
             chart_payloads=payloads,
         )
@@ -534,7 +512,6 @@ def cmd_all(args: argparse.Namespace) -> None:
             s,
             charts_dir,
             args.prompt,
-            args.follow_up,
             args.max_images_per_call,
             chart_payloads=payloads,
         )
@@ -543,7 +520,7 @@ def cmd_all(args: argparse.Namespace) -> None:
     print(out.full_text())
 
     write_last_response_id(out.final_response_id)
-    zt, zerr = parse_three_zone_prices(out.after_charts or "")
+    zt, zerr, _nc = parse_three_zone_prices(out.after_charts or "")
     if zt:
         write_morning_baseline_prices(zt)
         write_last_alert_prices(zt)
@@ -746,7 +723,17 @@ def cmd_update(args: argparse.Namespace) -> None:
     print(out_text)
     write_last_response_id(new_id)
 
-    new_triple, zerr = parse_three_zone_prices(out_text)
+    new_triple, zerr, no_change_json = parse_three_zone_prices(out_text)
+    if no_change_json is True:
+        if not args.no_telegram:
+            require_telegram(s)
+            send_message(
+                bot_token=s.telegram_bot_token,
+                chat_id=s.telegram_chat_id,
+                text="Vùng giá không đổi so với sáng (no_change), giữ nguyên cảnh báo.",
+                parse_mode=s.telegram_parse_mode,
+            )
+        return
     if new_triple is None:
         if is_no_change_action_line(out_text):
             if not args.no_telegram:

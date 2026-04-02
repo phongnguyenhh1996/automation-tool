@@ -3,9 +3,22 @@ from __future__ import annotations
 from automation_tool.mt5_openai_parse import (
     extract_output_ngan_gon_block,
     parse_journal_intraday_action,
+    parse_journal_intraday_action_from_openai_text,
     parse_openai_output_md,
     parse_trade_line,
 )
+
+
+def test_parse_openai_output_json_intraday() -> None:
+    text = r"""
+{"intraday_hanh_dong": "VÀO LỆNH",
+ "trade_line": "SELL LIMIT 3360.0 | SL 3363.5 | TP1 3354.5 | TP2 3350.5 | Lot 0.02"}
+"""
+    trade, err = parse_openai_output_md(text, default_symbol="XAUUSD")
+    assert err is None
+    assert trade is not None
+    assert trade.side == "SELL"
+    assert trade.price == 3360.0
 
 
 def test_parse_sample_output_md() -> None:
@@ -123,6 +136,13 @@ def test_journal_intraday_action_cho_loai_vao_lenh() -> None:
         "Hành động: VÀO LỆNH\n"
     )
     assert parse_journal_intraday_action(block3 or "") == "VÀO LỆNH"
+
+
+def test_journal_intraday_action_from_json() -> None:
+    raw = '{"intraday_hanh_dong": "chờ"}'
+    assert parse_journal_intraday_action_from_openai_text(raw) == "chờ"
+    raw2 = "[OUTPUT_NGAN_GON]\nHành động: loại\n"
+    assert parse_journal_intraday_action_from_openai_text(raw2) == "loại"
 
 
 def test_journal_intraday_last_action_wins() -> None:

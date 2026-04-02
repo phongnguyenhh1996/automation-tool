@@ -3,8 +3,8 @@
 Python CLI that:
 
 1. **capture** — Before running, optionally **clears** `data/charts/*.png` / `.json` (keeps `.gitkeep`) when `clear_charts_before_capture` is true. Then opens Coinmap in **Google Chrome** via Playwright. If **`chart_download.coinmap_screenshot_enabled`** is **false**, Coinmap skips fullscreen PNGs and only saves **API JSON** next to where PNGs would be (`{stamp}_coinmap_{SYMBOL}_{interval}.json`). If **true** (legacy), it also saves Coinmap screenshots. With **`api_data_export`**, JSON is always written when enabled. If **`tradingview_capture.enabled`** is true, it opens a **second tab** for TradingView and saves **`data/charts/*_tradingview_*.png`**. (The two sites run one after another.)
-2. **analyze** / **chatgpt-project** — **OpenAI Responses API** with a **dashboard prompt id**. Two steps: (1) text-only user input, (2) a user message in **fixed order** (`automation_tool/images.py` → `CHART_IMAGE_ORDER`): **TradingView** slots use **PNG** images; **Coinmap** slots use **JSON** when the file exists (otherwise PNG fallback). Chained with `previous_response_id`. Optional **`COINMAP_JSON_MAX_CHARS`** caps embedded JSON size. **Telegram** receives only the second-step output; stdout prints both steps separated by `---`.
-3. **all** — Runs **capture**, then the same two-step OpenAI flow as **analyze**.
+2. **analyze** / **chatgpt-project** — **OpenAI Responses API** with a **dashboard prompt id**. One **multimodal** user message: prompt text plus charts in **fixed order** (`automation_tool/images.py` → `CHART_IMAGE_ORDER`): **TradingView** slots use **PNG** images; **Coinmap** slots use **JSON** when the file exists (otherwise PNG fallback). Extra batches (if over `--max-images-per-call`) chain with `previous_response_id`. Optional **`COINMAP_JSON_MAX_CHARS`** caps embedded JSON size. Default prompt asks for **structured JSON** output (see `DEFAULT_ANALYSIS_PROMPT` in `openai_prompt_flow.py`). **Telegram** receives the analysis output; stdout prints the same (multi-batch runs join with `---`).
+3. **all** — Runs **capture**, then the same OpenAI flow as **analyze**.
 
 ## Requirements
 
@@ -72,7 +72,7 @@ Message [@userinfobot](https://t.me/userinfobot) or call `https://api.telegram.o
 # Capture charts only
 coinmap-automation capture --headed
 
-# Two-step flow on existing charts (text then images), send to Telegram
+# Multimodal analysis on existing charts, send to Telegram
 coinmap-automation analyze
 
 # Full pipeline
@@ -83,7 +83,7 @@ coinmap-automation chatgpt-project --no-telegram
 
 Options:
 
-- `--prompt` / `--follow-up` — Step 1 text and step 2 text before images (defaults are Vietnamese XAUUSD workflow strings).
+- `--prompt` — User message before chart images (default: Vietnamese XAUUSD workflow + JSON schema hints).
 - `--max-images-per-call` — Split images across multiple API calls (default `10`).
 - `--no-telegram` — Print only; do not send to Telegram (`analyze`, `all`, `chatgpt-project`).
 - `--storage-state` — Path to Playwright storage state JSON for **capture** (default `data/storage_state.json`).

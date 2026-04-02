@@ -5,6 +5,11 @@ from __future__ import annotations
 import re
 from typing import Optional
 
+from automation_tool.openai_analysis_json import (
+    parse_analysis_from_openai_text,
+    triple_from_zone_prices,
+)
+
 # Section headers (Vietnamese diacritics + optional emoji)
 _RE_PLAN_CHINH = re.compile(
     r"(?:📍\s*)?PLAN\s*CH[ÍI]NH\s+V[ÙU]NG\s+CH[ỜO]",
@@ -89,27 +94,59 @@ def _split_three_sections(text: str) -> tuple[Optional[str], Optional[str], Opti
     return blocks.get("c"), blocks.get("p"), blocks.get("s"), None
 
 
-def parse_three_zone_prices(text: str) -> tuple[Optional[tuple[float, float, float]], Optional[str]]:
+def parse_three_zone_prices(
+    text: str,
+) -> tuple[Optional[tuple[float, float, float]], Optional[str], Optional[bool]]:
     """
     Parse (plan_chinh, plan_phu, scalp) single price each.
-    Returns (None, err) on failure.
+
+    Returns ``(triple, err, no_change)``. When the model returns JSON with
+    ``"no_change": true``, returns ``(None, None, True)``. The third value is
+    ``None`` for legacy markdown-only output.
     """
     if not text or not text.strip():
-        return None, "Empty text."
+        return None, "Empty text.", None
+
+    payload = parse_analysis_from_openai_text(text)
+    if payload is not None:
+        if payload.no_change is True:
+            return None, None, True
+        if payload.prices:
+            trip = triple_from_zone_prices(payload.prices)
+            if trip is not None:
+                return trip, None, False if payload.no_change is False else None
+            return (
+                None,
+                "JSON có 'prices' nhưng thiếu đủ plan_chinh, plan_phu, scalp hoặc value không hợp lệ.",
+                None,
+            )
+
     bc, bp, bs, err = _split_three_sections(text)
     if err:
-        return None, err
+        return None, err, None
     assert bc is not None and bp is not None and bs is not None
     pc = _parse_one_block(bc)
     pp = _parse_one_block(bp)
     ps = _parse_one_block(bs)
     if pc is None:
-        return None, "Không parse được giá trong PLAN CHÍNH (cần BUY/SELL và cặp giá)."
+        return (
+            None,
+            "Không parse được giá trong PLAN CHÍNH (cần BUY/SELL và cặp giá).",
+            None,
+        )
     if pp is None:
-        return None, "Không parse được giá trong PLAN PHỤ (cần BUY/SELL và cặp giá)."
+        return (
+            None,
+            "Không parse được giá trong PLAN PHỤ (cần BUY/SELL và cặp giá).",
+            None,
+        )
     if ps is None:
-        return None, "Không parse được giá trong SCALP (cần BUY/SELL và cặp giá)."
-    return (pc, pp, ps), None
+        return (
+            None,
+            "Không parse được giá trong SCALP (cần BUY/SELL và cặp giá).",
+            None,
+        )
+    return (pc, pp, ps), None, None
 
 
 def prices_equal_triple(

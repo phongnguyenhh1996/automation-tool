@@ -21,10 +21,7 @@ from automation_tool.coinmap import (
 )
 from automation_tool.config import Settings
 from automation_tool.images import coinmap_xauusd_5m_json_path
-from automation_tool.mt5_openai_parse import (
-    extract_output_ngan_gon_block,
-    parse_journal_intraday_action,
-)
+from automation_tool.mt5_openai_parse import parse_journal_intraday_action_from_openai_text
 from automation_tool.openai_errors import re_raise_unless_openai
 from automation_tool.openai_prompt_flow import (
     JOURNAL_INTRADAY_FIRST_USER_TEMPLATE,
@@ -297,9 +294,8 @@ def _run_intraday_touch_loop(
         write_last_response_id(new_id)
         prev_id = new_id
 
-        block = extract_output_ngan_gon_block(out_text)
-        act = parse_journal_intraday_action(block or "")
-        _journal_log(tz, f"Parse [OUTPUT_NGAN_GON]: Hành động = {act!r}")
+        act = parse_journal_intraday_action_from_openai_text(out_text)
+        _journal_log(tz, f"Parse intraday (JSON hoặc [OUTPUT_NGAN_GON]): Hành động = {act!r}")
         if act == "VÀO LỆNH":
             if not params.no_telegram:
                 _journal_log(tz, "Gửi Telegram (VÀO LỆNH) — chat chính + OUTPUT_NGAN_GON nếu cấu hình.")

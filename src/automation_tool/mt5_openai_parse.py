@@ -6,6 +6,8 @@ import automation_tool.config  # noqa: F401 — nạp .env khi import (OPENAI_*,
 from dataclasses import dataclass
 from typing import Literal, Optional
 
+from automation_tool.openai_analysis_json import parse_analysis_from_openai_text
+
 _RE_OUTPUT_NGAN_GON = re.compile(r"\[OUTPUT_NGAN_GON\]", re.IGNORECASE)
 
 # Single-line: SELL LIMIT 3360.0 | SL 3363.5 | TP1 3354.5 | TP2 3350.5 | Lot 0.02
@@ -118,6 +120,17 @@ def parse_hanh_dong_ngan_gon(ngan_gon_block: str) -> Optional[Literal["VÀO LỆ
     return last
 
 
+def parse_journal_intraday_action_from_openai_text(text: str) -> Optional[JournalIntradayAction]:
+    """
+    Ưu tiên field JSON ``intraday_hanh_dong``; không có thì parse ``[OUTPUT_NGAN_GON]``.
+    """
+    payload = parse_analysis_from_openai_text(text)
+    if payload is not None and payload.intraday_hanh_dong is not None:
+        return payload.intraday_hanh_dong
+    block = extract_output_ngan_gon_block(text)
+    return parse_journal_intraday_action(block or "")
+
+
 def parse_journal_intraday_action(ngan_gon_block: str) -> Optional[JournalIntradayAction]:
     """
     Hành động cuối trong ``[OUTPUT_NGAN_GON]`` cho luồng TradingView Nhật ký intraday:
@@ -196,8 +209,8 @@ def parse_openai_output_md(
     symbol_override: Optional[str] = None,
 ) -> tuple[Optional[ParsedTrade], Optional[str]]:
     """
-    Đọc full markdown OpenAI: chỉ trả lệnh khi ``[OUTPUT_NGAN_GON]`` kết thúc bằng
-    ``Hành động: VÀO LỆNH`` và có dòng lệnh pipe.
+    Đọc output OpenAI: ưu tiên JSON (``intraday_hanh_dong``, ``trade_line``);
+    không có thì markdown ``[OUTPUT_NGAN_GON]`` + dòng pipe.
 
     Returns:
         (ParsedTrade or None, error message or None)
@@ -205,9 +218,30 @@ def parse_openai_output_md(
     # --symbol CLI > hint từ text (📊 XAUUSD) > default_symbol; ``XAUUSD`` → ``XAUUSDm`` (broker).
     sym = (symbol_override or "").strip() or extract_symbol_hint(text) or default_symbol
     sym = normalize_broker_xau_symbol(sym)
+
+    payload = parse_analysis_from_openai_text(text)
+    if payload is not None and payload.intraday_hanh_dong is not None:
+        if payload.intraday_hanh_dong != "VÀO LỆNH":
+            return None, (
+                f"Hành động intraday là {payload.intraday_hanh_dong!r}, cần 'VÀO LỆNH' để gửi lệnh."
+            )
+        trade_line = (payload.trade_line or "").strip()
+        if not trade_line:
+            blk = (payload.output_ngan_gon or "").strip()
+            if blk:
+                trade_line = find_trade_line(blk) or ""
+        if not trade_line:
+            return None, "Thiếu trade_line hoặc dòng lệnh pipe khi intraday_hanh_dong là VÀO LỆNH."
+        parsed = parse_trade_line(trade_line, symbol=sym)
+        if not parsed:
+            return None, f"Không parse được dòng lệnh: {trade_line!r}"
+        return parsed, None
+
     block = extract_output_ngan_gon_block(text)
+    if not block and payload is not None and payload.output_ngan_gon:
+        block = payload.output_ngan_gon.strip()
     if not block:
-        return None, "Không tìm thấy [OUTPUT_NGAN_GON]."
+        return None, "Không tìm thấy [OUTPUT_NGAN_GON] hoặc output_ngan_gon trong JSON."
 
     action = parse_hanh_dong_ngan_gon(block)
     if action != "VÀO LỆNH":

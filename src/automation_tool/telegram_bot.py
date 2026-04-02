@@ -9,6 +9,8 @@ from typing import Any, Optional
 
 import httpx
 
+from automation_tool.openai_analysis_json import parse_analysis_from_openai_text
+
 TELEGRAM_MAX_MESSAGE = 4096
 
 _RE_OUTPUT_CHI_TIET = re.compile(r"\[OUTPUT_CHI_TIET\]", re.IGNORECASE)
@@ -228,6 +230,21 @@ def parse_openai_telegram_payload(
     return merged if merged else None
 
 
+def split_analysis_json_chi_tiet_ngan_gon(raw: str) -> tuple[str, str] | None:
+    """
+    Khi model trả JSON phân tích có ``out_chi_tiet`` / ``output_ngan_gon`` (không dùng marker).
+    Trả ``(chi_tiet, ngan_gon)`` nếu có ít nhất một chuỗi không rỗng; ngược lại ``None``.
+    """
+    p = parse_analysis_from_openai_text(raw)
+    if p is None:
+        return None
+    ct = (p.out_chi_tiet or "").strip()
+    ng = (p.output_ngan_gon or "").strip()
+    if not ct and not ng:
+        return None
+    return (ct, ng)
+
+
 def split_output_chi_tiet_ngan_gon(raw: str) -> tuple[str, str] | None:
     """
     Parse model output that contains both markers::
@@ -401,7 +418,9 @@ def send_openai_output_to_telegram(
     if parsed is None:
         dual: tuple[str, str] | None = None
         if summary_chat_id and summary_chat_id.strip():
-            dual = split_output_chi_tiet_ngan_gon(raw)
+            dual = split_analysis_json_chi_tiet_ngan_gon(raw)
+            if dual is None:
+                dual = split_output_chi_tiet_ngan_gon(raw)
         if dual is not None:
             chi_tiet, ngan_gon = dual
             detail_msg_id: Optional[int] = None

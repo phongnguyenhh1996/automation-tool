@@ -24,8 +24,9 @@ SELL
 BUY
 100.0 – 90.0
 """
-    zt, err = parse_three_zone_prices(text)
+    zt, err, nc = parse_three_zone_prices(text)
     assert err is None
+    assert nc is None
     assert zt is not None
     assert zt[0] == 4698.0
     assert zt[1] == 2695.0
@@ -36,6 +37,31 @@ def test_prices_equal_triple() -> None:
     assert prices_equal_triple((1.0, 2.0, 3.0), (1.0, 2.0, 3.0))
     assert prices_equal_triple((1.001, 2.0, 3.0), (1.0, 2.0, 3.0), eps=0.05)
     assert not prices_equal_triple((1.0, 2.0, 3.0), (1.1, 2.0, 3.0))
+
+
+def test_parse_three_zone_prices_from_json() -> None:
+    text = """```json
+{
+  "prices": [
+    {"label": "plan_chinh", "value": 4698.0},
+    {"label": "plan_phu", "value": 2695.0},
+    {"label": "scalp", "value": 100.0}
+  ]
+}
+```"""
+    zt, err, nc = parse_three_zone_prices(text)
+    assert err is None
+    assert nc is None
+    assert zt is not None
+    assert zt == (4698.0, 2695.0, 100.0)
+
+
+def test_parse_no_change_json() -> None:
+    text = '{"no_change": true}'
+    zt, err, nc = parse_three_zone_prices(text)
+    assert zt is None
+    assert err is None
+    assert nc is True
 
 
 def test_format_tv_input() -> None:
