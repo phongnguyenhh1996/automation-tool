@@ -221,7 +221,8 @@ tradingview_capture:
   # alerts_list_tab_selector: '[role="tab"][aria-controls="id_alert-widget-tabs-slots_tabpanel_list"]'
   journal_log_tab_selector: 'button#log[role="tab"]'
   journal_log_panel_selector: "#id_alert-widget-tabs-slots_tabpanel_log"
-  journal_item_description_selector: 'div[data-name="alert-item-description"]'
+  # Dòng giá trong tab Nhật ký: alert-log-item (không dùng alert-item-description — đó là tab Danh sách)
+  journal_item_description_selector: 'div[data-name="alert-log-item"] > div:first-child'
   journal_after_tab_ms: 400
   initial_settle_ms: 3000
   after_interval_select_ms: 2000

@@ -93,7 +93,9 @@ def _journal_tab_selector(tv: dict[str, Any]) -> str:
 
 
 def _journal_desc_selector(tv: dict[str, Any]) -> str:
+    # Log tab uses alert-log-item + message line (not alert-item-description, which is the alerts *list* tab).
     return (tv.get("journal_item_description_selector") or "").strip() or (
+        'div[data-name="alert-log-item"] > div:first-child, '
         'div[data-name="alert-item-description"]'
     )
 
