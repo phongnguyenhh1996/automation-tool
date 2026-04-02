@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
-from playwright.sync_api import Page, sync_playwright
+from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError, sync_playwright
 
 from automation_tool.coinmap import (
     _maybe_tradingview_dark_mode,
@@ -213,12 +213,21 @@ def _ensure_three_alerts(
         if not missing:
             return
         price = missing[0]
-        page.locator("#header-toolbar-alerts").first.click(timeout=15_000)
-        page.wait_for_timeout(400)
+        toolbar = page.locator("#header-toolbar-alerts").first
         inp = page.locator(
             'input[data-qa-id="ui-lib-Input-input end-band-range-input"]'
         ).first
-        inp.wait_for(state="visible", timeout=15_000)
+        max_toggles = int(tv.get("alert_create_toolbar_toggles_max", 25))
+        short_wait_ms = int(tv.get("alert_create_input_short_wait_ms", 2_500))
+        for attempt in range(max_toggles):
+            toolbar.click(timeout=15_000)
+            page.wait_for_timeout(400)
+            try:
+                inp.wait_for(state="visible", timeout=short_wait_ms)
+                break
+            except PlaywrightTimeoutError:
+                if attempt == max_toggles - 1:
+                    inp.wait_for(state="visible", timeout=15_000)
         inp.fill("")
         inp.fill(format_price_for_tradingview_input(price))
         page.wait_for_timeout(200)
