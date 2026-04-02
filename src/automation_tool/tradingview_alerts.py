@@ -101,7 +101,14 @@ def _open_alerts_list_panel(page: Page, tv: dict[str, Any]) -> None:
     except Exception:
         pass
 
-    alerts_btn.click(timeout=15_000)
+    # Toolbar button is a toggle: if the alerts sidebar is already open (aria-pressed="true"),
+    # clicking again closes it — then the list panel never becomes visible.
+    try:
+        pressed = alerts_btn.get_attribute("aria-pressed")
+    except Exception:
+        pressed = None
+    if pressed != "true":
+        alerts_btn.click(timeout=15_000)
     page.wait_for_timeout(after_open)
 
     if list_tab.count():
