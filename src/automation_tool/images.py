@@ -40,6 +40,17 @@ def latest_chart_stamp(charts_dir: Path) -> Optional[str]:
     return max(stamps) if stamps else None
 
 
+def coinmap_xauusd_5m_json_path(
+    charts_dir: Path, *, stamp: Optional[str] = None
+) -> Optional[Path]:
+    """Latest ``{stamp}_coinmap_XAUUSD_5m.json`` under ``charts_dir``, if present."""
+    st = stamp or latest_chart_stamp(charts_dir)
+    if not st:
+        return None
+    p = charts_dir / f"{st}_coinmap_XAUUSD_5m.json"
+    return p if p.is_file() else None
+
+
 def ordered_chart_openai_payloads(
     charts_dir: Path, *, stamp: Optional[str] = None
 ) -> list[tuple[str, Path]]:

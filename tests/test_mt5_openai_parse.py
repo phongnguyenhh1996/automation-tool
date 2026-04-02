@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from automation_tool.mt5_openai_parse import (
+    extract_output_ngan_gon_block,
+    parse_journal_intraday_action,
     parse_openai_output_md,
     parse_trade_line,
 )
@@ -101,3 +103,30 @@ Hành động: VÀO LỆNH
     assert trade is not None
     assert trade.symbol == "XAUUSDm"
     assert trade.side == "SELL"
+
+
+def test_journal_intraday_action_cho_loai_vao_lenh() -> None:
+    block = extract_output_ngan_gon_block(
+        "[OUTPUT_NGAN_GON]\nHành động: chờ\n"
+    )
+    assert block is not None
+    assert parse_journal_intraday_action(block) == "chờ"
+
+    block2 = extract_output_ngan_gon_block(
+        "[OUTPUT_NGAN_GON]\nBias: x\nHành động: loại\n"
+    )
+    assert parse_journal_intraday_action(block2 or "") == "loại"
+
+    block3 = extract_output_ngan_gon_block(
+        "[OUTPUT_NGAN_GON]\n"
+        "BUY LIMIT 1 | SL 2 | TP1 3 | Lot 0.01\n"
+        "Hành động: VÀO LỆNH\n"
+    )
+    assert parse_journal_intraday_action(block3 or "") == "VÀO LỆNH"
+
+
+def test_journal_intraday_last_action_wins() -> None:
+    block = extract_output_ngan_gon_block(
+        "[OUTPUT_NGAN_GON]\nHành động: chờ\n...\nHành động: loại\n"
+    )
+    assert parse_journal_intraday_action(block or "") == "loại"

@@ -1,0 +1,20 @@
+@echo off
+setlocal
+
+REM Intraday update: Coinmap XAUUSD M5 + OpenAI follow-up + TradingView (if zones changed)
+cd /d "%~dp0"
+
+if not exist "logs" mkdir "logs"
+
+call ".venv\Scripts\activate.bat"
+if errorlevel 1 (
+  echo [%date% %time%] ERROR: Failed to activate virtual environment.>> "logs\update.log"
+  exit /b 1
+)
+
+echo [%date% %time%] INFO: Starting coinmap-automation update>> "logs\update.log"
+coinmap-automation update >> "logs\update.log" 2>&1
+set "EXIT_CODE=%ERRORLEVEL%"
+echo [%date% %time%] INFO: Finished with exit code %EXIT_CODE%>> "logs\update.log"
+
+exit /b %EXIT_CODE%

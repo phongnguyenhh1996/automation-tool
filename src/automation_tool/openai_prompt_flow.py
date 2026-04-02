@@ -23,6 +23,7 @@ class PromptTwoStepResult(NamedTuple):
 
     first_text: str
     after_charts: str
+    final_response_id: str
 
     def full_text(self) -> str:
         if not self.after_charts:
@@ -178,7 +179,7 @@ def run_prompt_two_step_flow(
         payloads = ordered_chart_openai_payloads(charts_dir)
 
     if not payloads:
-        return PromptTwoStepResult(first_text=text1, after_charts="")
+        return PromptTwoStepResult(first_text=text1, after_charts="", final_response_id=r1.id)
 
     chunks = chunk_payloads(payloads, max_images_per_call)
     assistant_parts: list[str] = []
@@ -212,4 +213,109 @@ def run_prompt_two_step_flow(
         assistant_parts.append((r.output_text or "").strip())
 
     after = "\n\n---\n\n".join(assistant_parts)
-    return PromptTwoStepResult(first_text=text1, after_charts=after)
+    return PromptTwoStepResult(
+        first_text=text1, after_charts=after, final_response_id=prev_id
+    )
+
+
+DEFAULT_UPDATE_PROMPT_TEMPLATE = (
+    "Dựa trên dữ liệu XAUUSD m5 mới này, hãy so sánh với phân tích sáng nay. "
+    "Vùng chờ (vùng giá) có thay đổi không?\n"
+    "3 mức giá baseline từ phân tích sáng (plan chính, plan phụ, scalp): {p1}, {p2}, {p3}\n"
+    "- Nếu CÓ thay đổi: Trả về đủ 3 section với tiêu đề "
+    "📍 PLAN CHÍNH VÙNG CHỜ, 📍 PLAN PHỤ VÙNG CHỜ, ⚡️SCALP VÙNG — "
+    "mỗi section một cặp giá và BUY hoặc SELL (cùng format phân tích sáng).\n"
+    "- Nếu KHÔNG: Chỉ trả về duy nhất dòng 'Hành động: không đổi'.\n"
+    "Không giải thích thêm."
+)
+
+# TradingView tab Nhật ký: giá chạm → Coinmap M5 + OpenAI (intraday).
+JOURNAL_INTRADAY_FIRST_USER_TEMPLATE = (
+    "Cảnh báo TradingView đã kích hoạt tại mức giá {touched_price} "
+    "(một trong ba vùng chờ: {p1}, {p2}, {p3}).\n"
+    "Dòng Nhật ký TradingView: {journal_line}\n\n"
+    "Đính kèm dữ liệu Coinmap XAUUSD khung M5 mới nhất.\n"
+    "Đánh giá: đã đủ điều kiện vào lệnh chưa?\n"
+    "Trả lời bắt buộc có section [OUTPUT_NGAN_GON] với đúng một dòng Hành động:\n"
+    "- Hành động: chờ — cần theo dõi thêm, chưa vào lệnh.\n"
+    "- Hành động: loại — vùng giá này không còn cơ hội.\n"
+    "- Hành động: VÀO LỆNH — kèm dòng lệnh đúng format pipe (BUY/SELL … | SL … | TP1 … | Lot …).\n"
+    "Không dùng các Hành động khác trong OUTPUT_NGAN_GON cho luồng này."
+)
+
+JOURNAL_INTRADAY_RETRY_USER_TEMPLATE = (
+    "Tiếp tục đánh giá sau {wait_minutes} phút: vẫn theo dõi mức đã chạm {touched_price}.\n"
+    "Bối cảnh Nhật ký (lần kích hoạt): {journal_line}\n\n"
+    "Đính kèm Coinmap XAUUSD M5 mới.\n"
+    "Cùng quy tắc [OUTPUT_NGAN_GON] như tin nhắn trước: chỉ Hành động: chờ, loại, hoặc VÀO LỆNH."
+)
+
+
+def run_single_followup_responses(
+    *,
+    api_key: str,
+    prompt_id: str,
+    prompt_version: str | None,
+    user_text: str,
+    coinmap_json_path: Path,
+    previous_response_id: str,
+    vector_store_ids: list[str],
+    store: bool,
+    include: list[str],
+    reasoning_summary: str = "auto",
+    max_coinmap_json_chars: int | None = None,
+) -> tuple[str, str]:
+    """
+    One multimodal user turn chained to ``previous_response_id`` (intraday update).
+
+    Returns ``(output_text, new_response_id)``.
+    """
+    if not coinmap_json_path.is_file():
+        raise FileNotFoundError(f"Coinmap JSON not found: {coinmap_json_path}")
+
+    client = OpenAI(api_key=api_key)
+    prompt = _prompt_dict(prompt_id, prompt_version)
+    tools: list[dict[str, Any]] = []
+    if vector_store_ids:
+        tools.append(
+            {
+                "type": "file_search",
+                "vector_store_ids": list(vector_store_ids),
+            }
+        )
+
+    reasoning: dict[str, Any] = {"summary": reasoning_summary}
+
+    common: dict[str, Any] = {
+        "prompt": prompt,
+        "store": store,
+        "include": include,
+        "reasoning": reasoning,
+    }
+    if tools:
+        common["tools"] = tools
+
+    mx_json = (
+        max_coinmap_json_chars
+        if max_coinmap_json_chars is not None
+        else _default_max_coinmap_json_chars()
+    )
+
+    content = _build_mixed_chart_user_content(
+        user_text,
+        [("json", coinmap_json_path)],
+        max_json_chars=mx_json,
+    )
+    r = client.responses.create(
+        **common,
+        previous_response_id=previous_response_id,
+        input=[
+            {
+                "type": "message",
+                "role": "user",
+                "content": content,
+            }
+        ],
+    )
+    out = (r.output_text or "").strip()
+    return out, r.id

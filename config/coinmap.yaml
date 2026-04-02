@@ -215,6 +215,11 @@ tradingview_capture:
   tradingview_fullscreen_notice_visible_timeout_ms: 10000
   tradingview_fullscreen_notice_hide_timeout_ms: 45000
   # tradingview_fullscreen_notice_wait_disabled: false
+  # Tab Nhật ký (CLI ``tv-journal-monitor``); mặc định khớp DOM TradingView tiếng Việt
+  journal_log_tab_selector: 'button#log[role="tab"]'
+  journal_log_panel_selector: "#id_alert-widget-tabs-slots_tabpanel_log"
+  journal_item_description_selector: 'div[data-name="alert-item-description"]'
+  journal_after_tab_ms: 400
   initial_settle_ms: 3000
   after_interval_select_ms: 2000
   fullscreen_settle_ms: 2000
@@ -227,9 +232,9 @@ chart_selectors:
   - "canvas"
 # If no elements match, fall back to one full-page screenshot (set false to disable)
 fallback_full_page: true
-# Browser viewport for the whole capture session (Coinmap tab + TradingView tab): Full HD.
-viewport_width: 1920
-viewport_height: 1080
+# Browser viewport for the whole capture session (Coinmap tab + TradingView tab).
+viewport_width: 1600
+viewport_height: 900
 
 # Milliseconds to wait after navigation before screenshots
 settle_ms: 2000

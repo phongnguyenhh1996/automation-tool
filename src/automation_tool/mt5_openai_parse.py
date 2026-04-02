@@ -93,6 +93,9 @@ def extract_symbol_hint(text: str) -> Optional[str]:
     return None
 
 
+JournalIntradayAction = Literal["VÀO LỆNH", "chờ", "loại"]
+
+
 def parse_hanh_dong_ngan_gon(ngan_gon_block: str) -> Optional[Literal["VÀO LỆNH", "ĐỨNG NGOÀI"]]:
     """
     Lấy hành động cuối trong block (dòng ``Hành động: ...``).
@@ -112,6 +115,31 @@ def parse_hanh_dong_ngan_gon(ngan_gon_block: str) -> Optional[Literal["VÀO LỆ
             last = "VÀO LỆNH"
         elif "đứng" in tail and "ngoài" in tail:
             last = "ĐỨNG NGOÀI"
+    return last
+
+
+def parse_journal_intraday_action(ngan_gon_block: str) -> Optional[JournalIntradayAction]:
+    """
+    Hành động cuối trong ``[OUTPUT_NGAN_GON]`` cho luồng TradingView Nhật ký intraday:
+    ``Hành động: chờ`` | ``Hành động: loại`` | ``Hành động: VÀO LỆNH``.
+    """
+    if not ngan_gon_block:
+        return None
+    last: Optional[JournalIntradayAction] = None
+    for line in ngan_gon_block.split("\n"):
+        line = line.strip()
+        low = line.lower()
+        if "hành động" not in low and "hanh dong" not in low.replace("à", "a"):
+            continue
+        if ":" not in line:
+            continue
+        tail = line.split(":", 1)[-1].strip().lower()
+        if "vào" in tail and "lệnh" in tail:
+            last = "VÀO LỆNH"
+        elif "loại" in tail or "loai" in tail:
+            last = "loại"
+        elif "chờ" in tail:
+            last = "chờ"
     return last
 
 

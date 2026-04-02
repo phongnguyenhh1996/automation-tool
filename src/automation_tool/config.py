@@ -82,6 +82,10 @@ def default_coinmap_config_path() -> Path:
     return _root() / "config" / "coinmap.yaml"
 
 
+def default_coinmap_update_config_path() -> Path:
+    return _root() / "config" / "coinmap_update.yaml"
+
+
 def default_storage_state_path() -> Path:
     return default_data_dir() / "storage_state.json"
 

@@ -9,6 +9,7 @@ from automation_tool.coinmap import capture_charts
 from automation_tool.config import (
     default_charts_dir,
     default_coinmap_config_path,
+    default_coinmap_update_config_path,
     default_storage_state_path,
     load_settings,
     require_openai,
@@ -18,10 +19,31 @@ from automation_tool.openai_errors import re_raise_unless_openai
 from automation_tool.openai_prompt_flow import (
     DEFAULT_FIRST_PROMPT,
     DEFAULT_FOLLOW_UP_PROMPT,
+    DEFAULT_UPDATE_PROMPT_TEMPLATE,
     PromptTwoStepResult,
     run_prompt_two_step_flow,
+    run_single_followup_responses,
 )
-from automation_tool.images import CHART_IMAGE_ORDER, ordered_chart_openai_payloads
+from automation_tool.images import (
+    CHART_IMAGE_ORDER,
+    coinmap_xauusd_5m_json_path,
+    ordered_chart_openai_payloads,
+)
+from automation_tool.state_files import (
+    read_last_alert_prices,
+    read_last_response_id,
+    read_morning_baseline_prices,
+    write_last_alert_prices,
+    write_last_response_id,
+    write_morning_baseline_prices,
+)
+from automation_tool.zone_prices import (
+    is_no_change_action_line,
+    parse_three_zone_prices,
+    prices_equal_triple,
+)
+from automation_tool.tradingview_alerts import sync_tradingview_alerts
+from automation_tool.tradingview_journal_monitor import JournalMonitorParams, run_tv_journal_monitor
 from automation_tool.telegram_bot import send_message, send_openai_output_to_telegram
 from automation_tool.config import load_all_dotenv
 from automation_tool.mt5_openai_parse import parse_openai_output_md
@@ -85,7 +107,7 @@ def _parser() -> argparse.ArgumentParser:
 
     al = sub.add_parser(
         "all",
-        help="capture then OpenAI: text step first, then vision with charts",
+        help="capture then OpenAI (2 steps); parse 3 zone prices from step 2 → persist + sync TradingView alerts",
     )
     al.add_argument("--config", type=Path, default=None)
     al.add_argument("--charts-dir", type=Path, default=None)
@@ -111,7 +133,108 @@ def _parser() -> argparse.ArgumentParser:
         help="Max items per OpenAI call (images + Coinmap JSON)",
     )
     al.add_argument("--no-telegram", action="store_true")
+    al.add_argument(
+        "--no-tradingview",
+        action="store_true",
+        help="Skip TradingView alert sync after parsing 3 zone prices from step-2 output",
+    )
     al.set_defaults(func=cmd_all)
+
+    up = sub.add_parser(
+        "update",
+        help="Intraday: Coinmap XAUUSD M5 JSON + OpenAI follow-up (same thread); sync TradingView if zones changed vs morning",
+    )
+    up.add_argument("--config", type=Path, default=None, help="Coinmap yaml for capture only (default: coinmap_update.yaml)")
+    up.add_argument(
+        "--tv-config",
+        type=Path,
+        default=None,
+        help="Yaml containing tradingview_capture for alert sync (default: config/coinmap.yaml)",
+    )
+    up.add_argument("--charts-dir", type=Path, default=None)
+    up.add_argument("--storage-state", type=Path, default=None)
+    up.add_argument("--no-save-storage", action="store_true")
+    up.add_argument("--headed", action="store_true")
+    up.add_argument("--no-telegram", action="store_true")
+    up.add_argument(
+        "--no-tradingview",
+        action="store_true",
+        help="Skip TradingView alert sync (still updates last_response_id)",
+    )
+    up.set_defaults(func=cmd_update)
+
+    tv = sub.add_parser(
+        "tv-alerts",
+        help="Chỉ đồng bộ 3 cảnh báo giá lên TradingView (test; cần chart_url trong yaml)",
+    )
+    tv.add_argument("p1", type=float, help="Giá cảnh báo 1")
+    tv.add_argument("p2", type=float, help="Giá cảnh báo 2")
+    tv.add_argument("p3", type=float, help="Giá cảnh báo 3")
+    tv.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Yaml có tradingview_capture.chart_url (mặc định: config/coinmap.yaml)",
+    )
+    tv.add_argument("--storage-state", type=Path, default=None)
+    tv.add_argument("--headed", action="store_true", help="Hiện cửa sổ trình duyệt")
+    tv.set_defaults(func=cmd_tv_alerts)
+
+    tj = sub.add_parser(
+        "tv-journal-monitor",
+        help=(
+            "Sau khi đã có cảnh báo TV: mỗi chu kỳ reload chart, tab Nhật ký, parse giá; "
+            "khớp 1 trong 3 giá → Coinmap M5 + OpenAI (chờ / loại / VÀO LỆNH) tới giờ kết thúc."
+        ),
+    )
+    tj.add_argument(
+        "--p1",
+        type=float,
+        default=None,
+        help="Giá vùng 1 (dùng cùng --p2 --p3; mặc định: data/last_alert_prices.json)",
+    )
+    tj.add_argument("--p2", type=float, default=None)
+    tj.add_argument("--p3", type=float, default=None)
+    tj.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Yaml có tradingview_capture (mặc định: config/coinmap.yaml)",
+    )
+    tj.add_argument(
+        "--capture-config",
+        type=Path,
+        default=None,
+        help="Yaml chỉ chụp Coinmap (mặc định: config/coinmap_update.yaml)",
+    )
+    tj.add_argument("--charts-dir", type=Path, default=None)
+    tj.add_argument("--storage-state", type=Path, default=None)
+    tj.add_argument("--no-save-storage", action="store_true")
+    tj.add_argument("--headed", action="store_true")
+    tj.add_argument("--no-telegram", action="store_true")
+    tj.add_argument(
+        "--poll-seconds",
+        type=float,
+        default=45.0,
+        help=(
+            "Sau mỗi lần reload trang + mở tab Nhật ký + parse giá: chờ bấy nhiêu giây "
+            "trước chu kỳ tiếp (mặc định: 45)"
+        ),
+    )
+    tj.add_argument(
+        "--wait-minutes",
+        type=int,
+        default=15,
+        help="Khi model trả Hành động: chờ — chờ bao nhiêu phút trước khi chụp M5 hỏi lại (mặc định: 15)",
+    )
+    tj.add_argument("--until-hour", type=int, default=23, help="Dừng theo dõi sau giờ này (địa phương)")
+    tj.add_argument(
+        "--timezone",
+        type=str,
+        default="Asia/Ho_Chi_Minh",
+        help="IANA timezone cho --until-hour (mặc định: Asia/Ho_Chi_Minh)",
+    )
+    tj.set_defaults(func=cmd_tv_journal_monitor)
 
     g = sub.add_parser(
         "chatgpt-project",
@@ -397,6 +520,32 @@ def cmd_all(args: argparse.Namespace) -> None:
     except Exception as e:
         re_raise_unless_openai(e)
     print(out.full_text())
+
+    write_last_response_id(out.final_response_id)
+    zt, zerr = parse_three_zone_prices(out.after_charts or "")
+    if zt:
+        write_morning_baseline_prices(zt)
+        write_last_alert_prices(zt)
+        if not args.no_tradingview:
+            p1, p2, p3 = zt
+            print(
+                f"Đồng bộ TradingView alerts → {p1} | {p2} | {p3} (config: {cfg})",
+                flush=True,
+            )
+            sync_tradingview_alerts(
+                coinmap_yaml=cfg,
+                storage_state_path=storage,
+                email=s.coinmap_email,
+                tradingview_password=s.tradingview_password,
+                target_prices=zt,
+                headless=not args.headed,
+            )
+    else:
+        print(
+            f"Warning: could not parse morning zone prices for persistence: {zerr}",
+            file=sys.stderr,
+        )
+
     if not args.no_telegram and out.after_charts:
         require_telegram(s)
         send_openai_output_to_telegram(
@@ -405,6 +554,196 @@ def cmd_all(args: argparse.Namespace) -> None:
             raw=out.after_charts,
             default_parse_mode=s.telegram_parse_mode,
             summary_chat_id=s.telegram_output_ngan_gon_chat_id,
+        )
+
+
+def cmd_tv_alerts(args: argparse.Namespace) -> None:
+    s = load_settings()
+    cfg_tv = args.config or default_coinmap_config_path()
+    storage = args.storage_state or default_storage_state_path()
+    p1, p2, p3 = args.p1, args.p2, args.p3
+    print(f"Đồng bộ TradingView alerts → {p1} | {p2} | {p3} (config: {cfg_tv})")
+    sync_tradingview_alerts(
+        coinmap_yaml=cfg_tv,
+        storage_state_path=storage,
+        email=s.coinmap_email,
+        tradingview_password=s.tradingview_password,
+        target_prices=(p1, p2, p3),
+        headless=not args.headed,
+    )
+    print("Xong.")
+
+
+def cmd_tv_journal_monitor(args: argparse.Namespace) -> None:
+    s = load_settings()
+    require_openai(s)
+    prev = read_last_response_id()
+    if not prev:
+        raise SystemExit(
+            "Missing data/last_response_id.txt — run `coinmap-automation all` or `update` first "
+            "so OpenAI has a thread id."
+        )
+
+    if args.p1 is not None:
+        if args.p2 is None or args.p3 is None:
+            raise SystemExit("Khi dùng --p1 cần truyền đủ --p1 --p2 --p3.")
+        targets = (args.p1, args.p2, args.p3)
+    else:
+        if args.p2 is not None or args.p3 is not None:
+            raise SystemExit("Dùng cả ba --p1 --p2 --p3 hoặc để trống để đọc last_alert_prices.")
+        t = read_last_alert_prices()
+        if t is None:
+            raise SystemExit(
+                "Không có data/last_alert_prices.json — chạy update hoặc truyền --p1 --p2 --p3."
+            )
+        targets = t
+
+    cfg_tv = args.config or default_coinmap_config_path()
+    cfg_cap = args.capture_config or default_coinmap_update_config_path()
+    charts_dir = args.charts_dir or default_charts_dir()
+    storage = args.storage_state or default_storage_state_path()
+
+    params = JournalMonitorParams(
+        coinmap_tv_yaml=cfg_tv,
+        capture_coinmap_yaml=cfg_cap,
+        charts_dir=charts_dir,
+        storage_state_path=storage,
+        target_prices=targets,
+        headless=not args.headed,
+        no_save_storage=args.no_save_storage,
+        poll_seconds=args.poll_seconds,
+        wait_minutes=args.wait_minutes,
+        until_hour=args.until_hour,
+        timezone_name=args.timezone,
+        no_telegram=args.no_telegram,
+    )
+
+    print(
+        f"tv-journal-monitor: giá {targets[0]} | {targets[1]} | {targets[2]} — "
+        f"tới {args.until_hour}:00 ({args.timezone}), "
+        f"chu kỳ: reload → Nhật ký → parse, nghỉ {args.poll_seconds}s.",
+        flush=True,
+    )
+    print(
+        f"  TV yaml: {cfg_tv} | Capture yaml: {cfg_cap} | charts: {charts_dir} | "
+        f"storage: {storage} | headed={args.headed} | no_telegram={args.no_telegram}",
+        flush=True,
+    )
+    try:
+        outcome = run_tv_journal_monitor(
+            settings=s,
+            params=params,
+            initial_response_id=prev,
+        )
+    except Exception as e:
+        re_raise_unless_openai(e)
+        raise
+    print(f"Kết thúc: {outcome}")
+
+
+def cmd_update(args: argparse.Namespace) -> None:
+    s = load_settings()
+    cfg_cap = args.config or default_coinmap_update_config_path()
+    charts_dir = args.charts_dir or default_charts_dir()
+    storage = args.storage_state or default_storage_state_path()
+    cfg_tv = args.tv_config or default_coinmap_config_path()
+
+    baseline = read_morning_baseline_prices()
+    if baseline is None:
+        raise SystemExit(
+            "Missing data/morning_baseline_prices.json — run `coinmap-automation all` successfully first."
+        )
+
+    prev = read_last_response_id()
+    if not prev:
+        raise SystemExit(
+            "Missing data/last_response_id.txt — run `coinmap-automation all` successfully first."
+        )
+
+    paths = capture_charts(
+        coinmap_yaml=cfg_cap,
+        charts_dir=charts_dir,
+        storage_state_path=storage,
+        email=s.coinmap_email,
+        password=s.coinmap_password,
+        tradingview_password=s.tradingview_password,
+        save_storage_state=not args.no_save_storage,
+        headless=not args.headed,
+    )
+    print(f"Captured {len(paths)} file(s) for update run.")
+    json_path = coinmap_xauusd_5m_json_path(charts_dir)
+    if json_path is None:
+        raise SystemExit(
+            f"No XAUUSD 5m Coinmap JSON under {charts_dir} after capture. "
+            "Check coinmap_update.yaml capture_plan and api_data_export."
+        )
+
+    require_openai(s)
+    p1, p2, p3 = baseline.prices
+    user_msg = DEFAULT_UPDATE_PROMPT_TEMPLATE.format(p1=p1, p2=p2, p3=p3)
+
+    try:
+        out_text, new_id = run_single_followup_responses(
+            api_key=s.openai_api_key,
+            prompt_id=s.openai_prompt_id,
+            prompt_version=s.openai_prompt_version,
+            user_text=user_msg,
+            coinmap_json_path=json_path,
+            previous_response_id=prev,
+            vector_store_ids=s.openai_vector_store_ids,
+            store=s.openai_responses_store,
+            include=s.openai_responses_include,
+        )
+    except Exception as e:
+        re_raise_unless_openai(e)
+
+    print(out_text)
+    write_last_response_id(new_id)
+
+    new_triple, zerr = parse_three_zone_prices(out_text)
+    if new_triple is None:
+        if is_no_change_action_line(out_text):
+            if not args.no_telegram:
+                require_telegram(s)
+                send_message(
+                    bot_token=s.telegram_bot_token,
+                    chat_id=s.telegram_chat_id,
+                    text="Vùng giá không đổi so với sáng, giữ nguyên cảnh báo.",
+                    parse_mode=s.telegram_parse_mode,
+                )
+            return
+        raise SystemExit(zerr or "Could not parse three zone prices from model output.")
+
+    if prices_equal_triple(new_triple, baseline.prices):
+        if not args.no_telegram:
+            require_telegram(s)
+            send_message(
+                bot_token=s.telegram_bot_token,
+                chat_id=s.telegram_chat_id,
+                text="Vùng giá không đổi so với sáng, giữ nguyên cảnh báo.",
+                parse_mode=s.telegram_parse_mode,
+            )
+        return
+
+    if not args.no_tradingview:
+        sync_tradingview_alerts(
+            coinmap_yaml=cfg_tv,
+            storage_state_path=storage,
+            email=s.coinmap_email,
+            tradingview_password=s.tradingview_password,
+            target_prices=new_triple,
+            headless=not args.headed,
+        )
+    write_last_alert_prices(new_triple)
+
+    if not args.no_telegram:
+        require_telegram(s)
+        a, b, c = new_triple
+        send_message(
+            bot_token=s.telegram_bot_token,
+            chat_id=s.telegram_chat_id,
+            text=f"Đã cập nhật vùng giá mới: {a} | {b} | {c}",
+            parse_mode=s.telegram_parse_mode,
         )
 
 

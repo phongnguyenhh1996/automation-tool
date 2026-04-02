@@ -1,0 +1,122 @@
+# Intraday update capture only: Coinmap XAUUSD 5m JSON (no TradingView tab in this run).
+# Use with: coinmap-automation update --config config/coinmap_update.yaml
+# TradingView alert sync reads tradingview_capture from config/coinmap.yaml by default.
+
+clear_charts_before_capture: true
+base_url: "https://coinmap.tech"
+login_url: "https://coinmap.tech/login"
+email_selector: 'input[type="email"], input[name="email"], input#email'
+password_selector: 'input[type="password"]'
+submit_selector: 'button[type="submit"], button:has-text("Sign in"), button:has-text("Log in")'
+post_login_wait_selector: "main, [data-testid='chart'], canvas, .chart"
+
+chart_download:
+  enabled: true
+  chart_page_url: "https://coinmap.tech/chart"
+  dismiss_symbol_search_modal: true
+  symbol_search_modal_escape_presses: 2
+  symbol_modal_escape_gap_ms: 180
+  after_symbol_modal_dismiss_ms: 350
+  symbol_search_modal_close_selector: ""
+  multi_shot_enabled: true
+  capture_plan:
+    - symbol: XAUUSD
+      interval: "5m"
+      watchlist_category: "forex 1"
+  right_sidebar_container_class_prefix: "ChartDesktopPage_rightSidebar__"
+  right_sidebar_toggle_click_force: true
+  right_sidebar_action_button_class_prefix: "ChartDesktopPage_actionButton"
+  right_sidebar_toggle_button_selector: ""
+  right_sidebar_already_open_check_ms: 2000
+  right_sidebar_open_max_toggles: 4
+  watchlist_title_class_prefix: "ChartWatchList_title__"
+  watchlist_title_visible_timeout_ms: 20000
+  watchlist_ant_select_visible_timeout_ms: 15000
+  watchlist_symbol_name_class_prefix: "TableData_symbolNameContent__"
+  interval_select_class_prefix: "IntervalSelect_intervalSelect__"
+  sidebar_toggle_after_click_ms: 450
+  watchlist_dropdown_open_ms: 350
+  watchlist_option_visible_timeout_ms: 15000
+  after_watchlist_category_ms: 400
+  after_watchlist_symbol_click_ms: 700
+  interval_dropdown_open_ms: 350
+  interval_option_visible_timeout_ms: 15000
+  after_interval_select_ms: 800
+  after_interval_change_settle_ms: 2000
+  after_fullscreen_escape_ms: 600
+  coinmap_fullscreen_exit_use_toolbar_click: true
+  coinmap_fullscreen_exit_action_button_index: 0
+  coinmap_fullscreen_exit_click_force: true
+  coinmap_fullscreen_exit_after_toolbar_click_ms: 450
+  coinmap_fullscreen_exit_escape_after_toolbar_presses: 0
+  coinmap_fullscreen_exit_escape_gap_ms: 200
+  coinmap_fullscreen_loop_start_escape_presses: 1
+  dark_mode_enabled: true
+  dark_mode_theme_button_selector: '[class*="Header_menuIconTheme"]'
+  dark_mode_sun_icon_selector: "span.anticon-sun"
+  dark_mode_after_click_ms: 400
+  light_theme_confirm_enabled: true
+  light_theme_confirm_selector: 'button:has-text("Confirm"), button:has-text("OK"), button:has-text("Continue")'
+  light_theme_modal_wait_ms: 2500
+  section_header_action_class_prefix: "SectionHeader_actionButton"
+  section_header_action_parent_selector: '[class*="SectionHeader_rightControls"]'
+  action_button_index: 1
+  fullscreen_action_button_click_force: false
+  fullscreen_screenshot_settle_ms: 1500
+  fullscreen_screenshot_full_page: false
+  chart_view_adjustments_enabled: true
+  chart_interaction_selector: "svg.react-stockchart-canvas, svg[class*='react-stockchart']"
+  chart_between_pan_ms: 200
+  chart_edge_pan_drag_steps: 12
+  chart_time_edge_pan_enabled: true
+  chart_time_edge_pan_repeats: 1
+  chart_time_edge_pan_y_ratio: 0.98
+  chart_time_edge_pan_start_x_ratio: 0.1
+  chart_time_edge_pan_end_x_ratio: 0.8
+  chart_price_edge_pan_enabled: true
+  chart_price_edge_pan_x_ratio: 0.98
+  chart_price_edge_pan_start_y_ratio: 0.42
+  chart_price_edge_pan_end_y_ratio: 0.38
+  chart_pan_start_x_ratio: 0.28
+  chart_pan_end_x_ratio: 0.4
+  chart_pan_y_ratio: 0.52
+  chart_pan_drag_steps: 14
+  chart_after_adjust_ms: 800
+  coinmap_screenshot_enabled: false
+  layer_tooltip_toggle_before_screenshot: true
+  layer_tooltip_selector: '[class*="layerTooltip"]'
+  layer_list_toggle_button_selector: '[class*="buttonToggleLayerList"]'
+  layer_tooltip_min_height_px: 19
+  after_layer_toggle_click_ms: 400
+
+  api_data_export:
+    enabled: true
+    mode: network_capture
+    merge_repeated_endpoint_responses: true
+    network_capture_max_responses_per_endpoint: 0
+    relax_symbol_filter_if_empty: true
+    slim_export_on_disk: true
+    network_capture_wait_ms: 12000
+    network_capture_poll_ms: 300
+    fail_on_api_error: false
+    max_nonjson_body_chars: 8000
+    http_method: GET
+    request_headers: {}
+    endpoints:
+      getcandlehistory: "https://gw.coinmap.tech/cm-api/api/v1/getcandlehistory"
+      getorderflowhistory: "https://gw.coinmap.tech/cm-api/api/v1/getorderflowhistory"
+      getindicatorsvwap: "https://gw.coinmap.tech/cm-api/api/v1/getindicatorsvwap"
+    query_template: {}
+    extra_query: {}
+
+tradingview_capture:
+  enabled: false
+
+screenshot_after_chart_download: false
+chart_selectors:
+  - "canvas"
+fallback_full_page: true
+viewport_width: 1600
+viewport_height: 900
+settle_ms: 2000
+max_charts: 50
