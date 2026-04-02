@@ -163,8 +163,13 @@ def _delete_alert_at_index(page: Page, tv: dict[str, Any], index: int) -> None:
 
 
 def _delete_stray_alerts(
-    page: Page, tv: dict[str, Any], targets: tuple[float, float, float]
+    page: Page,
+    tv: dict[str, Any],
+    targets: tuple[float, float, float],
+    settle_ms: int,
 ) -> None:
+    """Remove alerts whose price is not in ``targets``. After each delete, reload the chart and
+    reopen the alerts list — TradingView does not always refresh the list in place."""
     tset = set(targets)
     for _ in range(_MAX_DELETE_ROUNDS):
         prices = _list_alert_prices(page, tv)
@@ -178,7 +183,7 @@ def _delete_stray_alerts(
         if stray_idx is None:
             break
         _delete_alert_at_index(page, tv, stray_idx)
-        page.wait_for_timeout(400)
+        _reload_and_reopen(page, tv, settle_ms)
 
 
 def _reload_and_reopen(page: Page, tv: dict[str, Any], settle_ms: int) -> None:
@@ -221,7 +226,7 @@ def sync_alerts_on_page(page: Page, tv: dict[str, Any], settle_ms: int, targets:
     page.locator(f"#{intervals_id}").first.wait_for(state="visible", timeout=90_000)
 
     _open_alerts_list_panel(page, tv)
-    _delete_stray_alerts(page, tv, targets)
+    _delete_stray_alerts(page, tv, targets, settle_ms)
     _reload_and_reopen(page, tv, settle_ms)
     _ensure_three_alerts(page, tv, targets)
 
