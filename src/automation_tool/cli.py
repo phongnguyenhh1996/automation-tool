@@ -30,6 +30,7 @@ from automation_tool.images import (
     ordered_chart_openai_payloads,
 )
 from automation_tool.state_files import (
+    default_last_alert_prices_path,
     read_last_alert_prices,
     read_last_response_id,
     read_morning_baseline_prices,
@@ -165,11 +166,29 @@ def _parser() -> argparse.ArgumentParser:
 
     tv = sub.add_parser(
         "tv-alerts",
-        help="Chỉ đồng bộ 3 cảnh báo giá lên TradingView (test; cần chart_url trong yaml)",
+        help="Đồng bộ 3 cảnh báo giá lên TradingView (cần chart_url trong yaml)",
     )
-    tv.add_argument("p1", type=float, help="Giá cảnh báo 1")
-    tv.add_argument("p2", type=float, help="Giá cảnh báo 2")
-    tv.add_argument("p3", type=float, help="Giá cảnh báo 3")
+    tv.add_argument(
+        "p1",
+        type=float,
+        nargs="?",
+        default=None,
+        help="Giá 1 (bỏ qua nếu dùng --prices-json / --from-last-alert)",
+    )
+    tv.add_argument("p2", type=float, nargs="?", default=None, help="Giá 2")
+    tv.add_argument("p3", type=float, nargs="?", default=None, help="Giá 3")
+    tv.add_argument(
+        "--prices-json",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help="JSON có key 'prices': [a,b,c] (cùng format data/last_alert_prices.json)",
+    )
+    tv.add_argument(
+        "--from-last-alert",
+        action="store_true",
+        help=f"Đọc 3 giá từ {default_last_alert_prices_path()}",
+    )
     tv.add_argument(
         "--config",
         type=Path,
@@ -561,7 +580,31 @@ def cmd_tv_alerts(args: argparse.Namespace) -> None:
     s = load_settings()
     cfg_tv = args.config or default_coinmap_config_path()
     storage = args.storage_state or default_storage_state_path()
-    p1, p2, p3 = args.p1, args.p2, args.p3
+
+    if args.from_last_alert:
+        t = read_last_alert_prices()
+        if t is None:
+            raise SystemExit(
+                f"Không đọc được {default_last_alert_prices_path()} "
+                "(cần key 'prices': [a,b,c]). Chạy all/update trước hoặc dùng --prices-json FILE."
+            )
+        p1, p2, p3 = t
+    elif args.prices_json is not None:
+        t = read_last_alert_prices(args.prices_json)
+        if t is None:
+            raise SystemExit(
+                f"Không đọc được 3 giá từ {args.prices_json} "
+                "(JSON cần key 'prices': [a, b, c])."
+            )
+        p1, p2, p3 = t
+    elif args.p1 is not None and args.p2 is not None and args.p3 is not None:
+        p1, p2, p3 = args.p1, args.p2, args.p3
+    else:
+        raise SystemExit(
+            "Cần một trong: --from-last-alert | --prices-json FILE | ba số: p1 p2 p3\n"
+            "Ví dụ: coinmap-automation tv-alerts --prices-json data/last_alert_prices.json"
+        )
+
     print(f"Đồng bộ TradingView alerts → {p1} | {p2} | {p3} (config: {cfg_tv})")
     sync_tradingview_alerts(
         coinmap_yaml=cfg_tv,

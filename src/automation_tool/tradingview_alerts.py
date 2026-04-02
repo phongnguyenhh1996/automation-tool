@@ -58,31 +58,77 @@ def _price_in_targets(p: float, targets: set[float]) -> bool:
     return False
 
 
+def _alerts_panel_list_locator(page: Page, tv: dict[str, Any]):
+    sel = (tv.get("alerts_panel_list_selector") or "").strip()
+    return page.locator(sel or "#id_alert-widget-tabs-slots_tabpanel_list")
+
+
+def _alerts_list_tab_locator(page: Page, tv: dict[str, Any]):
+    custom = (tv.get("alerts_list_tab_selector") or "").strip()
+    if custom:
+        return page.locator(custom)
+    # Locale-agnostic: tab that controls the list panel (works when button#list is absent e.g. EN UI)
+    return page.locator(
+        '[role="tab"][aria-controls="id_alert-widget-tabs-slots_tabpanel_list"]'
+    )
+
+
 def _open_alerts_list_panel(page: Page, tv: dict[str, Any]) -> None:
-    panel = page.locator("#id_alert-widget-tabs-slots_tabpanel_list")
+    """
+    Open the Alerts sidebar and switch to the List tab so the list panel is visible.
+    Do not return early when another tab (e.g. Log) is selected — list panel stays hidden.
+    """
+    panel = _alerts_panel_list_locator(page, tv)
+    list_tab = _alerts_list_tab_locator(page, tv)
+    list_timeout = int(tv.get("alerts_list_panel_timeout_ms", 60_000))
+    after_open = int(tv.get("alerts_after_open_ms", 400))
+
+    alerts_btn = page.locator('button[data-name="alerts"]').first
+    alerts_btn.wait_for(state="visible", timeout=30_000)
+
+    def _list_tab_selected() -> bool:
+        if not list_tab.count():
+            return False
+        try:
+            return list_tab.first.get_attribute("aria-selected") == "true"
+        except Exception:
+            return False
+
+    # Sidebar open + list tab active + list panel visible → done
     try:
-        if panel.count() and panel.first.is_visible(timeout=1500):
+        if panel.first.is_visible(timeout=2_000) and _list_tab_selected():
             return
     except Exception:
         pass
-    alerts_btn = page.locator('button[data-name="alerts"]').first
-    alerts_btn.wait_for(state="visible", timeout=30_000)
+
     alerts_btn.click(timeout=15_000)
-    page.wait_for_timeout(int(tv.get("alerts_after_open_ms", 400)))
-    list_tab = page.locator(
-        'button#list[role="tab"][aria-controls="id_alert-widget-tabs-slots_tabpanel_list"]'
-    )
+    page.wait_for_timeout(after_open)
+
     if list_tab.count():
-        list_tab.first.click(timeout=10_000)
-    page.wait_for_timeout(300)
+        if not _list_tab_selected():
+            list_tab.first.click(timeout=15_000)
+            page.wait_for_timeout(300)
+    else:
+        # Legacy fallback (older Vietnamese DOM)
+        legacy = page.locator(
+            'button#list[role="tab"][aria-controls="id_alert-widget-tabs-slots_tabpanel_list"]'
+        )
+        if legacy.count():
+            legacy.first.click(timeout=15_000)
+            page.wait_for_timeout(300)
+
+    panel.first.wait_for(state="visible", timeout=list_timeout)
 
 
-def _list_alert_prices(page: Page) -> list[float]:
-    panel = page.locator("#id_alert-widget-tabs-slots_tabpanel_list")
-    panel.wait_for(state="visible", timeout=20_000)
-    descs = page.locator(
-        '#id_alert-widget-tabs-slots_tabpanel_list div[data-name="alert-item-description"]'
+def _list_alert_prices(page: Page, tv: dict[str, Any]) -> list[float]:
+    panel = _alerts_panel_list_locator(page, tv)
+    list_timeout = int(tv.get("alerts_list_panel_timeout_ms", 60_000))
+    panel.wait_for(state="visible", timeout=list_timeout)
+    panel_id = (
+        (tv.get("alerts_panel_list_selector") or "").strip()
+        or "#id_alert-widget-tabs-slots_tabpanel_list"
     )
+    descs = page.locator(f'{panel_id} div[data-name="alert-item-description"]')
     n = descs.count()
     out: list[float] = []
     for i in range(n):
@@ -93,9 +139,13 @@ def _list_alert_prices(page: Page) -> list[float]:
     return out
 
 
-def _delete_alert_at_index(page: Page, index: int) -> None:
+def _delete_alert_at_index(page: Page, tv: dict[str, Any], index: int) -> None:
+    panel_id = (
+        (tv.get("alerts_panel_list_selector") or "").strip()
+        or "#id_alert-widget-tabs-slots_tabpanel_list"
+    )
     desc = page.locator(
-        '#id_alert-widget-tabs-slots_tabpanel_list div[data-name="alert-item-description"]'
+        f'{panel_id} div[data-name="alert-item-description"]'
     ).nth(index)
     # Description text can sit under a sibling layer; TV's row shell (itemBody) receives the hit.
     row = desc.locator("xpath=ancestor::div[contains(@class,'itemBody')][1]")
@@ -117,7 +167,7 @@ def _delete_stray_alerts(
 ) -> None:
     tset = set(targets)
     for _ in range(_MAX_DELETE_ROUNDS):
-        prices = _list_alert_prices(page)
+        prices = _list_alert_prices(page, tv)
         if not prices:
             break
         stray_idx: Optional[int] = None
@@ -127,7 +177,7 @@ def _delete_stray_alerts(
                 break
         if stray_idx is None:
             break
-        _delete_alert_at_index(page, stray_idx)
+        _delete_alert_at_index(page, tv, stray_idx)
         page.wait_for_timeout(400)
 
 
@@ -141,7 +191,7 @@ def _ensure_three_alerts(
     page: Page, tv: dict[str, Any], targets: tuple[float, float, float]
 ) -> None:
     for _ in range(_MAX_CREATE_ROUNDS):
-        on_screen = _list_alert_prices(page)
+        on_screen = _list_alert_prices(page, tv)
         missing: list[float] = []
         for t in targets:
             if not any(abs(t - p) <= _EPS for p in on_screen):

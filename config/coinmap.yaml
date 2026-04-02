@@ -216,6 +216,9 @@ tradingview_capture:
   tradingview_fullscreen_notice_hide_timeout_ms: 45000
   # tradingview_fullscreen_notice_wait_disabled: false
   # Tab Nhật ký (CLI ``tv-journal-monitor``); mặc định khớp DOM TradingView tiếng Việt
+  # Đồng bộ 3 cảnh báo (CLI all / update / tv-alerts): mở sidebar Cảnh báo → tab Danh sách
+  # Nếu timeout panel list: tăng alerts_list_panel_timeout_ms (mặc định 60000)
+  # alerts_list_tab_selector: '[role="tab"][aria-controls="id_alert-widget-tabs-slots_tabpanel_list"]'
   journal_log_tab_selector: 'button#log[role="tab"]'
   journal_log_panel_selector: "#id_alert-widget-tabs-slots_tabpanel_log"
   journal_item_description_selector: 'div[data-name="alert-item-description"]'
