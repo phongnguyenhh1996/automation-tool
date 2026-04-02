@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, Optional
 
 from openai import OpenAI
 
@@ -137,12 +138,16 @@ def run_analysis_responses_flow(
     chart_paths: list[Path] | None = None,
     chart_payloads: list[tuple[str, Path]] | None = None,
     max_coinmap_json_chars: int | None = None,
+    on_first_model_text: Optional[Callable[[str], None]] = None,
 ) -> PromptTwoStepResult:
     """
     Một lần (hoặc nhiều batch nếu quá nhiều ảnh): user message multimodal với ``analysis_prompt``
     + chart payloads, không còn bước text-only tách biệt.
 
     ``after_charts`` chứa toàn bộ output; ``first_text`` luôn ``""``.
+
+    ``on_first_model_text`` (tuỳ chọn): gọi với text assistant của **batch đầu tiên**
+    (khi có multimodal); dùng cho VÀO LỆNH + MT5 / cập nhật ``last_alert_prices``.
     """
     client = OpenAI(api_key=api_key)
     prompt = _prompt_dict(prompt_id, prompt_version)
@@ -182,6 +187,8 @@ def run_analysis_responses_flow(
     if not payloads:
         r = client.responses.create(**common, input=analysis_prompt.strip())
         out = (r.output_text or "").strip()
+        if on_first_model_text is not None and out:
+            on_first_model_text(out)
         return PromptTwoStepResult(first_text="", after_charts=out, final_response_id=r.id)
 
     chunks = chunk_payloads(payloads, max_images_per_call)
@@ -216,7 +223,10 @@ def run_analysis_responses_flow(
             kwargs["previous_response_id"] = prev_id
         r = client.responses.create(**kwargs)
         prev_id = r.id
-        assistant_parts.append((r.output_text or "").strip())
+        chunk_text = (r.output_text or "").strip()
+        assistant_parts.append(chunk_text)
+        if bi == 0 and on_first_model_text is not None and chunk_text:
+            on_first_model_text(chunk_text)
 
     after = "\n\n---\n\n".join(assistant_parts)
     assert prev_id is not None
@@ -265,6 +275,7 @@ def run_prompt_two_step_flow(
         chart_paths=chart_paths,
         chart_payloads=chart_payloads,
         max_coinmap_json_chars=max_coinmap_json_chars,
+        on_first_model_text=None,
     )
 
 

@@ -4,7 +4,9 @@ import argparse
 import logging
 import os
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import Optional
 
 from automation_tool.coinmap import capture_charts
 from automation_tool.config import (
@@ -29,6 +31,7 @@ from automation_tool.images import (
     coinmap_xauusd_5m_json_path,
     ordered_chart_openai_payloads,
 )
+from automation_tool.first_response_trade import apply_first_response_vao_lenh
 from automation_tool.state_files import (
     all_plans_terminal,
     default_last_alert_prices_path,
@@ -47,11 +50,16 @@ from automation_tool.zone_prices import (
 )
 from automation_tool.tradingview_alerts import sync_tradingview_alerts
 from automation_tool.tradingview_journal_monitor import JournalMonitorParams, run_tv_journal_monitor
-from automation_tool.telegram_bot import send_message, send_openai_output_to_telegram
+from automation_tool.telegram_bot import (
+    send_message,
+    send_mt5_execution_log_to_ngan_gon_chat,
+    send_openai_output_to_telegram,
+)
 from automation_tool.telegram_logging import setup_automation_logging
 from automation_tool.config import load_all_dotenv
+from automation_tool.first_response_trade import apply_first_response_vao_lenh
 from automation_tool.mt5_openai_parse import parse_openai_output_md
-from automation_tool.mt5_execute import check_mt5_login, execute_trade
+from automation_tool.mt5_execute import check_mt5_login, execute_trade, format_mt5_execution_for_telegram
 
 _log = logging.getLogger("automation_tool.cli")
 
@@ -102,6 +110,30 @@ def _parser() -> argparse.ArgumentParser:
         "--no-telegram",
         action="store_true",
         help="Do not send to Telegram (stdout still shows both steps)",
+    )
+    a.add_argument(
+        "--last-alert-json",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help=(
+            "Sau phản hồi đầu tiên: nếu VÀO LỆNH + trade_line + đủ 3 giá JSON, "
+            f"cập nhật status (mặc định: {default_last_alert_prices_path()})"
+        ),
+    )
+    a.add_argument(
+        "--no-mt5-execute",
+        action="store_true",
+        help=(
+            "Không gọi execute_trade khi phản hồi đầu đủ VÀO LỆNH + trade_line "
+            "(mặc định: gọi lệnh thật trên MT5)"
+        ),
+    )
+    a.add_argument("--mt5-symbol", default=None, metavar="SYM", help="Symbol MT5 (phân tích đầu)")
+    a.add_argument(
+        "--mt5-dry-run",
+        action="store_true",
+        help="Phản hồi đầu: chỉ mô phỏng MT5, không gửi lệnh thật (mặc định: lệnh thật)",
     )
     a.set_defaults(func=cmd_analyze)
 
@@ -178,23 +210,29 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         metavar="FILE",
-        help="tv-journal-monitor: file last_alert_prices.json (mặc định: data/last_alert_prices.json)",
+        help=(
+            "Phân tích chart + tv-journal-monitor: file last_alert_prices.json "
+            "(mặc định: data/last_alert_prices.json)"
+        ),
     )
     al.add_argument(
-        "--mt5-execute",
+        "--no-mt5-execute",
         action="store_true",
-        help="tv-journal-monitor: sau VÀO LỆNH + trade_line hợp lệ, gọi execute_trade (cần Windows + MT5)",
+        help=(
+            "Không gọi execute_trade (phản hồi đầu phân tích + journal sau VÀO LỆNH + trade_line; "
+            "mặc định: gọi; cần Windows + MetaTrader5 pip)"
+        ),
     )
     al.add_argument(
         "--mt5-symbol",
         default=None,
         metavar="SYM",
-        help="tv-journal-monitor: symbol MT5 (ghi đè parse từ trade_line)",
+        help="Symbol MT5 (ghi đè parse từ trade_line)",
     )
     al.add_argument(
-        "--mt5-live",
+        "--mt5-dry-run",
         action="store_true",
-        help="tv-journal-monitor: gửi lệnh MT5 thật (mặc định dry-run)",
+        help="Chỉ dry-run MT5 (mặc định: gửi lệnh thật)",
     )
     al.set_defaults(func=cmd_all)
 
@@ -326,15 +364,18 @@ def _parser() -> argparse.ArgumentParser:
         help="File last_alert_prices.json (mặc định: data/last_alert_prices.json)",
     )
     tj.add_argument(
-        "--mt5-execute",
+        "--no-mt5-execute",
         action="store_true",
-        help="Sau VÀO LỆNH + trade_line hợp lệ, gọi execute_trade (cần Windows + MT5)",
+        help=(
+            "Không gọi execute_trade sau VÀO LỆNH + trade_line "
+            "(mặc định: luôn gọi; cần Windows + MetaTrader5 pip)"
+        ),
     )
     tj.add_argument("--mt5-symbol", default=None, metavar="SYM", help="Symbol MT5")
     tj.add_argument(
-        "--mt5-live",
+        "--mt5-dry-run",
         action="store_true",
-        help="Gửi lệnh MT5 thật (mặc định dry-run)",
+        help="Chỉ dry-run MT5 (mặc định: gửi lệnh thật)",
     )
     tj.set_defaults(func=cmd_tv_journal_monitor)
 
@@ -360,6 +401,24 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not send chart-step output to Telegram",
     )
+    g.add_argument(
+        "--last-alert-json",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help="Giống analyze: cập nhật last_alert_prices khi VÀO LỆNH ở phản hồi đầu",
+    )
+    g.add_argument(
+        "--no-mt5-execute",
+        action="store_true",
+        help="Giống analyze: không gọi MT5 từ phản hồi đầu",
+    )
+    g.add_argument("--mt5-symbol", default=None, metavar="SYM")
+    g.add_argument(
+        "--mt5-dry-run",
+        action="store_true",
+        help="Giống analyze: dry-run MT5 (mặc định: lệnh thật)",
+    )
     g.set_defaults(func=cmd_chatgpt_project)
 
     t = sub.add_parser("telegram-send", help="Send a text message to Telegram (uses .env token and chat id)")
@@ -375,7 +434,7 @@ def _parser() -> argparse.ArgumentParser:
     mt5 = sub.add_parser(
         "mt5-trade",
         help=(
-            "OpenAI .md → MetaTrader5. Dev Mac: dry-run. Prod: Windows VPS + MT5 đã đăng nhập + --execute."
+            "OpenAI .md → MetaTrader5. Mặc định gửi lệnh thật (Windows + MT5). Dùng --dry-run trên Mac/dev."
         ),
     )
     mt5.add_argument(
@@ -390,11 +449,11 @@ def _parser() -> argparse.ArgumentParser:
         help="Symbol MT5 (mặc định: từ 📊 trong text hoặc XAUUSD → tự đổi XAUUSDm)",
     )
     mt5.add_argument(
-        "--execute",
+        "--dry-run",
         action="store_true",
         help=(
-            "Gửi lệnh thật trên máy Windows có terminal MT5 (VPS: để trống MT5_LOGIN nếu đã đăng nhập sẵn). "
-            "Mặc định dry-run (Mac dev không cần MetaTrader5)."
+            "Không gửi lệnh thật (mô phỏng). Mặc định: gửi lệnh thật qua terminal MT5 "
+            "(VPS: có thể để trống MT5_LOGIN nếu đã đăng nhập sẵn)."
         ),
     )
     mt5.add_argument(
@@ -430,6 +489,7 @@ def _run_openai_flow(
     max_images: int,
     chart_paths: list[Path] | None = None,
     chart_payloads: list[tuple[str, Path]] | None = None,
+    on_first_model_text: Optional[Callable[[str], None]] = None,
 ) -> PromptTwoStepResult:
     return run_analysis_responses_flow(
         api_key=s.openai_api_key,
@@ -443,6 +503,7 @@ def _run_openai_flow(
         include=s.openai_responses_include,
         chart_paths=chart_paths,
         chart_payloads=chart_payloads,
+        on_first_model_text=on_first_model_text,
     )
 
 
@@ -496,6 +557,20 @@ def cmd_analyze(args: argparse.Namespace) -> None:
             "Run capture first or check data/charts."
         )
 
+    lap = args.last_alert_json or default_last_alert_prices_path()
+
+    def _on_first(text: str) -> None:
+        apply_first_response_vao_lenh(
+            text,
+            last_alert_path=lap,
+            mt5_execute=not args.no_mt5_execute,
+            mt5_dry_run=args.mt5_dry_run,
+            mt5_symbol=args.mt5_symbol,
+            telegram_bot_token=s.telegram_bot_token,
+            telegram_output_ngan_gon_chat_id=s.telegram_output_ngan_gon_chat_id,
+            telegram_source_label="analyze (phản hồi đầu)",
+        )
+
     try:
         out = _run_openai_flow(
             s,
@@ -503,6 +578,7 @@ def cmd_analyze(args: argparse.Namespace) -> None:
             args.prompt,
             args.max_images_per_call,
             chart_payloads=payloads,
+            on_first_model_text=_on_first,
         )
     except Exception as e:
         re_raise_unless_openai(e)
@@ -528,6 +604,7 @@ def cmd_mt5_trade(args: argparse.Namespace) -> None:
     if not path.is_file():
         raise SystemExit(f"File not found: {path}")
     load_all_dotenv()
+    s_mt5 = load_settings()
     text = path.read_text(encoding="utf-8")
     default_sym = "XAUUSD"
     trade, err = parse_openai_output_md(
@@ -537,13 +614,19 @@ def cmd_mt5_trade(args: argparse.Namespace) -> None:
     )
     if err or trade is None:
         raise SystemExit(err or "Không parse được lệnh.")
-    dry = not args.execute
     out = execute_trade(
         trade,
-        dry_run=dry,
+        dry_run=args.dry_run,
         symbol_override=args.symbol,
         lot_override=args.lot,
     )
+    if s_mt5.telegram_output_ngan_gon_chat_id:
+        send_mt5_execution_log_to_ngan_gon_chat(
+            bot_token=s_mt5.telegram_bot_token,
+            output_ngan_gon_chat_id=s_mt5.telegram_output_ngan_gon_chat_id,
+            source="mt5-trade",
+            text=format_mt5_execution_for_telegram(out),
+        )
     if out.resolved_symbol:
         print("Symbol MT5 (đã resolve):", out.resolved_symbol)
     print(out.message)
@@ -620,6 +703,20 @@ def cmd_all(args: argparse.Namespace) -> None:
             f"under {charts_dir}. Check capture and CHART_IMAGE_ORDER."
         )
 
+    lap_all = args.last_alert_json or default_last_alert_prices_path()
+
+    def _on_first_all(text: str) -> None:
+        apply_first_response_vao_lenh(
+            text,
+            last_alert_path=lap_all,
+            mt5_execute=not args.no_mt5_execute,
+            mt5_dry_run=args.mt5_dry_run,
+            mt5_symbol=args.mt5_symbol,
+            telegram_bot_token=s.telegram_bot_token,
+            telegram_output_ngan_gon_chat_id=s.telegram_output_ngan_gon_chat_id,
+            telegram_source_label="all (phản hồi đầu)",
+        )
+
     try:
         out = _run_openai_flow(
             s,
@@ -627,6 +724,7 @@ def cmd_all(args: argparse.Namespace) -> None:
             args.prompt,
             args.max_images_per_call,
             chart_payloads=payloads,
+            on_first_model_text=_on_first_all,
         )
     except Exception as e:
         re_raise_unless_openai(e)
@@ -691,9 +789,9 @@ def cmd_all(args: argparse.Namespace) -> None:
                     timezone_name=args.timezone,
                     no_telegram=args.no_telegram,
                     last_alert_path=args.last_alert_json or default_last_alert_prices_path(),
-                    mt5_execute=args.mt5_execute,
+                    mt5_execute=not args.no_mt5_execute,
                     mt5_symbol=args.mt5_symbol,
-                    mt5_dry_run=not args.mt5_live,
+                    mt5_dry_run=args.mt5_dry_run,
                 )
                 print(
                     f"tv-journal-monitor: giá {zt[0]} | {zt[1]} | {zt[2]} — "
@@ -815,9 +913,9 @@ def cmd_tv_journal_monitor(args: argparse.Namespace) -> None:
         timezone_name=args.timezone,
         no_telegram=args.no_telegram,
         last_alert_path=args.last_alert_json or default_last_alert_prices_path(),
-        mt5_execute=args.mt5_execute,
+        mt5_execute=not args.no_mt5_execute,
         mt5_symbol=args.mt5_symbol,
-        mt5_dry_run=not args.mt5_live,
+        mt5_dry_run=args.mt5_dry_run,
     )
 
     print(
@@ -1020,9 +1118,9 @@ def cmd_update(args: argparse.Namespace) -> None:
                 timezone_name="Asia/Ho_Chi_Minh",
                 no_telegram=args.no_telegram,
                 last_alert_path=default_last_alert_prices_path(),
-                mt5_execute=False,
+                mt5_execute=True,
                 mt5_symbol=None,
-                mt5_dry_run=True,
+                mt5_dry_run=False,
             )
             try:
                 outcome = run_tv_journal_monitor(

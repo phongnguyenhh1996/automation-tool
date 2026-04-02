@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import html
 import json
+import logging
 import re
 import sys
 from dataclasses import dataclass
 from typing import Any, Optional
 
 import httpx
+
+_log = logging.getLogger(__name__)
 
 from automation_tool.openai_analysis_json import parse_analysis_from_openai_text
 
@@ -394,6 +397,34 @@ def send_message(
                     if isinstance(mid, int):
                         first_message_id = mid
     return first_message_id
+
+
+def send_mt5_execution_log_to_ngan_gon_chat(
+    *,
+    bot_token: str,
+    output_ngan_gon_chat_id: Optional[str],
+    source: str,
+    text: str,
+) -> None:
+    """
+    Gửi log thực thi MT5 (sau ``execute_trade``) tới ``TELEGRAM_OUTPUT_NGAN_GON_CHAT_ID``.
+
+    Plain text; không dùng parse_mode để tránh lỗi ký tự đặc biệt từ broker/API.
+    """
+    cid = (output_ngan_gon_chat_id or "").strip()
+    if not cid:
+        return
+    body = (text or "").strip()
+    if not body:
+        return
+    out = f"📌 MT5 — {source}\n\n{body}"
+    try:
+        send_message(bot_token=bot_token, chat_id=cid, text=out, parse_mode=None)
+    except Exception as e:
+        _log.warning(
+            "Không gửi log MT5 tới TELEGRAM_OUTPUT_NGAN_GON_CHAT_ID: %s",
+            e,
+        )
 
 
 def send_openai_output_to_telegram(

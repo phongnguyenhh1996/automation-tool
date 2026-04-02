@@ -1,10 +1,9 @@
 """
 Thực thi lệnh qua MetaTrader5 (Python package ``MetaTrader5``).
 
-**Mac (dev):** gói thường không cài được; dùng ``mt5-trade`` không ``--execute`` (dry-run).
+**Mac (dev):** gói thường không cài được; dùng ``mt5-trade --dry-run`` hoặc ``--mt5-dry-run`` trên CLI tự động (mô phỏng).
 
-**Windows VPS (prod):** cài MT5 terminal, đăng nhập sẵn tài khoản, giữ terminal mở; chạy script
-với ``--execute``. Nếu không đặt ``MT5_LOGIN`` / ``MT5_PASSWORD`` / ``MT5_SERVER``, gọi
+**Windows VPS (prod):** cài MT5 terminal, đăng nhập sẵn tài khoản, giữ terminal mở; mặc định gửi lệnh thật. Nếu không đặt ``MT5_LOGIN`` / ``MT5_PASSWORD`` / ``MT5_SERVER``, gọi
 ``initialize()`` không đối số — bám phiên đăng nhập hiện có trong terminal (đúng với flow
 “VPS đã cài và đăng nhập sẵn MetaTrader5”).
 """
@@ -35,6 +34,28 @@ class MT5ExecutionResult:
     trade_result: Optional[dict[str, Any]] = None
     # Symbol thực tế dùng sau khi áp CLI và chuẩn hóa XAUUSD → XAUUSDm
     resolved_symbol: Optional[str] = None
+
+
+def format_mt5_execution_for_telegram(ex: MT5ExecutionResult) -> str:
+    """Chuỗi plain text cho log Telegram (OUTPUT_NGAN_GON / cảnh báo)."""
+    parts: list[str] = [ex.message]
+    if ex.resolved_symbol:
+        parts.append(f"Symbol: {ex.resolved_symbol}")
+    if ex.request is not None:
+        parts.append(f"request: {ex.request}")
+    if ex.retcode is not None:
+        parts.append(f"retcode: {ex.retcode}")
+    if ex.order is not None:
+        parts.append(f"order: {ex.order}")
+    if ex.deal is not None:
+        parts.append(f"deal: {ex.deal}")
+    if ex.last_error is not None:
+        parts.append(f"last_error: {ex.last_error}")
+    if ex.trade_check is not None:
+        parts.append(f"trade_check: {ex.trade_check}")
+    if ex.trade_result is not None:
+        parts.append(f"trade_result: {ex.trade_result}")
+    return "\n".join(parts)
 
 
 @dataclass

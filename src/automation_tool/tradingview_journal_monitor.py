@@ -22,7 +22,7 @@ from automation_tool.coinmap import (
 )
 from automation_tool.config import Settings
 from automation_tool.images import coinmap_xauusd_5m_json_path
-from automation_tool.mt5_execute import execute_trade
+from automation_tool.mt5_execute import execute_trade, format_mt5_execution_for_telegram
 from automation_tool.mt5_openai_parse import (
     parse_journal_intraday_action_from_openai_text,
     parse_openai_output_md,
@@ -46,7 +46,10 @@ from automation_tool.state_files import (
     update_single_plan_status,
     write_last_response_id,
 )
-from automation_tool.telegram_bot import send_openai_output_to_telegram
+from automation_tool.telegram_bot import (
+    send_mt5_execution_log_to_ngan_gon_chat,
+    send_openai_output_to_telegram,
+)
 from automation_tool.tradingview_alerts import (
     _open_alerts_list_panel,
     parse_tv_alert_price_from_description,
@@ -98,9 +101,9 @@ class JournalMonitorParams:
     timezone_name: str
     no_telegram: bool
     last_alert_path: Optional[Path] = None
-    mt5_execute: bool = False
+    mt5_execute: bool = True
     mt5_symbol: Optional[str] = None
-    mt5_dry_run: bool = True
+    mt5_dry_run: bool = False
 
 
 def _journal_panel_css(tv: dict[str, Any]) -> str:
@@ -382,6 +385,13 @@ def _run_intraday_touch_loop(
                     symbol_override=params.mt5_symbol,
                 )
                 _journal_log(tz, ex.message)
+                if settings.telegram_output_ngan_gon_chat_id:
+                    send_mt5_execution_log_to_ngan_gon_chat(
+                        bot_token=settings.telegram_bot_token,
+                        output_ngan_gon_chat_id=settings.telegram_output_ngan_gon_chat_id,
+                        source="tv-journal-monitor",
+                        text=format_mt5_execution_for_telegram(ex),
+                    )
             if not params.no_telegram:
                 _journal_log(tz, "Gửi Telegram (VÀO LỆNH) — chat chính + OUTPUT_NGAN_GON nếu cấu hình.")
                 send_openai_output_to_telegram(

@@ -39,7 +39,7 @@ cp .env.example .env
 
 | File | Purpose |
 |------|---------|
-| `.env` | `OPENAI_API_KEY`, `OPENAI_PROMPT_ID`, optional `OPENAI_PROMPT_VERSION`, optional `OPENAI_VECTOR_STORE_IDS`, `OPENAI_RESPONSES_STORE`, `OPENAI_RESPONSES_INCLUDE`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, optional `TELEGRAM_LOG_CHAT_ID` (channel nhận log bước chạy), optional `TELEGRAM_PARSE_MODE`, optional `COINMAP_*` |
+| `.env` | `OPENAI_API_KEY`, `OPENAI_PROMPT_ID`, optional `OPENAI_PROMPT_VERSION`, optional `OPENAI_VECTOR_STORE_IDS`, `OPENAI_RESPONSES_STORE`, `OPENAI_RESPONSES_INCLUDE`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, optional `TELEGRAM_LOG_CHAT_ID` (channel nhận log bước chạy), optional `TELEGRAM_OUTPUT_NGAN_GON_CHAT_ID` (OUTPUT_NGAN_GON + **log MT5** sau `execute_trade`), optional `TELEGRAM_PARSE_MODE`, optional `COINMAP_*` |
 
 **Telegram formatting:** mặc định không có `parse_mode` → plain text. Để **in đậm / tiêu đề** từ output kiểu markdown của model, đặt **`TELEGRAM_PARSE_MODE=HTML`**. Code sẽ chuyển `**bold**`, dòng `## tiêu đề`, và `` `code` `` sang thẻ HTML mà Telegram hỗ trợ (`<b>`, `<code>`), đồng thời escape `& < >` ở phần còn lại. **`MarkdownV2`** vẫn được hỗ trợ nhưng toàn bộ nội dung bị escape nên **trông như chữ thường** (tránh lỗi 400 với `+`, v.v.) — không dùng MDV2 nếu bạn muốn thấy định dạng.
 | `config/coinmap.yaml` | Login URL, **`chart_download`**, optional **`tradingview_capture`**, and optional canvas screenshot selectors |
@@ -87,7 +87,8 @@ Options:
 - `--max-images-per-call` — Split images across multiple API calls (default `10`).
 - `--no-telegram` — Print only; do not send to Telegram (`analyze`, `all`, `chatgpt-project`).
 - `--no-tradingview` / `--no-tv-journal-monitor` — On **`all`**, skip TradingView alert sync / skip the journal monitor step after sync (see `coinmap-automation all --help`).
-- **`all` / `tv-journal-monitor`**: `--last-alert-json` (path to `last_alert_prices.json`), `--mt5-execute`, `--mt5-symbol`, `--mt5-live` — optional MetaTrader5 execution after a valid `VÀO LỆNH` + parseable `trade_line` (default dry-run).
+- **`analyze` / `all` / `chatgpt-project`**: On the **first** OpenAI response for the chart step, if the text includes a complete JSON triple (`plan_chinh`, `plan_phu`, `scalp`) and `intraday_hanh_dong` is `VÀO LỆNH` with a parseable `trade_line`, the tool merges prices into `last_alert_prices.json`, sets `vao_lenh` on the zone nearest the entry, and calls `execute_trade` by default (**live** orders). Use `--no-mt5-execute` to skip MT5; `--mt5-dry-run` to simulate without sending. Override file path with `--last-alert-json` (default `data/last_alert_prices.json`).
+- **`all` / `tv-journal-monitor`**: same MT5 flags: `--last-alert-json`, `--no-mt5-execute`, `--mt5-symbol`, `--mt5-dry-run` — after a valid `VÀO LỆNH` + parseable `trade_line`, `execute_trade` runs **live** by default; pass `--mt5-dry-run` for simulation only.
 - **`update`**: `--no-journal-monitor-after-update` — when **before** writing new prices all three plans are already terminal (`vao_lenh` or `loai` in `data/last_alert_prices.json`), after a successful merged write the tool still syncs TradingView and Telegram, but **skips** the automatic `tv-journal-monitor` run (default: run monitor in that situation).
 - `--storage-state` — Path to Playwright storage state JSON for **capture** (default `data/storage_state.json`).
 

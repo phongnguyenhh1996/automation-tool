@@ -54,7 +54,7 @@ class Settings:
     openai_responses_include: List[str]
     telegram_bot_token: str
     telegram_chat_id: str
-    # Optional second chat: receives [OUTPUT_NGAN_GON] when model uses dual markers (see telegram_bot.split_output_chi_tiet_ngan_gon).
+    # Optional second chat: [OUTPUT_NGAN_GON] (dual markers) + MT5 execution logs after execute_trade.
     telegram_output_ngan_gon_chat_id: Optional[str]
     # Optional: nhận bản sao log bước chạy (INFO) — cùng bot, chat/channel khác (vd. supergroup -100…).
     telegram_log_chat_id: Optional[str]
