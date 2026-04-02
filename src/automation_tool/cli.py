@@ -101,7 +101,10 @@ def _parser() -> argparse.ArgumentParser:
 
     al = sub.add_parser(
         "all",
-        help="capture then OpenAI (multimodal); parse 3 zone prices → persist + sync TradingView alerts",
+        help=(
+            "capture → OpenAI → parse 3 vùng giá → persist + đồng bộ TradingView alerts → "
+            "tv-journal-monitor (mặc định; dùng --no-tv-journal-monitor để bỏ)"
+        ),
     )
     al.add_argument("--config", type=Path, default=None)
     al.add_argument("--charts-dir", type=Path, default=None)
@@ -125,6 +128,44 @@ def _parser() -> argparse.ArgumentParser:
         "--no-tradingview",
         action="store_true",
         help="Skip TradingView alert sync after parsing 3 zone prices from step-2 output",
+    )
+    al.add_argument(
+        "--no-tv-journal-monitor",
+        action="store_true",
+        help=(
+            "Không chạy tv-journal-monitor sau khi đồng bộ cảnh báo TV "
+            "(mặc định: luôn chạy khi đã đồng bộ TV)"
+        ),
+    )
+    al.add_argument(
+        "--capture-config",
+        type=Path,
+        default=None,
+        help="Yaml chụp Coinmap cho journal (mặc định: config/coinmap_update.yaml)",
+    )
+    al.add_argument(
+        "--poll-seconds",
+        type=float,
+        default=45.0,
+        help="tv-journal-monitor: nghỉ giữa các chu kỳ reload (mặc định: 45)",
+    )
+    al.add_argument(
+        "--wait-minutes",
+        type=int,
+        default=15,
+        help="tv-journal-monitor: khi model trả Hành động chờ — phút trước khi chụp M5 hỏi lại (mặc định: 15)",
+    )
+    al.add_argument(
+        "--until-hour",
+        type=int,
+        default=23,
+        help="tv-journal-monitor: dừng theo dõi sau giờ này (địa phương, mặc định: 23)",
+    )
+    al.add_argument(
+        "--timezone",
+        type=str,
+        default="Asia/Ho_Chi_Minh",
+        help="tv-journal-monitor: IANA timezone cho --until-hour",
     )
     al.set_defaults(func=cmd_all)
 
@@ -520,6 +561,16 @@ def cmd_all(args: argparse.Namespace) -> None:
     print(out.full_text())
 
     write_last_response_id(out.final_response_id)
+    if not args.no_telegram and out.after_charts:
+        require_telegram(s)
+        send_openai_output_to_telegram(
+            bot_token=s.telegram_bot_token,
+            chat_id=s.telegram_chat_id,
+            raw=out.after_charts,
+            default_parse_mode=s.telegram_parse_mode,
+            summary_chat_id=s.telegram_output_ngan_gon_chat_id,
+        )
+
     zt, zerr, _nc = parse_three_zone_prices(out.after_charts or "")
     if zt:
         write_morning_baseline_prices(zt)
@@ -538,20 +589,53 @@ def cmd_all(args: argparse.Namespace) -> None:
                 target_prices=zt,
                 headless=not args.headed,
             )
+            if not args.no_tv_journal_monitor:
+                require_openai(s)
+                prev_j = read_last_response_id()
+                if not prev_j:
+                    raise SystemExit(
+                        "Thiếu data/last_response_id.txt — không chạy tv-journal-monitor."
+                    )
+                cfg_cap = args.capture_config or default_coinmap_update_config_path()
+                params = JournalMonitorParams(
+                    coinmap_tv_yaml=cfg,
+                    capture_coinmap_yaml=cfg_cap,
+                    charts_dir=charts_dir,
+                    storage_state_path=storage,
+                    target_prices=zt,
+                    headless=not args.headed,
+                    no_save_storage=args.no_save_storage,
+                    poll_seconds=args.poll_seconds,
+                    wait_minutes=args.wait_minutes,
+                    until_hour=args.until_hour,
+                    timezone_name=args.timezone,
+                    no_telegram=args.no_telegram,
+                )
+                print(
+                    f"tv-journal-monitor: giá {zt[0]} | {zt[1]} | {zt[2]} — "
+                    f"tới {args.until_hour}:00 ({args.timezone}), "
+                    f"chu kỳ: reload → Nhật ký → parse, nghỉ {args.poll_seconds}s.",
+                    flush=True,
+                )
+                print(
+                    f"  TV yaml: {cfg} | Capture yaml: {cfg_cap} | charts: {charts_dir} | "
+                    f"storage: {storage} | headed={args.headed} | no_telegram={args.no_telegram}",
+                    flush=True,
+                )
+                try:
+                    outcome = run_tv_journal_monitor(
+                        settings=s,
+                        params=params,
+                        initial_response_id=prev_j,
+                    )
+                except Exception as e:
+                    re_raise_unless_openai(e)
+                    raise
+                print(f"Kết thúc tv-journal-monitor: {outcome}", flush=True)
     else:
         print(
             f"Warning: could not parse morning zone prices for persistence: {zerr}",
             file=sys.stderr,
-        )
-
-    if not args.no_telegram and out.after_charts:
-        require_telegram(s)
-        send_openai_output_to_telegram(
-            bot_token=s.telegram_bot_token,
-            chat_id=s.telegram_chat_id,
-            raw=out.after_charts,
-            default_parse_mode=s.telegram_parse_mode,
-            summary_chat_id=s.telegram_output_ngan_gon_chat_id,
         )
 
 
