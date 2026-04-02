@@ -14,3 +14,6 @@ data/conversation.json
 data/storage_state.json
 data/coinmap_data.json
 data/chrome_user_data/
+
+# Debug screenshots from failed capture (see coinmap._maybe_save_capture_error_screenshot)
+logs/*.png

@@ -12,6 +12,7 @@ import yaml
 from playwright.sync_api import Playwright, sync_playwright
 
 from automation_tool.coinmap_openai_slim import slim_coinmap_export_for_openai
+from automation_tool.config import default_logs_dir
 from automation_tool.playwright_browser import close_browser_and_context, launch_chrome_context
 
 
@@ -22,6 +23,27 @@ def load_coinmap_yaml(path: Path) -> dict[str, Any]:
 
 def _ensure_dir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
+
+
+def _maybe_save_capture_error_screenshot(
+    page,
+    *,
+    logs_dir: Path,
+    stamp: str,
+    label: str,
+) -> Optional[Path]:
+    """
+    Save a full-page PNG under logs/ when chart capture fails (modal, timeout, etc.).
+    Best-effort: never raises; returns None if screenshot could not be written.
+    """
+    try:
+        _ensure_dir(logs_dir)
+        safe = re.sub(r"[^a-zA-Z0-9._-]+", "_", label).strip("_") or "error"
+        path = logs_dir / f"{stamp}_capture_fail_{safe}.png"
+        page.screenshot(path=str(path), full_page=True, timeout=15_000)
+        return path
+    except Exception:
+        return None
 
 
 def _clear_charts_dir(charts_dir: Path) -> None:
@@ -1565,6 +1587,7 @@ def capture_charts(
         _clear_charts_dir(charts_dir)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     written: list[Path] = []
+    logs_dir = default_logs_dir()
 
     vw = int(cfg.get("viewport_width", 1920))
     vh = int(cfg.get("viewport_height", 1080))
@@ -1615,9 +1638,13 @@ def capture_charts(
                     )
                     written.extend(dl_paths)
                 except Exception as e:
+                    snap = _maybe_save_capture_error_screenshot(
+                        page, logs_dir=logs_dir, stamp=stamp, label="coinmap_chart_download"
+                    )
+                    hint = f" Failure screenshot: {snap}" if snap else ""
                     raise SystemExit(
                         "chart_download flow failed. Check selectors in config/coinmap.yaml "
-                        f"(multi_shot sidebar/watchlist/interval or single fullscreen). Error: {e}"
+                        f"(multi_shot sidebar/watchlist/interval or single fullscreen). Error: {e}.{hint}"
                     ) from e
 
             tv = cfg.get("tradingview_capture") or {}
@@ -1635,9 +1662,13 @@ def capture_charts(
                     )
                     written.extend(tv_paths)
                 except Exception as e:
+                    snap = _maybe_save_capture_error_screenshot(
+                        tv_page, logs_dir=logs_dir, stamp=stamp, label="tradingview_capture"
+                    )
+                    hint = f" Failure screenshot: {snap}" if snap else ""
                     raise SystemExit(
                         "tradingview_capture failed. Check config/coinmap.yaml "
-                        f"(capture_plan, watchlist, symbols, intervals, fullscreen). Error: {e}"
+                        f"(capture_plan, watchlist, symbols, intervals, fullscreen). Error: {e}.{hint}"
                     ) from e
                 finally:
                     tv_page.close()
