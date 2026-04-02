@@ -385,6 +385,7 @@ def cmd_capture(args: argparse.Namespace) -> None:
         tradingview_password=s.tradingview_password,
         save_storage_state=not args.no_save_storage,
         headless=not args.headed,
+        reuse_browser_context=None,
     )
     print(f"Saved {len(paths)} image(s) under {charts_dir}:")
     for p in paths:
@@ -512,6 +513,7 @@ def cmd_all(args: argparse.Namespace) -> None:
         tradingview_password=s.tradingview_password,
         save_storage_state=not args.no_save_storage,
         headless=not args.headed,
+        reuse_browser_context=None,
     )
     n_art = len(paths)
     print(f"Captured {n_art} file(s) (screenshots and/or API JSON paths returned by capture).")
@@ -712,6 +714,7 @@ def cmd_update(args: argparse.Namespace) -> None:
         tradingview_password=s.tradingview_password,
         save_storage_state=not args.no_save_storage,
         headless=not args.headed,
+        reuse_browser_context=None,
     )
     print(f"Captured {len(paths)} file(s) for update run.")
     json_path = coinmap_xauusd_5m_json_path(charts_dir)

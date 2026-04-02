@@ -9,7 +9,7 @@ from typing import Any, Callable, Optional
 from urllib.parse import urlparse
 
 import yaml
-from playwright.sync_api import Playwright, sync_playwright
+from playwright.sync_api import BrowserContext, Playwright, sync_playwright
 
 from automation_tool.coinmap_openai_slim import slim_coinmap_export_for_openai
 from automation_tool.config import default_logs_dir
@@ -1545,23 +1545,22 @@ def _run_tradingview_screenshot_flow(
     return [dest]
 
 
-def capture_charts(
+def _capture_charts_in_context(
+    context: BrowserContext,
     *,
-    coinmap_yaml: Path,
+    cfg: dict[str, Any],
     charts_dir: Path,
     storage_state_path: Optional[Path],
     email: Optional[str],
     password: Optional[str],
-    tradingview_password: Optional[str] = None,
-    save_storage_state: bool = True,
-    headless: bool = True,
+    tradingview_password: Optional[str],
+    save_storage_state: bool,
+    stamp: str,
 ) -> list[Path]:
     """
-    Optionally clear prior images in charts_dir, then log in (if credentials given),
-    optionally run chart screenshot flow (see config chart_download), then optionally
-    screenshot canvas elements. Saves files under charts_dir.
+    Run Coinmap (+ optional TradingView) capture using an existing browser context.
+    Opens a dedicated page for Coinmap and closes it before return; does not close ``context``.
     """
-    cfg = load_coinmap_yaml(coinmap_yaml)
     login_url = cfg.get("login_url") or "https://coinmap.tech/login"
     post_wait = (cfg.get("post_login_wait_selector") or "").strip()
     chart_selectors: list[str] = list(cfg.get("chart_selectors") or ["canvas"])
@@ -1572,6 +1571,143 @@ def capture_charts(
     email_sel = cfg.get("email_selector") or 'input[type="email"]'
     password_sel = cfg.get("password_selector") or 'input[type="password"]'
     submit_sel = cfg.get("submit_selector") or 'button[type="submit"]'
+
+    written: list[Path] = []
+    logs_dir = default_logs_dir()
+
+    page = context.new_page()
+    try:
+        page.goto(login_url, wait_until="domcontentloaded", timeout=60_000)
+        page.wait_for_timeout(settle_ms)
+
+        if email and password:
+            if _login_form_is_visible(page, email_sel, password_sel):
+                page.locator(email_sel).first.fill(email, timeout=15_000)
+                page.locator(password_sel).first.fill(password, timeout=15_000)
+                page.locator(submit_sel).first.click(timeout=15_000)
+                page.wait_for_load_state("networkidle", timeout=60_000)
+                page.wait_for_timeout(settle_ms)
+            else:
+                print(
+                    "Already logged in (no login form visible); skipping credential submit.",
+                    flush=True,
+                )
+
+        if post_wait:
+            try:
+                page.locator(post_wait).first.wait_for(state="visible", timeout=30_000)
+            except Exception:
+                pass
+
+        cd = cfg.get("chart_download") or {}
+        if not isinstance(cd, dict):
+            cd = {}
+        if cd.get("enabled", False):
+            try:
+                dl_paths = _run_chart_screenshot_flow(
+                    page,
+                    charts_dir=charts_dir,
+                    stamp=stamp,
+                    settle_ms=settle_ms,
+                    cd=cd,
+                )
+                written.extend(dl_paths)
+            except Exception as e:
+                snap = _maybe_save_capture_error_screenshot(
+                    page, logs_dir=logs_dir, stamp=stamp, label="coinmap_chart_download"
+                )
+                hint = f" Failure screenshot: {snap}" if snap else ""
+                raise SystemExit(
+                    "chart_download flow failed. Check selectors in config/coinmap.yaml "
+                    f"(multi_shot sidebar/watchlist/interval or single fullscreen). Error: {e}.{hint}"
+                ) from e
+
+        tv = cfg.get("tradingview_capture") or {}
+        if isinstance(tv, dict) and tv.get("enabled", False):
+            tv_page = context.new_page()
+            try:
+                tv_paths = _run_tradingview_screenshot_flow(
+                    tv_page,
+                    charts_dir=charts_dir,
+                    stamp=stamp,
+                    settle_ms=settle_ms,
+                    tv=tv,
+                    coinmap_email=email,
+                    tradingview_password=tradingview_password,
+                )
+                written.extend(tv_paths)
+            except Exception as e:
+                snap = _maybe_save_capture_error_screenshot(
+                    tv_page, logs_dir=logs_dir, stamp=stamp, label="tradingview_capture"
+                )
+                hint = f" Failure screenshot: {snap}" if snap else ""
+                raise SystemExit(
+                    "tradingview_capture failed. Check config/coinmap.yaml "
+                    f"(capture_plan, watchlist, symbols, intervals, fullscreen). Error: {e}.{hint}"
+                ) from e
+            finally:
+                tv_page.close()
+
+        screenshot_after = bool(cfg.get("screenshot_after_chart_download", True))
+        skip_canvas = bool(cd.get("enabled")) and not screenshot_after
+
+        if not skip_canvas:
+            idx = 0
+            for sel in chart_selectors:
+                if max_charts and idx >= max_charts:
+                    break
+                locs = page.locator(sel)
+                n = locs.count()
+                for i in range(n):
+                    if max_charts and idx >= max_charts:
+                        break
+                    path = charts_dir / f"{stamp}_chart_{idx:03d}.png"
+                    try:
+                        locs.nth(i).screenshot(path=str(path), timeout=20_000)
+                        written.append(path)
+                        idx += 1
+                    except Exception:
+                        continue
+
+            if not written and fallback_full:
+                path = charts_dir / f"{stamp}_fullpage.png"
+                page.screenshot(path=str(path), full_page=True)
+                written.append(path)
+
+        if save_storage_state and storage_state_path:
+            _ensure_dir(storage_state_path.parent)
+            context.storage_state(path=str(storage_state_path))
+    finally:
+        try:
+            page.close()
+        except Exception:
+            pass
+
+    return written
+
+
+def capture_charts(
+    *,
+    coinmap_yaml: Path,
+    charts_dir: Path,
+    storage_state_path: Optional[Path],
+    email: Optional[str],
+    password: Optional[str],
+    tradingview_password: Optional[str] = None,
+    save_storage_state: bool = True,
+    headless: bool = True,
+    reuse_browser_context: Optional[BrowserContext] = None,
+) -> list[Path]:
+    """
+    Optionally clear prior images in charts_dir, then log in (if credentials given),
+    optionally run chart screenshot flow (see config chart_download), then optionally
+    screenshot canvas elements. Saves files under charts_dir.
+
+    If ``reuse_browser_context`` is provided (e.g. ``tv-journal-monitor`` already runs
+    inside ``sync_playwright``), capture uses that context instead of starting a nested
+    Playwright sync session.
+    """
+    cfg = load_coinmap_yaml(coinmap_yaml)
 
     has_storage = bool(storage_state_path and storage_state_path.exists())
     if bool(email) != bool(password):
@@ -1586,8 +1722,19 @@ def capture_charts(
     if bool(cfg.get("clear_charts_before_capture", True)):
         _clear_charts_dir(charts_dir)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    written: list[Path] = []
-    logs_dir = default_logs_dir()
+
+    if reuse_browser_context is not None:
+        return _capture_charts_in_context(
+            reuse_browser_context,
+            cfg=cfg,
+            charts_dir=charts_dir,
+            storage_state_path=storage_state_path,
+            email=email,
+            password=password,
+            tradingview_password=tradingview_password,
+            save_storage_state=save_storage_state,
+            stamp=stamp,
+        )
 
     vw = int(cfg.get("viewport_width", 1920))
     vh = int(cfg.get("viewport_height", 1080))
@@ -1600,111 +1747,19 @@ def capture_charts(
             viewport_width=vw,
             viewport_height=vh,
         )
-        page = context.new_page()
         try:
-            page.goto(login_url, wait_until="domcontentloaded", timeout=60_000)
-            page.wait_for_timeout(settle_ms)
-
-            if email and password:
-                if _login_form_is_visible(page, email_sel, password_sel):
-                    page.locator(email_sel).first.fill(email, timeout=15_000)
-                    page.locator(password_sel).first.fill(password, timeout=15_000)
-                    page.locator(submit_sel).first.click(timeout=15_000)
-                    page.wait_for_load_state("networkidle", timeout=60_000)
-                    page.wait_for_timeout(settle_ms)
-                else:
-                    print(
-                        "Already logged in (no login form visible); skipping credential submit.",
-                        flush=True,
-                    )
-
-            if post_wait:
-                try:
-                    page.locator(post_wait).first.wait_for(state="visible", timeout=30_000)
-                except Exception:
-                    pass
-
-            cd = cfg.get("chart_download") or {}
-            if not isinstance(cd, dict):
-                cd = {}
-            if cd.get("enabled", False):
-                try:
-                    dl_paths = _run_chart_screenshot_flow(
-                        page,
-                        charts_dir=charts_dir,
-                        stamp=stamp,
-                        settle_ms=settle_ms,
-                        cd=cd,
-                    )
-                    written.extend(dl_paths)
-                except Exception as e:
-                    snap = _maybe_save_capture_error_screenshot(
-                        page, logs_dir=logs_dir, stamp=stamp, label="coinmap_chart_download"
-                    )
-                    hint = f" Failure screenshot: {snap}" if snap else ""
-                    raise SystemExit(
-                        "chart_download flow failed. Check selectors in config/coinmap.yaml "
-                        f"(multi_shot sidebar/watchlist/interval or single fullscreen). Error: {e}.{hint}"
-                    ) from e
-
-            tv = cfg.get("tradingview_capture") or {}
-            if isinstance(tv, dict) and tv.get("enabled", False):
-                tv_page = context.new_page()
-                try:
-                    tv_paths = _run_tradingview_screenshot_flow(
-                        tv_page,
-                        charts_dir=charts_dir,
-                        stamp=stamp,
-                        settle_ms=settle_ms,
-                        tv=tv,
-                        coinmap_email=email,
-                        tradingview_password=tradingview_password,
-                    )
-                    written.extend(tv_paths)
-                except Exception as e:
-                    snap = _maybe_save_capture_error_screenshot(
-                        tv_page, logs_dir=logs_dir, stamp=stamp, label="tradingview_capture"
-                    )
-                    hint = f" Failure screenshot: {snap}" if snap else ""
-                    raise SystemExit(
-                        "tradingview_capture failed. Check config/coinmap.yaml "
-                        f"(capture_plan, watchlist, symbols, intervals, fullscreen). Error: {e}.{hint}"
-                    ) from e
-                finally:
-                    tv_page.close()
-
-            screenshot_after = bool(cfg.get("screenshot_after_chart_download", True))
-            skip_canvas = bool(cd.get("enabled")) and not screenshot_after
-
-            if not skip_canvas:
-                idx = 0
-                for sel in chart_selectors:
-                    if max_charts and idx >= max_charts:
-                        break
-                    locs = page.locator(sel)
-                    n = locs.count()
-                    for i in range(n):
-                        if max_charts and idx >= max_charts:
-                            break
-                        path = charts_dir / f"{stamp}_chart_{idx:03d}.png"
-                        try:
-                            locs.nth(i).screenshot(path=str(path), timeout=20_000)
-                            written.append(path)
-                            idx += 1
-                        except Exception:
-                            continue
-
-                if not written and fallback_full:
-                    path = charts_dir / f"{stamp}_fullpage.png"
-                    page.screenshot(path=str(path), full_page=True)
-                    written.append(path)
-
-            if save_storage_state and storage_state_path:
-                _ensure_dir(storage_state_path.parent)
-                context.storage_state(path=str(storage_state_path))
+            return _capture_charts_in_context(
+                context,
+                cfg=cfg,
+                charts_dir=charts_dir,
+                storage_state_path=storage_state_path,
+                email=email,
+                password=password,
+                tradingview_password=tradingview_password,
+                save_storage_state=save_storage_state,
+                stamp=stamp,
+            )
         finally:
             close_browser_and_context(browser, context)
-
-    return written
 
 

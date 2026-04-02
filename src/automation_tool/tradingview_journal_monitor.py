@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, Optional, Set
 
-from playwright.sync_api import Page, sync_playwright
+from playwright.sync_api import BrowserContext, Page, sync_playwright
 from zoneinfo import ZoneInfo
 
 from automation_tool.coinmap import (
@@ -209,6 +209,7 @@ def _run_intraday_touch_loop(
     touched_price: float,
     journal_line: str,
     initial_response_id: str,
+    browser_context: BrowserContext,
 ) -> Literal["VÀO_LỆNH", "loại", "cutoff"]:
     """``chờ`` → capture lại + hỏi lại; lặp tới loại / VÀO LỆNH / hết giờ."""
     tz = params.timezone_name
@@ -237,6 +238,7 @@ def _run_intraday_touch_loop(
             tradingview_password=settings.tradingview_password,
             save_storage_state=not params.no_save_storage,
             headless=params.headless,
+            reuse_browser_context=browser_context,
         )
         _journal_log(tz, f"Coinmap capture xong: {len(paths)} file(s).")
         if paths:
@@ -453,6 +455,7 @@ def run_tv_journal_monitor(
                         touched_price=touched,
                         journal_line=line,
                         initial_response_id=initial_response_id,
+                        browser_context=context,
                     )
                     if inner == "VÀO_LỆNH":
                         _journal_log(tz, "Kết quả cuối: matched_and_entered (đã vào lệnh / Telegram).")
