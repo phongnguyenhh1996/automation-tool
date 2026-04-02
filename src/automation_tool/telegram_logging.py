@@ -4,9 +4,55 @@ from __future__ import annotations
 
 import logging
 import sys
+import threading
 
 from automation_tool.config import Settings
 from automation_tool.telegram_bot import send_message
+
+_exception_hooks_installed = False
+
+
+def _install_exception_hooks(log: logging.Logger) -> None:
+    """
+    Đưa exception không bắt được (main thread + thread phụ) vào cùng logger
+    → stderr + TELEGRAM_LOG_CHAT_ID (nếu đã gắn TelegramLogHandler).
+    """
+    global _exception_hooks_installed
+    if _exception_hooks_installed:
+        return
+    _exception_hooks_installed = True
+
+    prev_sys = sys.excepthook
+
+    def _sys_excepthook(
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        exc_tb: object | None,
+    ) -> None:
+        try:
+            if exc_type is not None and exc_value is not None:
+                log.critical("Uncaught exception", exc_info=(exc_type, exc_value, exc_tb))
+        except Exception:
+            pass
+        prev_sys(exc_type, exc_value, exc_tb)
+
+    sys.excepthook = _sys_excepthook
+
+    if hasattr(threading, "excepthook"):
+        prev_thread = threading.excepthook
+
+        def _thread_excepthook(args: threading.ExceptHookArgs) -> None:
+            try:
+                log.critical(
+                    "Uncaught exception in thread %r",
+                    args.thread.name,
+                    exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+                )
+            except Exception:
+                pass
+            prev_thread(args)
+
+        threading.excepthook = _thread_excepthook
 
 
 class TelegramLogHandler(logging.Handler):
@@ -27,12 +73,20 @@ class TelegramLogHandler(logging.Handler):
                 parse_mode=None,
             )
         except Exception:
-            self.handleError(record)
+            # Do not call handleError(): logging treats that as a logging-system failure
+            # and prints "--- Logging error ---" plus a full traceback. Transient Telegram
+            # / network issues (e.g. httpx.RemoteProtocolError) are expected; stderr still
+            # receives the line from the StreamHandler on the same logger.
+            pass
 
 
 def setup_automation_logging(settings: Settings) -> logging.Logger:
     """
     Cấu hình logger ``automation_tool`` (INFO): stderr + tùy chọn Telegram.
+
+    Khi có ``TELEGRAM_LOG_CHAT_ID`` + token: ngoài log INFO…, mọi ``logging.error``
+    / ``warning`` / ``critical`` và **exception không bắt được** (``sys.excepthook``,
+    ``threading.excepthook``) cũng được gửi lên cùng chat log.
 
     Idempotent: nếu đã có handler thì không thêm lần nữa.
     """
@@ -53,6 +107,7 @@ def setup_automation_logging(settings: Settings) -> logging.Logger:
         th = TelegramLogHandler(tok, cid)
         th.setFormatter(fmt)
         log.addHandler(th)
+        _install_exception_hooks(log)
     elif cid and not tok:
         print(
             "Warning: TELEGRAM_LOG_CHAT_ID set but TELEGRAM_BOT_TOKEN empty — log channel disabled.",

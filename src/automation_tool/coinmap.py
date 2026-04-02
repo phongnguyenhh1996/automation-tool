@@ -934,6 +934,54 @@ def _coinmap_select_interval(page, cd: dict[str, Any], interval_text: str) -> No
     page.wait_for_timeout(int(cd.get("after_interval_select_ms", 800)))
 
 
+def _coinmap_resolve_api_bump_interval(bump: str, target_interval: str) -> Optional[str]:
+    """
+    Interval to select before ``target_interval`` so it is never equal to the target.
+    Coinmap restores the **last** chart interval (not a fixed default); re-clicking the
+    same interval often does not refire gateway APIs — we always switch away first, then back.
+    """
+    b = bump.strip()
+    t = str(target_interval).strip()
+    if not b:
+        return None
+    if b != t:
+        return b
+    # Config accidentally matches target (e.g. both 15m) — use another common interval.
+    alternate: dict[str, str] = {
+        "1m": "5m",
+        "5m": "15m",
+        "15m": "5m",
+        "30m": "15m",
+        "1h": "15m",
+        "4h": "1h",
+    }
+    alt = alternate.get(t) or ("15m" if t != "15m" else "5m")
+    return alt if alt != t else None
+
+
+def _coinmap_maybe_bump_interval_before_target(
+    page,
+    cd: dict[str, Any],
+    *,
+    target_interval: str,
+    settle_ms: int,
+    for_api_capture: bool,
+) -> None:
+    """
+    Before selecting the capture step's interval, optionally select a **different** interval
+    so the chart issues fresh getcandlehistory / orderflow / vwap calls. If the UI already
+    shows that interval, choosing it again may not hit the gateway.
+    """
+    if not for_api_capture:
+        return
+    raw = (cd.get("api_network_capture_bump_interval") or "").strip()
+    bump = _coinmap_resolve_api_bump_interval(raw, target_interval)
+    if not bump:
+        return
+    _coinmap_select_interval(page, cd, bump)
+    page.wait_for_timeout(int(cd.get("after_interval_change_settle_ms", settle_ms)))
+
+
 def _coinmap_click_fullscreen_button(
     page,
     cd: dict[str, Any],
@@ -1007,6 +1055,13 @@ def _run_coinmap_multi_shot_flow(
             _coinmap_select_watchlist_symbol(page, cd, sym)
             _coinmap_toggle_right_sidebar(page, cd)
 
+        _coinmap_maybe_bump_interval_before_target(
+            page,
+            cd,
+            target_interval=interval,
+            settle_ms=settle_ms,
+            for_api_capture=net_capture is not None and api_cd is not None,
+        )
         _coinmap_select_interval(page, cd, interval)
         page.wait_for_timeout(int(cd.get("after_interval_change_settle_ms", settle_ms)))
 

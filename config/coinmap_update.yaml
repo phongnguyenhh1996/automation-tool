@@ -43,6 +43,9 @@ chart_download:
   interval_option_visible_timeout_ms: 15000
   after_interval_select_ms: 800
   after_interval_change_settle_ms: 2000
+  # Coinmap nhớ khung vừa dùng (không cố định M5). Chọn lại đúng khung đó → không gọi API → JSON null.
+  # Bước bump: chọn khung khác trước (vd. 15m), rồi tool chọn lại đích (5m). Trùng target trong yaml → code tự đổi.
+  api_network_capture_bump_interval: "15m"
   after_fullscreen_escape_ms: 600
   coinmap_fullscreen_exit_use_toolbar_click: true
   coinmap_fullscreen_exit_action_button_index: 0
