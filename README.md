@@ -39,7 +39,7 @@ cp .env.example .env
 
 | File | Purpose |
 |------|---------|
-| `.env` | `OPENAI_API_KEY`, `OPENAI_PROMPT_ID`, optional `OPENAI_PROMPT_VERSION`, optional `OPENAI_VECTOR_STORE_IDS`, `OPENAI_RESPONSES_STORE`, `OPENAI_RESPONSES_INCLUDE`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, optional `TELEGRAM_PARSE_MODE`, optional `COINMAP_*` |
+| `.env` | `OPENAI_API_KEY`, `OPENAI_PROMPT_ID`, optional `OPENAI_PROMPT_VERSION`, optional `OPENAI_VECTOR_STORE_IDS`, `OPENAI_RESPONSES_STORE`, `OPENAI_RESPONSES_INCLUDE`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, optional `TELEGRAM_LOG_CHAT_ID` (channel nhận log bước chạy), optional `TELEGRAM_PARSE_MODE`, optional `COINMAP_*` |
 
 **Telegram formatting:** mặc định không có `parse_mode` → plain text. Để **in đậm / tiêu đề** từ output kiểu markdown của model, đặt **`TELEGRAM_PARSE_MODE=HTML`**. Code sẽ chuyển `**bold**`, dòng `## tiêu đề`, và `` `code` `` sang thẻ HTML mà Telegram hỗ trợ (`<b>`, `<code>`), đồng thời escape `& < >` ở phần còn lại. **`MarkdownV2`** vẫn được hỗ trợ nhưng toàn bộ nội dung bị escape nên **trông như chữ thường** (tránh lỗi 400 với `+`, v.v.) — không dùng MDV2 nếu bạn muốn thấy định dạng.
 | `config/coinmap.yaml` | Login URL, **`chart_download`**, optional **`tradingview_capture`**, and optional canvas screenshot selectors |
@@ -87,7 +87,29 @@ Options:
 - `--max-images-per-call` — Split images across multiple API calls (default `10`).
 - `--no-telegram` — Print only; do not send to Telegram (`analyze`, `all`, `chatgpt-project`).
 - `--no-tradingview` / `--no-tv-journal-monitor` — On **`all`**, skip TradingView alert sync / skip the journal monitor step after sync (see `coinmap-automation all --help`).
+- **`all` / `tv-journal-monitor`**: `--last-alert-json` (path to `last_alert_prices.json`), `--mt5-execute`, `--mt5-symbol`, `--mt5-live` — optional MetaTrader5 execution after a valid `VÀO LỆNH` + parseable `trade_line` (default dry-run).
+- **`update`**: `--no-journal-monitor-after-update` — when **before** writing new prices all three plans are already terminal (`vao_lenh` or `loai` in `data/last_alert_prices.json`), after a successful merged write the tool still syncs TradingView and Telegram, but **skips** the automatic `tv-journal-monitor` run (default: run monitor in that situation).
 - `--storage-state` — Path to Playwright storage state JSON for **capture** (default `data/storage_state.json`).
+
+### `data/last_alert_prices.json` and `tv-journal-monitor`
+
+The file stores the current triple of zone prices plus **`status_by_label`**: for each of `plan_chinh`, `plan_phu`, `scalp`, one of:
+
+| Value | Meaning |
+|-------|---------|
+| `vung_cho` | Still waiting (journal not finished for this plan). |
+| `vao_lenh` | Inner loop returned `VÀO LỆNH` with a parseable `trade_line`. |
+| `loai` | Inner loop returned `loại`. |
+
+Older files without `status_by_label` are treated as all `vung_cho`. When **`all`** or **`update`** writes a **new** triple, only labels whose **price changed** are reset to `vung_cho`; unchanged prices keep their status.
+
+**`tv-journal-monitor`** reloads this file each outer cycle, matches the TradingView journal only against prices that are still `vung_cho`, and continues until all three are terminal or `--until-hour` is reached. Model action **`chờ`** does not set a terminal status. If the model says `VÀO LỆNH` but `trade_line` is missing or does not parse, the plan stays `vung_cho` and the inner loop waits and retries (same as `chờ`).
+
+**`update`**: TradingView sync runs **after** the merged write of `last_alert_prices.json`. If the pre-write state had all three plans terminal and you are writing a new triple, the CLI **also** starts `tv-journal-monitor` (unless `--no-journal-monitor-after-update`).
+
+### Log tới Telegram (channel)
+
+Đặt **`TELEGRAM_LOG_CHAT_ID`** (ví dụ supergroup/channel `-100…`) cùng bot đã được thêm làm admin: mọi log mức INFO của gói `automation_tool` (lệnh `coinmap-automation`, đồng bộ cảnh báo TV, toàn bộ dòng `tv-journal`) được gửi **plain text** tới channel đó (tin nhắn dài được chia chunk). Stderr vẫn in giống hệt.
 
 ## Security
 

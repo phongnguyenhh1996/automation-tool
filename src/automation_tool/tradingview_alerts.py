@@ -4,6 +4,7 @@ TradingView: sync exactly three price alerts with target levels (Vietnamese UI).
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import Any, Optional
@@ -20,6 +21,7 @@ from automation_tool.playwright_browser import close_browser_and_context, launch
 _EPS = 0.01
 _MAX_DELETE_ROUNDS = 40
 _MAX_CREATE_ROUNDS = 10
+_log_tv = logging.getLogger("automation_tool.tradingview_alerts")
 
 
 def format_price_for_tradingview_input(x: float) -> str:
@@ -251,6 +253,11 @@ def sync_tradingview_alerts(
     Launch browser, open TradingView chart from ``config/coinmap.yaml`` ``tradingview_capture``,
     sync alerts to exactly three price levels.
     """
+    p1, p2, p3 = target_prices
+    _log_tv.info(
+        f"sync_tradingview_alerts: bắt đầu | yaml={coinmap_yaml} | "
+        f"giá={p1} | {p2} | {p3} | headless={headless}"
+    )
     cfg = load_coinmap_yaml(coinmap_yaml)
     tv = cfg.get("tradingview_capture") or {}
     if not isinstance(tv, dict) or not tv.get("chart_url"):
@@ -274,5 +281,6 @@ def sync_tradingview_alerts(
             page.goto(url, wait_until="domcontentloaded", timeout=120_000)
             _maybe_tradingview_login(page, tv, email, tradingview_password)
             sync_alerts_on_page(page, tv, settle_ms, target_prices)
+            _log_tv.info("sync_tradingview_alerts: đồng bộ 3 cảnh báo xong, đóng browser.")
         finally:
             close_browser_and_context(browser, context)

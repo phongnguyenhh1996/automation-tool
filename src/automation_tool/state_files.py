@@ -5,12 +5,25 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from automation_tool.config import default_data_dir
+
+# Per-plan alert lifecycle for tv-journal-monitor (persisted in last_alert_prices.json).
+VUNG_CHO = "vung_cho"
+VAO_LENH = "vao_lenh"
+LOAI = "loai"
+AlertTerminalStatus = Literal["vao_lenh", "loai"]
+PLAN_LABELS_DEFAULT: tuple[str, str, str] = ("plan_chinh", "plan_phu", "scalp")
+# Float compare: treat as "same price" when syncing merge (no status reset).
+_PRICE_MERGE_EPS = 1e-9
+
+
+def _price_equal(a: float, b: float) -> bool:
+    return abs(a - b) <= _PRICE_MERGE_EPS
 
 
 def default_last_response_id_path() -> Path:
@@ -107,7 +120,28 @@ def write_morning_baseline_prices(
     _atomic_write_json(p, mb.to_json_dict())
 
 
-def read_last_alert_prices(path: Optional[Path] = None) -> Optional[tuple[float, float, float]]:
+@dataclass
+class LastAlertState:
+    """Snapshot of ``last_alert_prices.json`` including per-plan journal status."""
+
+    prices: tuple[float, float, float]
+    labels: tuple[str, str, str] = PLAN_LABELS_DEFAULT
+    status_by_label: dict[str, str] = field(default_factory=dict)
+    updated_at: str = ""
+
+    def to_json_dict(self) -> dict[str, Any]:
+        ts = self.updated_at or datetime.now(timezone.utc).isoformat()
+        out: dict[str, Any] = {
+            "prices": list(self.prices),
+            "labels": list(self.labels),
+            "status_by_label": {k: self.status_by_label.get(k, VUNG_CHO) for k in self.labels},
+            "updated_at": ts,
+        }
+        return out
+
+
+def read_last_alert_state(path: Optional[Path] = None) -> Optional[LastAlertState]:
+    """Parse last alert file; missing ``status_by_label`` → all ``vung_cho``."""
     p = path or default_last_alert_prices_path()
     if not p.is_file():
         return None
@@ -119,21 +153,128 @@ def read_last_alert_prices(path: Optional[Path] = None) -> Optional[tuple[float,
     if not isinstance(prices, list) or len(prices) != 3:
         return None
     try:
-        return (float(prices[0]), float(prices[1]), float(prices[2]))
+        tup = (float(prices[0]), float(prices[1]), float(prices[2]))
     except (TypeError, ValueError):
         return None
+    labels_raw = data.get("labels")
+    if isinstance(labels_raw, list) and len(labels_raw) == 3:
+        labels = tuple(str(x) for x in labels_raw)
+    else:
+        labels = PLAN_LABELS_DEFAULT
+
+    status_by_label: dict[str, str] = {}
+    sb = data.get("status_by_label")
+    if isinstance(sb, dict):
+        for lab in labels:
+            v = sb.get(lab)
+            if isinstance(v, str) and v.strip():
+                status_by_label[lab] = v.strip()
+            else:
+                status_by_label[lab] = VUNG_CHO
+    else:
+        st_list = data.get("statuses")
+        if isinstance(st_list, list) and len(st_list) == 3:
+            for i, lab in enumerate(labels):
+                v = st_list[i]
+                status_by_label[lab] = str(v).strip() if isinstance(v, str) and v.strip() else VUNG_CHO
+        else:
+            for lab in labels:
+                status_by_label[lab] = VUNG_CHO
+
+    ts = str(data.get("updated_at") or "")
+    return LastAlertState(
+        prices=tup,
+        labels=labels,
+        status_by_label=status_by_label,
+        updated_at=ts,
+    )
+
+
+def write_last_alert_state(state: LastAlertState, path: Optional[Path] = None) -> None:
+    p = path or default_last_alert_prices_path()
+    st = LastAlertState(
+        prices=state.prices,
+        labels=state.labels,
+        status_by_label=dict(state.status_by_label),
+        updated_at=datetime.now(timezone.utc).isoformat(),
+    )
+    _atomic_write_json(p, st.to_json_dict())
+
+
+def merge_alert_prices_with_status(
+    old: Optional[LastAlertState],
+    new_prices: tuple[float, float, float],
+) -> LastAlertState:
+    """
+    When persisting a new triple: for each label, if price changed vs ``old``,
+    reset that plan to ``vung_cho``; otherwise keep prior status.
+    """
+    labels = old.labels if old is not None else PLAN_LABELS_DEFAULT
+    if old is None:
+        return LastAlertState(
+            prices=new_prices,
+            labels=labels,
+            status_by_label={lab: VUNG_CHO for lab in labels},
+            updated_at=datetime.now(timezone.utc).isoformat(),
+        )
+    new_status: dict[str, str] = {}
+    for i, lab in enumerate(labels):
+        op = old.prices[i]
+        np = new_prices[i]
+        if not _price_equal(op, np):
+            new_status[lab] = VUNG_CHO
+        else:
+            new_status[lab] = old.status_by_label.get(lab, VUNG_CHO)
+    return LastAlertState(
+        prices=new_prices,
+        labels=labels,
+        status_by_label=new_status,
+        updated_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+def update_single_plan_status(
+    label: str,
+    status: str,
+    path: Optional[Path] = None,
+) -> None:
+    """Set one plan's status and rewrite ``last_alert_prices.json``."""
+    st = read_last_alert_state(path)
+    if st is None:
+        raise SystemExit(
+            f"No last alert state at {path or default_last_alert_prices_path()} — cannot update status."
+        )
+    if label not in st.labels:
+        raise SystemExit(f"Unknown plan label {label!r}; expected one of {st.labels}.")
+    d = {**st.status_by_label, label: status}
+    write_last_alert_state(
+        LastAlertState(prices=st.prices, labels=st.labels, status_by_label=d, updated_at=st.updated_at),
+        path=path,
+    )
+
+
+def all_plans_terminal(state: LastAlertState) -> bool:
+    """True when every plan is ``vao_lenh`` or ``loai`` (not ``vung_cho``)."""
+    for lab in state.labels:
+        s = state.status_by_label.get(lab, VUNG_CHO)
+        if s == VUNG_CHO:
+            return False
+    return True
+
+
+def read_last_alert_prices(path: Optional[Path] = None) -> Optional[tuple[float, float, float]]:
+    st = read_last_alert_state(path)
+    if st is None:
+        return None
+    return st.prices
 
 
 def write_last_alert_prices(
     prices: tuple[float, float, float],
     path: Optional[Path] = None,
 ) -> None:
+    """Persist triple and merge statuses: only reset status for labels whose price changed."""
     p = path or default_last_alert_prices_path()
-    _atomic_write_json(
-        p,
-        {
-            "prices": list(prices),
-            "labels": ["plan_chinh", "plan_phu", "scalp"],
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        },
-    )
+    old = read_last_alert_state(p)
+    merged = merge_alert_prices_with_status(old, prices)
+    write_last_alert_state(merged, path=p)

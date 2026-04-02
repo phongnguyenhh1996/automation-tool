@@ -1,0 +1,100 @@
+"""Tests for last_alert_prices.json merge and terminal checks."""
+
+from __future__ import annotations
+
+import json
+import tempfile
+from pathlib import Path
+
+import pytest
+
+from automation_tool.state_files import (
+    LOAI,
+    VAO_LENH,
+    VUNG_CHO,
+    LastAlertState,
+    all_plans_terminal,
+    merge_alert_prices_with_status,
+    read_last_alert_state,
+    update_single_plan_status,
+    write_last_alert_state,
+)
+
+
+def test_read_legacy_no_status_all_vung_cho() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "last_alert_prices.json"
+        p.write_text(
+            json.dumps(
+                {"prices": [2600.0, 2610.0, 2620.0], "labels": ["plan_chinh", "plan_phu", "scalp"]},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        st = read_last_alert_state(p)
+        assert st is not None
+        for lab in st.labels:
+            assert st.status_by_label[lab] == VUNG_CHO
+        assert not all_plans_terminal(st)
+
+
+def test_merge_only_resets_changed_price_labels() -> None:
+    old = LastAlertState(
+        prices=(2600.0, 2610.0, 2620.0),
+        labels=("plan_chinh", "plan_phu", "scalp"),
+        status_by_label={
+            "plan_chinh": VAO_LENH,
+            "plan_phu": LOAI,
+            "scalp": VUNG_CHO,
+        },
+    )
+    new = merge_alert_prices_with_status(old, (2600.5, 2610.0, 2620.0))
+    assert new.status_by_label["plan_chinh"] == VUNG_CHO
+    assert new.status_by_label["plan_phu"] == LOAI
+    assert new.status_by_label["scalp"] == VUNG_CHO
+
+
+def test_all_plans_terminal_true() -> None:
+    st = LastAlertState(
+        prices=(1.0, 2.0, 3.0),
+        labels=("plan_chinh", "plan_phu", "scalp"),
+        status_by_label={
+            "plan_chinh": VAO_LENH,
+            "plan_phu": LOAI,
+            "scalp": LOAI,
+        },
+    )
+    assert all_plans_terminal(st)
+
+
+def test_update_single_plan_status_roundtrip() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "x.json"
+        write_last_alert_state(
+            LastAlertState(
+                prices=(100.0, 200.0, 300.0),
+                labels=("plan_chinh", "plan_phu", "scalp"),
+                status_by_label={lab: VUNG_CHO for lab in ("plan_chinh", "plan_phu", "scalp")},
+            ),
+            path=p,
+        )
+        update_single_plan_status("plan_chinh", VAO_LENH, path=p)
+        st = read_last_alert_state(p)
+        assert st is not None
+        assert st.status_by_label["plan_chinh"] == VAO_LENH
+        assert st.status_by_label["plan_phu"] == VUNG_CHO
+
+
+def test_update_single_plan_unknown_label_exits() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "x.json"
+        write_last_alert_state(
+            LastAlertState(
+                prices=(1.0, 2.0, 3.0),
+                labels=("plan_chinh", "plan_phu", "scalp"),
+                status_by_label={lab: VUNG_CHO for lab in ("plan_chinh", "plan_phu", "scalp")},
+            ),
+            path=p,
+        )
+        with pytest.raises(SystemExit):
+            update_single_plan_status("nope", VAO_LENH, path=p)

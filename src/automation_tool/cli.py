@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sys
 from pathlib import Path
@@ -29,8 +30,10 @@ from automation_tool.images import (
     ordered_chart_openai_payloads,
 )
 from automation_tool.state_files import (
+    all_plans_terminal,
     default_last_alert_prices_path,
     read_last_alert_prices,
+    read_last_alert_state,
     read_last_response_id,
     read_morning_baseline_prices,
     write_last_alert_prices,
@@ -45,9 +48,12 @@ from automation_tool.zone_prices import (
 from automation_tool.tradingview_alerts import sync_tradingview_alerts
 from automation_tool.tradingview_journal_monitor import JournalMonitorParams, run_tv_journal_monitor
 from automation_tool.telegram_bot import send_message, send_openai_output_to_telegram
+from automation_tool.telegram_logging import setup_automation_logging
 from automation_tool.config import load_all_dotenv
 from automation_tool.mt5_openai_parse import parse_openai_output_md
 from automation_tool.mt5_execute import check_mt5_login, execute_trade
+
+_log = logging.getLogger("automation_tool.cli")
 
 
 def _configure_stdio_utf8() -> None:
@@ -167,6 +173,29 @@ def _parser() -> argparse.ArgumentParser:
         default="Asia/Ho_Chi_Minh",
         help="tv-journal-monitor: IANA timezone cho --until-hour",
     )
+    al.add_argument(
+        "--last-alert-json",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help="tv-journal-monitor: file last_alert_prices.json (mặc định: data/last_alert_prices.json)",
+    )
+    al.add_argument(
+        "--mt5-execute",
+        action="store_true",
+        help="tv-journal-monitor: sau VÀO LỆNH + trade_line hợp lệ, gọi execute_trade (cần Windows + MT5)",
+    )
+    al.add_argument(
+        "--mt5-symbol",
+        default=None,
+        metavar="SYM",
+        help="tv-journal-monitor: symbol MT5 (ghi đè parse từ trade_line)",
+    )
+    al.add_argument(
+        "--mt5-live",
+        action="store_true",
+        help="tv-journal-monitor: gửi lệnh MT5 thật (mặc định dry-run)",
+    )
     al.set_defaults(func=cmd_all)
 
     up = sub.add_parser(
@@ -189,6 +218,14 @@ def _parser() -> argparse.ArgumentParser:
         "--no-tradingview",
         action="store_true",
         help="Skip TradingView alert sync (still updates last_response_id)",
+    )
+    up.add_argument(
+        "--no-journal-monitor-after-update",
+        action="store_true",
+        help=(
+            "Khi trước khi ghi file cả 3 plan đã thoát vùng chờ (vao_lenh/loai): "
+            "sau khi ghi giá mới không tự chạy tv-journal-monitor (mặc định: chạy)"
+        ),
     )
     up.set_defaults(func=cmd_update)
 
@@ -280,6 +317,24 @@ def _parser() -> argparse.ArgumentParser:
         type=str,
         default="Asia/Ho_Chi_Minh",
         help="IANA timezone cho --until-hour (mặc định: Asia/Ho_Chi_Minh)",
+    )
+    tj.add_argument(
+        "--last-alert-json",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help="File last_alert_prices.json (mặc định: data/last_alert_prices.json)",
+    )
+    tj.add_argument(
+        "--mt5-execute",
+        action="store_true",
+        help="Sau VÀO LỆNH + trade_line hợp lệ, gọi execute_trade (cần Windows + MT5)",
+    )
+    tj.add_argument("--mt5-symbol", default=None, metavar="SYM", help="Symbol MT5")
+    tj.add_argument(
+        "--mt5-live",
+        action="store_true",
+        help="Gửi lệnh MT5 thật (mặc định dry-run)",
     )
     tj.set_defaults(func=cmd_tv_journal_monitor)
 
@@ -393,6 +448,12 @@ def _run_openai_flow(
 
 def cmd_capture(args: argparse.Namespace) -> None:
     s = load_settings()
+    _log.info(
+        "capture: bắt đầu | config=%s charts_dir=%s headed=%s",
+        args.config or default_coinmap_config_path(),
+        args.charts_dir or default_charts_dir(),
+        args.headed,
+    )
     cfg = args.config or default_coinmap_config_path()
     charts_dir = args.charts_dir or default_charts_dir()
     storage = args.storage_state or default_storage_state_path()
@@ -408,6 +469,7 @@ def cmd_capture(args: argparse.Namespace) -> None:
         reuse_browser_context=None,
     )
     print(f"Saved {len(paths)} image(s) under {charts_dir}:")
+    _log.info("capture: xong | %s file(s) → %s", len(paths), charts_dir)
     for p in paths:
         print(f"  {p}")
 
@@ -423,6 +485,7 @@ def _warn_if_incomplete_chart_payloads(payloads: list[tuple[str, Path]]) -> None
 
 def cmd_analyze(args: argparse.Namespace) -> None:
     s = load_settings()
+    _log.info("analyze: bắt đầu | charts_dir=%s no_telegram=%s", args.charts_dir or default_charts_dir(), args.no_telegram)
     require_openai(s)
     charts_dir = args.charts_dir or default_charts_dir()
     payloads = ordered_chart_openai_payloads(charts_dir)
@@ -444,6 +507,7 @@ def cmd_analyze(args: argparse.Namespace) -> None:
     except Exception as e:
         re_raise_unless_openai(e)
     print(out.full_text())
+    _log.info("analyze: OpenAI xong | response_id=%s", out.final_response_id)
     if not args.no_telegram and out.after_charts:
         require_telegram(s)
         send_openai_output_to_telegram(
@@ -523,6 +587,13 @@ def cmd_all(args: argparse.Namespace) -> None:
     cfg = args.config or default_coinmap_config_path()
     charts_dir = args.charts_dir or default_charts_dir()
     storage = args.storage_state or default_storage_state_path()
+    _log.info(
+        "all: bắt đầu | tv_yaml=%s charts=%s no_tradingview=%s no_tv_journal=%s",
+        cfg,
+        charts_dir,
+        args.no_tradingview,
+        args.no_tv_journal_monitor,
+    )
     paths = capture_charts(
         coinmap_yaml=cfg,
         charts_dir=charts_dir,
@@ -536,6 +607,7 @@ def cmd_all(args: argparse.Namespace) -> None:
     )
     n_art = len(paths)
     print(f"Captured {n_art} file(s) (screenshots and/or API JSON paths returned by capture).")
+    _log.info("all: capture xong | %s artifact(s)", n_art)
     if not paths:
         raise SystemExit("No chart artifacts captured; aborting analyze step.")
 
@@ -559,6 +631,7 @@ def cmd_all(args: argparse.Namespace) -> None:
     except Exception as e:
         re_raise_unless_openai(e)
     print(out.full_text())
+    _log.info("all: OpenAI xong | response_id=%s", out.final_response_id)
 
     write_last_response_id(out.final_response_id)
     if not args.no_telegram and out.after_charts:
@@ -575,6 +648,12 @@ def cmd_all(args: argparse.Namespace) -> None:
     if zt:
         write_morning_baseline_prices(zt)
         write_last_alert_prices(zt)
+        _log.info(
+            "all: đã ghi morning_baseline + last_alert | giá=%s | %s | %s",
+            zt[0],
+            zt[1],
+            zt[2],
+        )
         if not args.no_tradingview:
             p1, p2, p3 = zt
             print(
@@ -589,6 +668,7 @@ def cmd_all(args: argparse.Namespace) -> None:
                 target_prices=zt,
                 headless=not args.headed,
             )
+            _log.info("all: TradingView sync xong")
             if not args.no_tv_journal_monitor:
                 require_openai(s)
                 prev_j = read_last_response_id()
@@ -610,6 +690,10 @@ def cmd_all(args: argparse.Namespace) -> None:
                     until_hour=args.until_hour,
                     timezone_name=args.timezone,
                     no_telegram=args.no_telegram,
+                    last_alert_path=args.last_alert_json or default_last_alert_prices_path(),
+                    mt5_execute=args.mt5_execute,
+                    mt5_symbol=args.mt5_symbol,
+                    mt5_dry_run=not args.mt5_live,
                 )
                 print(
                     f"tv-journal-monitor: giá {zt[0]} | {zt[1]} | {zt[2]} — "
@@ -622,6 +706,7 @@ def cmd_all(args: argparse.Namespace) -> None:
                     f"storage: {storage} | headed={args.headed} | no_telegram={args.no_telegram}",
                     flush=True,
                 )
+                _log.info("all: chạy tv-journal-monitor…")
                 try:
                     outcome = run_tv_journal_monitor(
                         settings=s,
@@ -632,6 +717,7 @@ def cmd_all(args: argparse.Namespace) -> None:
                     re_raise_unless_openai(e)
                     raise
                 print(f"Kết thúc tv-journal-monitor: {outcome}", flush=True)
+                _log.info("all: tv-journal-monitor kết thúc | outcome=%s", outcome)
     else:
         print(
             f"Warning: could not parse morning zone prices for persistence: {zerr}",
@@ -669,6 +755,7 @@ def cmd_tv_alerts(args: argparse.Namespace) -> None:
         )
 
     print(f"Đồng bộ TradingView alerts → {p1} | {p2} | {p3} (config: {cfg_tv})")
+    _log.info("tv-alerts: sync | %s | %s | %s | yaml=%s", p1, p2, p3, cfg_tv)
     sync_tradingview_alerts(
         coinmap_yaml=cfg_tv,
         storage_state_path=storage,
@@ -682,6 +769,11 @@ def cmd_tv_alerts(args: argparse.Namespace) -> None:
 
 def cmd_tv_journal_monitor(args: argparse.Namespace) -> None:
     s = load_settings()
+    _log.info(
+        "tv-journal-monitor: bắt đầu (CLI) | poll=%s until_hour=%s",
+        args.poll_seconds,
+        args.until_hour,
+    )
     require_openai(s)
     prev = read_last_response_id()
     if not prev:
@@ -722,6 +814,10 @@ def cmd_tv_journal_monitor(args: argparse.Namespace) -> None:
         until_hour=args.until_hour,
         timezone_name=args.timezone,
         no_telegram=args.no_telegram,
+        last_alert_path=args.last_alert_json or default_last_alert_prices_path(),
+        mt5_execute=args.mt5_execute,
+        mt5_symbol=args.mt5_symbol,
+        mt5_dry_run=not args.mt5_live,
     )
 
     print(
@@ -745,10 +841,18 @@ def cmd_tv_journal_monitor(args: argparse.Namespace) -> None:
         re_raise_unless_openai(e)
         raise
     print(f"Kết thúc: {outcome}")
+    _log.info("tv-journal-monitor: kết thúc | outcome=%s", outcome)
 
 
 def cmd_update(args: argparse.Namespace) -> None:
     s = load_settings()
+    _log.info(
+        "update: bắt đầu | capture_yaml=%s tv_yaml=%s no_tradingview=%s no_journal_after=%s",
+        args.config or default_coinmap_update_config_path(),
+        args.tv_config or default_coinmap_config_path(),
+        args.no_tradingview,
+        getattr(args, "no_journal_monitor_after_update", False),
+    )
     cfg_cap = args.config or default_coinmap_update_config_path()
     charts_dir = args.charts_dir or default_charts_dir()
     storage = args.storage_state or default_storage_state_path()
@@ -778,6 +882,7 @@ def cmd_update(args: argparse.Namespace) -> None:
         reuse_browser_context=None,
     )
     print(f"Captured {len(paths)} file(s) for update run.")
+    _log.info("update: capture xong | %s file(s) | json M5=%s", len(paths), coinmap_xauusd_5m_json_path(charts_dir))
     json_path = coinmap_xauusd_5m_json_path(charts_dir)
     if json_path is None:
         raise SystemExit(
@@ -806,6 +911,7 @@ def cmd_update(args: argparse.Namespace) -> None:
 
     print(out_text)
     write_last_response_id(new_id)
+    _log.info("update: OpenAI follow-up xong | new_response_id=%s", new_id)
 
     new_triple, zerr, no_change_json = parse_three_zone_prices(out_text)
     if no_change_json is True:
@@ -817,6 +923,7 @@ def cmd_update(args: argparse.Namespace) -> None:
                 text="Vùng giá không đổi so với sáng (no_change), giữ nguyên cảnh báo.",
                 parse_mode=s.telegram_parse_mode,
             )
+        _log.info("update: no_change (JSON) — dừng, không ghi giá")
         return
     if new_triple is None:
         if is_no_change_action_line(out_text):
@@ -828,6 +935,7 @@ def cmd_update(args: argparse.Namespace) -> None:
                     text="Vùng giá không đổi so với sáng, giữ nguyên cảnh báo.",
                     parse_mode=s.telegram_parse_mode,
                 )
+            _log.info("update: no_change (action line) — dừng")
             return
         raise SystemExit(zerr or "Could not parse three zone prices from model output.")
 
@@ -840,7 +948,28 @@ def cmd_update(args: argparse.Namespace) -> None:
                 text="Vùng giá không đổi so với sáng, giữ nguyên cảnh báo.",
                 parse_mode=s.telegram_parse_mode,
             )
+        _log.info("update: giá trùng baseline — dừng")
         return
+
+    pre_alert = read_last_alert_state()
+    run_monitor_after = (
+        pre_alert is not None
+        and all_plans_terminal(pre_alert)
+        and not args.no_journal_monitor_after_update
+    )
+    _log.info(
+        "update: trước ghi file | all_terminal=%s → sau ghi sẽ chạy journal_monitor=%s",
+        pre_alert is not None and all_plans_terminal(pre_alert),
+        run_monitor_after,
+    )
+
+    write_last_alert_prices(new_triple)
+    _log.info(
+        "update: đã ghi last_alert_prices | %s | %s | %s",
+        new_triple[0],
+        new_triple[1],
+        new_triple[2],
+    )
 
     if not args.no_tradingview:
         sync_tradingview_alerts(
@@ -851,7 +980,7 @@ def cmd_update(args: argparse.Namespace) -> None:
             target_prices=new_triple,
             headless=not args.headed,
         )
-    write_last_alert_prices(new_triple)
+        _log.info("update: TradingView sync xong")
 
     if not args.no_telegram:
         require_telegram(s)
@@ -862,12 +991,58 @@ def cmd_update(args: argparse.Namespace) -> None:
             text=f"Đã cập nhật vùng giá mới: {a} | {b} | {c}",
             parse_mode=s.telegram_parse_mode,
         )
+        _log.info("update: đã gửi Telegram chat chính")
+
+    if run_monitor_after:
+        if not prev:
+            print(
+                "Warning: bỏ qua tv-journal-monitor sau update — thiếu last_response_id.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "Cả 3 plan đã terminal — chạy tv-journal-monitor sau khi ghi giá mới.",
+                flush=True,
+            )
+            _log.info("update: chạy tv-journal-monitor (phiên cũ đã terminal)…")
+            cfg_cap = args.config or default_coinmap_update_config_path()
+            jparams = JournalMonitorParams(
+                coinmap_tv_yaml=cfg_tv,
+                capture_coinmap_yaml=cfg_cap,
+                charts_dir=charts_dir,
+                storage_state_path=storage,
+                target_prices=new_triple,
+                headless=not args.headed,
+                no_save_storage=args.no_save_storage,
+                poll_seconds=45.0,
+                wait_minutes=15,
+                until_hour=23,
+                timezone_name="Asia/Ho_Chi_Minh",
+                no_telegram=args.no_telegram,
+                last_alert_path=default_last_alert_prices_path(),
+                mt5_execute=False,
+                mt5_symbol=None,
+                mt5_dry_run=True,
+            )
+            try:
+                outcome = run_tv_journal_monitor(
+                    settings=s,
+                    params=jparams,
+                    initial_response_id=prev,
+                )
+            except Exception as e:
+                re_raise_unless_openai(e)
+                raise
+            print(f"Kết thúc tv-journal-monitor (sau update): {outcome}", flush=True)
+            _log.info("update: tv-journal-monitor sau update kết thúc | outcome=%s", outcome)
 
 
 def main() -> None:
     _configure_stdio_utf8()
+    setup_automation_logging(load_settings())
     parser = _parser()
     args = parser.parse_args()
+    _log.info("CLI argv: %s", " ".join(sys.argv[1:]))
     args.func(args)
 
 

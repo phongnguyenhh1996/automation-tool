@@ -56,6 +56,8 @@ class Settings:
     telegram_chat_id: str
     # Optional second chat: receives [OUTPUT_NGAN_GON] when model uses dual markers (see telegram_bot.split_output_chi_tiet_ngan_gon).
     telegram_output_ngan_gon_chat_id: Optional[str]
+    # Optional: nhận bản sao log bước chạy (INFO) — cùng bot, chat/channel khác (vd. supergroup -100…).
+    telegram_log_chat_id: Optional[str]
     # Telegram sendMessage parse_mode: None = plain text. Use Markdown, MarkdownV2, or HTML for formatting.
     telegram_parse_mode: Optional[str]
     coinmap_base_url: str
@@ -129,6 +131,7 @@ def load_settings() -> Settings:
         telegram_output_ngan_gon_chat_id=(
             (os.getenv("TELEGRAM_OUTPUT_NGAN_GON_CHAT_ID") or "").strip() or None
         ),
+        telegram_log_chat_id=((os.getenv("TELEGRAM_LOG_CHAT_ID") or "").strip() or None),
         telegram_parse_mode=_parse_telegram_parse_mode(),
         coinmap_base_url=os.getenv("COINMAP_BASE_URL", "https://coinmap.tech"),
     )

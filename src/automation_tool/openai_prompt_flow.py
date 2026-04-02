@@ -287,9 +287,10 @@ JOURNAL_INTRADAY_FIRST_USER_TEMPLATE = (
     "Đính kèm dữ liệu Coinmap XAUUSD khung M5 mới nhất.\n"
     "Trả về một JSON object duy nhất:\n"
     '- "intraday_hanh_dong": "chờ" | "loại" | "VÀO LỆNH"\n'
-    '- "trade_line": bắt buộc một dòng pipe không rỗng khi intraday_hanh_dong là "VÀO LỆNH" '
-    "(BUY/SELL LIMIT|STOP|MARKET … | SL … | TP1 … | Lot …); "
-    'nếu "chờ" hoặc "loại" thì trade_line phải là "".\n'
+    '- "trade_line": luôn phải có key này. '
+    'Một dòng pipe không rỗng khi intraday_hanh_dong là "VÀO LỆNH" '
+    "(BUY/SELL LIMIT|STOP|MARKET … | SL … | TP1 … | Lot …) để có thể gửi MT5; "
+    'nếu "chờ" hoặc "loại" thì đặt trade_line là chuỗi rỗng "".\n'
     '- "output_ngan_gon", "out_chi_tiet": tùy cần.\n'
     "Không dùng giá trị khác cho intraday_hanh_dong trong luồng này."
 )
@@ -298,8 +299,9 @@ JOURNAL_INTRADAY_RETRY_USER_TEMPLATE = (
     "Tiếp tục đánh giá sau {wait_minutes} phút: vẫn theo dõi mức đã chạm {touched_price}.\n"
     "Bối cảnh Nhật ký (lần kích hoạt): {journal_line}\n\n"
     "Đính kèm Coinmap XAUUSD M5 mới.\n"
-    "Cùng schema JSON như tin nhắn trước: intraday_hanh_dong chỉ \"chờ\", \"loại\", hoặc \"VÀO LỆNH\"; "
-    'nếu "VÀO LỆNH" thì trade_line bắt buộc có một dòng lệnh pipe hợp lệ (không được rỗng).'
+    "Cùng schema JSON như tin nhắn trước: luôn có key trade_line "
+    '(rỗng nếu "chờ" hoặc "loại"); intraday_hanh_dong chỉ "chờ", "loại", hoặc "VÀO LỆNH"; '
+    'nếu "VÀO LỆNH" thì trade_line phải là một dòng lệnh pipe hợp lệ (không rỗng) cho MT5.'
 )
 
 

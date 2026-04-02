@@ -4,6 +4,7 @@ TradingView: tab Nhật ký — khớp một trong ba giá → Coinmap XAUUSD M5
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -21,7 +22,11 @@ from automation_tool.coinmap import (
 )
 from automation_tool.config import Settings
 from automation_tool.images import coinmap_xauusd_5m_json_path
-from automation_tool.mt5_openai_parse import parse_journal_intraday_action_from_openai_text
+from automation_tool.mt5_execute import execute_trade
+from automation_tool.mt5_openai_parse import (
+    parse_journal_intraday_action_from_openai_text,
+    parse_openai_output_md,
+)
 from automation_tool.openai_errors import re_raise_unless_openai
 from automation_tool.openai_prompt_flow import (
     JOURNAL_INTRADAY_FIRST_USER_TEMPLATE,
@@ -29,7 +34,18 @@ from automation_tool.openai_prompt_flow import (
     run_single_followup_responses,
 )
 from automation_tool.playwright_browser import close_browser_and_context, launch_chrome_context
-from automation_tool.state_files import write_last_response_id
+from automation_tool.state_files import (
+    LOAI,
+    LastAlertState,
+    VAO_LENH,
+    VUNG_CHO,
+    all_plans_terminal,
+    default_last_alert_prices_path,
+    read_last_alert_state,
+    read_last_response_id,
+    update_single_plan_status,
+    write_last_response_id,
+)
 from automation_tool.telegram_bot import send_openai_output_to_telegram
 from automation_tool.tradingview_alerts import (
     _open_alerts_list_panel,
@@ -40,13 +56,14 @@ _EPS = 0.01
 
 
 def _journal_log(timezone_name: str, msg: str) -> None:
-    """Log có timestamp (theo timezone monitor) để quan sát trên terminal."""
+    """Log có timestamp (stderr + logger ``automation_tool.journal`` → Telegram nếu cấu hình)."""
     try:
         z = ZoneInfo(timezone_name)
         ts = datetime.now(z).strftime("%Y-%m-%d %H:%M:%S %Z")
     except Exception:
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{ts}] tv-journal | {msg}", flush=True)
+    full = f"[{ts}] tv-journal | {msg}"
+    logging.getLogger("automation_tool.journal").info(full)
 
 
 def _truncate(s: str, max_len: int = 140) -> str:
@@ -60,7 +77,10 @@ JournalRunOutcome = Literal[
     "matched_and_entered",
     "matched_rejected",
     "cutoff_time",
+    "all_plans_resolved",
 ]
+
+InnerLoopOutcome = Literal["entered", "rejected", "cutoff"]
 
 
 @dataclass(frozen=True)
@@ -77,6 +97,10 @@ class JournalMonitorParams:
     until_hour: int
     timezone_name: str
     no_telegram: bool
+    last_alert_path: Optional[Path] = None
+    mt5_execute: bool = False
+    mt5_symbol: Optional[str] = None
+    mt5_dry_run: bool = True
 
 
 def _journal_panel_css(tv: dict[str, Any]) -> str:
@@ -174,6 +198,33 @@ def _sleep_wait_minutes_respecting_cutoff(
     return ok
 
 
+def _waiting_label_prices(state: LastAlertState) -> list[tuple[str, float]]:
+    """Plans still in ``vung_cho`` as (label, price)."""
+    out: list[tuple[str, float]] = []
+    for i, lab in enumerate(state.labels):
+        if state.status_by_label.get(lab, VUNG_CHO) == VUNG_CHO:
+            out.append((lab, state.prices[i]))
+    return out
+
+
+def _pick_matching_waiting_row(
+    rows: list[tuple[Optional[float], str]],
+    waiting: list[tuple[str, float]],
+    processed: Set[str],
+) -> Optional[tuple[float, str, str]]:
+    """Return ``(parsed_price, raw_line, label)`` for first row matching a waiting plan price."""
+    for price, raw in rows:
+        key = raw.strip()
+        if not key or key in processed:
+            continue
+        if price is None:
+            continue
+        for lab, tp in waiting:
+            if abs(price - tp) <= _EPS:
+                return (price, raw, lab)
+    return None
+
+
 def _pick_matching_row(
     rows: list[tuple[Optional[float], str]],
     targets: tuple[float, float, float],
@@ -204,24 +255,31 @@ def _run_intraday_touch_loop(
     settings: Settings,
     params: JournalMonitorParams,
     touched_price: float,
+    touched_label: str,
     journal_line: str,
     initial_response_id: str,
     browser_context: BrowserContext,
-) -> Literal["VÀO_LỆNH", "loại", "cutoff"]:
-    """``chờ`` → capture lại + hỏi lại; lặp tới loại / VÀO LỆNH / hết giờ."""
+    last_alert_path: Path,
+) -> InnerLoopOutcome:
+    """``chờ`` → capture lại + hỏi lại; lặp tới loại / VÀO LỆNH (có trade_line) / hết giờ."""
     tz = params.timezone_name
-    prev_id = initial_response_id
+    prev_id = read_last_response_id() or initial_response_id
     first = True
-    p1, p2, p3 = params.target_prices
     inner_i = 0
 
     _journal_log(
         tz,
-        f"=== Vòng trong (touch) — giá chạm={touched_price} | dòng Nhật ký: {_truncate(journal_line, 200)!s}",
+        f"=== Vòng trong (touch) — label={touched_label} | giá chạm={touched_price} | "
+        f"dòng Nhật ký: {_truncate(journal_line, 200)!s}",
     )
 
     while _before_cutoff(params.timezone_name, params.until_hour):
         inner_i += 1
+        st = read_last_alert_state(last_alert_path)
+        if st is None:
+            raise SystemExit(f"Missing last alert state at {last_alert_path}")
+        p1, p2, p3 = st.prices
+
         _journal_log(
             tz,
             f"Vòng trong #{inner_i}: chụp Coinmap (yaml={params.capture_coinmap_yaml.name}, charts_dir={params.charts_dir})",
@@ -297,6 +355,33 @@ def _run_intraday_touch_loop(
         act = parse_journal_intraday_action_from_openai_text(out_text)
         _journal_log(tz, f"Parse intraday (JSON hoặc [OUTPUT_NGAN_GON]): Hành động = {act!r}")
         if act == "VÀO LỆNH":
+            parsed, tl_err = parse_openai_output_md(out_text, symbol_override=params.mt5_symbol)
+            if tl_err or parsed is None:
+                _journal_log(
+                    tz,
+                    f"VÀO LỆNH nhưng trade_line không hợp lệ: {tl_err} — coi như chờ, chờ {params.wait_minutes} phút.",
+                )
+                if not _sleep_wait_minutes_respecting_cutoff(
+                    params.wait_minutes,
+                    params.timezone_name,
+                    params.until_hour,
+                ):
+                    _journal_log(tz, "Hết giờ trong lúc chờ (trade_line) — cutoff.")
+                    return "cutoff"
+                first = False
+                continue
+            update_single_plan_status(touched_label, VAO_LENH, path=last_alert_path)
+            if params.mt5_execute:
+                _journal_log(
+                    tz,
+                    f"MT5 ({'dry-run' if params.mt5_dry_run else 'live'}): gửi lệnh…",
+                )
+                ex = execute_trade(
+                    parsed,
+                    dry_run=params.mt5_dry_run,
+                    symbol_override=params.mt5_symbol,
+                )
+                _journal_log(tz, ex.message)
             if not params.no_telegram:
                 _journal_log(tz, "Gửi Telegram (VÀO LỆNH) — chat chính + OUTPUT_NGAN_GON nếu cấu hình.")
                 send_openai_output_to_telegram(
@@ -308,11 +393,12 @@ def _run_intraday_touch_loop(
                 )
             else:
                 _journal_log(tz, "Bỏ qua Telegram (--no-telegram).")
-            _journal_log(tz, "Kết thúc vòng trong: VÀO LỆNH.")
-            return "VÀO_LỆNH"
+            _journal_log(tz, "Kết thúc vòng trong: VÀO LỆNH (đã ghi status + optional MT5).")
+            return "entered"
         if act == "loại":
-            _journal_log(tz, "Kết thúc vòng trong: loại (vùng không còn cơ hội).")
-            return "loại"
+            update_single_plan_status(touched_label, LOAI, path=last_alert_path)
+            _journal_log(tz, "Kết thúc vòng trong: loại (vùng không còn cơ hội) — đã ghi status.")
+            return "rejected"
         if act == "chờ":
             _journal_log(tz, f"Hành động: chờ — sẽ nghỉ {params.wait_minutes} phút rồi chụp M5 + hỏi lại.")
             if not _sleep_wait_minutes_respecting_cutoff(
@@ -362,15 +448,19 @@ def run_tv_journal_monitor(
     vh = int(cfg.get("viewport_height", 1080))
     tz = params.timezone_name
 
-    p1, p2, p3 = params.target_prices
+    lap = params.last_alert_path or default_last_alert_prices_path()
+    st0 = read_last_alert_state(lap)
+    if st0 is None:
+        raise SystemExit(f"Cannot read last alert state from {lap} (need prices + labels).")
+    p1, p2, p3 = st0.prices
     _journal_log(
         tz,
         f"Bắt đầu monitor | chart={tv.get('chart_url')!s} | headless={params.headless} | "
-        f"viewport={vw}x{vh} | settle_ms={settle_ms}",
+        f"viewport={vw}x{vh} | settle_ms={settle_ms} | last_alert={lap}",
     )
     _journal_log(
         tz,
-        f"3 giá theo dõi: {p1} | {p2} | {p3} (epsilon={_EPS}) | "
+        f"3 giá + status: {p1} | {p2} | {p3} | {st0.status_by_label} (epsilon={_EPS}) | "
         f"poll sau mỗi chu kỳ={params.poll_seconds}s | "
         f"chờ OpenAI={params.wait_minutes}m | tới {params.until_hour}:00 ({tz})",
     )
@@ -413,6 +503,25 @@ def run_tv_journal_monitor(
                     tz,
                     f"--- Vòng ngoài #{outer_cycle} (giờ địa phương ~{now_local}) ---",
                 )
+                st = read_last_alert_state(lap)
+                if st is None:
+                    raise SystemExit(f"Lost last alert state at {lap}")
+                if all_plans_terminal(st):
+                    _journal_log(
+                        tz,
+                        "Cả 3 plan đã có trạng thái vao_lenh hoặc loai — dừng monitor.",
+                    )
+                    return "all_plans_resolved"
+                waiting = _waiting_label_prices(st)
+                if not waiting:
+                    _journal_log(tz, "Không còn plan vung_cho — dừng.")
+                    return "all_plans_resolved"
+                _journal_log(
+                    tz,
+                    f"Plan còn chờ ({VUNG_CHO}): "
+                    + ", ".join(f"{lab}={px}" for lab, px in waiting),
+                )
+
                 _journal_log(tz, "Reload trang TradingView…")
                 page.reload(wait_until="domcontentloaded", timeout=120_000)
                 _journal_log(tz, f"Chờ settle {settle_ms}ms sau reload…")
@@ -437,34 +546,41 @@ def run_tv_journal_monitor(
                 n_proc = len(processed)
                 if n_proc:
                     _journal_log(tz, f"Số dòng Nhật ký đã xử lý (dedupe): {n_proc}")
-                m = _pick_matching_row(rows, params.target_prices, processed)
+                m = _pick_matching_waiting_row(rows, waiting, processed)
                 if m is not None:
-                    touched, line = m
+                    touched, line, tlab = m
                     _journal_log(
                         tz,
-                        f"KHỚP giá {touched} với một trong 3 mức — bắt đầu vòng trong (Coinmap + OpenAI).",
+                        f"KHỚP giá {touched} (plan {tlab}) — bắt đầu vòng trong (Coinmap + OpenAI).",
                     )
                     processed.add(line.strip())
+                    rid = read_last_response_id() or initial_response_id
                     inner = _run_intraday_touch_loop(
                         settings=settings,
                         params=params,
                         touched_price=touched,
+                        touched_label=tlab,
                         journal_line=line,
-                        initial_response_id=initial_response_id,
+                        initial_response_id=rid,
                         browser_context=context,
+                        last_alert_path=lap,
                     )
-                    if inner == "VÀO_LỆNH":
-                        _journal_log(tz, "Kết quả cuối: matched_and_entered (đã vào lệnh / Telegram).")
-                        return "matched_and_entered"
-                    if inner == "loại":
-                        _journal_log(tz, "Kết quả cuối: matched_rejected (loại).")
-                        return "matched_rejected"
-                    _journal_log(tz, "Kết quả cuối: cutoff_time (hết giờ trong vòng trong).")
-                    return "cutoff_time"
+                    st2 = read_last_alert_state(lap)
+                    if st2 is not None and all_plans_terminal(st2):
+                        _journal_log(tz, "Kết quả: all_plans_resolved (đã xử lý đủ 3 plan).")
+                        return "all_plans_resolved"
+                    if inner == "cutoff":
+                        _journal_log(tz, "Kết quả cuối: cutoff_time (hết giờ trong vòng trong).")
+                        return "cutoff_time"
+                    _journal_log(
+                        tz,
+                        f"Vòng trong kết thúc ({inner!s}) — tiếp tục vòng ngoài nếu còn plan chờ.",
+                    )
+                    continue
 
                 _journal_log(
                     tz,
-                    f"Chưa có dòng mới khớp 3 giá — nghỉ {params.poll_seconds}s trước chu kỳ reload tiếp theo.",
+                    f"Chưa có dòng mới khớp plan đang chờ — nghỉ {params.poll_seconds}s trước chu kỳ reload tiếp theo.",
                 )
                 time.sleep(max(1.0, params.poll_seconds))
 
