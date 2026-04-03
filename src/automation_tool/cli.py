@@ -20,9 +20,9 @@ from automation_tool.config import (
 )
 from automation_tool.openai_errors import re_raise_unless_openai
 from automation_tool.openai_prompt_flow import (
-    DEFAULT_ANALYSIS_PROMPT,
     DEFAULT_UPDATE_PROMPT_TEMPLATE,
     PromptTwoStepResult,
+    default_analysis_prompt,
     run_analysis_responses_flow,
     run_single_followup_responses,
 )
@@ -114,8 +114,11 @@ def _parser() -> argparse.ArgumentParser:
     a.add_argument(
         "--prompt",
         type=str,
-        default=DEFAULT_ANALYSIS_PROMPT,
-        help="User message kèm hướng dẫn JSON (mặc định: quy trình XAUUSD + schema)",
+        default=None,
+        help=(
+            "User message kèm hướng dẫn JSON; mặc định: theo cặp đang active "
+            "(marker charts-dir / data/.main_chart_symbol, xem default_analysis_prompt)"
+        ),
     )
     a.add_argument(
         "--max-images-per-call",
@@ -184,8 +187,8 @@ def _parser() -> argparse.ArgumentParser:
     al.add_argument(
         "--prompt",
         type=str,
-        default=DEFAULT_ANALYSIS_PROMPT,
-        help="Một prompt user kèm hướng dẫn JSON (mặc định: quy trình + schema)",
+        default=None,
+        help="Prompt user kèm JSON; mặc định: theo cặp active (giống analyze)",
     )
     al.add_argument(
         "--max-images-per-call",
@@ -424,8 +427,8 @@ def _parser() -> argparse.ArgumentParser:
     g.add_argument(
         "--prompt",
         type=str,
-        default=DEFAULT_ANALYSIS_PROMPT,
-        help="User message (default: analysis + JSON schema)",
+        default=None,
+        help="User message; default: analysis prompt theo cặp active + JSON schema",
     )
     g.add_argument("--charts-dir", type=Path, default=None)
     g.add_argument(
@@ -586,6 +589,16 @@ def cmd_capture(args: argparse.Namespace) -> None:
         print(f"  {p}")
 
 
+def _resolved_analysis_prompt(args: argparse.Namespace, charts_dir: Path) -> str:
+    """Khi không truyền --prompt: dùng default_analysis_prompt theo read_main_chart_symbol(charts_dir)."""
+    p = getattr(args, "prompt", None)
+    if p is not None and str(p).strip():
+        return str(p)
+    from automation_tool.images import read_main_chart_symbol
+
+    return default_analysis_prompt(read_main_chart_symbol(charts_dir))
+
+
 def _warn_if_incomplete_chart_payloads(
     charts_dir: Path, payloads: list[tuple[str, Path]]
 ) -> None:
@@ -628,11 +641,12 @@ def cmd_analyze(args: argparse.Namespace) -> None:
             telegram_source_label="analyze (phản hồi đầu)",
         )
 
+    prompt = _resolved_analysis_prompt(args, charts_dir)
     try:
         out = _run_openai_flow(
             s,
             charts_dir,
-            args.prompt,
+            prompt,
             args.max_images_per_call,
             chart_payloads=payloads,
             on_first_model_text=_on_first,
@@ -779,11 +793,12 @@ def cmd_all(args: argparse.Namespace) -> None:
             telegram_source_label="all (phản hồi đầu)",
         )
 
+    prompt_all = _resolved_analysis_prompt(args, charts_dir)
     try:
         out = _run_openai_flow(
             s,
             charts_dir,
-            args.prompt,
+            prompt_all,
             args.max_images_per_call,
             chart_payloads=payloads,
             on_first_model_text=_on_first_all,

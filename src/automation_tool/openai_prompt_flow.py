@@ -13,9 +13,12 @@ from automation_tool.coinmap_openai_slim import (
     slim_coinmap_export_for_openai,
 )
 from automation_tool.images import (
+    DEFAULT_MAIN_CHART_SYMBOL,
     chunk_payloads,
     image_to_data_url,
+    normalize_main_chart_symbol,
     ordered_chart_openai_payloads,
+    read_main_chart_symbol,
 )
 
 
@@ -32,21 +35,34 @@ class PromptTwoStepResult(NamedTuple):
         return f"{self.first_text}\n\n---\n\n{self.after_charts}" if self.first_text else self.after_charts
 
 
-DEFAULT_ANALYSIS_PROMPT = (
-    "Chạy quy trình phân tích XAUUSD. "
-    "Dữ liệu đính kèm theo thứ tự cố định (TradingView = ảnh; Coinmap = JSON export API nếu có, không thì ảnh): "
-    "TradingView DXY (4h, 1h, 15m) → Coinmap USDINDEX 15m → "
-    "TradingView XAUUSD (4h, 1h, 15m, 5m) → Coinmap XAUUSD (15m, 5m).\n\n"
-    "Trả về một JSON object hợp lệ duy nhất (có thể bọc trong ```json). Schema gợi ý:\n"
-    '- "out_chi_tiet": string (phân tích chi tiết)\n'
-    '- "output_ngan_gon": string (tóm tắt)\n'
-    '- "prices": [ {"label":"plan_chinh"|"plan_phu"|"scalp","value":number} ] — đủ 3 phần tử\n'
-    '- "intraday_hanh_dong": "chờ" | "loại" | "VÀO LỆNH" hoặc null nếu không áp dụng\n'
-    '- "trade_line": string — một dòng lệnh dạng BUY/SELL … | SL … | TP1 … | Lot … hoặc ""\n'
-    '- "no_change": boolean — chỉ dùng rõ trong luồng update intraday; phân tích sáng có thể bỏ qua hoặc false\n'
-)
+def default_analysis_prompt(main_symbol: str | None = None) -> str:
+    """
+    Prompt text mặc định cho bước phân tích multimodal; ``main_symbol`` là cặp chính (TradingView/Coinmap).
+    Nếu None hoặc không hợp lệ → ``DEFAULT_MAIN_CHART_SYMBOL``.
+    """
+    sym = DEFAULT_MAIN_CHART_SYMBOL
+    if main_symbol and str(main_symbol).strip():
+        try:
+            sym = normalize_main_chart_symbol(str(main_symbol).strip())
+        except ValueError:
+            pass
+    return (
+        f"Chạy quy trình phân tích {sym}. "
+        "Dữ liệu đính kèm theo thứ tự cố định (TradingView = ảnh; Coinmap = JSON export API nếu có, không thì ảnh): "
+        "TradingView DXY (4h, 1h, 15m) → Coinmap USDINDEX 15m → "
+        f"TradingView {sym} (4h, 1h, 15m, 5m) → Coinmap {sym} (15m, 5m).\n\n"
+        "Trả về một JSON object hợp lệ duy nhất (có thể bọc trong ```json). Schema gợi ý:\n"
+        '- "out_chi_tiet": string (phân tích chi tiết)\n'
+        '- "output_ngan_gon": string (tóm tắt)\n'
+        '- "prices": [ {"label":"plan_chinh"|"plan_phu"|"scalp","value":number} ] — đủ 3 phần tử\n'
+        '- "intraday_hanh_dong": "chờ" | "loại" | "VÀO LỆNH" hoặc null nếu không áp dụng\n'
+        '- "trade_line": string — một dòng lệnh dạng BUY/SELL … | SL … | TP1 … | Lot … hoặc ""\n'
+        '- "no_change": boolean — chỉ dùng rõ trong luồng update intraday; phân tích sáng có thể bỏ qua hoặc false\n'
+    )
 
-# Tương thích ngược: gộp vào DEFAULT_ANALYSIS_PROMPT
+
+# Tương thích ngược: prompt mặc định khi cặp = XAUUSD
+DEFAULT_ANALYSIS_PROMPT = default_analysis_prompt(DEFAULT_MAIN_CHART_SYMBOL)
 DEFAULT_FIRST_PROMPT = DEFAULT_ANALYSIS_PROMPT
 DEFAULT_FOLLOW_UP_PROMPT = ""
 
@@ -149,6 +165,8 @@ def run_analysis_responses_flow(
     ``on_first_model_text`` (tuỳ chọn): gọi với text assistant của **batch đầu tiên**
     (khi có multimodal); dùng cho VÀO LỆNH + MT5 / cập nhật ``last_alert_prices``.
     """
+    if not (analysis_prompt or "").strip():
+        analysis_prompt = default_analysis_prompt(read_main_chart_symbol(charts_dir))
     client = OpenAI(api_key=api_key)
     prompt = _prompt_dict(prompt_id, prompt_version)
     tools: list[dict[str, Any]] = []
@@ -260,7 +278,7 @@ def run_prompt_two_step_flow(
     if b:
         analysis_prompt = f"{a}\n\n{b}" if a else b
     else:
-        analysis_prompt = a or DEFAULT_ANALYSIS_PROMPT
+        analysis_prompt = a or default_analysis_prompt(read_main_chart_symbol(charts_dir))
     return run_analysis_responses_flow(
         api_key=api_key,
         prompt_id=prompt_id,
