@@ -161,6 +161,40 @@ SHORT"""
     assert "https://t.me/c/1234567890/42" in calls[2]["text"]
 
 
+def test_send_openai_dual_detail_channel(monkeypatch):
+    """Chi tiết sang detail_chat_id; tóm tắt sang summary_chat_id."""
+    calls: list[dict] = []
+
+    def fake_send(**kwargs):
+        calls.append(kwargs)
+        cid = kwargs.get("chat_id")
+        if cid == "-100detail":
+            return 7
+        return None
+
+    monkeypatch.setattr(
+        "automation_tool.telegram_bot.send_message",
+        fake_send,
+    )
+    raw = """[OUTPUT_CHI_TIET]
+FULL
+[OUTPUT_NGAN_GON]
+SHORT"""
+    send_openai_output_to_telegram(
+        bot_token="t",
+        chat_id="main",
+        raw=raw,
+        default_parse_mode="HTML",
+        summary_chat_id="sum",
+        detail_chat_id="-100detail",
+    )
+    assert len(calls) == 2
+    assert calls[0]["chat_id"] == "-100detail"
+    assert calls[0]["text"] == "FULL"
+    assert calls[1]["chat_id"] == "sum"
+    assert "SHORT" in calls[1]["text"]
+
+
 def test_send_openai_dual_routes(monkeypatch):
     calls: list[dict] = []
 

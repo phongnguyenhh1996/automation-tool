@@ -1,4 +1,4 @@
-"""Persistence for Responses thread id and zone price JSON files under data/."""
+"""Persistence for Responses thread id and zone price JSON files under data/{{SYMBOL}}/."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, Optional
 
-from automation_tool.config import default_data_dir
+from automation_tool.config import symbol_data_dir
 
 # Per-plan alert lifecycle for tv-journal-monitor (persisted in last_alert_prices.json).
 VUNG_CHO = "vung_cho"
@@ -27,15 +27,15 @@ def _price_equal(a: float, b: float) -> bool:
 
 
 def default_last_response_id_path() -> Path:
-    return default_data_dir() / "last_response_id.txt"
+    return symbol_data_dir() / "last_response_id.txt"
 
 
 def default_morning_baseline_prices_path() -> Path:
-    return default_data_dir() / "morning_baseline_prices.json"
+    return symbol_data_dir() / "morning_baseline_prices.json"
 
 
 def default_last_alert_prices_path() -> Path:
-    return default_data_dir() / "last_alert_prices.json"
+    return symbol_data_dir() / "last_alert_prices.json"
 
 
 def _atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:

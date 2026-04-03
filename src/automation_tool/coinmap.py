@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import re
 import time
@@ -19,6 +20,41 @@ from automation_tool.playwright_browser import close_browser_and_context, launch
 def load_coinmap_yaml(path: Path) -> dict[str, Any]:
     raw = path.read_text(encoding="utf-8")
     return yaml.safe_load(raw) or {}
+
+
+_LEGACY_MAIN_PAIR = "XAUUSD"
+
+
+def apply_main_chart_symbol_to_config(cfg: dict[str, Any], main_symbol: str) -> dict[str, Any]:
+    """
+    Replace ``XAUUSD`` with ``main_symbol`` in Coinmap/TradingView capture plans and TV ``chart_url``.
+    Does not change DXY / USDINDEX rows.
+    """
+    from automation_tool.images import normalize_main_chart_symbol
+
+    sym = normalize_main_chart_symbol(main_symbol)
+    out = copy.deepcopy(cfg)
+    old = _LEGACY_MAIN_PAIR
+
+    cd = out.get("chart_download")
+    if isinstance(cd, dict):
+        plan = cd.get("capture_plan")
+        if isinstance(plan, list):
+            for row in plan:
+                if isinstance(row, dict) and str(row.get("symbol") or "").strip().upper() == old:
+                    row["symbol"] = sym
+
+    tv = out.get("tradingview_capture")
+    if isinstance(tv, dict):
+        url = tv.get("chart_url")
+        if isinstance(url, str) and old in url:
+            tv["chart_url"] = url.replace(old, sym)
+        plan = tv.get("capture_plan")
+        if isinstance(plan, list):
+            for row in plan:
+                if isinstance(row, dict) and str(row.get("symbol") or "").strip().upper() == old:
+                    row["symbol"] = sym
+    return out
 
 
 def _ensure_dir(p: Path) -> None:
@@ -1744,7 +1780,7 @@ def _capture_charts_in_context(
 def capture_charts(
     *,
     coinmap_yaml: Path,
-    charts_dir: Path,
+    charts_dir: Optional[Path] = None,
     storage_state_path: Optional[Path],
     email: Optional[str],
     password: Optional[str],
@@ -1752,6 +1788,7 @@ def capture_charts(
     save_storage_state: bool = True,
     headless: bool = True,
     reuse_browser_context: Optional[BrowserContext] = None,
+    main_chart_symbol: Optional[str] = None,
 ) -> list[Path]:
     """
     Optionally clear prior images in charts_dir, then log in (if credentials given),
@@ -1762,7 +1799,16 @@ def capture_charts(
     inside ``sync_playwright``), capture uses that context instead of starting a nested
     Playwright sync session.
     """
+    from automation_tool.config import default_charts_dir
+    from automation_tool.images import (
+        get_active_main_symbol,
+        set_active_main_symbol_file,
+        write_main_chart_symbol_marker,
+    )
+
     cfg = load_coinmap_yaml(coinmap_yaml)
+    if main_chart_symbol is not None and str(main_chart_symbol).strip():
+        cfg = apply_main_chart_symbol_to_config(cfg, main_chart_symbol)
 
     has_storage = bool(storage_state_path and storage_state_path.exists())
     if bool(email) != bool(password):
@@ -1773,7 +1819,12 @@ def capture_charts(
             f"or an existing Playwright storage state file (e.g. {storage_state_path})."
         )
 
+    set_active_main_symbol_file(
+        main_chart_symbol if (main_chart_symbol and str(main_chart_symbol).strip()) else None
+    )
+    charts_dir = charts_dir or default_charts_dir()
     _ensure_dir(charts_dir)
+    write_main_chart_symbol_marker(charts_dir, get_active_main_symbol())
     if bool(cfg.get("clear_charts_before_capture", True)):
         _clear_charts_dir(charts_dir)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")

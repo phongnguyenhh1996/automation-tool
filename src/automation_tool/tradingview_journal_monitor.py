@@ -21,7 +21,7 @@ from automation_tool.coinmap import (
     load_coinmap_yaml,
 )
 from automation_tool.config import Settings
-from automation_tool.images import coinmap_xauusd_5m_json_path
+from automation_tool.images import coinmap_xauusd_5m_json_path, read_main_chart_symbol
 from automation_tool.mt5_execute import execute_trade, format_mt5_execution_for_telegram
 from automation_tool.mt5_openai_parse import (
     parse_journal_intraday_action_from_openai_text,
@@ -297,6 +297,7 @@ def _run_intraday_touch_loop(
             save_storage_state=not params.no_save_storage,
             headless=params.headless,
             reuse_browser_context=browser_context,
+            main_chart_symbol=read_main_chart_symbol(params.charts_dir),
         )
         _journal_log(tz, f"Coinmap capture xong: {len(paths)} file(s).")
         if paths:
@@ -307,10 +308,11 @@ def _run_intraday_touch_loop(
         json_path = coinmap_xauusd_5m_json_path(params.charts_dir)
         if json_path is None or not json_path.is_file():
             raise SystemExit(
-                f"No XAUUSD 5m Coinmap JSON under {params.charts_dir}. "
+                f"No main-pair 5m Coinmap JSON under {params.charts_dir} "
+                f"(expected stamp coinmap_{read_main_chart_symbol(params.charts_dir)}_5m). "
                 "Check coinmap_update.yaml capture_plan and api_data_export."
             )
-        _journal_log(tz, f"JSON M5 XAUUSD: {json_path}")
+        _journal_log(tz, f"JSON M5 {read_main_chart_symbol(params.charts_dir)}: {json_path}")
 
         if first:
             user_msg = JOURNAL_INTRADAY_FIRST_USER_TEMPLATE.format(

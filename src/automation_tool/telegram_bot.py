@@ -434,31 +434,38 @@ def send_openai_output_to_telegram(
     raw: str,
     default_parse_mode: Optional[str],
     summary_chat_id: Optional[str] = None,
+    detail_chat_id: Optional[str] = None,
 ) -> None:
     """
     Send OpenAI multimodal step output: either structured JSON (see
     :func:`parse_openai_telegram_payload`) or legacy free-form text using
     ``default_parse_mode`` (same behavior as before JSON contract).
 
-    If ``summary_chat_id`` is set and the text contains both ``[OUTPUT_CHI_TIET]``
-    and ``[OUTPUT_NGAN_GON]`` (and the payload is not JSON), detailed text is
-    sent to ``chat_id`` and the short block to ``summary_chat_id``, with a link
-    in the short message pointing at the first detailed message (``t.me/c/...``).
+    If the text contains both detailed and short parts (markers or JSON) and at
+    least one of ``detail_chat_id`` or ``summary_chat_id`` is set, the detailed
+    block goes to ``detail_chat_id`` if set, else ``chat_id``; the short block
+    goes to ``summary_chat_id`` if set, else ``chat_id``. The short message can
+    include a link to the detailed message (``t.me/c/...``).
     """
     parsed = parse_openai_telegram_payload(raw)
     if parsed is None:
+        d_opt = (detail_chat_id or "").strip()
+        s_opt = (summary_chat_id or "").strip()
+        want_split = bool(d_opt or s_opt)
         dual: tuple[str, str] | None = None
-        if summary_chat_id and summary_chat_id.strip():
+        if want_split:
             dual = split_analysis_json_chi_tiet_ngan_gon(raw)
             if dual is None:
                 dual = split_output_chi_tiet_ngan_gon(raw)
         if dual is not None:
             chi_tiet, ngan_gon = dual
+            detail_target = d_opt or chat_id
+            summary_target = s_opt or chat_id
             detail_msg_id: Optional[int] = None
             if chi_tiet:
                 detail_msg_id = send_message(
                     bot_token=bot_token,
-                    chat_id=chat_id,
+                    chat_id=detail_target,
                     text=chi_tiet,
                     parse_mode=default_parse_mode,
                     html_ready=False,
@@ -470,12 +477,12 @@ def send_openai_output_to_telegram(
                 if detail_msg_id is not None:
                     text_out, pm2, hr_out = enrich_ngan_gon_with_detail_link(
                         ngan_gon,
-                        detail_chat_id=chat_id,
+                        detail_chat_id=detail_target,
                         detail_message_id=detail_msg_id,
                     )
                     if pm2 is not None:
                         pm_out = pm2
-                target = summary_chat_id.strip()
+                target = summary_target.strip()
                 try:
                     send_message(
                         bot_token=bot_token,
@@ -488,7 +495,7 @@ def send_openai_output_to_telegram(
                     if not _should_fallback_summary_to_main(e):
                         raise
                     print(
-                        f"Warning: could not send OUTPUT_NGAN_GON to TELEGRAM_OUTPUT_NGAN_GON_CHAT_ID "
+                        f"Warning: could not send OUTPUT_NGAN_GON to summary chat "
                         f"({target!r}): {e}\n"
                         "Fix: add the bot to that channel/group and use the correct id (often -100... for "
                         "channels). Sending the short summary to TELEGRAM_CHAT_ID instead.",

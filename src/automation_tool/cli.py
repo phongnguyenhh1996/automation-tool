@@ -27,14 +27,16 @@ from automation_tool.openai_prompt_flow import (
     run_single_followup_responses,
 )
 from automation_tool.images import (
-    CHART_IMAGE_ORDER,
     coinmap_xauusd_5m_json_path,
+    effective_chart_image_order,
     ordered_chart_openai_payloads,
 )
 from automation_tool.first_response_trade import apply_first_response_vao_lenh
 from automation_tool.state_files import (
     all_plans_terminal,
     default_last_alert_prices_path,
+    default_last_response_id_path,
+    default_morning_baseline_prices_path,
     read_last_alert_prices,
     read_last_alert_state,
     read_last_response_id,
@@ -87,6 +89,15 @@ def _parser() -> argparse.ArgumentParser:
     c.add_argument("--storage-state", type=Path, default=None, help="Playwright storage state JSON")
     c.add_argument("--no-save-storage", action="store_true", help="Do not write storage state after run")
     c.add_argument("--headed", action="store_true", help="Show browser window")
+    c.add_argument(
+        "--main-symbol",
+        default=None,
+        metavar="SYM",
+        help=(
+            "Thay cặp mặc định XAUUSD trong config (Coinmap + TradingView chart_url/plan) bằng SYM "
+            "(vd. USDJPY). Ghi data/.main_chart_symbol và dùng data/{{SYM}}/charts/."
+        ),
+    )
     c.set_defaults(func=cmd_capture)
 
     a = sub.add_parser(
@@ -94,6 +105,12 @@ def _parser() -> argparse.ArgumentParser:
         help="OpenAI: một lần gọi multimodal với chart (no capture; uses OPENAI_PROMPT_ID)",
     )
     a.add_argument("--charts-dir", type=Path, default=None)
+    a.add_argument(
+        "--main-symbol",
+        default=None,
+        metavar="SYM",
+        help="Cặp cần phân tích: ghi data/.main_chart_symbol, đọc data/{{SYM}}/charts và last_alert theo SYM",
+    )
     a.add_argument(
         "--prompt",
         type=str,
@@ -135,6 +152,15 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Phản hồi đầu: chỉ mô phỏng MT5, không gửi lệnh thật (mặc định: lệnh thật)",
     )
+    a.add_argument(
+        "--telegram-detail-chat-id",
+        default=None,
+        metavar="ID",
+        help=(
+            "Chat/channel nhận OUTPUT chi tiết (markers / JSON out_chi_tiet); "
+            "mặc định TELEGRAM_ANALYSIS_DETAIL_CHAT_ID trong .env"
+        ),
+    )
     a.set_defaults(func=cmd_analyze)
 
     al = sub.add_parser(
@@ -149,6 +175,12 @@ def _parser() -> argparse.ArgumentParser:
     al.add_argument("--storage-state", type=Path, default=None)
     al.add_argument("--no-save-storage", action="store_true")
     al.add_argument("--headed", action="store_true")
+    al.add_argument(
+        "--main-symbol",
+        default=None,
+        metavar="SYM",
+        help="Giống capture: thay XAUUSD bằng SYM và ghi .main_chart_symbol",
+    )
     al.add_argument(
         "--prompt",
         type=str,
@@ -251,6 +283,12 @@ def _parser() -> argparse.ArgumentParser:
     up.add_argument("--storage-state", type=Path, default=None)
     up.add_argument("--no-save-storage", action="store_true")
     up.add_argument("--headed", action="store_true")
+    up.add_argument(
+        "--main-symbol",
+        default=None,
+        metavar="SYM",
+        help="Giống capture: thay XAUUSD trong yaml chụp (mặc định coinmap_update.yaml)",
+    )
     up.add_argument("--no-telegram", action="store_true")
     up.add_argument(
         "--no-tradingview",
@@ -391,6 +429,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     g.add_argument("--charts-dir", type=Path, default=None)
     g.add_argument(
+        "--main-symbol",
+        default=None,
+        metavar="SYM",
+        help="Giống analyze: cặp và thư mục data/{{SYM}}/",
+    )
+    g.add_argument(
         "--max-images-per-call",
         type=int,
         default=10,
@@ -418,6 +462,12 @@ def _parser() -> argparse.ArgumentParser:
         "--mt5-dry-run",
         action="store_true",
         help="Giống analyze: dry-run MT5 (mặc định: lệnh thật)",
+    )
+    g.add_argument(
+        "--telegram-detail-chat-id",
+        default=None,
+        metavar="ID",
+        help="Giống analyze: kênh nhận bản chi tiết",
     )
     g.set_defaults(func=cmd_chatgpt_project)
 
@@ -512,15 +562,14 @@ def cmd_capture(args: argparse.Namespace) -> None:
     _log.info(
         "capture: bắt đầu | config=%s charts_dir=%s headed=%s",
         args.config or default_coinmap_config_path(),
-        args.charts_dir or default_charts_dir(),
+        args.charts_dir if args.charts_dir is not None else "(default theo data/.main_chart_symbol)",
         args.headed,
     )
     cfg = args.config or default_coinmap_config_path()
-    charts_dir = args.charts_dir or default_charts_dir()
     storage = args.storage_state or default_storage_state_path()
     paths = capture_charts(
         coinmap_yaml=cfg,
-        charts_dir=charts_dir,
+        charts_dir=args.charts_dir,
         storage_state_path=storage,
         email=s.coinmap_email,
         password=s.coinmap_password,
@@ -528,15 +577,19 @@ def cmd_capture(args: argparse.Namespace) -> None:
         save_storage_state=not args.no_save_storage,
         headless=not args.headed,
         reuse_browser_context=None,
+        main_chart_symbol=args.main_symbol,
     )
+    charts_dir = args.charts_dir or default_charts_dir()
     print(f"Saved {len(paths)} image(s) under {charts_dir}:")
     _log.info("capture: xong | %s file(s) → %s", len(paths), charts_dir)
     for p in paths:
         print(f"  {p}")
 
 
-def _warn_if_incomplete_chart_payloads(payloads: list[tuple[str, Path]]) -> None:
-    expected = len(CHART_IMAGE_ORDER)
+def _warn_if_incomplete_chart_payloads(
+    charts_dir: Path, payloads: list[tuple[str, Path]]
+) -> None:
+    expected = len(effective_chart_image_order(charts_dir))
     if len(payloads) < expected:
         print(
             f"Warning: expected {expected} chart slots in fixed order, found {len(payloads)} file(s) on disk.",
@@ -545,16 +598,20 @@ def _warn_if_incomplete_chart_payloads(payloads: list[tuple[str, Path]]) -> None
 
 
 def cmd_analyze(args: argparse.Namespace) -> None:
+    from automation_tool.images import set_active_main_symbol_file
+
     s = load_settings()
+    if getattr(args, "main_symbol", None):
+        set_active_main_symbol_file(args.main_symbol)
     _log.info("analyze: bắt đầu | charts_dir=%s no_telegram=%s", args.charts_dir or default_charts_dir(), args.no_telegram)
     require_openai(s)
     charts_dir = args.charts_dir or default_charts_dir()
     payloads = ordered_chart_openai_payloads(charts_dir)
-    _warn_if_incomplete_chart_payloads(payloads)
+    _warn_if_incomplete_chart_payloads(charts_dir, payloads)
     if not payloads:
         raise SystemExit(
             f"No chart files under {charts_dir} (TradingView PNG / Coinmap JSON or PNG). "
-            "Run capture first or check data/charts."
+            "Run capture first or check charts under data/{SYMBOL}/charts/."
         )
 
     lap = args.last_alert_json or default_last_alert_prices_path()
@@ -586,12 +643,16 @@ def cmd_analyze(args: argparse.Namespace) -> None:
     _log.info("analyze: OpenAI xong | response_id=%s", out.final_response_id)
     if not args.no_telegram and out.after_charts:
         require_telegram(s)
+        detail_cid = (getattr(args, "telegram_detail_chat_id", None) or "").strip() or (
+            (s.telegram_analysis_detail_chat_id or "").strip() or None
+        )
         send_openai_output_to_telegram(
             bot_token=s.telegram_bot_token,
             chat_id=s.telegram_chat_id,
             raw=out.after_charts,
             default_parse_mode=s.telegram_parse_mode,
             summary_chat_id=s.telegram_output_ngan_gon_chat_id,
+            detail_chat_id=detail_cid,
         )
 
 
@@ -668,18 +729,17 @@ def cmd_telegram_send(args: argparse.Namespace) -> None:
 def cmd_all(args: argparse.Namespace) -> None:
     s = load_settings()
     cfg = args.config or default_coinmap_config_path()
-    charts_dir = args.charts_dir or default_charts_dir()
     storage = args.storage_state or default_storage_state_path()
     _log.info(
         "all: bắt đầu | tv_yaml=%s charts=%s no_tradingview=%s no_tv_journal=%s",
         cfg,
-        charts_dir,
+        args.charts_dir if args.charts_dir is not None else "(default)",
         args.no_tradingview,
         args.no_tv_journal_monitor,
     )
     paths = capture_charts(
         coinmap_yaml=cfg,
-        charts_dir=charts_dir,
+        charts_dir=args.charts_dir,
         storage_state_path=storage,
         email=s.coinmap_email,
         password=s.coinmap_password,
@@ -687,7 +747,9 @@ def cmd_all(args: argparse.Namespace) -> None:
         save_storage_state=not args.no_save_storage,
         headless=not args.headed,
         reuse_browser_context=None,
+        main_chart_symbol=args.main_symbol,
     )
+    charts_dir = args.charts_dir or default_charts_dir()
     n_art = len(paths)
     print(f"Captured {n_art} file(s) (screenshots and/or API JSON paths returned by capture).")
     _log.info("all: capture xong | %s artifact(s)", n_art)
@@ -696,11 +758,11 @@ def cmd_all(args: argparse.Namespace) -> None:
 
     require_openai(s)
     payloads = ordered_chart_openai_payloads(charts_dir)
-    _warn_if_incomplete_chart_payloads(payloads)
+    _warn_if_incomplete_chart_payloads(charts_dir, payloads)
     if not payloads:
         raise SystemExit(
             "No TradingView/Coinmap chart files found for OpenAI step "
-            f"under {charts_dir}. Check capture and CHART_IMAGE_ORDER."
+            f"under {charts_dir}. Check capture and chart slot order (effective_chart_image_order)."
         )
 
     lap_all = args.last_alert_json or default_last_alert_prices_path()
@@ -772,7 +834,7 @@ def cmd_all(args: argparse.Namespace) -> None:
                 prev_j = read_last_response_id()
                 if not prev_j:
                     raise SystemExit(
-                        "Thiếu data/last_response_id.txt — không chạy tv-journal-monitor."
+                        f"Thiếu {default_last_response_id_path()} — không chạy tv-journal-monitor."
                     )
                 cfg_cap = args.capture_config or default_coinmap_update_config_path()
                 params = JournalMonitorParams(
@@ -876,7 +938,7 @@ def cmd_tv_journal_monitor(args: argparse.Namespace) -> None:
     prev = read_last_response_id()
     if not prev:
         raise SystemExit(
-            "Missing data/last_response_id.txt — run `coinmap-automation all` or `update` first "
+            f"Missing {default_last_response_id_path()} — run `coinmap-automation all` or `update` first "
             "so OpenAI has a thread id."
         )
 
@@ -943,7 +1005,11 @@ def cmd_tv_journal_monitor(args: argparse.Namespace) -> None:
 
 
 def cmd_update(args: argparse.Namespace) -> None:
+    from automation_tool.images import set_active_main_symbol_file
+
     s = load_settings()
+    if getattr(args, "main_symbol", None):
+        set_active_main_symbol_file(args.main_symbol)
     _log.info(
         "update: bắt đầu | capture_yaml=%s tv_yaml=%s no_tradingview=%s no_journal_after=%s",
         args.config or default_coinmap_update_config_path(),
@@ -952,25 +1018,24 @@ def cmd_update(args: argparse.Namespace) -> None:
         getattr(args, "no_journal_monitor_after_update", False),
     )
     cfg_cap = args.config or default_coinmap_update_config_path()
-    charts_dir = args.charts_dir or default_charts_dir()
     storage = args.storage_state or default_storage_state_path()
     cfg_tv = args.tv_config or default_coinmap_config_path()
 
     baseline = read_morning_baseline_prices()
     if baseline is None:
         raise SystemExit(
-            "Missing data/morning_baseline_prices.json — run `coinmap-automation all` successfully first."
+            f"Missing {default_morning_baseline_prices_path()} — run `coinmap-automation all` successfully first."
         )
 
     prev = read_last_response_id()
     if not prev:
         raise SystemExit(
-            "Missing data/last_response_id.txt — run `coinmap-automation all` successfully first."
+            f"Missing {default_last_response_id_path()} — run `coinmap-automation all` successfully first."
         )
 
     paths = capture_charts(
         coinmap_yaml=cfg_cap,
-        charts_dir=charts_dir,
+        charts_dir=args.charts_dir,
         storage_state_path=storage,
         email=s.coinmap_email,
         password=s.coinmap_password,
@@ -978,7 +1043,9 @@ def cmd_update(args: argparse.Namespace) -> None:
         save_storage_state=not args.no_save_storage,
         headless=not args.headed,
         reuse_browser_context=None,
+        main_chart_symbol=args.main_symbol,
     )
+    charts_dir = args.charts_dir or default_charts_dir()
     print(f"Captured {len(paths)} file(s) for update run.")
     _log.info("update: capture xong | %s file(s) | json M5=%s", len(paths), coinmap_xauusd_5m_json_path(charts_dir))
     json_path = coinmap_xauusd_5m_json_path(charts_dir)
@@ -1137,6 +1204,9 @@ def cmd_update(args: argparse.Namespace) -> None:
 
 def main() -> None:
     _configure_stdio_utf8()
+    from automation_tool.data_migration import migrate_legacy_flat_data_layout
+
+    migrate_legacy_flat_data_layout()
     setup_automation_logging(load_settings())
     parser = _parser()
     args = parser.parse_args()

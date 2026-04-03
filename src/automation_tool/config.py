@@ -56,6 +56,8 @@ class Settings:
     telegram_chat_id: str
     # Optional second chat: [OUTPUT_NGAN_GON] (dual markers) + MT5 execution logs after execute_trade.
     telegram_output_ngan_gon_chat_id: Optional[str]
+    # Optional: [OUTPUT_CHI_TIET] / JSON out_chi_tiet → this channel (analyze / dual-send).
+    telegram_analysis_detail_chat_id: Optional[str]
     # Optional: nhận bản sao log bước chạy (INFO) — cùng bot, chat/channel khác (vd. supergroup -100…).
     telegram_log_chat_id: Optional[str]
     # Telegram sendMessage parse_mode: None = plain text. Use Markdown, MarkdownV2, or HTML for formatting.
@@ -71,8 +73,20 @@ def default_data_dir() -> Path:
     return _root() / "data"
 
 
+def symbol_data_dir(symbol: Optional[str] = None) -> Path:
+    """
+    Per-instrument data root: ``data/{{SYMBOL}}/`` (e.g. ``data/XAUUSD``, ``data/USDJPY``).
+    Symbol comes from ``symbol`` or :func:`automation_tool.images.get_active_main_symbol`.
+    """
+    from automation_tool.images import get_active_main_symbol
+
+    sym = (symbol or get_active_main_symbol()).strip().upper()
+    return default_data_dir() / sym
+
+
 def default_charts_dir() -> Path:
-    return default_data_dir() / "charts"
+    """``data/{{active_symbol}}/charts/`` — see ``get_active_main_symbol`` in ``images.py``."""
+    return symbol_data_dir() / "charts"
 
 
 def default_logs_dir() -> Path:
@@ -94,7 +108,7 @@ def default_coinmap_update_config_path() -> Path:
 
 
 def default_storage_state_path() -> Path:
-    return default_data_dir() / "storage_state.json"
+    return symbol_data_dir() / "storage_state.json"
 
 
 def _parse_vector_store_ids() -> list[str]:
@@ -130,6 +144,9 @@ def load_settings() -> Settings:
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
         telegram_output_ngan_gon_chat_id=(
             (os.getenv("TELEGRAM_OUTPUT_NGAN_GON_CHAT_ID") or "").strip() or None
+        ),
+        telegram_analysis_detail_chat_id=(
+            (os.getenv("TELEGRAM_ANALYSIS_DETAIL_CHAT_ID") or "").strip() or None
         ),
         telegram_log_chat_id=((os.getenv("TELEGRAM_LOG_CHAT_ID") or "").strip() or None),
         telegram_parse_mode=_parse_telegram_parse_mode(),
