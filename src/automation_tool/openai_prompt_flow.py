@@ -57,7 +57,9 @@ def default_analysis_prompt(main_symbol: str | None = None) -> str:
         '- "prices": [ {"label":"plan_chinh"|"plan_phu"|"scalp","value":number} ] — đủ 3 phần tử\n'
         '- "intraday_hanh_dong": "chờ" | "loại" | "VÀO LỆNH" hoặc null nếu không áp dụng\n'
         '- "trade_line": string — một dòng lệnh dạng BUY/SELL … | SL … | TP1 … | Lot … hoặc ""\n'
-        '- "no_change": boolean — chỉ dùng rõ trong luồng update intraday; phân tích sáng có thể bỏ qua hoặc false\n'
+        '- "no_change": boolean — chỉ dùng rõ trong luồng update intraday; phân tích sáng có thể bỏ qua hoặc false\n\n'
+        "Trong output_ngan_gon: sau mỗi khối PLAN CHÍNH VÙNG CHỜ / PLAN PHỤ VÙNG CHỜ / SCALP VÙNG thêm một dòng lệnh tham khảo (pipe) để vào tay. "
+        "Lot tham khảo: USDJPY = giá/(10×SL pip); XAUUSD = 1/SL_giá (SL_giá = |entry−SL| theo giá).\n"
     )
 
 
