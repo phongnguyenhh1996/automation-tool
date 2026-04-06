@@ -68,14 +68,14 @@ Sau khi hoàn tất phân tích theo quy trình, **chỉ trả về một JSON o
 |-------|------|--------|
 | `out_chi_tiet` | string | Phân tích đầy đủ. Đã định dạng để gửi lên telegram. Đúng theo  `[OUTPUT_CHI_TIET]`. |
 | `output_ngan_gon` | string | Tóm tắt ngắn. Đã định dạng để gửi lên telegram. đúng theo  `[OUTPUT_NGAN_GON]`. Với mỗi trong ba khối **PLAN CHÍNH VÙNG CHỜ**, **PLAN PHỤ VÙNG CHỜ**, **SCALP VÙNG** phải kèm **một dòng lệnh tham khảo** (format pipe) để trader vào thủ công. Lot theo user cung cấp. |
-| `prices` | array | Đúng **3** phần tử, mỗi phần tử chỉ cần `label` (`"plan_chinh"` \| `"plan_phu"` \| `"scalp"`) và `value` (float) — giá để tạo cảnh báo chạm giá trên tradingView , sell lấy giá trị nhỏ nhất trong vùng giá, buy lấy giá trị lớn nhất trong vùng giá. |
-| `intraday_hanh_dong` | string hoặc null | Chỉ cho luồng Nhật ký intraday: `"chờ"` \| `"loại"` \| `"VÀO LỆNH"`. Phân tích sáng thường gửi `null` hoặc bỏ key. |
-| `trade_line` | string | Một dòng lệnh đúng format pipe (xem dưới). Nếu không vào lệnh: `""`. |
+| `prices` | array | Đúng **3** phần tử (`plan_chinh`, `plan_phu`, `scalp`). **Mỗi phần tử bắt buộc có:** `label`, `value` (float — giá cảnh báo TV: sell = giá nhỏ nhất vùng, buy = giá lớn nhất vùng), **`hop_luu`** (integer 0–100, điểm hợp lưu của **đúng vùng đó**), **`trade_line`** (một dòng lệnh pipe MT5 cho **đúng vùng đó**; có thể `""` nếu vùng đó không đề xuất lệnh khớp MT5). Tool tự động: chỉ gửi MT5 khi có vùng với `hop_luu` **> 80** và `trade_line` không rỗng (chọn vùng theo điểm cao nhất; hòa điểm: ưu tiên plan_chinh → plan_phu → scalp). |
+| `intraday_hanh_dong` | string hoặc null | Chủ yếu luồng Nhật ký intraday: `"chờ"` \| `"loại"` \| `"VÀO LỆNH"`. Phân tích sáng có thể `null` hoặc bỏ key (auto-MT5 sáng dùng `hop_luu` + `trade_line` trong `prices`). |
+| `trade_line` | string | Ở **gốc JSON**: tóm tắt hoặc `""` nếu đã điền đủ **`trade_line` trong từng phần tử `prices`** — không bắt buộc trùng với dòng sẽ gửi MT5 (MT5 sáng lấy theo từng vùng trong `prices`). |
 | `no_change` | boolean hoặc bỏ qua | Chỉ rõ trong luồng **update** intraday so với baseline sáng: `true` = ba vùng không đổi; `false` = có thay đổi. Phân tích sáng có thể `false` hoặc không gửi key. |
 
-### `trade_line` (khi đủ điều kiện vào lệnh)
+### `trade_line` trong `prices[]` và ở gốc (format pipe)
 
-Một dòng duy nhất, số dùng dấu chấm thập phân, không ký tự lạ giữa các phần:
+Mỗi dòng `trade_line` (theo vùng hoặc gốc nếu dùng), số dùng dấu chấm thập phân, không ký tự lạ giữa các phần:
 
 - LIMIT/STOP: `SELL LIMIT 4565.0 | SL 4592.0 | TP1 4550.0 | TP2 4545.0 | Lot 0.02` (TP2 có thể bỏ).
 - MARKET: `BUY MARKET | SL 99.0 | TP1 101.0 | Lot 0.01`
@@ -87,10 +87,10 @@ Lot theo user cung cấp.
 
 Với **MT5 / đứng ngoài**, vẫn có thể kết thúc `output_ngan_gon` bằng một trong:
 
-- `Hành động: VÀO LỆNH` (khi có `trade_line` hợp lệ), hoặc
+- `Hành động: VÀO LỆNH` (khi có dòng pipe hợp lệ — phân tích sáng: trong `prices[].trade_line`), hoặc
 - `Hành động: ĐỨNG NGOÀI`
 
-Hoặc thể hiện qua `intraday_hanh_dong` + `trade_line` khi automation đọc JSON.
+Hoặc thể hiện qua `intraday_hanh_dong` + `trade_line` (Nhật ký intraday); phân tích sáng ưu tiên **`hop_luu` / `trade_line` theo từng phần tử `prices`** cho tool.
 
 ### Ví dụ tối thiểu (rút gọn)
 
@@ -99,12 +99,29 @@ Hoặc thể hiện qua `intraday_hanh_dong` + `trade_line` khi automation đọ
   "out_chi_tiet": "… nội dung phân tích dài …",
   "output_ngan_gon": "… tóm tắt …\nHành động: ĐỨNG NGOÀI",
   "prices": [
-    {"label": "plan_chinh", "value": 2650.5},
-    {"label": "plan_phu", "value": 2648.0},
-    {"label": "scalp", "value": 2652.0}
+    {
+      "label": "plan_chinh",
+      "value": 2650.5,
+      "hop_luu": 85,
+      "trade_line": "SELL LIMIT 2650.5 | SL 2655.0 | TP1 2640.0 | Lot 0.02"
+    },
+    {
+      "label": "plan_phu",
+      "value": 2648.0,
+      "hop_luu": 62,
+      "trade_line": ""
+    },
+    {
+      "label": "scalp",
+      "value": 2652.0,
+      "hop_luu": 55,
+      "trade_line": ""
+    }
   ],
   "intraday_hanh_dong": null,
   "trade_line": "",
   "no_change": false
 }
 ```
+
+Ở ví dụ trên chỉ **plan_chinh** có `hop_luu` > 80 và `trade_line` khác rỗng → tool có thể gửi **một** lệnh MT5 đúng dòng đó. Các vùng `hop_luu` ≤ 80 hoặc `trade_line` rỗng không kích hoạt auto-MT5 nhưng vẫn dùng `value` cho cảnh báo giá trên TradingView.
