@@ -27,6 +27,7 @@ from automation_tool.mt5_openai_parse import (
     parse_journal_intraday_action_from_openai_text,
     parse_openai_output_md,
 )
+from automation_tool.first_response_trade import apply_first_response_vao_lenh
 from automation_tool.openai_errors import re_raise_unless_openai
 from automation_tool.openai_prompt_flow import (
     JOURNAL_INTRADAY_FIRST_USER_TEMPLATE,
@@ -361,6 +362,39 @@ def _run_intraday_touch_loop(
         _journal_log(tz, "--- Hết output OpenAI ---")
         write_last_response_id(new_id)
         prev_id = new_id
+
+        hop_done = apply_first_response_vao_lenh(
+            out_text,
+            last_alert_path=last_alert_path,
+            mt5_execute=params.mt5_execute,
+            mt5_dry_run=params.mt5_dry_run,
+            mt5_symbol=params.mt5_symbol,
+            telegram_bot_token=settings.telegram_bot_token,
+            telegram_analysis_detail_chat_id=settings.telegram_analysis_detail_chat_id,
+            telegram_output_ngan_gon_chat_id=settings.telegram_output_ngan_gon_chat_id,
+            telegram_source_label="tv-journal-monitor (Nhật ký)",
+            auto_mt5_zone_label=touched_label,
+        )
+        if hop_done:
+            _journal_log(
+                tz,
+                "JSON prices: hop_luu>80 + trade_line tại vùng chạm — đã ghi vao_lenh / MT5 (nếu bật). Kết thúc vòng trong.",
+            )
+            if not params.no_telegram:
+                _journal_log(
+                    tz,
+                    "Gửi Telegram — chat chính + OUTPUT_NGAN_GON nếu cấu hình.",
+                )
+                send_openai_output_to_telegram(
+                    bot_token=settings.telegram_bot_token,
+                    chat_id=settings.telegram_chat_id,
+                    raw=out_text,
+                    default_parse_mode=settings.telegram_parse_mode,
+                    summary_chat_id=settings.telegram_output_ngan_gon_chat_id,
+                )
+            else:
+                _journal_log(tz, "Bỏ qua Telegram (--no-telegram).")
+            return "entered"
 
         act = parse_journal_intraday_action_from_openai_text(out_text)
         _journal_log(tz, f"Parse intraday (JSON hoặc [OUTPUT_NGAN_GON]): Hành động = {act!r}")

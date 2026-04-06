@@ -10,11 +10,17 @@ from typing import Optional
 from automation_tool.mt5_execute import execute_trade, format_mt5_execution_for_telegram
 from automation_tool.mt5_openai_parse import ParsedTrade, parse_openai_output_md
 from automation_tool.openai_analysis_json import (
+    AUTO_MT5_HOP_LUU_THRESHOLD,
+    PriceZoneEntry,
     parse_analysis_from_openai_text,
     select_zone_for_auto_mt5,
+    select_zone_for_auto_mt5_for_label,
 )
 from automation_tool.state_files import VAO_LENH, update_single_plan_status, write_last_alert_prices
-from automation_tool.telegram_bot import send_mt5_execution_log_to_ngan_gon_chat
+from automation_tool.telegram_bot import (
+    send_first_response_log_to_analysis_detail_chat,
+    send_mt5_execution_log_to_ngan_gon_chat,
+)
 from automation_tool.zone_prices import parse_three_zone_prices
 
 _log = logging.getLogger(__name__)
@@ -35,6 +41,32 @@ def plan_label_nearest_trade_entry(
     return _PLAN_ORDER[best_i]
 
 
+def _zone_diagnostics_lines(prices: list[PriceZoneEntry]) -> str:
+    lines: list[str] = []
+    for p in prices:
+        hop_s = str(p.hop_luu) if p.hop_luu is not None else "—"
+        has_tl = "có" if (p.trade_line or "").strip() else "không"
+        lines.append(f"  • {p.label}: value={p.value} hop_luu={hop_s} trade_line={has_tl}")
+    return "\n".join(lines)
+
+
+def _tg(
+    *,
+    telegram_bot_token: Optional[str],
+    telegram_analysis_detail_chat_id: Optional[str],
+    telegram_source_label: str,
+    body: str,
+) -> None:
+    if not telegram_bot_token or not telegram_analysis_detail_chat_id:
+        return
+    send_first_response_log_to_analysis_detail_chat(
+        bot_token=telegram_bot_token,
+        telegram_analysis_detail_chat_id=telegram_analysis_detail_chat_id,
+        source=telegram_source_label,
+        text=body,
+    )
+
+
 def _minimal_json_for_trade_parse(trade_line: str) -> str:
     """JSON tối thiểu để ``parse_openai_output_md`` lấy đúng một dòng lệnh."""
     return json.dumps(
@@ -51,54 +83,126 @@ def apply_first_response_vao_lenh(
     mt5_dry_run: bool = False,
     mt5_symbol: Optional[str] = None,
     telegram_bot_token: Optional[str] = None,
+    telegram_analysis_detail_chat_id: Optional[str] = None,
     telegram_output_ngan_gon_chat_id: Optional[str] = None,
     telegram_source_label: str = "phân tích chart (phản hồi đầu)",
-) -> None:
+    auto_mt5_zone_label: Optional[str] = None,
+) -> bool:
     """
     Ghi ``last_alert_prices`` khi đủ triple giá.
 
     Auto-MT5 (không dry-run mặc định): chỉ khi có vùng với ``hop_luu`` > 80 và ``trade_line``
     không rỗng trong JSON; dùng đúng ``trade_line`` của vùng đó. Ghi ``vao_lenh`` + ``entry_manual`` false.
+    Nếu ``auto_mt5_zone_label`` được set (vd. ``plan_chinh``), chỉ xét đúng vùng đó (Nhật ký TV).
+
+    Telegram: log phản hồi đầu (hop_luu, vùng, lỗi…) → ``telegram_analysis_detail_chat_id``
+    (``TELEGRAM_ANALYSIS_DETAIL_CHAT_ID``). Kết quả ``execute_trade`` → ``telegram_output_ngan_gon_chat_id``.
+
+    Returns:
+        ``True`` nếu đã hoàn tất nhánh auto-MT5 (đã ghi ``vao_lenh`` cho vùng chọn; MT5 chạy thành công
+        khi bật ``mt5_execute``). ``False`` trong mọi trường hợp khác (gồm chỉ ghi 3 giá, chưa đủ hop_luu).
     """
     text = (first_model_text or "").strip()
     if not text:
-        return
+        _log.debug("first_response: bỏ qua — text rỗng.")
+        return False
 
-    zt, _zerr, nc = parse_three_zone_prices(text)
-    if nc is True or zt is None:
-        return
+    zt, zerr, nc = parse_three_zone_prices(text)
+    if nc is True:
+        _log.info("first_response: no_change — không ghi last_alert.")
+        return False
+    if zt is None:
+        _log.warning("first_response: không parse được triple giá: %s", zerr)
+        return False
+
+    p1, p2, p3 = zt
+    _log.info(
+        "first_response: triple giá plan_chinh=%s plan_phu=%s scalp=%s | last_alert_path=%s",
+        p1,
+        p2,
+        p3,
+        last_alert_path,
+    )
 
     try:
         write_last_alert_prices(zt, path=last_alert_path)
     except SystemExit as e:
         _log.warning("first_response: không ghi last_alert — %s", e)
-        return
+        return False
+
+    _log.info(
+        "first_response: đã merge last_alert_prices (3 giá) → %s",
+        last_alert_path,
+    )
 
     payload = parse_analysis_from_openai_text(text)
     if payload is None or not payload.prices:
-        _log.info(
-            "first_response: đã ghi 3 giá; không có JSON prices để hop_luu/trade_line — bỏ qua auto-MT5."
+        msg = (
+            "Đã ghi 3 giá vào last_alert.\n"
+            "Không có JSON `prices` (hoặc rỗng) — không thể đọc hop_luu/trade_line theo vùng; bỏ qua auto-MT5."
         )
-        return
+        _log.info("first_response: %s", msg.replace("\n", " "))
+        _tg(
+            telegram_bot_token=telegram_bot_token,
+            telegram_analysis_detail_chat_id=telegram_analysis_detail_chat_id,
+            telegram_source_label=telegram_source_label,
+            body=msg,
+        )
+        return False
 
-    picked = select_zone_for_auto_mt5(payload.prices)
+    zones_txt = _zone_diagnostics_lines(payload.prices)
+    _log.info(
+        "first_response: JSON prices (%d vùng):\n%s",
+        len(payload.prices),
+        zones_txt,
+    )
+
+    zone_filter = (auto_mt5_zone_label or "").strip()
+    if zone_filter:
+        picked = select_zone_for_auto_mt5_for_label(payload.prices, zone_filter)
+    else:
+        picked = select_zone_for_auto_mt5(payload.prices)
     if picked is None:
-        _log.info(
-            "first_response: không có vùng nào hop_luu>80 kèm trade_line — chỉ cập nhật giá, không vao_lenh/MT5."
+        zhint = f" (chỉ vùng `{zone_filter}`)" if zone_filter else ""
+        msg = (
+            f"Đã ghi 3 giá. Ngưỡng auto-MT5: hop_luu > {AUTO_MT5_HOP_LUU_THRESHOLD} + trade_line không rỗng{zhint}.\n"
+            f"Không có vùng đủ điều kiện — không ghi vao_lenh / không MT5.\n"
+            f"Vùng trong JSON:\n{zones_txt}"
         )
-        return
+        _log.info("first_response: không có vùng auto-MT5 — chỉ giá đã lưu.")
+        _tg(
+            telegram_bot_token=telegram_bot_token,
+            telegram_analysis_detail_chat_id=telegram_analysis_detail_chat_id,
+            telegram_source_label=telegram_source_label,
+            body=msg,
+        )
+        return False
 
     label, hop, zone_trade_line = picked
     minimal = _minimal_json_for_trade_parse(zone_trade_line)
     parsed, err = parse_openai_output_md(minimal, symbol_override=mt5_symbol)
     if err or parsed is None:
-        _log.warning(
-            "first_response: hop_luu=%s label=%s nhưng không parse được trade_line: %s",
-            hop,
-            label,
-            err,
+        msg = (
+            f"Chọn vùng {label} (hop_luu={hop}) nhưng không parse được trade_line.\n"
+            f"Lỗi: {err}\n"
+            f"Dòng (rút gọn): {(zone_trade_line[:200] + '…') if len(zone_trade_line) > 200 else zone_trade_line}"
         )
-        return
+        _log.warning("first_response: %s", msg.replace("\n", " "))
+        _tg(
+            telegram_bot_token=telegram_bot_token,
+            telegram_analysis_detail_chat_id=telegram_analysis_detail_chat_id,
+            telegram_source_label=telegram_source_label,
+            body=msg,
+        )
+        return False
+
+    _log.info(
+        "first_response: chọn vùng %s hop_luu=%s (>%s) — parse trade_line OK → ghi %s",
+        label,
+        hop,
+        AUTO_MT5_HOP_LUU_THRESHOLD,
+        VAO_LENH,
+    )
 
     try:
         update_single_plan_status(
@@ -109,19 +213,43 @@ def apply_first_response_vao_lenh(
         )
     except SystemExit as e:
         _log.warning("first_response: không cập nhật status — %s", e)
-        return
+        _tg(
+            telegram_bot_token=telegram_bot_token,
+            telegram_analysis_detail_chat_id=telegram_analysis_detail_chat_id,
+            telegram_source_label=telegram_source_label,
+            body=f"Lỗi ghi status: {e}",
+        )
+        return False
 
     _log.info(
-        "first_response: vùng %s hop_luu=%s → %s tại %s",
+        "first_response: đã ghi status %s=%s tại %s (entry_manual=false)",
         label,
-        hop,
         VAO_LENH,
         last_alert_path,
     )
 
+    summary = (
+        f"Vùng chọn: {label} | hop_luu={hop} (ngưỡng >{AUTO_MT5_HOP_LUU_THRESHOLD})\n"
+        f"last_alert: {last_alert_path}\n"
+        f"MT5 symbol override: {mt5_symbol or '(từ lệnh)'}\n"
+        "Đã ghi vao_lenh (entry_manual=false)."
+    )
+    if mt5_execute:
+        summary += (
+            "\nKết quả MT5 (hoặc dry-run) gửi tới TELEGRAM_OUTPUT_NGAN_GON_CHAT_ID nếu cấu hình."
+        )
+    else:
+        summary += "\n--no-mt5-execute: không gọi MT5."
+    _tg(
+        telegram_bot_token=telegram_bot_token,
+        telegram_analysis_detail_chat_id=telegram_analysis_detail_chat_id,
+        telegram_source_label=telegram_source_label,
+        body=summary,
+    )
+
     if not mt5_execute:
         _log.info("first_response: bỏ qua MT5 (--no-mt5-execute).")
-        return
+        return True
 
     try:
         ex = execute_trade(
@@ -130,7 +258,11 @@ def apply_first_response_vao_lenh(
             symbol_override=mt5_symbol,
         )
         print(ex.message, flush=True)
-        _log.info("first_response MT5: %s", ex.message)
+        _log.info(
+            "first_response MT5 dry_run=%s: %s",
+            mt5_dry_run,
+            ex.message,
+        )
         if telegram_bot_token and telegram_output_ngan_gon_chat_id:
             send_mt5_execution_log_to_ngan_gon_chat(
                 bot_token=telegram_bot_token,
@@ -138,7 +270,22 @@ def apply_first_response_vao_lenh(
                 source=telegram_source_label,
                 text=format_mt5_execution_for_telegram(ex),
             )
+        return True
     except SystemExit as e:
         _log.warning("first_response: MT5 không chạy — %s", e)
+        _tg(
+            telegram_bot_token=telegram_bot_token,
+            telegram_analysis_detail_chat_id=telegram_analysis_detail_chat_id,
+            telegram_source_label=telegram_source_label,
+            body=f"MT5 SystemExit: {e}",
+        )
+        return False
     except Exception as e:
         _log.exception("first_response: lỗi execute_trade: %s", e)
+        _tg(
+            telegram_bot_token=telegram_bot_token,
+            telegram_analysis_detail_chat_id=telegram_analysis_detail_chat_id,
+            telegram_source_label=telegram_source_label,
+            body=f"Lỗi execute_trade: {e!s}",
+        )
+        return False

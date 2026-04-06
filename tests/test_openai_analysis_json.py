@@ -6,6 +6,7 @@ from automation_tool.openai_analysis_json import (
     AUTO_MT5_HOP_LUU_THRESHOLD,
     PriceZoneEntry,
     select_zone_for_auto_mt5,
+    select_zone_for_auto_mt5_for_label,
 )
 
 
@@ -39,3 +40,16 @@ def test_select_zone_requires_above_threshold() -> None:
     assert AUTO_MT5_HOP_LUU_THRESHOLD == 80
     assert select_zone_for_auto_mt5([PriceZoneEntry("plan_chinh", 1.0, hop_luu=80, trade_line=tl)]) is None
     assert select_zone_for_auto_mt5([PriceZoneEntry("plan_chinh", 1.0, hop_luu=81, trade_line=tl)]) is not None
+
+
+def test_select_zone_for_label_ignores_other_plans() -> None:
+    tl = "BUY LIMIT 1 | SL 0 | TP1 2 | Lot 0.01"
+    prices = [
+        PriceZoneEntry("plan_chinh", 1.0, hop_luu=90, trade_line=tl),
+        PriceZoneEntry("plan_phu", 2.0, hop_luu=50, trade_line=""),
+        PriceZoneEntry("scalp", 3.0, hop_luu=99, trade_line=tl),
+    ]
+    z = select_zone_for_auto_mt5_for_label(prices, "plan_chinh")
+    assert z is not None
+    assert z[0] == "plan_chinh"
+    assert select_zone_for_auto_mt5_for_label(prices, "plan_phu") is None

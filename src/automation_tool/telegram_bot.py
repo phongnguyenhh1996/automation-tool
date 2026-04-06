@@ -399,6 +399,41 @@ def send_message(
     return first_message_id
 
 
+def _send_plain_text_to_chat_id(
+    *,
+    bot_token: str,
+    chat_id: Optional[str],
+    text: str,
+    log_context: str,
+) -> None:
+    """Gửi plain text tới một ``chat_id`` bất kỳ (không parse_mode)."""
+    cid = (chat_id or "").strip()
+    if not cid:
+        return
+    body = (text or "").strip()
+    if not body:
+        return
+    try:
+        send_message(bot_token=bot_token, chat_id=cid, text=body, parse_mode=None)
+    except Exception as e:
+        _log.warning("Không gửi Telegram (%s): %s", log_context, e)
+
+
+def _send_plain_text_to_ngan_gon_chat(
+    *,
+    bot_token: str,
+    output_ngan_gon_chat_id: Optional[str],
+    text: str,
+) -> None:
+    """Gửi plain text tới ``TELEGRAM_OUTPUT_NGAN_GON_CHAT_ID`` (bản ngắn / MT5)."""
+    _send_plain_text_to_chat_id(
+        bot_token=bot_token,
+        chat_id=output_ngan_gon_chat_id,
+        text=text,
+        log_context="TELEGRAM_OUTPUT_NGAN_GON_CHAT_ID",
+    )
+
+
 def send_mt5_execution_log_to_ngan_gon_chat(
     *,
     bot_token: str,
@@ -411,20 +446,38 @@ def send_mt5_execution_log_to_ngan_gon_chat(
 
     Plain text; không dùng parse_mode để tránh lỗi ký tự đặc biệt từ broker/API.
     """
-    cid = (output_ngan_gon_chat_id or "").strip()
-    if not cid:
-        return
     body = (text or "").strip()
     if not body:
         return
     out = f"📌 MT5 — {source}\n\n{body}"
-    try:
-        send_message(bot_token=bot_token, chat_id=cid, text=out, parse_mode=None)
-    except Exception as e:
-        _log.warning(
-            "Không gửi log MT5 tới TELEGRAM_OUTPUT_NGAN_GON_CHAT_ID: %s",
-            e,
-        )
+    _send_plain_text_to_ngan_gon_chat(
+        bot_token=bot_token,
+        output_ngan_gon_chat_id=output_ngan_gon_chat_id,
+        text=out,
+    )
+
+
+def send_first_response_log_to_analysis_detail_chat(
+    *,
+    bot_token: str,
+    telegram_analysis_detail_chat_id: Optional[str],
+    source: str,
+    text: str,
+) -> None:
+    """
+    Log phản hồi đầu phân tích (giá / hop_luu / chọn vùng / lý do bỏ qua MT5) tới
+    ``TELEGRAM_ANALYSIS_DETAIL_CHAT_ID``. Plain text.
+    """
+    body = (text or "").strip()
+    if not body:
+        return
+    out = f"📊 Phản hồi đầu — {source}\n\n{body}"
+    _send_plain_text_to_chat_id(
+        bot_token=bot_token,
+        chat_id=telegram_analysis_detail_chat_id,
+        text=out,
+        log_context="TELEGRAM_ANALYSIS_DETAIL_CHAT_ID",
+    )
 
 
 def send_openai_output_to_telegram(

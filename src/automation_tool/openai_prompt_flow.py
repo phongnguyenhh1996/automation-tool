@@ -306,12 +306,17 @@ def run_prompt_two_step_flow(
 DEFAULT_UPDATE_PROMPT_TEMPLATE = (
     "Dựa trên dữ liệu XAUUSD M5 mới, so sánh với phân tích sáng.\n"
     "Baseline 3 mức (plan_chinh, plan_phu, scalp): {p1}, {p2}, {p3}\n\n"
-    "Trả về một JSON object duy nhất:\n"
+    "Trả về một JSON object hợp lệ duy nhất (có thể bọc trong ```json). "
+    "Schema **cùng kiểu** bước phân tích sáng (multimodal 10 chart):\n"
     '- "no_change": true nếu ba vùng giá không đổi so với baseline; false nếu có thay đổi.\n'
-    '- Nếu no_change là false: "prices" phải có đủ 3 phần tử với label plan_chinh, plan_phu, scalp và value mới.\n'
-    '- Nếu no_change là true: có thể đặt no_change true và không cần mô tả lại section markdown; '
-    "optional: out_chi_tiet / output_ngan_gon ngắn.\n"
-    '- Các field khác (intraday_hanh_dong, trade_line) để null hoặc "" nếu không dùng.'
+    '- "out_chi_tiet": string (phân tích chi tiết); "output_ngan_gon": string (tóm tắt) — tùy cần.\n'
+    '- "prices": đúng 3 phần tử, mỗi phần tử:\n'
+    '  {"label":"plan_chinh"|"plan_phu"|"scalp","value":number,'
+    '"hop_luu":integer 0–100,"trade_line":string} — '
+    "hop_luu = điểm hợp lưu của vùng; trade_line = một dòng pipe MT5 cho đúng vùng "
+    "(BUY/SELL LIMIT|STOP|MARKET … | SL … | TP1 … | Lot …).\n"
+    '- "intraday_hanh_dong": "chờ" | "loại" | "VÀO LỆNH" hoặc null (tuỳ chọn; auto-MT5 intraday dùng hop_luu + trade_line trong prices).\n'
+    '- "trade_line": string — có thể để trống nếu đã có trade_line trong từng phần tử prices.'
 )
 
 # TradingView tab Nhật ký: giá chạm → Coinmap M5 + OpenAI (intraday).
@@ -320,12 +325,15 @@ JOURNAL_INTRADAY_FIRST_USER_TEMPLATE = (
     "(một trong ba vùng chờ: {p1}, {p2}, {p3}).\n"
     "Dòng Nhật ký TradingView: {journal_line}\n\n"
     "Đính kèm dữ liệu Coinmap XAUUSD khung M5 mới nhất.\n"
-    "Trả về một JSON object duy nhất:\n"
+    "Trả về một JSON object duy nhất (schema giống phân tích sáng + intraday):\n"
     '- "intraday_hanh_dong": "chờ" | "loại" | "VÀO LỆNH"\n'
-    '- "trade_line": luôn phải có key này. '
-    'Một dòng pipe không rỗng khi intraday_hanh_dong là "VÀO LỆNH" '
-    "(BUY/SELL LIMIT|STOP|MARKET … | SL … | TP1 … | Lot …) để có thể gửi MT5; "
-    'nếu "chờ" hoặc "loại" thì đặt trade_line là chuỗi rỗng "".\n'
+    '- "prices": đúng 3 phần tử, mỗi phần tử:\n'
+    '  {"label":"plan_chinh"|"plan_phu"|"scalp","value":number,'
+    '"hop_luu":integer 0–100,"trade_line":string} — '
+    "hop_luu = điểm hợp lưu của vùng; trade_line = một dòng pipe MT5 cho đúng vùng "
+    "(BUY/SELL LIMIT|STOP|MARKET … | SL … | TP1 … | Lot …). \n"
+    '- "trade_line": string tổng — có thể "" nếu đã đủ trade_line trong từng phần tử prices; '
+    'hoặc một dòng pipe khi intraday_hanh_dong là "VÀO LỆNH" và chưa ghi ở prices.\n'
     '- "output_ngan_gon", "out_chi_tiet": tùy cần.\n'
     "Không dùng giá trị khác cho intraday_hanh_dong trong luồng này."
 )
@@ -334,9 +342,9 @@ JOURNAL_INTRADAY_RETRY_USER_TEMPLATE = (
     "Tiếp tục **đánh giá** sau {wait_minutes} phút: vẫn theo dõi mức đã chạm {touched_price}.\n"
     "Bối cảnh Nhật ký (lần kích hoạt): {journal_line}\n\n"
     "Đính kèm Coinmap XAUUSD M5 mới.\n"
-    "Cùng schema JSON như tin nhắn trước: luôn có key trade_line "
-    '(rỗng nếu "chờ" hoặc "loại"); intraday_hanh_dong chỉ "chờ", "loại", hoặc "VÀO LỆNH"; '
-    'nếu "VÀO LỆNH" thì trade_line phải là một dòng lệnh pipe hợp lệ (không rỗng) cho MT5.'
+    "Cùng schema JSON như tin đầu: intraday_hanh_dong; "
+    "prices[3] với label, value, hop_luu, trade_line (auto-MT5 khi hop_luu>80 tại vùng đang theo dõi); "
+    "trade_line tổng nếu cần."
 )
 
 

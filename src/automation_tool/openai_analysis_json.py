@@ -241,6 +241,30 @@ def select_zone_for_auto_mt5(
     return (best[0], best[1], best[2])
 
 
+def select_zone_for_auto_mt5_for_label(
+    prices: list[PriceZoneEntry],
+    zone_label: str,
+) -> Optional[tuple[str, int, str]]:
+    """
+    Giống :func:`select_zone_for_auto_mt5` nhưng chỉ xét **một** vùng ``zone_label``
+    (``plan_chinh`` | ``plan_phu`` | ``scalp``), ví dụ plan vừa chạm giá trong Nhật ký TV.
+    """
+    want = zone_label.strip().lower()
+    if want not in ZONE_LABELS_ORDER:
+        return None
+    for p in prices:
+        key = p.label.strip().lower()
+        if key != want:
+            continue
+        if p.hop_luu is None or p.hop_luu <= AUTO_MT5_HOP_LUU_THRESHOLD:
+            return None
+        tl = (p.trade_line or "").strip()
+        if not tl:
+            return None
+        return (key, int(p.hop_luu), tl)
+    return None
+
+
 def parse_analysis_from_openai_text(text: str) -> Optional[AnalysisPayload]:
     """Extract JSON from ``text`` and parse into :class:`AnalysisPayload`."""
     obj = extract_json_object(text)

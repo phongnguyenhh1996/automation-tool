@@ -33,12 +33,10 @@ from automation_tool.images import (
 )
 from automation_tool.first_response_trade import apply_first_response_vao_lenh
 from automation_tool.state_files import (
-    all_plans_terminal,
     default_last_alert_prices_path,
     default_last_response_id_path,
     default_morning_baseline_prices_path,
     read_last_alert_prices,
-    read_last_alert_state,
     read_last_response_id,
     read_morning_baseline_prices,
     write_last_alert_prices,
@@ -59,7 +57,6 @@ from automation_tool.telegram_bot import (
 )
 from automation_tool.telegram_logging import setup_automation_logging
 from automation_tool.config import load_all_dotenv
-from automation_tool.first_response_trade import apply_first_response_vao_lenh
 from automation_tool.mt5_openai_parse import parse_openai_output_md
 from automation_tool.mt5_execute import check_mt5_login, execute_trade, format_mt5_execution_for_telegram
 
@@ -302,9 +299,34 @@ def _parser() -> argparse.ArgumentParser:
         "--no-journal-monitor-after-update",
         action="store_true",
         help=(
-            "Khi trước khi ghi file cả 3 plan đã thoát vùng chờ (vao_lenh/loai): "
-            "sau khi ghi giá mới không tự chạy tv-journal-monitor (mặc định: chạy)"
+            "Không chạy tv-journal-monitor sau update (kể cả no_change / giá trùng baseline; "
+            "mặc định: luôn chạy)"
         ),
+    )
+    up.add_argument(
+        "--last-alert-json",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help="File last_alert_prices.json cho ghi giá + auto-MT5 sau follow-up (mặc định: data/last_alert_prices.json)",
+    )
+    up.add_argument(
+        "--no-mt5-execute",
+        action="store_true",
+        help=(
+            "Không gọi execute_trade khi follow-up có vùng hop_luu>80 + trade_line (mặc định: gọi; cần Windows + MetaTrader5)"
+        ),
+    )
+    up.add_argument(
+        "--mt5-symbol",
+        default=None,
+        metavar="SYM",
+        help="Symbol MT5 (ghi đè parse từ trade_line) cho auto-MT5 sau follow-up",
+    )
+    up.add_argument(
+        "--mt5-dry-run",
+        action="store_true",
+        help="Chỉ dry-run MT5 cho auto-MT5 sau follow-up",
     )
     up.set_defaults(func=cmd_update)
 
@@ -637,6 +659,7 @@ def cmd_analyze(args: argparse.Namespace) -> None:
             mt5_dry_run=args.mt5_dry_run,
             mt5_symbol=args.mt5_symbol,
             telegram_bot_token=s.telegram_bot_token,
+            telegram_analysis_detail_chat_id=s.telegram_analysis_detail_chat_id,
             telegram_output_ngan_gon_chat_id=s.telegram_output_ngan_gon_chat_id,
             telegram_source_label="analyze (phản hồi đầu)",
         )
@@ -789,6 +812,7 @@ def cmd_all(args: argparse.Namespace) -> None:
             mt5_dry_run=args.mt5_dry_run,
             mt5_symbol=args.mt5_symbol,
             telegram_bot_token=s.telegram_bot_token,
+            telegram_analysis_detail_chat_id=s.telegram_analysis_detail_chat_id,
             telegram_output_ngan_gon_chat_id=s.telegram_output_ngan_gon_chat_id,
             telegram_source_label="all (phản hồi đầu)",
         )
@@ -1093,6 +1117,60 @@ def cmd_update(args: argparse.Namespace) -> None:
     write_last_response_id(new_id)
     _log.info("update: OpenAI follow-up xong | new_response_id=%s", new_id)
 
+    lap = args.last_alert_json or default_last_alert_prices_path()
+    apply_first_response_vao_lenh(
+        out_text,
+        last_alert_path=lap,
+        mt5_execute=not args.no_mt5_execute,
+        mt5_dry_run=args.mt5_dry_run,
+        mt5_symbol=args.mt5_symbol,
+        telegram_bot_token=s.telegram_bot_token,
+        telegram_analysis_detail_chat_id=s.telegram_analysis_detail_chat_id,
+        telegram_output_ngan_gon_chat_id=s.telegram_output_ngan_gon_chat_id,
+        telegram_source_label="update (follow-up M5)",
+    )
+
+    def _run_tv_journal_after_update(
+        target_prices: tuple[float, float, float], *, log_label: str
+    ) -> None:
+        if args.no_journal_monitor_after_update:
+            _log.info(
+                "update: bỏ qua tv-journal-monitor (%s) — --no-journal-monitor-after-update",
+                log_label,
+            )
+            return
+        print(f"Chạy tv-journal-monitor ({log_label}).", flush=True)
+        _log.info("update: chạy tv-journal-monitor | %s", log_label)
+        jparams = JournalMonitorParams(
+            coinmap_tv_yaml=cfg_tv,
+            capture_coinmap_yaml=cfg_cap,
+            charts_dir=charts_dir,
+            storage_state_path=storage,
+            target_prices=target_prices,
+            headless=not args.headed,
+            no_save_storage=args.no_save_storage,
+            poll_seconds=45.0,
+            wait_minutes=15,
+            until_hour=23,
+            timezone_name="Asia/Ho_Chi_Minh",
+            no_telegram=args.no_telegram,
+            last_alert_path=lap,
+            mt5_execute=not args.no_mt5_execute,
+            mt5_symbol=args.mt5_symbol,
+            mt5_dry_run=args.mt5_dry_run,
+        )
+        try:
+            outcome = run_tv_journal_monitor(
+                settings=s,
+                params=jparams,
+                initial_response_id=new_id,
+            )
+        except Exception as e:
+            re_raise_unless_openai(e)
+            raise
+        print(f"Kết thúc tv-journal-monitor (sau update): {outcome}", flush=True)
+        _log.info("update: tv-journal-monitor sau update kết thúc | outcome=%s", outcome)
+
     new_triple, zerr, no_change_json = parse_three_zone_prices(out_text)
     if no_change_json is True:
         if not args.no_telegram:
@@ -1103,7 +1181,9 @@ def cmd_update(args: argparse.Namespace) -> None:
                 text="Vùng giá không đổi so với sáng (no_change), giữ nguyên cảnh báo.",
                 parse_mode=s.telegram_parse_mode,
             )
-        _log.info("update: no_change (JSON) — dừng, không ghi giá")
+        _log.info("update: no_change (JSON) — không ghi giá mới")
+        p1, p2, p3 = baseline.prices
+        _run_tv_journal_after_update((p1, p2, p3), log_label="no_change JSON")
         return
     if new_triple is None:
         if is_no_change_action_line(out_text):
@@ -1115,7 +1195,9 @@ def cmd_update(args: argparse.Namespace) -> None:
                     text="Vùng giá không đổi so với sáng, giữ nguyên cảnh báo.",
                     parse_mode=s.telegram_parse_mode,
                 )
-            _log.info("update: no_change (action line) — dừng")
+            _log.info("update: no_change (action line) — không ghi giá mới")
+            p1, p2, p3 = baseline.prices
+            _run_tv_journal_after_update((p1, p2, p3), log_label="no_change action line")
             return
         raise SystemExit(zerr or "Could not parse three zone prices from model output.")
 
@@ -1128,20 +1210,9 @@ def cmd_update(args: argparse.Namespace) -> None:
                 text="Vùng giá không đổi so với sáng, giữ nguyên cảnh báo.",
                 parse_mode=s.telegram_parse_mode,
             )
-        _log.info("update: giá trùng baseline — dừng")
+        _log.info("update: giá trùng baseline — không ghi giá mới")
+        _run_tv_journal_after_update(new_triple, log_label="giá trùng baseline")
         return
-
-    pre_alert = read_last_alert_state()
-    run_monitor_after = (
-        pre_alert is not None
-        and all_plans_terminal(pre_alert)
-        and not args.no_journal_monitor_after_update
-    )
-    _log.info(
-        "update: trước ghi file | all_terminal=%s → sau ghi sẽ chạy journal_monitor=%s",
-        pre_alert is not None and all_plans_terminal(pre_alert),
-        run_monitor_after,
-    )
 
     write_last_alert_prices(new_triple)
     _log.info(
@@ -1173,48 +1244,7 @@ def cmd_update(args: argparse.Namespace) -> None:
         )
         _log.info("update: đã gửi Telegram chat chính")
 
-    if run_monitor_after:
-        if not prev:
-            print(
-                "Warning: bỏ qua tv-journal-monitor sau update — thiếu last_response_id.",
-                file=sys.stderr,
-            )
-        else:
-            print(
-                "Cả 3 plan đã terminal — chạy tv-journal-monitor sau khi ghi giá mới.",
-                flush=True,
-            )
-            _log.info("update: chạy tv-journal-monitor (phiên cũ đã terminal)…")
-            cfg_cap = args.config or default_coinmap_update_config_path()
-            jparams = JournalMonitorParams(
-                coinmap_tv_yaml=cfg_tv,
-                capture_coinmap_yaml=cfg_cap,
-                charts_dir=charts_dir,
-                storage_state_path=storage,
-                target_prices=new_triple,
-                headless=not args.headed,
-                no_save_storage=args.no_save_storage,
-                poll_seconds=45.0,
-                wait_minutes=15,
-                until_hour=23,
-                timezone_name="Asia/Ho_Chi_Minh",
-                no_telegram=args.no_telegram,
-                last_alert_path=default_last_alert_prices_path(),
-                mt5_execute=True,
-                mt5_symbol=None,
-                mt5_dry_run=False,
-            )
-            try:
-                outcome = run_tv_journal_monitor(
-                    settings=s,
-                    params=jparams,
-                    initial_response_id=prev,
-                )
-            except Exception as e:
-                re_raise_unless_openai(e)
-                raise
-            print(f"Kết thúc tv-journal-monitor (sau update): {outcome}", flush=True)
-            _log.info("update: tv-journal-monitor sau update kết thúc | outcome=%s", outcome)
+    _run_tv_journal_after_update(new_triple, log_label="ghi giá mới")
 
 
 def main() -> None:
