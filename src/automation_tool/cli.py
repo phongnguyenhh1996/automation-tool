@@ -661,6 +661,7 @@ def cmd_analyze(args: argparse.Namespace) -> None:
             mt5_dry_run=args.mt5_dry_run,
             mt5_symbol=args.mt5_symbol,
             telegram_bot_token=s.telegram_bot_token,
+            telegram_chat_id=s.telegram_chat_id,
             telegram_analysis_detail_chat_id=s.telegram_analysis_detail_chat_id,
             telegram_output_ngan_gon_chat_id=s.telegram_output_ngan_gon_chat_id,
             telegram_source_label="analyze (phản hồi đầu)",
@@ -719,13 +720,12 @@ def cmd_mt5_trade(args: argparse.Namespace) -> None:
         symbol_override=args.symbol,
         lot_override=args.lot,
     )
-    if s_mt5.telegram_output_ngan_gon_chat_id:
-        send_mt5_execution_log_to_ngan_gon_chat(
-            bot_token=s_mt5.telegram_bot_token,
-            output_ngan_gon_chat_id=s_mt5.telegram_output_ngan_gon_chat_id,
-            source="mt5-trade",
-            text=format_mt5_execution_for_telegram(out),
-        )
+    send_mt5_execution_log_to_ngan_gon_chat(
+        bot_token=s_mt5.telegram_bot_token,
+        telegram_chat_id=s_mt5.telegram_chat_id,
+        source="mt5-trade",
+        text=format_mt5_execution_for_telegram(out),
+    )
     if out.resolved_symbol:
         print("Symbol MT5 (đã resolve):", out.resolved_symbol)
     print(out.message)
@@ -813,6 +813,7 @@ def cmd_all(args: argparse.Namespace) -> None:
             mt5_dry_run=args.mt5_dry_run,
             mt5_symbol=args.mt5_symbol,
             telegram_bot_token=s.telegram_bot_token,
+            telegram_chat_id=s.telegram_chat_id,
             telegram_analysis_detail_chat_id=s.telegram_analysis_detail_chat_id,
             telegram_output_ngan_gon_chat_id=s.telegram_output_ngan_gon_chat_id,
             telegram_source_label="all (phản hồi đầu)",
@@ -1127,6 +1128,7 @@ def cmd_update(args: argparse.Namespace) -> None:
         mt5_dry_run=args.mt5_dry_run,
         mt5_symbol=args.mt5_symbol,
         telegram_bot_token=s.telegram_bot_token,
+        telegram_chat_id=s.telegram_chat_id,
         telegram_analysis_detail_chat_id=s.telegram_analysis_detail_chat_id,
         telegram_output_ngan_gon_chat_id=s.telegram_output_ngan_gon_chat_id,
         telegram_source_label="update (follow-up M5)",

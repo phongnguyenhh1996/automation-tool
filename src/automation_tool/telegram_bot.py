@@ -425,7 +425,7 @@ def _send_plain_text_to_ngan_gon_chat(
     output_ngan_gon_chat_id: Optional[str],
     text: str,
 ) -> None:
-    """Gửi plain text tới ``TELEGRAM_OUTPUT_NGAN_GON_CHAT_ID`` (bản ngắn / MT5)."""
+    """Gửi plain text tới ``TELEGRAM_OUTPUT_NGAN_GON_CHAT_ID`` (bản ngắn phân tích)."""
     _send_plain_text_to_chat_id(
         bot_token=bot_token,
         chat_id=output_ngan_gon_chat_id,
@@ -437,12 +437,12 @@ def _send_plain_text_to_ngan_gon_chat(
 def send_mt5_execution_log_to_ngan_gon_chat(
     *,
     bot_token: str,
-    output_ngan_gon_chat_id: Optional[str],
+    telegram_chat_id: Optional[str] = None,
     source: str,
     text: str,
 ) -> None:
     """
-    Gửi log thực thi MT5 (sau ``execute_trade``) tới ``TELEGRAM_OUTPUT_NGAN_GON_CHAT_ID``.
+    Gửi log thực thi MT5 (sau ``execute_trade``) chỉ tới ``TELEGRAM_CHAT_ID``.
 
     Plain text; không dùng parse_mode để tránh lỗi ký tự đặc biệt từ broker/API.
     """
@@ -450,10 +450,14 @@ def send_mt5_execution_log_to_ngan_gon_chat(
     if not body:
         return
     out = f"📌 MT5 — {source}\n\n{body}"
-    _send_plain_text_to_ngan_gon_chat(
+    main = (telegram_chat_id or "").strip()
+    if not main:
+        return
+    _send_plain_text_to_chat_id(
         bot_token=bot_token,
-        output_ngan_gon_chat_id=output_ngan_gon_chat_id,
+        chat_id=main,
         text=out,
+        log_context="TELEGRAM_CHAT_ID",
     )
 
 

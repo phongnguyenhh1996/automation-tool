@@ -83,6 +83,7 @@ def apply_first_response_vao_lenh(
     mt5_dry_run: bool = False,
     mt5_symbol: Optional[str] = None,
     telegram_bot_token: Optional[str] = None,
+    telegram_chat_id: Optional[str] = None,
     telegram_analysis_detail_chat_id: Optional[str] = None,
     telegram_output_ngan_gon_chat_id: Optional[str] = None,
     telegram_source_label: str = "phân tích chart (phản hồi đầu)",
@@ -96,7 +97,7 @@ def apply_first_response_vao_lenh(
     Nếu ``auto_mt5_zone_label`` được set (vd. ``plan_chinh``), chỉ xét đúng vùng đó (Nhật ký TV).
 
     Telegram: log phản hồi đầu (hop_luu, vùng, lỗi…) → ``telegram_analysis_detail_chat_id``
-    (``TELEGRAM_ANALYSIS_DETAIL_CHAT_ID``). Kết quả ``execute_trade`` → ``telegram_output_ngan_gon_chat_id``.
+    (``TELEGRAM_ANALYSIS_DETAIL_CHAT_ID``).     Kết quả ``execute_trade`` → ``telegram_chat_id`` (``TELEGRAM_CHAT_ID``).
 
     Returns:
         ``True`` nếu đã hoàn tất nhánh auto-MT5 (đã ghi ``vao_lenh`` cho vùng chọn; MT5 chạy thành công
@@ -235,9 +236,7 @@ def apply_first_response_vao_lenh(
         "Đã ghi vao_lenh (entry_manual=false)."
     )
     if mt5_execute:
-        summary += (
-            "\nKết quả MT5 (hoặc dry-run) gửi tới TELEGRAM_OUTPUT_NGAN_GON_CHAT_ID nếu cấu hình."
-        )
+        summary += "\nKết quả MT5 (hoặc dry-run) gửi tới TELEGRAM_CHAT_ID."
     else:
         summary += "\n--no-mt5-execute: không gọi MT5."
     _tg(
@@ -263,10 +262,10 @@ def apply_first_response_vao_lenh(
             mt5_dry_run,
             ex.message,
         )
-        if telegram_bot_token and telegram_output_ngan_gon_chat_id:
+        if telegram_bot_token and (telegram_chat_id or "").strip():
             send_mt5_execution_log_to_ngan_gon_chat(
                 bot_token=telegram_bot_token,
-                output_ngan_gon_chat_id=telegram_output_ngan_gon_chat_id,
+                telegram_chat_id=telegram_chat_id,
                 source=telegram_source_label,
                 text=format_mt5_execution_for_telegram(ex),
             )

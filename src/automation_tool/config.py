@@ -54,7 +54,7 @@ class Settings:
     openai_responses_include: List[str]
     telegram_bot_token: str
     telegram_chat_id: str
-    # Optional second chat: [OUTPUT_NGAN_GON] (dual markers) + MT5 execution logs after execute_trade.
+    # Optional second chat: [OUTPUT_NGAN_GON] (dual markers); MT5 logs go to telegram_chat_id only.
     telegram_output_ngan_gon_chat_id: Optional[str]
     # Optional: [OUTPUT_CHI_TIET] / JSON out_chi_tiet → this channel (analyze / dual-send).
     telegram_analysis_detail_chat_id: Optional[str]

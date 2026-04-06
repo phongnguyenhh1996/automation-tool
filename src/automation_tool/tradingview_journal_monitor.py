@@ -416,6 +416,7 @@ def _run_intraday_touch_loop(
             mt5_dry_run=params.mt5_dry_run,
             mt5_symbol=params.mt5_symbol,
             telegram_bot_token=settings.telegram_bot_token,
+            telegram_chat_id=settings.telegram_chat_id,
             telegram_analysis_detail_chat_id=settings.telegram_analysis_detail_chat_id,
             telegram_output_ngan_gon_chat_id=settings.telegram_output_ngan_gon_chat_id,
             telegram_source_label="tv-journal-monitor (Nhật ký)",
@@ -479,10 +480,10 @@ def _run_intraday_touch_loop(
                     symbol_override=params.mt5_symbol,
                 )
                 _journal_log(tz, ex.message)
-                if settings.telegram_output_ngan_gon_chat_id:
+                if not params.no_telegram:
                     send_mt5_execution_log_to_ngan_gon_chat(
                         bot_token=settings.telegram_bot_token,
-                        output_ngan_gon_chat_id=settings.telegram_output_ngan_gon_chat_id,
+                        telegram_chat_id=settings.telegram_chat_id,
                         source="tv-journal-monitor",
                         text=format_mt5_execution_for_telegram(ex),
                     )

@@ -37,7 +37,7 @@ class MT5ExecutionResult:
 
 
 def format_mt5_execution_for_telegram(ex: MT5ExecutionResult) -> str:
-    """Chuỗi plain text cho log Telegram (OUTPUT_NGAN_GON / cảnh báo)."""
+    """Chuỗi plain text cho log Telegram (TELEGRAM_CHAT_ID sau ``execute_trade``)."""
     parts: list[str] = [ex.message]
     if ex.resolved_symbol:
         parts.append(f"Symbol: {ex.resolved_symbol}")
