@@ -1022,8 +1022,9 @@ def cmd_tv_journal_monitor(args: argparse.Namespace) -> None:
 
     print(
         f"tv-journal-monitor: giá {targets[0]} | {targets[1]} | {targets[2]} — "
-        f"tới {args.until_hour}:00 ({args.timezone}), "
-        f"chu kỳ: reload → Nhật ký → parse, nghỉ {args.poll_seconds}s.",
+        f"mốc dừng phiên: trước 13:00→13:00 cùng ngày; từ 13:00→02:00 sáng ({args.timezone}); "
+        f"fallback nếu không set session: --until-hour={args.until_hour}. "
+        f"Chu kỳ: reload → Nhật ký → parse, nghỉ {args.poll_seconds}s.",
         flush=True,
     )
     print(

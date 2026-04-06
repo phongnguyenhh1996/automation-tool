@@ -6,8 +6,8 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, replace
+from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Literal, Optional, Set
 
@@ -45,6 +45,7 @@ from automation_tool.state_files import (
     read_last_alert_state,
     read_last_response_id,
     update_single_plan_status,
+    write_journal_monitor_first_run,
     write_last_response_id,
 )
 from automation_tool.telegram_bot import (
@@ -109,6 +110,8 @@ class JournalMonitorParams:
     mt5_execute: bool = True
     mt5_symbol: Optional[str] = None
     mt5_dry_run: bool = False
+    # Đặt khi chạy monitor: mốc dừng động (trước 13:00 → 13:00 cùng ngày; từ 13:00 → 02:00 sáng hôm sau).
+    session_cutoff_end: Optional[datetime] = None
 
 
 def _journal_panel_css(tv: dict[str, Any]) -> str:
@@ -160,9 +163,44 @@ def _price_matches_any(p: float, targets: tuple[float, float, float]) -> bool:
     return False
 
 
-def _before_cutoff(timezone_name: str, until_hour: int) -> bool:
+def _next_02am_after(fr: datetime, z: ZoneInfo) -> datetime:
+    """Mốc 02:00 sáng đầu tiên sau ``fr`` (cùng timezone)."""
+    fr = fr.astimezone(z)
+    d = fr.date()
+    today_2am = datetime.combine(d, time(2, 0), tzinfo=z)
+    if fr < today_2am:
+        return today_2am
+    next_d = d + timedelta(days=1)
+    return datetime.combine(next_d, time(2, 0), tzinfo=z)
+
+
+def compute_journal_session_cutoff(first_run: datetime, timezone_name: str) -> datetime:
+    """
+    - ``first_run`` **trước 13:00** địa phương → dừng lúc **13:00** cùng ngày.
+    - **Từ 13:00** trở đi (gồm sau 13:20) → chạy tới **02:00 sáng** (ngày kế tiếp nếu cần).
+    """
+    z = ZoneInfo(timezone_name)
+    fr = first_run.astimezone(z) if first_run.tzinfo else first_run.replace(tzinfo=z)
+    noon = time(13, 0)
+    if fr.time() < noon:
+        return fr.replace(hour=13, minute=0, second=0, microsecond=0)
+    return _next_02am_after(fr, z)
+
+
+def _before_cutoff(
+    timezone_name: str,
+    until_hour: int,
+    session_cutoff_end: Optional[datetime] = None,
+) -> bool:
     z = ZoneInfo(timezone_name)
     now = datetime.now(z)
+    if session_cutoff_end is not None:
+        co = session_cutoff_end
+        if co.tzinfo is None:
+            co = co.replace(tzinfo=z)
+        else:
+            co = co.astimezone(z)
+        return now < co
     cutoff = now.replace(hour=until_hour, minute=0, second=0, microsecond=0)
     return now < cutoff
 
@@ -171,6 +209,7 @@ def _sleep_wait_minutes_respecting_cutoff(
     wait_minutes: int,
     timezone_name: str,
     until_hour: int,
+    session_cutoff_end: Optional[datetime] = None,
 ) -> bool:
     """
     Sleep up to ``wait_minutes`` in small steps. Returns False if cutoff passed during sleep.
@@ -188,8 +227,11 @@ def _sleep_wait_minutes_respecting_cutoff(
     )
     last_progress_log = 0.0
     while time.time() < end:
-        if not _before_cutoff(timezone_name, until_hour):
-            _journal_log(timezone_name, "Hết khung giờ (--until-hour) trong lúc chờ — dừng.")
+        if not _before_cutoff(timezone_name, until_hour, session_cutoff_end):
+            _journal_log(
+                timezone_name,
+                "Hết khung giờ (session_cutoff hoặc --until-hour) trong lúc chờ — dừng.",
+            )
             return False
         now = time.time()
         remain = end - now
@@ -200,7 +242,7 @@ def _sleep_wait_minutes_respecting_cutoff(
             )
             last_progress_log = now
         time.sleep(min(30.0, remain))
-    ok = _before_cutoff(timezone_name, until_hour)
+    ok = _before_cutoff(timezone_name, until_hour, session_cutoff_end)
     if ok:
         _journal_log(timezone_name, f"Đã chờ xong {wait_minutes} phút — chụp Coinmap + gửi OpenAI lại.")
     return ok
@@ -282,7 +324,11 @@ def _run_intraday_touch_loop(
         f"dòng Nhật ký: {_truncate(journal_line, 200)!s}",
     )
 
-    while _before_cutoff(params.timezone_name, params.until_hour):
+    while _before_cutoff(
+        params.timezone_name,
+        params.until_hour,
+        params.session_cutoff_end,
+    ):
         inner_i += 1
         st = read_last_alert_state(last_alert_path)
         if st is None:
@@ -410,6 +456,7 @@ def _run_intraday_touch_loop(
                     params.wait_minutes,
                     params.timezone_name,
                     params.until_hour,
+                    params.session_cutoff_end,
                 ):
                     _journal_log(tz, "Hết giờ trong lúc chờ (trade_line) — cutoff.")
                     return "cutoff"
@@ -464,6 +511,7 @@ def _run_intraday_touch_loop(
                     params.wait_minutes,
                     params.timezone_name,
                     params.until_hour,
+                    params.session_cutoff_end,
                 ):
                     _journal_log(tz, "Hết giờ trong lúc chờ (xác nhận loại) — cutoff.")
                     return "cutoff"
@@ -482,6 +530,7 @@ def _run_intraday_touch_loop(
                 params.wait_minutes,
                 params.timezone_name,
                 params.until_hour,
+                params.session_cutoff_end,
             ):
                 _journal_log(tz, "Hết giờ trong lúc chờ (chờ) — cutoff.")
                 return "cutoff"
@@ -497,12 +546,13 @@ def _run_intraday_touch_loop(
             params.wait_minutes,
             params.timezone_name,
             params.until_hour,
+            params.session_cutoff_end,
         ):
             _journal_log(tz, "Hết giờ sau chờ mặc định — cutoff.")
             return "cutoff"
         first = False
 
-    _journal_log(tz, "Vòng trong: hết giờ --until-hour — cutoff.")
+    _journal_log(tz, "Vòng trong: hết phiên (session_cutoff hoặc --until-hour) — cutoff.")
     return "cutoff"
 
 
@@ -531,6 +581,17 @@ def run_tv_journal_monitor(
     if st0 is None:
         raise SystemExit(f"Cannot read last alert state from {lap} (need prices + labels).")
     p1, p2, p3 = st0.prices
+    zinfo = ZoneInfo(tz)
+    first_run = datetime.now(zinfo)
+    session_cutoff_end = compute_journal_session_cutoff(first_run, tz)
+    fr_path = write_journal_monitor_first_run(
+        started_at=first_run,
+        session_cutoff_end=session_cutoff_end,
+        timezone_name=tz,
+        last_alert_path=lap,
+    )
+    params = replace(params, session_cutoff_end=session_cutoff_end)
+
     _journal_log(
         tz,
         f"Bắt đầu monitor | chart={tv.get('chart_url')!s} | headless={params.headless} | "
@@ -538,9 +599,16 @@ def run_tv_journal_monitor(
     )
     _journal_log(
         tz,
+        f"first_run={first_run.strftime('%Y-%m-%d %H:%M:%S')} | "
+        f"session_cutoff_end={session_cutoff_end.strftime('%Y-%m-%d %H:%M:%S')} | "
+        f"đã ghi {fr_path.name}",
+    )
+    _journal_log(
+        tz,
         f"3 giá + status: {p1} | {p2} | {p3} | {st0.status_by_label} (epsilon={_EPS}) | "
         f"poll sau mỗi chu kỳ={params.poll_seconds}s | "
-        f"chờ OpenAI={params.wait_minutes}m | tới {params.until_hour}:00 ({tz})",
+        f"chờ OpenAI={params.wait_minutes}m | "
+        f"mốc dừng phiên: trước 13:00→13:00 cùng ngày; từ 13:00→02:00 sáng (timezone {tz})",
     )
 
     processed: Set[str] = set()
@@ -574,7 +642,11 @@ def run_tv_journal_monitor(
             page.locator(f"#{intervals_id}").first.wait_for(state="visible", timeout=90_000)
             _journal_log(tz, "Khung thời gian chart sẵn sàng — bắt đầu vòng ngoài (reload → Nhật ký → parse).")
 
-            while _before_cutoff(params.timezone_name, params.until_hour):
+            while _before_cutoff(
+                params.timezone_name,
+                params.until_hour,
+                params.session_cutoff_end,
+            ):
                 outer_cycle += 1
                 now_local = datetime.now(ZoneInfo(tz)).strftime("%H:%M:%S")
                 _journal_log(
@@ -662,10 +734,19 @@ def run_tv_journal_monitor(
                 )
                 time.sleep(max(1.0, params.poll_seconds))
 
-            _journal_log(
-                tz,
-                f"Đã qua giờ kết thúc ({params.until_hour}:00 {tz}) — dừng vòng ngoài.",
-            )
+            if params.session_cutoff_end is not None:
+                ce_s = params.session_cutoff_end.astimezone(ZoneInfo(tz)).strftime(
+                    "%Y-%m-%d %H:%M"
+                )
+                _journal_log(
+                    tz,
+                    f"Đã qua mốc dừng phiên ({ce_s} {tz}) — dừng vòng ngoài.",
+                )
+            else:
+                _journal_log(
+                    tz,
+                    f"Đã qua giờ kết thúc ({params.until_hour}:00 {tz}) — dừng vòng ngoài.",
+                )
             return "cutoff_time"
         finally:
             _journal_log(tz, "Đóng trình duyệt (Playwright).")

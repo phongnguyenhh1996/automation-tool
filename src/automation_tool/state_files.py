@@ -38,6 +38,39 @@ def default_last_alert_prices_path() -> Path:
     return symbol_data_dir() / "last_alert_prices.json"
 
 
+def journal_monitor_first_run_path(last_alert_path: Optional[Path] = None) -> Path:
+    """Cùng thư mục với ``last_alert_prices.json`` — ``journal_monitor_first_run.json``."""
+    base = last_alert_path or default_last_alert_prices_path()
+    return base.parent / "journal_monitor_first_run.json"
+
+
+def write_journal_monitor_first_run(
+    *,
+    started_at: datetime,
+    session_cutoff_end: datetime,
+    timezone_name: str,
+    last_alert_path: Optional[Path] = None,
+) -> Path:
+    """Ghi lần chạy monitor: thời điểm bắt đầu + mốc dừng theo quy tắc ca sáng/chiều."""
+    path = journal_monitor_first_run_path(last_alert_path)
+    data: dict[str, Any] = {
+        "started_at": started_at.isoformat(),
+        "session_cutoff_end": session_cutoff_end.isoformat(),
+        "timezone": timezone_name,
+    }
+    _atomic_write_json(path, data)
+    return path
+
+
+def read_journal_monitor_first_run(
+    last_alert_path: Optional[Path] = None,
+) -> Optional[dict[str, Any]]:
+    if not journal_monitor_first_run_path(last_alert_path).is_file():
+        return None
+    raw = journal_monitor_first_run_path(last_alert_path).read_text(encoding="utf-8")
+    return json.loads(raw)
+
+
 def _atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(
