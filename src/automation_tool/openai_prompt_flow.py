@@ -57,10 +57,12 @@ def default_analysis_prompt(main_symbol: str | None = None) -> str:
         '- "prices": đúng 3 phần tử, mỗi phần tử:\n'
         '  {"label":"plan_chinh"|"plan_phu"|"scalp","value":number,'
         '"hop_luu":integer 0–100,"trade_line":string} — '
-        "``hop_luu`` = điểm hợp lưu của vùng đó; ``trade_line`` = một dòng pipe MT5 cho đúng vùng "
-        "(BUY/SELL LIMIT|STOP|MARKET … | SL … | TP1 … | Lot …).\n"
+        "``hop_luu`` = điểm hợp lưu của vùng đó. "
+        "``trade_line`` = **một dòng pipe MT5 bắt buộc, chuỗi không rỗng** cho đúng vùng "
+        "(BUY/SELL LIMIT|STOP|MARKET … | SL … | TP1 … | Lot …); **không** được bỏ key, **không** được `""`. "
+        "Mỗi vùng luôn có ít nhất một dòng lệnh tham khảo pipe đầy đủ.\n"
         '- "intraday_hanh_dong": "chờ" | "loại" | "VÀO LỆNH" hoặc null (tuỳ chọn; tool auto-MT5 sáng dùng ``hop_luu`` + ``trade_line`` trong ``prices``)\n'
-        '- "trade_line": string — có thể để trống nếu đã có ``trade_line`` trong từng phần tử ``prices``\n'
+        '- "trade_line" (gốc JSON): có thể `""` chỉ khi cả 3 phần tử trong ``prices`` đã có ``trade_line`` không rỗng như trên.\n'
         '- "no_change": boolean — chỉ dùng rõ trong luồng update intraday; phân tích sáng có thể bỏ qua hoặc false\n\n'
         "Trong output_ngan_gon: sau mỗi khối PLAN CHÍNH VÙNG CHỜ / PLAN PHỤ VÙNG CHỜ / SCALP VÙNG thêm một dòng lệnh tham khảo (pipe) để vào tay. "
         "Lot tham khảo: USDJPY = giá/(10×SL pip); XAUUSD = 1/SL_giá (SL_giá = |entry−SL| theo giá).\n"
@@ -313,10 +315,11 @@ DEFAULT_UPDATE_PROMPT_TEMPLATE = (
     '- "prices": đúng 3 phần tử, mỗi phần tử:\n'
     '  {{"label":"plan_chinh"|"plan_phu"|"scalp","value":number,'
     '"hop_luu":integer 0–100,"trade_line":string}} — '
-    "hop_luu = điểm hợp lưu của vùng; trade_line = một dòng pipe MT5 cho đúng vùng "
-    "(BUY/SELL LIMIT|STOP|MARKET … | SL … | TP1 … | Lot …).\n"
+    "hop_luu = điểm hợp lưu. **BẮT BUỘC:** mỗi phần tử phải có `trade_line` là chuỗi **không rỗng** "
+    "(một dòng pipe MT5 đầy đủ: BUY/SELL LIMIT|STOP|MARKET … | SL … | TP1 … | Lot …); không `""`, không bỏ key. "
+    "Kể cả no_change hoặc chờ — vẫn điền dòng pipe tham khảo cho từng vùng.\n"
     '- "intraday_hanh_dong": "chờ" | "loại" | "VÀO LỆNH" hoặc null (tuỳ chọn; auto-MT5 intraday dùng hop_luu + trade_line trong prices).\n'
-    '- "trade_line": string — có thể để trống nếu đã có trade_line trong từng phần tử prices.'
+    '- "trade_line" (gốc): có thể `""` nếu đã điền đủ trade_line không rỗng trong cả 3 phần tử prices.'
 )
 
 # TradingView tab Nhật ký: giá chạm → Coinmap M5 + OpenAI (intraday).
@@ -330,10 +333,10 @@ JOURNAL_INTRADAY_FIRST_USER_TEMPLATE = (
     '- "prices": đúng 3 phần tử, mỗi phần tử:\n'
     '  {{"label":"plan_chinh"|"plan_phu"|"scalp","value":number,'
     '"hop_luu":integer 0–100,"trade_line":string}} — '
-    "hop_luu = điểm hợp lưu của vùng; trade_line = một dòng pipe MT5 cho đúng vùng "
-    "(BUY/SELL LIMIT|STOP|MARKET … | SL … | TP1 … | Lot …). \n"
-    '- "trade_line": string tổng — có thể "" nếu đã đủ trade_line trong từng phần tử prices; '
-    'hoặc một dòng pipe khi intraday_hanh_dong là "VÀO LỆNH" và chưa ghi ở prices.\n'
+    "**BẮT BUỘC:** mỗi phần tử có `trade_line` không rỗng (một dòng pipe MT5 đầy đủ cho đúng vùng); "
+    "không `""`, không bỏ key. hop_luu = điểm hợp lưu. \n"
+    '- "trade_line" (gốc): có thể `""` nếu cả 3 phần tử prices đã có trade_line không rỗng; '
+    'hoặc một dòng tóm tắt nếu cần.\n'
     '- "output_ngan_gon", "out_chi_tiet": tùy cần.\n'
     "Không dùng giá trị khác cho intraday_hanh_dong trong luồng này."
 )
@@ -343,8 +346,8 @@ JOURNAL_INTRADAY_RETRY_USER_TEMPLATE = (
     "Bối cảnh Nhật ký (lần kích hoạt): {journal_line}\n\n"
     "Đính kèm Coinmap XAUUSD M5 mới.\n"
     "Cùng schema JSON như tin đầu: intraday_hanh_dong; "
-    "prices[3] với label, value, hop_luu, trade_line; "
-    "trade_line tổng nếu cần."
+    "prices[3] — mỗi phần tử bắt buộc trade_line không rỗng (pipe MT5 đầy đủ); "
+    "trade_line gốc tùy chọn nếu đã đủ trong prices[]."
 )
 
 
