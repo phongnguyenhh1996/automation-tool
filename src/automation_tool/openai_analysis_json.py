@@ -10,8 +10,18 @@ IntradayHanhDong = Literal["chờ", "loại", "VÀO LỆNH"]
 
 ZONE_LABELS_ORDER = ("plan_chinh", "plan_phu", "scalp")
 
-# Morning auto-MT5: only zones with hop_luu strictly above this threshold.
+# Morning auto-MT5: hop_luu strictly above this threshold (plan_chinh / plan_phu).
 AUTO_MT5_HOP_LUU_THRESHOLD = 80
+# Lower bar for scalp-only auto-MT5.
+AUTO_MT5_HOP_LUU_THRESHOLD_SCALP = 70
+
+
+def auto_mt5_hop_luu_threshold_for_label(label: str) -> int:
+    """Ngưỡng hop_luu cho auto-MT5 theo vùng: scalp thấp hơn plan_chinh / plan_phu."""
+    key = label.strip().lower()
+    if key == "scalp":
+        return AUTO_MT5_HOP_LUU_THRESHOLD_SCALP
+    return AUTO_MT5_HOP_LUU_THRESHOLD
 
 
 def _strip_json_code_fence(text: str) -> str:
@@ -213,8 +223,9 @@ def select_zone_for_auto_mt5(
     prices: list[PriceZoneEntry],
 ) -> Optional[tuple[str, int, str]]:
     """
-    Chọn một vùng để auto-MT5 sáng: ``hop_luu`` > :data:`AUTO_MT5_HOP_LUU_THRESHOLD`,
-    có ``trade_line`` không rỗng.
+    Chọn một vùng để auto-MT5 sáng: ``hop_luu`` vượt ngưỡng theo vùng
+    (:data:`AUTO_MT5_HOP_LUU_THRESHOLD` cho plan_chinh/plan_phu,
+    :data:`AUTO_MT5_HOP_LUU_THRESHOLD_SCALP` cho scalp), có ``trade_line`` không rỗng.
 
     Nhiều vùng hợp lệ: **điểm cao nhất**; hòa điểm: thứ tự ``plan_chinh`` → ``plan_phu`` → ``scalp``.
 
@@ -227,7 +238,8 @@ def select_zone_for_auto_mt5(
         key = p.label.strip().lower()
         if key not in ZONE_LABELS_ORDER:
             continue
-        if p.hop_luu is None or p.hop_luu <= AUTO_MT5_HOP_LUU_THRESHOLD:
+        thr = auto_mt5_hop_luu_threshold_for_label(key)
+        if p.hop_luu is None or p.hop_luu <= thr:
             continue
         tl = (p.trade_line or "").strip()
         if not tl:
@@ -256,7 +268,8 @@ def select_zone_for_auto_mt5_for_label(
         key = p.label.strip().lower()
         if key != want:
             continue
-        if p.hop_luu is None or p.hop_luu <= AUTO_MT5_HOP_LUU_THRESHOLD:
+        thr = auto_mt5_hop_luu_threshold_for_label(key)
+        if p.hop_luu is None or p.hop_luu <= thr:
             return None
         tl = (p.trade_line or "").strip()
         if not tl:

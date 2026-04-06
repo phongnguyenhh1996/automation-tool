@@ -89,7 +89,15 @@ JournalRunOutcome = Literal[
     "all_plans_resolved",
 ]
 
-InnerLoopOutcome = Literal["entered", "rejected", "cutoff"]
+InnerLoopOutcome = Literal["entered", "rejected", "cutoff", "superseded"]
+
+
+@dataclass(frozen=True)
+class InnerLoopResult:
+    """Kết quả vòng trong: nếu ``superseded``, dùng ``supersede_touch`` để mở vòng trong mới."""
+
+    outcome: InnerLoopOutcome
+    supersede_touch: Optional[tuple[float, str, str]] = None  # (price, journal_line, label)
 
 
 @dataclass(frozen=True)
@@ -205,14 +213,39 @@ def _before_cutoff(
     return now < cutoff
 
 
-def _sleep_wait_minutes_respecting_cutoff(
+def _reload_page_and_list_journal_rows(
+    page: Page,
+    tv: dict[str, Any],
+    settle_ms: int,
+) -> list[tuple[Optional[float], str]]:
+    """Reload chart → panel cảnh báo → tab Nhật ký → danh sách dòng (dùng chung vòng ngoài và poll trong lúc chờ)."""
+    page.reload(wait_until="domcontentloaded", timeout=120_000)
+    page.wait_for_timeout(settle_ms)
+    _open_alerts_list_panel(page, tv)
+    open_journal_tab(page, tv)
+    return list_journal_rows(page, tv)
+
+
+def _sleep_wait_minutes_respecting_cutoff_with_journal_poll(
     wait_minutes: int,
     timezone_name: str,
     until_hour: int,
-    session_cutoff_end: Optional[datetime] = None,
-) -> bool:
+    session_cutoff_end: Optional[datetime],
+    *,
+    page: Page,
+    tv: dict[str, Any],
+    settle_ms: int,
+    poll_seconds: float,
+    last_alert_path: Path,
+    processed: Set[str],
+    touched_label: str,
+    touched_price: float,
+) -> tuple[bool, Optional[tuple[float, str, str]]]:
     """
-    Sleep up to ``wait_minutes`` in small steps. Returns False if cutoff passed during sleep.
+    Chờ tối đa ``wait_minutes`` nhưng chia nhỏ: mỗi ``poll_seconds`` (tối đa 30s) reload Nhật ký
+    và kiểm tra chạm giá. Nếu có dòng khớp plan **khác** (label hoặc giá khác plan đang xử lý):
+    ghi ``loại`` cho plan cũ, thêm dòng mới vào ``processed``, trả về ``(True, (giá, dòng, label))``.
+    Nếu hết giờ trong lúc chờ: ``(False, None)``. Chờ đủ phút không đổi giá: ``(True, None)``.
     """
     end = time.time() + wait_minutes * 60
     try:
@@ -223,29 +256,86 @@ def _sleep_wait_minutes_respecting_cutoff(
         wake_hint = ""
     _journal_log(
         timezone_name,
-        f"Bắt đầu chờ {wait_minutes} phút trước lần chụp Coinmap M5 + OpenAI tiếp theo{wake_hint}.",
+        f"Bắt đầu chờ {wait_minutes} phút (vẫn poll Nhật ký mỗi ~{poll_seconds:.0f}s) "
+        f"trước lần chụp Coinmap M5 + OpenAI tiếp theo{wake_hint}.",
     )
     last_progress_log = 0.0
+    poll_iv = min(30.0, max(1.0, float(poll_seconds)))
+
     while time.time() < end:
         if not _before_cutoff(timezone_name, until_hour, session_cutoff_end):
             _journal_log(
                 timezone_name,
                 "Hết khung giờ (session_cutoff hoặc --until-hour) trong lúc chờ — dừng.",
             )
-            return False
+            return (False, None)
+
         now = time.time()
         remain = end - now
         if now - last_progress_log >= 120.0:
             _journal_log(
                 timezone_name,
-                f"… vẫn chờ: còn khoảng {remain / 60.0:.1f} phút",
+                f"… vẫn chờ: còn khoảng {remain / 60.0:.1f} phút (poll Nhật ký đang bật)",
             )
             last_progress_log = now
-        time.sleep(min(30.0, remain))
+
+        st = read_last_alert_state(last_alert_path)
+        if st is None:
+            raise SystemExit(f"Missing last alert state at {last_alert_path}")
+        waiting = _waiting_label_prices(st)
+        if waiting:
+            _journal_log(timezone_name, "Poll Nhật ký (trong lúc chờ) — reload + đọc dòng…")
+            try:
+                rows = _reload_page_and_list_journal_rows(page, tv, settle_ms)
+            except Exception as e:
+                _journal_log(
+                    timezone_name,
+                    f"Poll Nhật ký lỗi (bỏ qua lần này, thử lại sau): {e!s}",
+                )
+            else:
+                m = _pick_matching_waiting_row(rows, waiting, processed)
+                if m is not None:
+                    new_price, new_line, new_label = m
+                    same_touch = new_label == touched_label and abs(new_price - touched_price) <= _EPS
+                    if same_touch:
+                        key = new_line.strip()
+                        if key and key not in processed:
+                            processed.add(key)
+                            _journal_log(
+                                timezone_name,
+                                f"Poll: thêm dòng trùng plan {touched_label}@{touched_price} vào dedupe — tiếp tục chờ.",
+                            )
+                    else:
+                        _journal_log(
+                            timezone_name,
+                            f"Poll: chạm giá/plan khác — mới={new_label}@{new_price}, "
+                            f"đang xử lý={touched_label}@{touched_price}. Ghi loại plan cũ, chuyển sang giá mới.",
+                        )
+                        update_single_plan_status(touched_label, LOAI, path=last_alert_path)
+                        processed.add(new_line.strip())
+                        _journal_log(timezone_name, f"Đã ghi status loại cho plan {touched_label}.")
+                        return (True, (new_price, new_line, new_label))
+
+        remain = end - time.time()
+        if remain <= 0:
+            break
+        chunk = min(poll_iv, remain, 30.0)
+        time.sleep(chunk)
+
+        if not _before_cutoff(timezone_name, until_hour, session_cutoff_end):
+            _journal_log(
+                timezone_name,
+                "Hết khung giờ trong lúc chờ — dừng.",
+            )
+            return (False, None)
+
     ok = _before_cutoff(timezone_name, until_hour, session_cutoff_end)
     if ok:
-        _journal_log(timezone_name, f"Đã chờ xong {wait_minutes} phút — chụp Coinmap + gửi OpenAI lại.")
-    return ok
+        _journal_log(
+            timezone_name,
+            f"Đã chờ xong {wait_minutes} phút (không có chạm plan khác) — chụp Coinmap + gửi OpenAI lại.",
+        )
+    return (ok, None)
 
 
 def _waiting_label_prices(state: LastAlertState) -> list[tuple[str, float]]:
@@ -310,8 +400,12 @@ def _run_intraday_touch_loop(
     initial_response_id: str,
     browser_context: BrowserContext,
     last_alert_path: Path,
-) -> InnerLoopOutcome:
-    """``chờ`` → capture lại + hỏi lại; lặp tới loại / VÀO LỆNH (có trade_line) / hết giờ."""
+    page: Page,
+    tv: dict[str, Any],
+    settle_ms: int,
+    processed: Set[str],
+) -> InnerLoopResult:
+    """``chờ`` → capture lại + hỏi lại; lặp tới loại / VÀO LỆNH (có trade_line) / hết giờ / superseded."""
     tz = params.timezone_name
     prev_id = read_last_response_id() or initial_response_id
     first = True
@@ -425,7 +519,7 @@ def _run_intraday_touch_loop(
         if hop_done:
             _journal_log(
                 tz,
-                "JSON prices: hop_luu>80 + trade_line tại vùng chạm — đã ghi vao_lenh / MT5 (nếu bật). Kết thúc vòng trong.",
+                "JSON prices: plan_chinh/plan_phu hop_luu>80, scalp hop_luu>70 + trade_line tại vùng chạm — đã ghi vao_lenh / MT5 (nếu bật). Kết thúc vòng trong.",
             )
             if not params.no_telegram:
                 _journal_log(
@@ -441,7 +535,7 @@ def _run_intraday_touch_loop(
                 )
             else:
                 _journal_log(tz, "Bỏ qua Telegram (--no-telegram).")
-            return "entered"
+            return InnerLoopResult("entered")
 
         act = parse_journal_intraday_action_from_openai_text(out_text)
         _journal_log(tz, f"Parse intraday (JSON hoặc [OUTPUT_NGAN_GON]): Hành động = {act!r}")
@@ -453,14 +547,25 @@ def _run_intraday_touch_loop(
                     tz,
                     f"VÀO LỆNH nhưng trade_line không hợp lệ: {tl_err} — coi như chờ, chờ {params.wait_minutes} phút.",
                 )
-                if not _sleep_wait_minutes_respecting_cutoff(
+                ok_sleep, sup = _sleep_wait_minutes_respecting_cutoff_with_journal_poll(
                     params.wait_minutes,
                     params.timezone_name,
                     params.until_hour,
                     params.session_cutoff_end,
-                ):
+                    page=page,
+                    tv=tv,
+                    settle_ms=settle_ms,
+                    poll_seconds=params.poll_seconds,
+                    last_alert_path=last_alert_path,
+                    processed=processed,
+                    touched_label=touched_label,
+                    touched_price=touched_price,
+                )
+                if not ok_sleep:
                     _journal_log(tz, "Hết giờ trong lúc chờ (trade_line) — cutoff.")
-                    return "cutoff"
+                    return InnerLoopResult("cutoff")
+                if sup is not None:
+                    return InnerLoopResult("superseded", sup)
                 first = False
                 continue
             update_single_plan_status(
@@ -499,7 +604,7 @@ def _run_intraday_touch_loop(
             else:
                 _journal_log(tz, "Bỏ qua Telegram (--no-telegram).")
             _journal_log(tz, "Kết thúc vòng trong: VÀO LỆNH (đã ghi status + optional MT5).")
-            return "entered"
+            return InnerLoopResult("entered")
         if act == "loại":
             loai_streak += 1
             if loai_streak < JOURNAL_LOAI_CONFIRM_ROUNDS:
@@ -508,14 +613,25 @@ def _run_intraday_touch_loop(
                     f"Hành động: loại (lần {loai_streak}/{JOURNAL_LOAI_CONFIRM_ROUNDS}) — "
                     "chưa ghi status; tiếp tục chờ như «chờ».",
                 )
-                if not _sleep_wait_minutes_respecting_cutoff(
+                ok_sleep, sup = _sleep_wait_minutes_respecting_cutoff_with_journal_poll(
                     params.wait_minutes,
                     params.timezone_name,
                     params.until_hour,
                     params.session_cutoff_end,
-                ):
+                    page=page,
+                    tv=tv,
+                    settle_ms=settle_ms,
+                    poll_seconds=params.poll_seconds,
+                    last_alert_path=last_alert_path,
+                    processed=processed,
+                    touched_label=touched_label,
+                    touched_price=touched_price,
+                )
+                if not ok_sleep:
                     _journal_log(tz, "Hết giờ trong lúc chờ (xác nhận loại) — cutoff.")
-                    return "cutoff"
+                    return InnerLoopResult("cutoff")
+                if sup is not None:
+                    return InnerLoopResult("superseded", sup)
                 first = False
                 continue
             update_single_plan_status(touched_label, LOAI, path=last_alert_path)
@@ -523,18 +639,29 @@ def _run_intraday_touch_loop(
                 tz,
                 f"Kết thúc vòng trong: loại (đã xác nhận {JOURNAL_LOAI_CONFIRM_ROUNDS} lần liên tiếp) — đã ghi status.",
             )
-            return "rejected"
+            return InnerLoopResult("rejected")
         if act == "chờ":
             loai_streak = 0
             _journal_log(tz, f"Hành động: chờ — sẽ nghỉ {params.wait_minutes} phút rồi chụp M5 + hỏi lại.")
-            if not _sleep_wait_minutes_respecting_cutoff(
+            ok_sleep, sup = _sleep_wait_minutes_respecting_cutoff_with_journal_poll(
                 params.wait_minutes,
                 params.timezone_name,
                 params.until_hour,
                 params.session_cutoff_end,
-            ):
+                page=page,
+                tv=tv,
+                settle_ms=settle_ms,
+                poll_seconds=params.poll_seconds,
+                last_alert_path=last_alert_path,
+                processed=processed,
+                touched_label=touched_label,
+                touched_price=touched_price,
+            )
+            if not ok_sleep:
                 _journal_log(tz, "Hết giờ trong lúc chờ (chờ) — cutoff.")
-                return "cutoff"
+                return InnerLoopResult("cutoff")
+            if sup is not None:
+                return InnerLoopResult("superseded", sup)
             first = False
             continue
 
@@ -543,18 +670,29 @@ def _run_intraday_touch_loop(
             tz,
             "Cảnh báo: không parse được Hành động (chờ / loại / VÀO LỆNH) trong [OUTPUT_NGAN_GON] — coi như chờ.",
         )
-        if not _sleep_wait_minutes_respecting_cutoff(
+        ok_sleep, sup = _sleep_wait_minutes_respecting_cutoff_with_journal_poll(
             params.wait_minutes,
             params.timezone_name,
             params.until_hour,
             params.session_cutoff_end,
-        ):
+            page=page,
+            tv=tv,
+            settle_ms=settle_ms,
+            poll_seconds=params.poll_seconds,
+            last_alert_path=last_alert_path,
+            processed=processed,
+            touched_label=touched_label,
+            touched_price=touched_price,
+        )
+        if not ok_sleep:
             _journal_log(tz, "Hết giờ sau chờ mặc định — cutoff.")
-            return "cutoff"
+            return InnerLoopResult("cutoff")
+        if sup is not None:
+            return InnerLoopResult("superseded", sup)
         first = False
 
     _journal_log(tz, "Vòng trong: hết phiên (session_cutoff hoặc --until-hour) — cutoff.")
-    return "cutoff"
+    return InnerLoopResult("cutoff")
 
 
 def run_tv_journal_monitor(
@@ -674,14 +812,8 @@ def run_tv_journal_monitor(
                 )
 
                 _journal_log(tz, "Reload trang TradingView…")
-                page.reload(wait_until="domcontentloaded", timeout=120_000)
                 _journal_log(tz, f"Chờ settle {settle_ms}ms sau reload…")
-                page.wait_for_timeout(settle_ms)
-                _journal_log(tz, "Mở panel Cảnh báo (danh sách)…")
-                _open_alerts_list_panel(page, tv)
-                _journal_log(tz, "Chuyển tab Nhật ký (#log)…")
-                open_journal_tab(page, tv)
-                rows = list_journal_rows(page, tv)
+                rows = _reload_page_and_list_journal_rows(page, tv, settle_ms)
                 _journal_log(tz, f"Đọc Nhật ký: {len(rows)} dòng (selector mô tả trong yaml).")
                 for idx, (pr, raw) in enumerate(rows):
                     skip = ""
@@ -706,26 +838,43 @@ def run_tv_journal_monitor(
                     )
                     processed.add(line.strip())
                     rid = read_last_response_id() or initial_response_id
-                    inner = _run_intraday_touch_loop(
-                        settings=settings,
-                        params=params,
-                        touched_price=touched,
-                        touched_label=tlab,
-                        journal_line=line,
-                        initial_response_id=rid,
-                        browser_context=context,
-                        last_alert_path=lap,
-                    )
+                    while True:
+                        inner = _run_intraday_touch_loop(
+                            settings=settings,
+                            params=params,
+                            touched_price=touched,
+                            touched_label=tlab,
+                            journal_line=line,
+                            initial_response_id=rid,
+                            browser_context=context,
+                            last_alert_path=lap,
+                            page=page,
+                            tv=tv,
+                            settle_ms=settle_ms,
+                            processed=processed,
+                        )
+                        if inner.outcome == "superseded" and inner.supersede_touch is not None:
+                            sp = inner.supersede_touch
+                            touched, line, tlab = sp[0], sp[1], sp[2]
+                            rid = read_last_response_id() or rid
+                            _journal_log(
+                                tz,
+                                f"Chuyển tiếp vòng trong mới — giá {touched} (plan {tlab}), "
+                                f"dòng={_truncate(line, 120)!s}",
+                            )
+                            continue
+                        break
+
                     st2 = read_last_alert_state(lap)
                     if st2 is not None and all_plans_terminal(st2):
                         _journal_log(tz, "Kết quả: all_plans_resolved (đã xử lý đủ 3 plan).")
                         return "all_plans_resolved"
-                    if inner == "cutoff":
+                    if inner.outcome == "cutoff":
                         _journal_log(tz, "Kết quả cuối: cutoff_time (hết giờ trong vòng trong).")
                         return "cutoff_time"
                     _journal_log(
                         tz,
-                        f"Vòng trong kết thúc ({inner!s}) — tiếp tục vòng ngoài nếu còn plan chờ.",
+                        f"Vòng trong kết thúc ({inner.outcome!s}) — tiếp tục vòng ngoài nếu còn plan chờ.",
                     )
                     continue
 
