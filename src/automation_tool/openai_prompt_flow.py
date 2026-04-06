@@ -311,8 +311,8 @@ DEFAULT_UPDATE_PROMPT_TEMPLATE = (
     '- "no_change": true nếu ba vùng giá không đổi so với baseline; false nếu có thay đổi.\n'
     '- "out_chi_tiet": string (phân tích chi tiết); "output_ngan_gon": string (tóm tắt) — tùy cần.\n'
     '- "prices": đúng 3 phần tử, mỗi phần tử:\n'
-    '  {"label":"plan_chinh"|"plan_phu"|"scalp","value":number,'
-    '"hop_luu":integer 0–100,"trade_line":string} — '
+    '  {{"label":"plan_chinh"|"plan_phu"|"scalp","value":number,'
+    '"hop_luu":integer 0–100,"trade_line":string}} — '
     "hop_luu = điểm hợp lưu của vùng; trade_line = một dòng pipe MT5 cho đúng vùng "
     "(BUY/SELL LIMIT|STOP|MARKET … | SL … | TP1 … | Lot …).\n"
     '- "intraday_hanh_dong": "chờ" | "loại" | "VÀO LỆNH" hoặc null (tuỳ chọn; auto-MT5 intraday dùng hop_luu + trade_line trong prices).\n'
@@ -328,8 +328,8 @@ JOURNAL_INTRADAY_FIRST_USER_TEMPLATE = (
     "Trả về một JSON object duy nhất (schema giống phân tích sáng + intraday):\n"
     '- "intraday_hanh_dong": "chờ" | "loại" | "VÀO LỆNH"\n'
     '- "prices": đúng 3 phần tử, mỗi phần tử:\n'
-    '  {"label":"plan_chinh"|"plan_phu"|"scalp","value":number,'
-    '"hop_luu":integer 0–100,"trade_line":string} — '
+    '  {{"label":"plan_chinh"|"plan_phu"|"scalp","value":number,'
+    '"hop_luu":integer 0–100,"trade_line":string}} — '
     "hop_luu = điểm hợp lưu của vùng; trade_line = một dòng pipe MT5 cho đúng vùng "
     "(BUY/SELL LIMIT|STOP|MARKET … | SL … | TP1 … | Lot …). \n"
     '- "trade_line": string tổng — có thể "" nếu đã đủ trade_line trong từng phần tử prices; '
@@ -343,7 +343,7 @@ JOURNAL_INTRADAY_RETRY_USER_TEMPLATE = (
     "Bối cảnh Nhật ký (lần kích hoạt): {journal_line}\n\n"
     "Đính kèm Coinmap XAUUSD M5 mới.\n"
     "Cùng schema JSON như tin đầu: intraday_hanh_dong; "
-    "prices[3] với label, value, hop_luu, trade_line (auto-MT5 khi hop_luu>80 tại vùng đang theo dõi); "
+    "prices[3] với label, value, hop_luu, trade_line; "
     "trade_line tổng nếu cần."
 )
 
