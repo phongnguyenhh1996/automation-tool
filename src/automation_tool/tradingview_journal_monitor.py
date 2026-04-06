@@ -7,7 +7,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, replace
-from datetime import datetime, time, timedelta
+from datetime import datetime, time as dt_time, timedelta
 from pathlib import Path
 from typing import Any, Literal, Optional, Set
 
@@ -167,11 +167,11 @@ def _next_02am_after(fr: datetime, z: ZoneInfo) -> datetime:
     """Mốc 02:00 sáng đầu tiên sau ``fr`` (cùng timezone)."""
     fr = fr.astimezone(z)
     d = fr.date()
-    today_2am = datetime.combine(d, time(2, 0), tzinfo=z)
+    today_2am = datetime.combine(d, dt_time(2, 0), tzinfo=z)
     if fr < today_2am:
         return today_2am
     next_d = d + timedelta(days=1)
-    return datetime.combine(next_d, time(2, 0), tzinfo=z)
+    return datetime.combine(next_d, dt_time(2, 0), tzinfo=z)
 
 
 def compute_journal_session_cutoff(first_run: datetime, timezone_name: str) -> datetime:
@@ -181,7 +181,7 @@ def compute_journal_session_cutoff(first_run: datetime, timezone_name: str) -> d
     """
     z = ZoneInfo(timezone_name)
     fr = first_run.astimezone(z) if first_run.tzinfo else first_run.replace(tzinfo=z)
-    noon = time(13, 0)
+    noon = dt_time(13, 0)
     if fr.time() < noon:
         return fr.replace(hour=13, minute=0, second=0, microsecond=0)
     return _next_02am_after(fr, z)
