@@ -54,6 +54,8 @@ from automation_tool.telegram_bot import (
     send_message,
     send_mt5_execution_log_to_ngan_gon_chat,
     send_openai_output_to_telegram,
+    split_analysis_json_chi_tiet_ngan_gon,
+    split_output_chi_tiet_ngan_gon,
 )
 from automation_tool.telegram_logging import setup_automation_logging
 from automation_tool.config import load_all_dotenv
@@ -680,16 +682,15 @@ def cmd_analyze(args: argparse.Namespace) -> None:
     _log.info("analyze: OpenAI xong | response_id=%s", out.final_response_id)
     if not args.no_telegram and out.after_charts:
         require_telegram(s)
-        detail_cid = (getattr(args, "telegram_detail_chat_id", None) or "").strip() or (
-            (s.telegram_analysis_detail_chat_id or "").strip() or None
-        )
+        # out_chi_tiet → TELEGRAM_CHAT_ID; output_ngan_gon → TELEGRAM_OUTPUT_NGAN_GON_CHAT_ID.
+        # TELEGRAM_ANALYSIS_DETAIL_CHAT_ID is for per-step logs (first_response / journal), not here.
         send_openai_output_to_telegram(
             bot_token=s.telegram_bot_token,
             chat_id=s.telegram_chat_id,
             raw=out.after_charts,
             default_parse_mode=s.telegram_parse_mode,
             summary_chat_id=s.telegram_output_ngan_gon_chat_id,
-            detail_chat_id=detail_cid,
+            detail_chat_id=None,
         )
 
 
@@ -1242,7 +1243,26 @@ def cmd_update(args: argparse.Namespace) -> None:
             text=f"Đã cập nhật vùng giá mới: {a} | {b} | {c}",
             parse_mode=s.telegram_parse_mode,
         )
-        _log.info("update: đã gửi Telegram chat chính")
+        dual = split_analysis_json_chi_tiet_ngan_gon(out_text)
+        if dual is None:
+            dual = split_output_chi_tiet_ngan_gon(out_text)
+        if dual is not None:
+            # out_chi_tiet → TELEGRAM_CHAT_ID; output_ngan_gon → TELEGRAM_OUTPUT_NGAN_GON_CHAT_ID (hoặc main nếu không cấu hình).
+            send_openai_output_to_telegram(
+                bot_token=s.telegram_bot_token,
+                chat_id=s.telegram_chat_id,
+                raw=out_text,
+                default_parse_mode=s.telegram_parse_mode,
+                summary_chat_id=(s.telegram_output_ngan_gon_chat_id or "").strip() or None,
+                detail_chat_id=None,
+            )
+            _log.info(
+                "update: đã gửi out_chi_tiet lên TELEGRAM_CHAT_ID, output_ngan_gon lên kênh ngắn gọn (nếu có)"
+            )
+        else:
+            _log.info(
+                "update: không tách được out_chi_tiet/output_ngan_gon — chỉ gửi dòng giá lên main"
+            )
 
     _run_tv_journal_after_update(new_triple, log_label="ghi giá mới")
 
