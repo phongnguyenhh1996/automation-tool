@@ -381,7 +381,12 @@ def _run_intraday_touch_loop(
                     return "cutoff"
                 first = False
                 continue
-            update_single_plan_status(touched_label, VAO_LENH, path=last_alert_path)
+            update_single_plan_status(
+                touched_label,
+                VAO_LENH,
+                path=last_alert_path,
+                entry_manual=False,
+            )
             if params.mt5_execute:
                 _journal_log(
                     tz,

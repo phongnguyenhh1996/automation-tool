@@ -35,6 +35,7 @@ def test_read_legacy_no_status_all_vung_cho() -> None:
         assert st is not None
         for lab in st.labels:
             assert st.status_by_label[lab] == VUNG_CHO
+            assert st.entry_manual_by_label.get(lab) is False
         assert not all_plans_terminal(st)
 
 
@@ -47,11 +48,18 @@ def test_merge_only_resets_changed_price_labels() -> None:
             "plan_phu": LOAI,
             "scalp": VUNG_CHO,
         },
+        entry_manual_by_label={
+            "plan_chinh": True,
+            "plan_phu": False,
+            "scalp": False,
+        },
     )
     new = merge_alert_prices_with_status(old, (2600.5, 2610.0, 2620.0))
     assert new.status_by_label["plan_chinh"] == VUNG_CHO
     assert new.status_by_label["plan_phu"] == LOAI
     assert new.status_by_label["scalp"] == VUNG_CHO
+    assert new.entry_manual_by_label["plan_chinh"] is False
+    assert new.entry_manual_by_label["plan_phu"] is False
 
 
 def test_all_plans_terminal_true() -> None:
@@ -78,11 +86,12 @@ def test_update_single_plan_status_roundtrip() -> None:
             ),
             path=p,
         )
-        update_single_plan_status("plan_chinh", VAO_LENH, path=p)
+        update_single_plan_status("plan_chinh", VAO_LENH, path=p, entry_manual=False)
         st = read_last_alert_state(p)
         assert st is not None
         assert st.status_by_label["plan_chinh"] == VAO_LENH
         assert st.status_by_label["plan_phu"] == VUNG_CHO
+        assert st.entry_manual_by_label["plan_chinh"] is False
 
 
 def test_update_single_plan_unknown_label_exits() -> None:

@@ -54,9 +54,13 @@ def default_analysis_prompt(main_symbol: str | None = None) -> str:
         "Trả về một JSON object hợp lệ duy nhất (có thể bọc trong ```json). Schema gợi ý:\n"
         '- "out_chi_tiet": string (phân tích chi tiết)\n'
         '- "output_ngan_gon": string (tóm tắt)\n'
-        '- "prices": [ {"label":"plan_chinh"|"plan_phu"|"scalp","value":number} ] — đủ 3 phần tử\n'
-        '- "intraday_hanh_dong": "chờ" | "loại" | "VÀO LỆNH" hoặc null nếu không áp dụng\n'
-        '- "trade_line": string — một dòng lệnh dạng BUY/SELL … | SL … | TP1 … | Lot … hoặc ""\n'
+        '- "prices": đúng 3 phần tử, mỗi phần tử:\n'
+        '  {"label":"plan_chinh"|"plan_phu"|"scalp","value":number,'
+        '"hop_luu":integer 0–100,"trade_line":string} — '
+        "``hop_luu`` = điểm hợp lưu của vùng đó; ``trade_line`` = một dòng pipe MT5 cho đúng vùng "
+        "(BUY/SELL LIMIT|STOP|MARKET … | SL … | TP1 … | Lot …).\n"
+        '- "intraday_hanh_dong": "chờ" | "loại" | "VÀO LỆNH" hoặc null (tuỳ chọn; tool auto-MT5 sáng dùng ``hop_luu`` + ``trade_line`` trong ``prices``)\n'
+        '- "trade_line": string — có thể để trống nếu đã có ``trade_line`` trong từng phần tử ``prices``\n'
         '- "no_change": boolean — chỉ dùng rõ trong luồng update intraday; phân tích sáng có thể bỏ qua hoặc false\n\n'
         "Trong output_ngan_gon: sau mỗi khối PLAN CHÍNH VÙNG CHỜ / PLAN PHỤ VÙNG CHỜ / SCALP VÙNG thêm một dòng lệnh tham khảo (pipe) để vào tay. "
         "Lot tham khảo: USDJPY = giá/(10×SL pip); XAUUSD = 1/SL_giá (SL_giá = |entry−SL| theo giá).\n"
@@ -327,7 +331,7 @@ JOURNAL_INTRADAY_FIRST_USER_TEMPLATE = (
 )
 
 JOURNAL_INTRADAY_RETRY_USER_TEMPLATE = (
-    "Tiếp tục đánh giá sau {wait_minutes} phút: vẫn theo dõi mức đã chạm {touched_price}.\n"
+    "Tiếp tục **đánh giá** sau {wait_minutes} phút: vẫn theo dõi mức đã chạm {touched_price}.\n"
     "Bối cảnh Nhật ký (lần kích hoạt): {journal_line}\n\n"
     "Đính kèm Coinmap XAUUSD M5 mới.\n"
     "Cùng schema JSON như tin nhắn trước: luôn có key trade_line "

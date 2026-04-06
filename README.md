@@ -87,22 +87,22 @@ Options:
 - `--max-images-per-call` — Split images across multiple API calls (default `10`).
 - `--no-telegram` — Print only; do not send to Telegram (`analyze`, `all`, `chatgpt-project`).
 - `--no-tradingview` / `--no-tv-journal-monitor` — On **`all`**, skip TradingView alert sync / skip the journal monitor step after sync (see `coinmap-automation all --help`).
-- **`analyze` / `all` / `chatgpt-project`**: On the **first** OpenAI response for the chart step, if the text includes a complete JSON triple (`plan_chinh`, `plan_phu`, `scalp`) and `intraday_hanh_dong` is `VÀO LỆNH` with a parseable `trade_line`, the tool merges prices into `last_alert_prices.json`, sets `vao_lenh` on the zone nearest the entry, and calls `execute_trade` by default (**live** orders). Use `--no-mt5-execute` to skip MT5; `--mt5-dry-run` to simulate without sending. Override file path with `--last-alert-json` (default `data/last_alert_prices.json`).
+- **`analyze` / `all` / `chatgpt-project`**: On the **first** OpenAI response for the chart step, if the JSON includes a complete triple (`plan_chinh`, `plan_phu`, `scalp`) with per-zone **`hop_luu`** (0–100) and **`trade_line`** (one MT5 pipe line per zone), the tool merges prices into `last_alert_prices.json`. **Auto-MT5** runs (**live** by default) only when at least one zone has **`hop_luu` > 80** and a non-empty `trade_line`: the tool picks that zone (highest score; tie-break `plan_chinh` → `plan_phu` → `scalp`), sets `vao_lenh` for that label, sets `entry_manual_by_label` to `false`, and calls `execute_trade` on that zone’s `trade_line`. If no zone is above 80, prices are still written but statuses stay non-terminal for auto-entry. Use `--no-mt5-execute` to skip MT5; `--mt5-dry-run` to simulate. Override file path with `--last-alert-json` (default `data/{SYMBOL}/last_alert_prices.json` per active symbol).
 - **`all` / `tv-journal-monitor`**: same MT5 flags: `--last-alert-json`, `--no-mt5-execute`, `--mt5-symbol`, `--mt5-dry-run` — after a valid `VÀO LỆNH` + parseable `trade_line`, `execute_trade` runs **live** by default; pass `--mt5-dry-run` for simulation only.
 - **`update`**: `--no-journal-monitor-after-update` — when **before** writing new prices all three plans are already terminal (`vao_lenh` or `loai` in `data/last_alert_prices.json`), after a successful merged write the tool still syncs TradingView and Telegram, but **skips** the automatic `tv-journal-monitor` run (default: run monitor in that situation).
 - `--storage-state` — Path to Playwright storage state JSON for **capture** (default `data/storage_state.json`).
 
 ### `data/last_alert_prices.json` and `tv-journal-monitor`
 
-The file stores the current triple of zone prices plus **`status_by_label`**: for each of `plan_chinh`, `plan_phu`, `scalp`, one of:
+The file stores the current triple of zone prices plus **`status_by_label`** and optional **`entry_manual_by_label`** (bool per label: `true` if you record the fill as **manual** off-bot; `false` when set by this tool / MT5). For each of `plan_chinh`, `plan_phu`, `scalp`, status is one of:
 
 | Value | Meaning |
 |-------|---------|
 | `vung_cho` | Still waiting (journal not finished for this plan). |
-| `vao_lenh` | Inner loop returned `VÀO LỆNH` with a parseable `trade_line`. |
+| `vao_lenh` | Inner loop returned `VÀO LỆNH` with a parseable `trade_line`, or morning auto-MT5 ran for that zone. |
 | `loai` | Inner loop returned `loại`. |
 
-Older files without `status_by_label` are treated as all `vung_cho`. When **`all`** or **`update`** writes a **new** triple, only labels whose **price changed** are reset to `vung_cho`; unchanged prices keep their status.
+Older files without `status_by_label` are treated as all `vung_cho`; missing `entry_manual_by_label` defaults to `false` for every label. When **`all`** or **`update`** writes a **new** triple, only labels whose **price changed** are reset to `vung_cho` and their **manual** flag to `false`; unchanged prices keep their status and manual flag.
 
 **`tv-journal-monitor`** reloads this file each outer cycle, matches the TradingView journal only against prices that are still `vung_cho`, and continues until all three are terminal or `--until-hour` is reached. Model action **`chờ`** does not set a terminal status. If the model says `VÀO LỆNH` but `trade_line` is missing or does not parse, the plan stays `vung_cho` and the inner loop waits and retries (same as `chờ`).
 

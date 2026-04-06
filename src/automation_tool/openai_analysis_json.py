@@ -10,6 +10,9 @@ IntradayHanhDong = Literal["chờ", "loại", "VÀO LỆNH"]
 
 ZONE_LABELS_ORDER = ("plan_chinh", "plan_phu", "scalp")
 
+# Morning auto-MT5: only zones with hop_luu strictly above this threshold.
+AUTO_MT5_HOP_LUU_THRESHOLD = 80
+
 
 def _strip_json_code_fence(text: str) -> str:
     t = text.strip()
@@ -82,10 +85,32 @@ def _normalize_intraday(s: str) -> Optional[IntradayHanhDong]:
     return None
 
 
+def _as_int(x: Any) -> Optional[int]:
+    if isinstance(x, bool):
+        return None
+    if isinstance(x, int):
+        return x
+    if isinstance(x, float):
+        if x != x:  # NaN
+            return None
+        return int(round(x))
+    if isinstance(x, str):
+        s = x.strip().replace(",", "")
+        if not s:
+            return None
+        try:
+            return int(round(float(s)))
+        except ValueError:
+            return None
+    return None
+
+
 @dataclass
 class PriceZoneEntry:
     label: str
     value: float
+    hop_luu: Optional[int] = None
+    trade_line: str = ""
 
 
 @dataclass
@@ -107,9 +132,14 @@ def _parse_price_entry(d: dict[str, Any]) -> Optional[PriceZoneEntry]:
     v = _as_float(d.get("value"))
     if v is None:
         return None
+    hop = _as_int(d.get("hop_luu"))
+    tl_raw = d.get("trade_line")
+    trade_line = tl_raw.strip() if isinstance(tl_raw, str) else ""
     return PriceZoneEntry(
         label=lab.strip(),
         value=v,
+        hop_luu=hop,
+        trade_line=trade_line,
     )
 
 
@@ -177,6 +207,38 @@ def triple_from_zone_prices(prices: list[PriceZoneEntry]) -> Optional[tuple[floa
             return None
         out.append(by_label[lab])
     return (out[0], out[1], out[2])
+
+
+def select_zone_for_auto_mt5(
+    prices: list[PriceZoneEntry],
+) -> Optional[tuple[str, int, str]]:
+    """
+    Chọn một vùng để auto-MT5 sáng: ``hop_luu`` > :data:`AUTO_MT5_HOP_LUU_THRESHOLD`,
+    có ``trade_line`` không rỗng.
+
+    Nhiều vùng hợp lệ: **điểm cao nhất**; hòa điểm: thứ tự ``plan_chinh`` → ``plan_phu`` → ``scalp``.
+
+    Returns:
+        ``(label, hop_luu, trade_line)`` với ``label`` chữ thường khớp :data:`ZONE_LABELS_ORDER`,
+        hoặc ``None``.
+    """
+    scored: list[tuple[str, int, str, int]] = []
+    for p in prices:
+        key = p.label.strip().lower()
+        if key not in ZONE_LABELS_ORDER:
+            continue
+        if p.hop_luu is None or p.hop_luu <= AUTO_MT5_HOP_LUU_THRESHOLD:
+            continue
+        tl = (p.trade_line or "").strip()
+        if not tl:
+            continue
+        tie = ZONE_LABELS_ORDER.index(key)
+        scored.append((key, int(p.hop_luu), tl, tie))
+    if not scored:
+        return None
+    scored.sort(key=lambda x: (-x[1], x[3]))
+    best = scored[0]
+    return (best[0], best[1], best[2])
 
 
 def parse_analysis_from_openai_text(text: str) -> Optional[AnalysisPayload]:

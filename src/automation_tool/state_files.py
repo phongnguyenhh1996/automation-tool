@@ -122,11 +122,15 @@ def write_morning_baseline_prices(
 
 @dataclass
 class LastAlertState:
-    """Snapshot of ``last_alert_prices.json`` including per-plan journal status."""
+    """Snapshot of ``last_alert_prices.json`` including per-plan journal status.
+
+    ``entry_manual_by_label``: True = vào lệnh thủ công (ghi tay ngoài bot); False = qua tool/MT5.
+    """
 
     prices: tuple[float, float, float]
     labels: tuple[str, str, str] = PLAN_LABELS_DEFAULT
     status_by_label: dict[str, str] = field(default_factory=dict)
+    entry_manual_by_label: dict[str, bool] = field(default_factory=dict)
     updated_at: str = ""
 
     def to_json_dict(self) -> dict[str, Any]:
@@ -135,6 +139,9 @@ class LastAlertState:
             "prices": list(self.prices),
             "labels": list(self.labels),
             "status_by_label": {k: self.status_by_label.get(k, VUNG_CHO) for k in self.labels},
+            "entry_manual_by_label": {
+                k: bool(self.entry_manual_by_label.get(k, False)) for k in self.labels
+            },
             "updated_at": ts,
         }
         return out
@@ -181,11 +188,22 @@ def read_last_alert_state(path: Optional[Path] = None) -> Optional[LastAlertStat
             for lab in labels:
                 status_by_label[lab] = VUNG_CHO
 
+    entry_manual_by_label: dict[str, bool] = {}
+    emb = data.get("entry_manual_by_label")
+    if isinstance(emb, dict):
+        for lab in labels:
+            v = emb.get(lab)
+            entry_manual_by_label[lab] = bool(v) if isinstance(v, bool) else False
+    else:
+        for lab in labels:
+            entry_manual_by_label[lab] = False
+
     ts = str(data.get("updated_at") or "")
     return LastAlertState(
         prices=tup,
         labels=labels,
         status_by_label=status_by_label,
+        entry_manual_by_label=entry_manual_by_label,
         updated_at=ts,
     )
 
@@ -196,6 +214,7 @@ def write_last_alert_state(state: LastAlertState, path: Optional[Path] = None) -
         prices=state.prices,
         labels=state.labels,
         status_by_label=dict(state.status_by_label),
+        entry_manual_by_label=dict(state.entry_manual_by_label),
         updated_at=datetime.now(timezone.utc).isoformat(),
     )
     _atomic_write_json(p, st.to_json_dict())
@@ -215,20 +234,25 @@ def merge_alert_prices_with_status(
             prices=new_prices,
             labels=labels,
             status_by_label={lab: VUNG_CHO for lab in labels},
+            entry_manual_by_label={lab: False for lab in labels},
             updated_at=datetime.now(timezone.utc).isoformat(),
         )
     new_status: dict[str, str] = {}
+    new_manual: dict[str, bool] = {}
     for i, lab in enumerate(labels):
         op = old.prices[i]
         np = new_prices[i]
         if not _price_equal(op, np):
             new_status[lab] = VUNG_CHO
+            new_manual[lab] = False
         else:
             new_status[lab] = old.status_by_label.get(lab, VUNG_CHO)
+            new_manual[lab] = old.entry_manual_by_label.get(lab, False)
     return LastAlertState(
         prices=new_prices,
         labels=labels,
         status_by_label=new_status,
+        entry_manual_by_label=new_manual,
         updated_at=datetime.now(timezone.utc).isoformat(),
     )
 
@@ -237,8 +261,14 @@ def update_single_plan_status(
     label: str,
     status: str,
     path: Optional[Path] = None,
+    *,
+    entry_manual: Optional[bool] = None,
 ) -> None:
-    """Set one plan's status and rewrite ``last_alert_prices.json``."""
+    """Set one plan's status and rewrite ``last_alert_prices.json``.
+
+    ``entry_manual``: nếu không None, ghi nhận vào ``entry_manual_by_label`` cho label đó
+    (ví dụ ``False`` khi vào lệnh qua bot/MT5).
+    """
     st = read_last_alert_state(path)
     if st is None:
         raise SystemExit(
@@ -247,8 +277,17 @@ def update_single_plan_status(
     if label not in st.labels:
         raise SystemExit(f"Unknown plan label {label!r}; expected one of {st.labels}.")
     d = {**st.status_by_label, label: status}
+    em = {**st.entry_manual_by_label}
+    if entry_manual is not None:
+        em[label] = entry_manual
     write_last_alert_state(
-        LastAlertState(prices=st.prices, labels=st.labels, status_by_label=d, updated_at=st.updated_at),
+        LastAlertState(
+            prices=st.prices,
+            labels=st.labels,
+            status_by_label=d,
+            entry_manual_by_label=em,
+            updated_at=st.updated_at,
+        ),
         path=path,
     )
 
