@@ -57,6 +57,10 @@ from automation_tool.tradingview_alerts import (
 
 _EPS = 0.01
 
+# Trong vòng trong (touch): chỉ ghi status loại sau khi model trả "loại" đủ nhiều lần liên tiếp
+# (mỗi lần chờ wait_minutes rồi chụp M5 + hỏi lại), tránh loại ngay từ lần đầu.
+JOURNAL_LOAI_CONFIRM_ROUNDS = 3
+
 
 def _journal_log(timezone_name: str, msg: str) -> None:
     """Log có timestamp (stderr + logger ``automation_tool.journal`` → Telegram nếu cấu hình)."""
@@ -269,6 +273,7 @@ def _run_intraday_touch_loop(
     prev_id = read_last_response_id() or initial_response_id
     first = True
     inner_i = 0
+    loai_streak = 0
 
     _journal_log(
         tz,
@@ -360,6 +365,7 @@ def _run_intraday_touch_loop(
         act = parse_journal_intraday_action_from_openai_text(out_text)
         _journal_log(tz, f"Parse intraday (JSON hoặc [OUTPUT_NGAN_GON]): Hành động = {act!r}")
         if act == "VÀO LỆNH":
+            loai_streak = 0
             parsed, tl_err = parse_openai_output_md(out_text, symbol_override=params.mt5_symbol)
             if tl_err or parsed is None:
                 _journal_log(
@@ -408,10 +414,30 @@ def _run_intraday_touch_loop(
             _journal_log(tz, "Kết thúc vòng trong: VÀO LỆNH (đã ghi status + optional MT5).")
             return "entered"
         if act == "loại":
+            loai_streak += 1
+            if loai_streak < JOURNAL_LOAI_CONFIRM_ROUNDS:
+                _journal_log(
+                    tz,
+                    f"Hành động: loại (lần {loai_streak}/{JOURNAL_LOAI_CONFIRM_ROUNDS}) — "
+                    "chưa ghi status; tiếp tục chờ như «chờ».",
+                )
+                if not _sleep_wait_minutes_respecting_cutoff(
+                    params.wait_minutes,
+                    params.timezone_name,
+                    params.until_hour,
+                ):
+                    _journal_log(tz, "Hết giờ trong lúc chờ (xác nhận loại) — cutoff.")
+                    return "cutoff"
+                first = False
+                continue
             update_single_plan_status(touched_label, LOAI, path=last_alert_path)
-            _journal_log(tz, "Kết thúc vòng trong: loại (vùng không còn cơ hội) — đã ghi status.")
+            _journal_log(
+                tz,
+                f"Kết thúc vòng trong: loại (đã xác nhận {JOURNAL_LOAI_CONFIRM_ROUNDS} lần liên tiếp) — đã ghi status.",
+            )
             return "rejected"
         if act == "chờ":
+            loai_streak = 0
             _journal_log(tz, f"Hành động: chờ — sẽ nghỉ {params.wait_minutes} phút rồi chụp M5 + hỏi lại.")
             if not _sleep_wait_minutes_respecting_cutoff(
                 params.wait_minutes,
@@ -423,6 +449,7 @@ def _run_intraday_touch_loop(
             first = False
             continue
 
+        loai_streak = 0
         _journal_log(
             tz,
             "Cảnh báo: không parse được Hành động (chờ / loại / VÀO LỆNH) trong [OUTPUT_NGAN_GON] — coi như chờ.",
