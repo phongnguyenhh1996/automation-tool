@@ -41,7 +41,7 @@ from automation_tool.tradingview_touch_flow import (
     TouchFlowParams,
     before_cutoff,
     compute_session_cutoff,
-    parse_first_float,
+    parse_first_float_trunc0,
     run_intraday_touch_flow,
 )
 
@@ -123,7 +123,7 @@ def _read_watchlist_last_price(
             return None
 
     txt = price_span.inner_text(timeout=5_000)
-    return parse_first_float(txt)
+    return parse_first_float_trunc0(txt)
 
 
 def _poll_supersede_from_watchlist(

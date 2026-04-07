@@ -412,3 +412,18 @@ def parse_first_float(text: str) -> Optional[float]:
     except ValueError:
         return None
 
+
+def parse_first_float_trunc0(text: str) -> Optional[float]:
+    """
+    Like :func:`parse_first_float` but truncates to integer precision.
+
+    Example: ``4656.355`` -> ``4656.0``.
+    """
+    v = parse_first_float(text)
+    if v is None:
+        return None
+    try:
+        return float(int(v))
+    except Exception:
+        return None
+
