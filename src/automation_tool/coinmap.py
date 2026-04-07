@@ -1944,18 +1944,18 @@ def capture_charts(
         cfg["clear_charts_before_capture"] = bool(clear_charts_before_capture)
 
     # For multi-symbol runs: allow disabling one side (Coinmap vs TradingView) per phase.
+    # Also disable legacy canvas screenshots (stamp_chart_XXX.png) which are noisy for this workflow.
+    if enable_coinmap is not None or enable_tradingview is not None:
+        cfg["chart_selectors"] = []
+        cfg["fallback_full_page"] = False
+        cfg["screenshot_after_chart_download"] = False
+
     if enable_coinmap is not None:
         cd = cfg.get("chart_download")
         if not isinstance(cd, dict):
             cd = {}
             cfg["chart_download"] = cd
         cd["enabled"] = bool(enable_coinmap)
-        if not enable_coinmap:
-            # Also disable legacy canvas screenshots; for multi-symbol phases we only want
-            # the explicit capture flows.
-            cfg["chart_selectors"] = []
-            cfg["fallback_full_page"] = False
-            cfg["screenshot_after_chart_download"] = False
     if enable_tradingview is not None:
         tv = cfg.get("tradingview_capture")
         if not isinstance(tv, dict):

@@ -1041,14 +1041,30 @@ def cmd_analyze_many(args: argparse.Namespace) -> None:
         print(f"\n==== {sym} OUTPUT ====\n{out.full_text()}\n")
         if not args.no_telegram and out.after_charts:
             require_telegram(s)
-            send_openai_output_to_telegram(
-                bot_token=s.telegram_bot_token,
-                chat_id=s.telegram_chat_id,
-                raw=out.after_charts,
-                default_parse_mode=s.telegram_parse_mode,
-                summary_chat_id=s.telegram_output_ngan_gon_chat_id,
-                detail_chat_id=None,
-            )
+            # New flow requirement: only send OUTPUT_CHI_TIET to TELEGRAM_ANALYSIS_DETAIL_CHAT_ID
+            # (or --telegram-detail-chat-id override).
+            dual = split_analysis_json_chi_tiet_ngan_gon(out.after_charts)
+            if dual is None:
+                dual = split_output_chi_tiet_ngan_gon(out.after_charts)
+            if dual is not None:
+                chi_tiet, _ngan_gon = dual
+                if chi_tiet:
+                    send_message(
+                        bot_token=s.telegram_bot_token,
+                        chat_id=detail_chat_id or s.telegram_chat_id,
+                        text=chi_tiet,
+                        parse_mode=s.telegram_parse_mode,
+                    )
+            else:
+                # Fallback: send whatever the model produced (still to detail chat).
+                send_openai_output_to_telegram(
+                    bot_token=s.telegram_bot_token,
+                    chat_id=detail_chat_id or s.telegram_chat_id,
+                    raw=out.after_charts,
+                    default_parse_mode=s.telegram_parse_mode,
+                    summary_chat_id=None,
+                    detail_chat_id=None,
+                )
 
     print(f"analyze-many finished: ok={ok} fail={fail}")
 
