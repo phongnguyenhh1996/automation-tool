@@ -108,7 +108,11 @@ def default_coinmap_update_config_path() -> Path:
 
 
 def default_storage_state_path() -> Path:
-    return symbol_data_dir() / "storage_state.json"
+    """
+    Một file Playwright session dùng chung cho mọi symbol (Coinmap / TradingView),
+    không theo ``data/{{SYM}}/``. Ghi đè bằng ``--storage-state`` nếu cần.
+    """
+    return default_data_dir() / "storage_state.json"
 
 
 def _parse_vector_store_ids() -> list[str]:
