@@ -49,6 +49,14 @@ def apply_main_chart_symbol_to_config(cfg: dict[str, Any], main_symbol: str) -> 
         url = tv.get("chart_url")
         if isinstance(url, str) and old in url:
             tv["chart_url"] = url.replace(old, sym)
+
+        # Watchlist monitor: keep in sync with main symbol as well.
+        ws = tv.get("watchlist_symbol_short")
+        if isinstance(ws, str):
+            wss = ws.strip().upper()
+            if wss == old:
+                tv["watchlist_symbol_short"] = sym
+
         plan = tv.get("capture_plan")
         if isinstance(plan, list):
             for row in plan:

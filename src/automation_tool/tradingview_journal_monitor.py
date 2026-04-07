@@ -11,7 +11,7 @@ from datetime import datetime, time as dt_time, timedelta
 from pathlib import Path
 from typing import Any, Literal, Optional, Set
 
-from playwright.sync_api import BrowserContext, Page, sync_playwright
+from playwright.sync_api import Page, sync_playwright
 from zoneinfo import ZoneInfo
 
 from automation_tool.coinmap import (
@@ -22,40 +22,25 @@ from automation_tool.coinmap import (
 )
 from automation_tool.config import Settings
 from automation_tool.images import coinmap_xauusd_5m_json_path, read_main_chart_symbol
-from automation_tool.mt5_execute import execute_trade, format_mt5_execution_for_telegram
-from automation_tool.mt5_openai_parse import (
-    parse_journal_intraday_action_from_openai_text,
-    parse_openai_output_md,
-)
-from automation_tool.first_response_trade import apply_first_response_vao_lenh
 from automation_tool.openai_errors import re_raise_unless_openai
-from automation_tool.openai_prompt_flow import (
-    JOURNAL_INTRADAY_FIRST_USER_TEMPLATE,
-    JOURNAL_INTRADAY_RETRY_USER_TEMPLATE,
-    run_single_followup_responses,
-)
 from automation_tool.playwright_browser import close_browser_and_context, launch_chrome_context
 from automation_tool.state_files import (
-    LOAI,
     LastAlertState,
-    VAO_LENH,
     VUNG_CHO,
     all_plans_terminal,
     default_last_alert_prices_path,
     read_last_alert_state,
     read_last_response_id,
-    update_single_plan_status,
     write_journal_monitor_first_run,
-    write_last_response_id,
 )
 from automation_tool.telegram_bot import (
-    send_mt5_execution_log_to_ngan_gon_chat,
     send_openai_output_to_telegram,
 )
 from automation_tool.tradingview_alerts import (
     _open_alerts_list_panel,
     parse_tv_alert_price_from_description,
 )
+from automation_tool.tradingview_touch_flow import TouchFlowParams, run_intraday_touch_flow
 
 _EPS = 0.01
 
@@ -838,43 +823,71 @@ def run_tv_journal_monitor(
                     )
                     processed.add(line.strip())
                     rid = read_last_response_id() or initial_response_id
-                    while True:
-                        inner = _run_intraday_touch_loop(
-                            settings=settings,
-                            params=params,
-                            touched_price=touched,
-                            touched_label=tlab,
-                            journal_line=line,
-                            initial_response_id=rid,
-                            browser_context=context,
-                            last_alert_path=lap,
-                            page=page,
-                            tv=tv,
-                            settle_ms=settle_ms,
-                            processed=processed,
-                        )
-                        if inner.outcome == "superseded" and inner.supersede_touch is not None:
-                            sp = inner.supersede_touch
-                            touched, line, tlab = sp[0], sp[1], sp[2]
-                            rid = read_last_response_id() or rid
-                            _journal_log(
-                                tz,
-                                f"Chuyển tiếp vòng trong mới — giá {touched} (plan {tlab}), "
-                                f"dòng={_truncate(line, 120)!s}",
-                            )
-                            continue
-                        break
+
+                    tfp = TouchFlowParams(
+                        capture_coinmap_yaml=params.capture_coinmap_yaml,
+                        charts_dir=params.charts_dir,
+                        storage_state_path=params.storage_state_path,
+                        headless=params.headless,
+                        no_save_storage=params.no_save_storage,
+                        wait_minutes=params.wait_minutes,
+                        until_hour=params.until_hour,
+                        timezone_name=params.timezone_name,
+                        no_telegram=params.no_telegram,
+                        mt5_execute=params.mt5_execute,
+                        mt5_symbol=params.mt5_symbol,
+                        mt5_dry_run=params.mt5_dry_run,
+                        session_cutoff_end=params.session_cutoff_end,
+                    )
+
+                    def _poll_sup(touched_label: str, touched_price: float):
+                        # Reload journal and pick a new waiting-row match (different plan) to supersede.
+                        try:
+                            stx = read_last_alert_state(lap)
+                            if stx is None:
+                                return None
+                            waiting_x = _waiting_label_prices(stx)
+                            if not waiting_x:
+                                return None
+                            rows_x = _reload_page_and_list_journal_rows(page, tv, settle_ms)
+                            m2 = _pick_matching_waiting_row(rows_x, waiting_x, processed)
+                            if m2 is None:
+                                return None
+                            np, nline, nlab = m2
+                            same = nlab == touched_label and abs(np - touched_price) <= _EPS
+                            if same:
+                                return None
+                            processed.add(nline.strip())
+                            return (np, nline, nlab)
+                        except Exception:
+                            return None
+
+                    inner_outcome = run_intraday_touch_flow(
+                        settings=settings,
+                        params=tfp,
+                        touched_price=touched,
+                        touched_label=tlab,
+                        touch_line=line,
+                        initial_response_id=rid,
+                        browser_context=context,
+                        last_alert_path=lap,
+                        page=page,
+                        tv=tv,
+                        settle_ms=settle_ms,
+                        poll_seconds=params.poll_seconds,
+                        poll_supersede_touch=_poll_sup,
+                    )
 
                     st2 = read_last_alert_state(lap)
                     if st2 is not None and all_plans_terminal(st2):
                         _journal_log(tz, "Kết quả: all_plans_resolved (đã xử lý đủ 3 plan).")
                         return "all_plans_resolved"
-                    if inner.outcome == "cutoff":
+                    if inner_outcome == "cutoff":
                         _journal_log(tz, "Kết quả cuối: cutoff_time (hết giờ trong vòng trong).")
                         return "cutoff_time"
                     _journal_log(
                         tz,
-                        f"Vòng trong kết thúc ({inner.outcome!s}) — tiếp tục vòng ngoài nếu còn plan chờ.",
+                        f"Vòng trong kết thúc ({inner_outcome!s}) — tiếp tục vòng ngoài nếu còn plan chờ.",
                     )
                     continue
 

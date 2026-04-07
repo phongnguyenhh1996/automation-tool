@@ -54,6 +54,9 @@ class Settings:
     openai_responses_include: List[str]
     telegram_bot_token: str
     telegram_chat_id: str
+    # Optional: chat/channel/supergroup to listen for inbound commands (e.g. /full).
+    # Defaults to telegram_chat_id when unset.
+    telegram_listen_chat_id: Optional[str]
     # Optional second chat: [OUTPUT_NGAN_GON] (dual markers); MT5 logs go to telegram_chat_id only.
     telegram_output_ngan_gon_chat_id: Optional[str]
     # Optional: [OUTPUT_CHI_TIET] / JSON out_chi_tiet → this channel (analyze / dual-send).
@@ -146,6 +149,7 @@ def load_settings() -> Settings:
         openai_responses_include=_parse_include(),
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
+        telegram_listen_chat_id=((os.getenv("TELEGRAM_LISTEN_CHAT_ID") or "").strip() or None),
         telegram_output_ngan_gon_chat_id=(
             (os.getenv("TELEGRAM_OUTPUT_NGAN_GON_CHAT_ID") or "").strip() or None
         ),

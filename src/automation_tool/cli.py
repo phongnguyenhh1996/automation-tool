@@ -50,6 +50,10 @@ from automation_tool.zone_prices import (
 )
 from automation_tool.tradingview_alerts import sync_tradingview_alerts
 from automation_tool.tradingview_journal_monitor import JournalMonitorParams, run_tv_journal_monitor
+from automation_tool.tradingview_watchlist_monitor import (
+    WatchlistMonitorParams,
+    run_tv_watchlist_monitor,
+)
 from automation_tool.telegram_bot import (
     send_message,
     send_mt5_execution_log_to_ngan_gon_chat,
@@ -57,6 +61,7 @@ from automation_tool.telegram_bot import (
     split_analysis_json_chi_tiet_ngan_gon,
     split_output_chi_tiet_ngan_gon,
 )
+from automation_tool.telegram_listen import TelegramListenParams, run_telegram_listener
 from automation_tool.telegram_logging import setup_automation_logging
 from automation_tool.config import load_all_dotenv
 from automation_tool.exclusive_all_update import acquire_exclusive_all_update_run
@@ -169,8 +174,8 @@ def _parser() -> argparse.ArgumentParser:
     al = sub.add_parser(
         "all",
         help=(
-            "capture → OpenAI → parse 3 vùng giá → persist + đồng bộ TradingView alerts → "
-            "tv-journal-monitor (mặc định; dùng --no-tv-journal-monitor để bỏ)"
+            "capture → OpenAI → parse 3 vùng giá → persist → "
+            "tv-watchlist-monitor (mặc định; dùng --no-tv-journal-monitor để bỏ)"
         ),
     )
     al.add_argument("--config", type=Path, default=None)
@@ -200,14 +205,14 @@ def _parser() -> argparse.ArgumentParser:
     al.add_argument(
         "--no-tradingview",
         action="store_true",
-        help="Skip TradingView alert sync after parsing 3 zone prices from step-2 output",
+        help="Skip TradingView monitoring step (không mở/treo TradingView)",
     )
     al.add_argument(
         "--no-tv-journal-monitor",
         action="store_true",
         help=(
-            "Không chạy tv-journal-monitor sau khi đồng bộ cảnh báo TV "
-            "(mặc định: luôn chạy khi đã đồng bộ TV)"
+            "Không chạy monitor TradingView sau khi đã có 3 vùng giá "
+            "(mặc định: luôn chạy khi không set --no-tradingview)"
         ),
     )
     al.add_argument(
@@ -220,25 +225,25 @@ def _parser() -> argparse.ArgumentParser:
         "--poll-seconds",
         type=float,
         default=45.0,
-        help="tv-journal-monitor: nghỉ giữa các chu kỳ reload (mặc định: 45)",
+        help="(legacy tv-journal-monitor) nghỉ giữa các chu kỳ reload (mặc định: 45)",
     )
     al.add_argument(
         "--wait-minutes",
         type=int,
         default=15,
-        help="tv-journal-monitor: khi model trả Hành động chờ — phút trước khi chụp M5 hỏi lại (mặc định: 15)",
+        help="Monitor: khi model trả Hành động chờ — phút trước khi chụp M5 hỏi lại (mặc định: 15)",
     )
     al.add_argument(
         "--until-hour",
         type=int,
         default=23,
-        help="tv-journal-monitor: dừng theo dõi sau giờ này (địa phương, mặc định: 23)",
+        help="Monitor: dừng theo dõi sau giờ này (địa phương, mặc định: 23)",
     )
     al.add_argument(
         "--timezone",
         type=str,
         default="Asia/Ho_Chi_Minh",
-        help="tv-journal-monitor: IANA timezone cho --until-hour",
+        help="Monitor: IANA timezone cho --until-hour",
     )
     al.add_argument(
         "--last-alert-json",
@@ -271,16 +276,46 @@ def _parser() -> argparse.ArgumentParser:
     )
     al.set_defaults(func=cmd_all)
 
+    tl = sub.add_parser(
+        "telegram-listen",
+        help="Listen inbound Telegram messages in a channel/group (poll getUpdates). Supports /full.",
+    )
+    tl.add_argument(
+        "--poll-interval-seconds",
+        type=float,
+        default=0.5,
+        help="Sleep between polls when idle (default: 0.5)",
+    )
+    tl.add_argument(
+        "--long-poll-timeout-seconds",
+        type=int,
+        default=45,
+        help="Telegram long poll timeout passed to getUpdates (default: 45)",
+    )
+    tl.add_argument(
+        "--full-main-symbol",
+        type=str,
+        default="XAUUSD",
+        help="Symbol used when /full triggers (default: XAUUSD). On Windows runs run_daily.bat.",
+    )
+    tl.add_argument(
+        "--update-main-symbol",
+        type=str,
+        default="XAUUSD",
+        help="Symbol used when /update triggers (default: XAUUSD). On Windows runs run_update.bat.",
+    )
+    tl.set_defaults(func=cmd_telegram_listen)
+
     up = sub.add_parser(
         "update",
-        help="Intraday: Coinmap XAUUSD M5 JSON + OpenAI follow-up (same thread); sync TradingView if zones changed vs morning",
+        help="Intraday: Coinmap M5 JSON + OpenAI follow-up (same thread); rồi chạy tv-watchlist-monitor",
     )
     up.add_argument("--config", type=Path, default=None, help="Coinmap yaml for capture only (default: coinmap_update.yaml)")
     up.add_argument(
         "--tv-config",
         type=Path,
         default=None,
-        help="Yaml containing tradingview_capture for alert sync (default: config/coinmap.yaml)",
+        help="Yaml chứa tradingview_capture cho monitor (default: config/coinmap.yaml)",
     )
     up.add_argument("--charts-dir", type=Path, default=None)
     up.add_argument("--storage-state", type=Path, default=None)
@@ -296,13 +331,13 @@ def _parser() -> argparse.ArgumentParser:
     up.add_argument(
         "--no-tradingview",
         action="store_true",
-        help="Skip TradingView alert sync (still updates last_response_id)",
+        help="Skip TradingView monitoring step (still updates last_response_id)",
     )
     up.add_argument(
         "--no-journal-monitor-after-update",
         action="store_true",
         help=(
-            "Không chạy tv-journal-monitor sau update (kể cả no_change / giá trùng baseline; "
+            "Không chạy tv-watchlist-monitor sau update (kể cả no_change / giá trùng baseline; "
             "mặc định: luôn chạy)"
         ),
     )
@@ -765,6 +800,18 @@ def cmd_telegram_send(args: argparse.Namespace) -> None:
     print("Sent.")
 
 
+def cmd_telegram_listen(args: argparse.Namespace) -> None:
+    s = load_settings()
+    require_telegram(s)
+    params = TelegramListenParams(
+        poll_interval_seconds=float(args.poll_interval_seconds),
+        long_poll_timeout_seconds=int(args.long_poll_timeout_seconds),
+        full_main_symbol=str(args.full_main_symbol or "XAUUSD"),
+        update_main_symbol=str(args.update_main_symbol or "XAUUSD"),
+    )
+    run_telegram_listener(settings=s, params=params)
+
+
 def cmd_all(args: argparse.Namespace) -> None:
     acquire_exclusive_all_update_run()
     s = load_settings()
@@ -858,37 +905,22 @@ def cmd_all(args: argparse.Namespace) -> None:
             zt[2],
         )
         if not args.no_tradingview:
-            p1, p2, p3 = zt
-            print(
-                f"Đồng bộ TradingView alerts → {p1} | {p2} | {p3} (config: {cfg})",
-                flush=True,
-            )
-            sync_tradingview_alerts(
-                coinmap_yaml=cfg,
-                storage_state_path=storage,
-                email=s.coinmap_email,
-                tradingview_password=s.tradingview_password,
-                target_prices=zt,
-                headless=not args.headed,
-            )
-            _log.info("all: TradingView sync xong")
             if not args.no_tv_journal_monitor:
                 require_openai(s)
                 prev_j = read_last_response_id()
                 if not prev_j:
                     raise SystemExit(
-                        f"Thiếu {default_last_response_id_path()} — không chạy tv-journal-monitor."
+                        f"Thiếu {default_last_response_id_path()} — không chạy tv-watchlist-monitor."
                     )
                 cfg_cap = args.capture_config or default_coinmap_update_config_path()
-                params = JournalMonitorParams(
+                params = WatchlistMonitorParams(
                     coinmap_tv_yaml=cfg,
                     capture_coinmap_yaml=cfg_cap,
                     charts_dir=charts_dir,
                     storage_state_path=storage,
-                    target_prices=zt,
                     headless=not args.headed,
                     no_save_storage=args.no_save_storage,
-                    poll_seconds=args.poll_seconds,
+                    watchlist_poll_seconds=10.0,
                     wait_minutes=args.wait_minutes,
                     until_hour=args.until_hour,
                     timezone_name=args.timezone,
@@ -899,19 +931,14 @@ def cmd_all(args: argparse.Namespace) -> None:
                     mt5_dry_run=args.mt5_dry_run,
                 )
                 print(
-                    f"tv-journal-monitor: giá {zt[0]} | {zt[1]} | {zt[2]} — "
+                    f"tv-watchlist-monitor: giá {zt[0]} | {zt[1]} | {zt[2]} — "
                     f"tới {args.until_hour}:00 ({args.timezone}), "
-                    f"chu kỳ: reload → Nhật ký → parse, nghỉ {args.poll_seconds}s.",
+                    "chu kỳ: đọc Watchlist (skip highlight) mỗi 10s.",
                     flush=True,
                 )
-                print(
-                    f"  TV yaml: {cfg} | Capture yaml: {cfg_cap} | charts: {charts_dir} | "
-                    f"storage: {storage} | headed={args.headed} | no_telegram={args.no_telegram}",
-                    flush=True,
-                )
-                _log.info("all: chạy tv-journal-monitor…")
+                _log.info("all: chạy tv-watchlist-monitor…")
                 try:
-                    outcome = run_tv_journal_monitor(
+                    outcome = run_tv_watchlist_monitor(
                         settings=s,
                         params=params,
                         initial_response_id=prev_j,
@@ -919,8 +946,8 @@ def cmd_all(args: argparse.Namespace) -> None:
                 except Exception as e:
                     re_raise_unless_openai(e)
                     raise
-                print(f"Kết thúc tv-journal-monitor: {outcome}", flush=True)
-                _log.info("all: tv-journal-monitor kết thúc | outcome=%s", outcome)
+                print(f"Kết thúc tv-watchlist-monitor: {outcome}", flush=True)
+                _log.info("all: tv-watchlist-monitor kết thúc | outcome=%s", outcome)
     else:
         print(
             f"Warning: could not parse morning zone prices for persistence: {zerr}",
@@ -1148,15 +1175,14 @@ def cmd_update(args: argparse.Namespace) -> None:
             return
         print(f"Chạy tv-journal-monitor ({log_label}).", flush=True)
         _log.info("update: chạy tv-journal-monitor | %s", log_label)
-        jparams = JournalMonitorParams(
+        jparams = WatchlistMonitorParams(
             coinmap_tv_yaml=cfg_tv,
             capture_coinmap_yaml=cfg_cap,
             charts_dir=charts_dir,
             storage_state_path=storage,
-            target_prices=target_prices,
             headless=not args.headed,
             no_save_storage=args.no_save_storage,
-            poll_seconds=45.0,
+            watchlist_poll_seconds=10.0,
             wait_minutes=15,
             until_hour=23,
             timezone_name="Asia/Ho_Chi_Minh",
@@ -1167,7 +1193,7 @@ def cmd_update(args: argparse.Namespace) -> None:
             mt5_dry_run=args.mt5_dry_run,
         )
         try:
-            outcome = run_tv_journal_monitor(
+            outcome = run_tv_watchlist_monitor(
                 settings=s,
                 params=jparams,
                 initial_response_id=new_id,
@@ -1175,8 +1201,8 @@ def cmd_update(args: argparse.Namespace) -> None:
         except Exception as e:
             re_raise_unless_openai(e)
             raise
-        print(f"Kết thúc tv-journal-monitor (sau update): {outcome}", flush=True)
-        _log.info("update: tv-journal-monitor sau update kết thúc | outcome=%s", outcome)
+        print(f"Kết thúc tv-watchlist-monitor (sau update): {outcome}", flush=True)
+        _log.info("update: tv-watchlist-monitor sau update kết thúc | outcome=%s", outcome)
 
     new_triple, zerr, no_change_json = parse_three_zone_prices(out_text)
     if no_change_json is True:
@@ -1229,16 +1255,7 @@ def cmd_update(args: argparse.Namespace) -> None:
         new_triple[2],
     )
 
-    if not args.no_tradingview:
-        sync_tradingview_alerts(
-            coinmap_yaml=cfg_tv,
-            storage_state_path=storage,
-            email=s.coinmap_email,
-            tradingview_password=s.tradingview_password,
-            target_prices=new_triple,
-            headless=not args.headed,
-        )
-        _log.info("update: TradingView sync xong")
+    # Không cần tạo TradingView alerts nữa; monitor đọc trực tiếp giá realtime từ Watchlist.
 
     if not args.no_telegram:
         require_telegram(s)

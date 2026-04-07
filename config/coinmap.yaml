@@ -207,6 +207,17 @@ tradingview_capture:
   symbol_name_class_prefix: "symbolNameText-"
   after_symbol_select_ms: 1500
   after_fullscreen_escape_ms: 800
+  # Watchlist realtime price monitor (no alerts): để trống để tự dùng symbol active
+  # (data/.main_chart_symbol hoặc env AUTOMATION_MAIN_SYMBOL). Nếu set, phải khớp data-symbol-short trên TradingView.
+  watchlist_symbol_short: ""
+  watchlist_row_selector: '[data-symbol-short="{symbol}"]'
+  # Scope under the row element (avoid relying on hash classes like *-RsFlttSS).
+  watchlist_last_cell_selector: 'span[class*="cell"][class*="last"] span[class*="inner"]'
+  watchlist_poll_seconds: 10
+  # Only parse price when the span does NOT have these highlight class prefixes.
+  watchlist_price_stable_class_prefix_denylist:
+    - "highlightUp-"
+    - "highlightDown-"
   # Inactive timeframe radios stay in DOM but hidden
   interval_button_click_force: true
   # Legacy single-shot only when multi_shot_enabled: false
