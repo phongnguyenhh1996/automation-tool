@@ -79,16 +79,44 @@ def _message_id_from_envelope(env: dict[str, Any]) -> Optional[int]:
     return mid if isinstance(mid, int) else None
 
 
-def _parse_command(text: str) -> Optional[str]:
+def _parse_command(text: str) -> tuple[Optional[str], str]:
     """
-    Parse "/full", "/update", "/stop", "/full@BotName", and ignore arguments.
+    Parse "/full", "/update", "/stop", "/analyze-many", "/full@BotName".
+    Returns (cmd, args_text) where args_text is the remaining raw text (may be empty).
     """
     t = (text or "").strip()
     if not t.startswith("/"):
-        return None
-    head = t.split(maxsplit=1)[0]
+        return None, ""
+    parts = t.split(maxsplit=1)
+    head = parts[0]
+    rest = parts[1].strip() if len(parts) > 1 else ""
     cmd = head[1:].split("@", 1)[0].strip().lower()
-    return cmd or None
+    return (cmd or None), rest
+
+
+def _parse_symbols_from_args_text(args_text: str) -> Optional[str]:
+    """
+    Accept: "EURUSD,USDJPY" or "EURUSD USDJPY" or "EURUSD, USDJPY".
+    Returns normalized comma-separated string (e.g. "EURUSD,USDJPY") or None.
+    """
+    raw = (args_text or "").strip()
+    if not raw:
+        return None
+    # Replace whitespace with commas then split.
+    raw = raw.replace("\n", " ").replace("\t", " ")
+    raw = raw.replace(" ", ",")
+    parts = [p.strip().upper() for p in raw.split(",") if p.strip()]
+    if not parts:
+        return None
+    # De-dupe while preserving order.
+    out: list[str] = []
+    seen: set[str] = set()
+    for p in parts:
+        if p in seen:
+            continue
+        seen.add(p)
+        out.append(p)
+    return ",".join(out)
 
 
 def _send_status(settings: Settings, chat_id: str, text: str) -> None:
@@ -302,6 +330,57 @@ def _run_update_pipeline_in_thread(
             _PROCS[:] = [p for p in _PROCS if p.popen.poll() is None]
 
 
+def _run_analyze_many_pipeline_in_thread(
+    *,
+    settings: Settings,
+    reply_chat_id: str,
+    symbols_csv: str,
+    trigger_message_id: Optional[int],
+) -> None:
+    """
+    Runs analyze-many asynchronously and posts start/finish messages.
+    """
+    root = _project_root()
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    ref = f"(msg_id={trigger_message_id})" if trigger_message_id else ""
+    _send_status(
+        settings,
+        reply_chat_id,
+        f"▶️ /analyze-many received {ref}\nStarting analyze-many ({symbols_csv}) at {stamp}.",
+    )
+
+    # Cross-platform: run the CLI module. (On Windows, this assumes the bot runs inside the venv.)
+    cmd = [
+        sys.executable,
+        "-m",
+        "automation_tool.cli",
+        "analyze-many",
+        "--symbols",
+        symbols_csv,
+        "--parallel",
+        "2",
+    ]
+
+    try:
+        mp = _spawn_managed_process(name="analyze-many", cmd=cmd, cwd=root)
+        out, _ = mp.popen.communicate()
+        code = int(mp.popen.returncode or 0)
+        if code == 0:
+            _send_status(settings, reply_chat_id, "✅ /analyze-many finished successfully (exit code 0).")
+        else:
+            tail = (out or "").strip()
+            if len(tail) > 1500:
+                tail = tail[-1500:]
+            msg = f"❌ /analyze-many failed (exit code {code})."
+            if tail:
+                msg += "\n\nLast output:\n" + tail
+            _send_status(settings, reply_chat_id, msg)
+    except Exception as e:
+        _send_status(settings, reply_chat_id, f"❌ /analyze-many crashed: {e!r}")
+    finally:
+        with _PROC_LOCK:
+            _PROCS[:] = [p for p in _PROCS if p.popen.poll() is None]
+
 def run_telegram_listener(
     *,
     settings: Settings,
@@ -359,7 +438,7 @@ def run_telegram_listener(
                     if not chat_id or chat_id != listen_chat_id:
                         continue
 
-                    cmd = _parse_command(text)
+                    cmd, args_text = _parse_command(text)
                     if cmd == "stop":
                         _stop_all_processes(settings, listen_chat_id)
                     elif cmd == "update":
@@ -390,6 +469,21 @@ def run_telegram_listener(
                             },
                             daemon=True,
                             name="telegram-full-runner",
+                        )
+                        t.start()
+                    elif cmd == "analyze-many":
+                        mid = _message_id_from_envelope(env)
+                        symbols_csv = _parse_symbols_from_args_text(args_text) or "EURUSD,USDJPY"
+                        t = threading.Thread(
+                            target=_run_analyze_many_pipeline_in_thread,
+                            kwargs={
+                                "settings": settings,
+                                "reply_chat_id": listen_chat_id,
+                                "symbols_csv": symbols_csv,
+                                "trigger_message_id": mid,
+                            },
+                            daemon=True,
+                            name="telegram-analyze-many-runner",
                         )
                         t.start()
 

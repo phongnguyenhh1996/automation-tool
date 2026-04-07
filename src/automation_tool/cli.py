@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import logging
 import os
 import sys
+import threading
 from collections.abc import Callable
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
-from automation_tool.coinmap import capture_charts
+from automation_tool.coinmap import capture_charts, load_coinmap_yaml
 from automation_tool.config import (
     default_charts_dir,
     default_coinmap_config_path,
@@ -17,6 +19,7 @@ from automation_tool.config import (
     load_settings,
     require_openai,
     require_telegram,
+    symbol_data_dir,
 )
 from automation_tool.openai_errors import re_raise_unless_openai
 from automation_tool.openai_prompt_flow import (
@@ -67,6 +70,10 @@ from automation_tool.config import load_all_dotenv
 from automation_tool.exclusive_all_update import acquire_exclusive_all_update_run
 from automation_tool.mt5_openai_parse import parse_openai_output_md
 from automation_tool.mt5_execute import check_mt5_login, execute_trade, format_mt5_execution_for_telegram
+
+from playwright.sync_api import sync_playwright
+
+from automation_tool.playwright_browser import close_browser_and_context, launch_chrome_context
 
 _log = logging.getLogger("automation_tool.cli")
 
@@ -170,6 +177,85 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     a.set_defaults(func=cmd_analyze)
+
+    cm = sub.add_parser(
+        "capture-many",
+        help="Capture Coinmap + TradingView for multiple symbols (single browser session)",
+    )
+    cm.add_argument(
+        "--symbols",
+        required=True,
+        metavar="SYMS",
+        help="Comma-separated symbols (e.g. EURUSD,USDJPY). Capture runs Coinmap(all) then TradingView(all).",
+    )
+    cm.add_argument("--config", type=Path, default=None, help="Path to coinmap.yaml")
+    cm.add_argument(
+        "--storage-state",
+        type=Path,
+        default=None,
+        help="Playwright storage state JSON (shared for the whole run unless overridden)",
+    )
+    cm.add_argument("--no-save-storage", action="store_true", help="Do not write storage state after run")
+    cm.add_argument("--headed", action="store_true", help="Show browser window")
+    cm.set_defaults(func=cmd_capture_many)
+
+    am = sub.add_parser(
+        "analyze-many",
+        help="OpenAI analyze multiple symbols (parallel, best-effort)",
+    )
+    am.add_argument(
+        "--symbols",
+        required=True,
+        metavar="SYMS",
+        help="Comma-separated symbols (e.g. EURUSD,USDJPY). Each uses data/{SYM}/charts/.",
+    )
+    am.add_argument(
+        "--parallel",
+        type=int,
+        default=2,
+        help="Max concurrent OpenAI calls (default: 2)",
+    )
+    am.add_argument(
+        "--max-images-per-call",
+        type=int,
+        default=10,
+        help="Max items per OpenAI call (TradingView images + Coinmap JSON blocks)",
+    )
+    am.add_argument(
+        "--prompt",
+        type=str,
+        default=None,
+        help="Optional prompt override (applies to every symbol). Default: per-symbol analysis prompt.",
+    )
+    am.add_argument("--no-telegram", action="store_true", help="Do not send results to Telegram")
+    am.add_argument(
+        "--last-alert-json",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help=(
+            "Override last_alert_prices.json path (advanced). "
+            "Default is per-symbol data/{SYM}/last_alert_prices.json."
+        ),
+    )
+    am.add_argument(
+        "--mt5-execute",
+        action="store_true",
+        help="Allow execute_trade from first response (default: disabled for safety)",
+    )
+    am.add_argument(
+        "--mt5-live",
+        action="store_true",
+        help="If --mt5-execute is enabled: send real orders (default: dry-run)",
+    )
+    am.add_argument("--mt5-symbol", default=None, metavar="SYM", help="Symbol MT5 override (first response)")
+    am.add_argument(
+        "--telegram-detail-chat-id",
+        default=None,
+        metavar="ID",
+        help="Chat/channel for detailed execution logs (markers / JSON out_chi_tiet)",
+    )
+    am.set_defaults(func=cmd_analyze_many)
 
     al = sub.add_parser(
         "all",
@@ -595,6 +681,32 @@ def _parser() -> argparse.ArgumentParser:
     return p
 
 
+def _parse_symbols_arg(raw: str | Sequence[str]) -> list[str]:
+    """
+    Normalize symbols list from a comma-separated string (or repeated values in the future).
+    """
+    if isinstance(raw, str):
+        parts = [p.strip() for p in raw.split(",")]
+    else:
+        parts = [str(p).strip() for p in raw]
+    out: list[str] = []
+    for p in parts:
+        if not p:
+            continue
+        out.append(p.upper())
+    if not out:
+        raise SystemExit("No symbols provided. Use --symbols EURUSD,USDJPY")
+    # De-dupe while preserving order.
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for s in out:
+        if s in seen:
+            continue
+        seen.add(s)
+        uniq.append(s)
+    return uniq
+
+
 def _run_openai_flow(
     s,
     charts_dir: Path,
@@ -647,6 +759,91 @@ def cmd_capture(args: argparse.Namespace) -> None:
     _log.info("capture: xong | %s file(s) → %s", len(paths), charts_dir)
     for p in paths:
         print(f"  {p}")
+
+
+def cmd_capture_many(args: argparse.Namespace) -> None:
+    """
+    Multi-symbol capture in one browser session, 2 phases:
+    1) Coinmap for all symbols
+    2) TradingView for all symbols
+    """
+    s = load_settings()
+    symbols = _parse_symbols_arg(args.symbols)
+    cfg_path = args.config or default_coinmap_config_path()
+    storage = args.storage_state or default_storage_state_path()
+    cfg = load_coinmap_yaml(cfg_path)
+    vw = int(cfg.get("viewport_width", 1920))
+    vh = int(cfg.get("viewport_height", 1080))
+
+    _log.info(
+        "capture-many: start | symbols=%s config=%s headed=%s storage=%s",
+        ",".join(symbols),
+        cfg_path,
+        args.headed,
+        storage,
+    )
+
+    with sync_playwright() as p:
+        browser, context = launch_chrome_context(
+            p,
+            headless=not args.headed,
+            storage_state_path=storage,
+            viewport_width=vw,
+            viewport_height=vh,
+        )
+        try:
+            # Phase 1: Coinmap for all symbols (clears per-symbol charts dir).
+            for sym in symbols:
+                charts_dir = symbol_data_dir(sym) / "charts"
+                _log.info("capture-many: coinmap phase | %s → %s", sym, charts_dir)
+                capture_charts(
+                    coinmap_yaml=cfg_path,
+                    charts_dir=charts_dir,
+                    storage_state_path=storage,
+                    email=s.coinmap_email,
+                    password=s.coinmap_password,
+                    tradingview_password=s.tradingview_password,
+                    save_storage_state=False,
+                    headless=not args.headed,
+                    reuse_browser_context=context,
+                    main_chart_symbol=sym,
+                    set_global_active_symbol=False,
+                    enable_coinmap=True,
+                    enable_tradingview=False,
+                    clear_charts_before_capture=True,
+                )
+
+            # Phase 2: TradingView for all symbols (must NOT clear prior Coinmap outputs).
+            for sym in symbols:
+                charts_dir = symbol_data_dir(sym) / "charts"
+                _log.info("capture-many: tradingview phase | %s → %s", sym, charts_dir)
+                capture_charts(
+                    coinmap_yaml=cfg_path,
+                    charts_dir=charts_dir,
+                    storage_state_path=storage,
+                    email=s.coinmap_email,
+                    password=s.coinmap_password,
+                    tradingview_password=s.tradingview_password,
+                    save_storage_state=False,
+                    headless=not args.headed,
+                    reuse_browser_context=context,
+                    main_chart_symbol=sym,
+                    set_global_active_symbol=False,
+                    enable_coinmap=False,
+                    enable_tradingview=True,
+                    clear_charts_before_capture=False,
+                )
+
+            if not args.no_save_storage and storage:
+                storage.parent.mkdir(parents=True, exist_ok=True)
+                context.storage_state(path=str(storage))
+                _log.info("capture-many: wrote storage state | %s", storage)
+        finally:
+            close_browser_and_context(browser, context)
+
+    print("capture-many finished. Charts dirs:")
+    for sym in symbols:
+        print(f"  {sym}: {symbol_data_dir(sym) / 'charts'}")
 
 
 def _resolved_analysis_prompt(args: argparse.Namespace, charts_dir: Path) -> str:
@@ -729,6 +926,131 @@ def cmd_analyze(args: argparse.Namespace) -> None:
             summary_chat_id=s.telegram_output_ngan_gon_chat_id,
             detail_chat_id=None,
         )
+
+
+def cmd_analyze_many(args: argparse.Namespace) -> None:
+    s = load_settings()
+    require_openai(s)
+    symbols = _parse_symbols_arg(args.symbols)
+    parallel = max(1, int(args.parallel or 1))
+
+    # Safety defaults for multi-symbol: no MT5 execute unless explicitly enabled; dry-run unless --mt5-live.
+    mt5_execute = bool(getattr(args, "mt5_execute", False))
+    mt5_dry_run = not bool(getattr(args, "mt5_live", False))
+    mt5_lock = threading.Lock()
+    detail_chat_id = (
+        str(args.telegram_detail_chat_id).strip()
+        if getattr(args, "telegram_detail_chat_id", None) is not None
+        and str(args.telegram_detail_chat_id).strip()
+        else s.telegram_analysis_detail_chat_id
+    )
+
+    _log.info(
+        "analyze-many: start | symbols=%s parallel=%s no_telegram=%s mt5_execute=%s mt5_dry_run=%s",
+        ",".join(symbols),
+        parallel,
+        args.no_telegram,
+        mt5_execute,
+        mt5_dry_run,
+    )
+
+    def _analyze_one(sym: str) -> tuple[str, Optional[PromptTwoStepResult], Optional[BaseException]]:
+        charts_dir = symbol_data_dir(sym) / "charts"
+        payloads = ordered_chart_openai_payloads(charts_dir)
+        _warn_if_incomplete_chart_payloads(charts_dir, payloads)
+        if not payloads:
+            return sym, None, SystemExit(f"No chart files under {charts_dir} (run capture-many first).")
+
+        lap = args.last_alert_json or (symbol_data_dir(sym) / "last_alert_prices.json")
+
+        def _on_first(text: str) -> None:
+            # Guardrail: if MT5 execution is enabled, serialize the side-effectful part.
+            if mt5_execute:
+                with mt5_lock:
+                    apply_first_response_vao_lenh(
+                        text,
+                        last_alert_path=lap,
+                        mt5_execute=mt5_execute,
+                        mt5_dry_run=mt5_dry_run,
+                        mt5_symbol=args.mt5_symbol,
+                        telegram_bot_token=s.telegram_bot_token,
+                        telegram_chat_id=s.telegram_chat_id,
+                        telegram_analysis_detail_chat_id=detail_chat_id,
+                        telegram_output_ngan_gon_chat_id=s.telegram_output_ngan_gon_chat_id,
+                        telegram_source_label=f"analyze-many ({sym}) (phản hồi đầu)",
+                    )
+                return
+            apply_first_response_vao_lenh(
+                text,
+                last_alert_path=lap,
+                mt5_execute=mt5_execute,
+                mt5_dry_run=mt5_dry_run,
+                mt5_symbol=args.mt5_symbol,
+                telegram_bot_token=s.telegram_bot_token,
+                telegram_chat_id=s.telegram_chat_id,
+                telegram_analysis_detail_chat_id=detail_chat_id,
+                telegram_output_ngan_gon_chat_id=s.telegram_output_ngan_gon_chat_id,
+                telegram_source_label=f"analyze-many ({sym}) (phản hồi đầu)",
+            )
+
+        prompt = (
+            str(args.prompt).strip()
+            if getattr(args, "prompt", None) is not None and str(args.prompt).strip()
+            else default_analysis_prompt(sym)
+        )
+
+        try:
+            out = _run_openai_flow(
+                s,
+                charts_dir,
+                prompt,
+                args.max_images_per_call,
+                chart_payloads=payloads,
+                on_first_model_text=_on_first,
+            )
+            return sym, out, None
+        except BaseException as e:
+            return sym, None, e
+
+    results: list[tuple[str, Optional[PromptTwoStepResult], Optional[BaseException]]] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=parallel) as ex:
+        futs = {ex.submit(_analyze_one, sym): sym for sym in symbols}
+        for fut in concurrent.futures.as_completed(futs):
+            sym = futs[fut]
+            try:
+                results.append(fut.result())
+            except BaseException as e:
+                results.append((sym, None, e))
+
+    # Stable output order = input order.
+    by_sym = {sym: (out, err) for sym, out, err in results}
+    ok = 0
+    fail = 0
+    for sym in symbols:
+        out, err = by_sym.get(sym, (None, RuntimeError("missing result")))
+        if err is not None:
+            fail += 1
+            try:
+                re_raise_unless_openai(err)
+            except BaseException:
+                pass
+            print(f"\n==== {sym} ERROR ====\n{err}\n")
+            continue
+        ok += 1
+        assert out is not None
+        print(f"\n==== {sym} OUTPUT ====\n{out.full_text()}\n")
+        if not args.no_telegram and out.after_charts:
+            require_telegram(s)
+            send_openai_output_to_telegram(
+                bot_token=s.telegram_bot_token,
+                chat_id=s.telegram_chat_id,
+                raw=out.after_charts,
+                default_parse_mode=s.telegram_parse_mode,
+                summary_chat_id=s.telegram_output_ngan_gon_chat_id,
+                detail_chat_id=None,
+            )
+
+    print(f"analyze-many finished: ok={ok} fail={fail}")
 
 
 def cmd_chatgpt_project(args: argparse.Namespace) -> None:

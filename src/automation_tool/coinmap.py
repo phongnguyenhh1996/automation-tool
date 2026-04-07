@@ -1914,6 +1914,10 @@ def capture_charts(
     headless: bool = True,
     reuse_browser_context: Optional[BrowserContext] = None,
     main_chart_symbol: Optional[str] = None,
+    set_global_active_symbol: bool = True,
+    enable_coinmap: Optional[bool] = None,
+    enable_tradingview: Optional[bool] = None,
+    clear_charts_before_capture: Optional[bool] = None,
 ) -> list[Path]:
     """
     Optionally clear prior images in charts_dir, then log in (if credentials given),
@@ -1928,12 +1932,36 @@ def capture_charts(
     from automation_tool.images import (
         get_active_main_symbol,
         set_active_main_symbol_file,
+        normalize_main_chart_symbol,
         write_main_chart_symbol_marker,
     )
 
     cfg = load_coinmap_yaml(coinmap_yaml)
     if main_chart_symbol is not None and str(main_chart_symbol).strip():
         cfg = apply_main_chart_symbol_to_config(cfg, main_chart_symbol)
+
+    if clear_charts_before_capture is not None:
+        cfg["clear_charts_before_capture"] = bool(clear_charts_before_capture)
+
+    # For multi-symbol runs: allow disabling one side (Coinmap vs TradingView) per phase.
+    if enable_coinmap is not None:
+        cd = cfg.get("chart_download")
+        if not isinstance(cd, dict):
+            cd = {}
+            cfg["chart_download"] = cd
+        cd["enabled"] = bool(enable_coinmap)
+        if not enable_coinmap:
+            # Also disable legacy canvas screenshots; for multi-symbol phases we only want
+            # the explicit capture flows.
+            cfg["chart_selectors"] = []
+            cfg["fallback_full_page"] = False
+            cfg["screenshot_after_chart_download"] = False
+    if enable_tradingview is not None:
+        tv = cfg.get("tradingview_capture")
+        if not isinstance(tv, dict):
+            tv = {}
+            cfg["tradingview_capture"] = tv
+        tv["enabled"] = bool(enable_tradingview)
 
     has_storage = bool(storage_state_path and storage_state_path.exists())
     if bool(email) != bool(password):
@@ -1944,12 +1972,16 @@ def capture_charts(
             f"or an existing Playwright storage state file (e.g. {storage_state_path})."
         )
 
-    set_active_main_symbol_file(
-        main_chart_symbol if (main_chart_symbol and str(main_chart_symbol).strip()) else None
-    )
+    if set_global_active_symbol:
+        set_active_main_symbol_file(
+            main_chart_symbol if (main_chart_symbol and str(main_chart_symbol).strip()) else None
+        )
     charts_dir = charts_dir or default_charts_dir()
     _ensure_dir(charts_dir)
-    write_main_chart_symbol_marker(charts_dir, get_active_main_symbol())
+    if main_chart_symbol is not None and str(main_chart_symbol).strip():
+        write_main_chart_symbol_marker(charts_dir, normalize_main_chart_symbol(main_chart_symbol))
+    else:
+        write_main_chart_symbol_marker(charts_dir, get_active_main_symbol())
     if bool(cfg.get("clear_charts_before_capture", True)):
         _clear_charts_dir(charts_dir)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
