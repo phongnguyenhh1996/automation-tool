@@ -59,6 +59,7 @@ from automation_tool.telegram_bot import (
 )
 from automation_tool.telegram_logging import setup_automation_logging
 from automation_tool.config import load_all_dotenv
+from automation_tool.exclusive_all_update import acquire_exclusive_all_update_run
 from automation_tool.mt5_openai_parse import parse_openai_output_md
 from automation_tool.mt5_execute import check_mt5_login, execute_trade, format_mt5_execution_for_telegram
 
@@ -765,6 +766,7 @@ def cmd_telegram_send(args: argparse.Namespace) -> None:
 
 
 def cmd_all(args: argparse.Namespace) -> None:
+    acquire_exclusive_all_update_run()
     s = load_settings()
     cfg = args.config or default_coinmap_config_path()
     storage = args.storage_state or default_storage_state_path()
@@ -1047,6 +1049,7 @@ def cmd_tv_journal_monitor(args: argparse.Namespace) -> None:
 
 
 def cmd_update(args: argparse.Namespace) -> None:
+    acquire_exclusive_all_update_run()
     from automation_tool.images import set_active_main_symbol_file
 
     s = load_settings()
