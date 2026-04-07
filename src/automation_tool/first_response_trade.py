@@ -18,7 +18,12 @@ from automation_tool.openai_analysis_json import (
     select_zone_for_auto_mt5,
     select_zone_for_auto_mt5_for_label,
 )
-from automation_tool.state_files import VAO_LENH, update_single_plan_status, write_last_alert_prices
+from automation_tool.state_files import (
+    VAO_LENH,
+    read_last_alert_state,
+    update_single_plan_status,
+    write_last_alert_prices,
+)
 from automation_tool.telegram_bot import (
     send_first_response_log_to_analysis_detail_chat,
     send_mt5_execution_log_to_ngan_gon_chat,
@@ -209,6 +214,22 @@ def apply_first_response_vao_lenh(
         _thr,
         VAO_LENH,
     )
+
+    # Guard: avoid duplicate MT5 execution if this zone already entered previously.
+    st = read_last_alert_state(last_alert_path)
+    if st is not None and st.status_by_label.get(label) == VAO_LENH:
+        msg = (
+            f"Bỏ qua auto-MT5: vùng `{label}` đã ở trạng thái `{VAO_LENH}` trong last_alert_prices.\n"
+            f"last_alert: {last_alert_path}"
+        )
+        _log.info("first_response: %s", msg.replace("\n", " "))
+        _tg(
+            telegram_bot_token=telegram_bot_token,
+            telegram_analysis_detail_chat_id=telegram_analysis_detail_chat_id,
+            telegram_source_label=telegram_source_label,
+            body=msg,
+        )
+        return False
 
     try:
         update_single_plan_status(

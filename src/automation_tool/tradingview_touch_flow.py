@@ -321,6 +321,24 @@ def run_intraday_touch_flow(
                 first = False
                 continue
 
+            # Guard: avoid duplicate MT5 execution if already entered for this label.
+            st = read_last_alert_state(last_alert_path)
+            if st is not None and st.status_by_label.get(touched_label) == VAO_LENH:
+                _ts_log(
+                    tz,
+                    "tv-touch",
+                    f"Bỏ qua MT5: `{touched_label}` đã ở trạng thái `{VAO_LENH}` trong last_alert_prices.",
+                )
+                if not params.no_telegram:
+                    send_openai_output_to_telegram(
+                        bot_token=settings.telegram_bot_token,
+                        chat_id=settings.telegram_chat_id,
+                        raw=out_text,
+                        default_parse_mode=settings.telegram_parse_mode,
+                        summary_chat_id=settings.telegram_output_ngan_gon_chat_id,
+                    )
+                return "entered"
+
             update_single_plan_status(
                 touched_label,
                 VAO_LENH,
