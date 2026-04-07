@@ -24,6 +24,13 @@ _MAX_CREATE_ROUNDS = 10
 _log_tv = logging.getLogger("automation_tool.tradingview_alerts")
 
 
+def _wait_for_chart_interactive(page: Page, tv: dict[str, Any]) -> None:
+    """Wait until the chart chrome (intervals toolbar) is visible — required before alerts UI exists."""
+    intervals_id = (tv.get("intervals_toolbar_id") or "header-toolbar-intervals").strip().lstrip("#")
+    timeout = int(tv.get("chart_ready_timeout_ms", 90_000))
+    page.locator(f"#{intervals_id}").first.wait_for(state="visible", timeout=timeout)
+
+
 def format_price_for_tradingview_input(x: float) -> str:
     """Format like ``4,708.000`` (comma thousands, dot decimals)."""
     neg = x < 0
@@ -198,6 +205,11 @@ def _delete_stray_alerts(
 def _reload_and_reopen(page: Page, tv: dict[str, Any], settle_ms: int) -> None:
     page.reload(wait_until="domcontentloaded", timeout=120_000)
     page.wait_for_timeout(settle_ms)
+    # Same gate as sync_alerts_on_page: after reload the SPA may not mount the alerts widget yet.
+    _wait_for_chart_interactive(page, tv)
+    extra = int(tv.get("after_reload_chart_ready_ms", 400))
+    if extra > 0:
+        page.wait_for_timeout(extra)
     _open_alerts_list_panel(page, tv)
 
 
@@ -240,8 +252,7 @@ def sync_alerts_on_page(page: Page, tv: dict[str, Any], settle_ms: int, targets:
     """Assume chart URL already loaded and logged in. Mutates alerts to match ``targets``."""
     page.wait_for_timeout(int(tv.get("initial_settle_ms", 3000)))
     _maybe_tradingview_dark_mode(page, tv)
-    intervals_id = (tv.get("intervals_toolbar_id") or "header-toolbar-intervals").strip().lstrip("#")
-    page.locator(f"#{intervals_id}").first.wait_for(state="visible", timeout=90_000)
+    _wait_for_chart_interactive(page, tv)
 
     _open_alerts_list_panel(page, tv)
     _delete_stray_alerts(page, tv, targets, settle_ms)
