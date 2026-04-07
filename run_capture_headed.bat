@@ -14,9 +14,9 @@ if errorlevel 1 (
   exit /b 1
 )
 
-REM Run capture only in headed mode and append logs
-echo [%date% %time%] INFO: Starting coinmap-automation capture --headed>> "logs\capture_headed.log"
-coinmap-automation capture --headed >> "logs\capture_headed.log" 2>&1
+REM Capture charts (headless by default; this script name is legacy)
+echo [%date% %time%] INFO: Starting coinmap-automation capture>> "logs\capture_headed.log"
+coinmap-automation capture >> "logs\capture_headed.log" 2>&1
 set "EXIT_CODE=%ERRORLEVEL%"
 echo [%date% %time%] INFO: Finished with exit code %EXIT_CODE%>> "logs\capture_headed.log"
 

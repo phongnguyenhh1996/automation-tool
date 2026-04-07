@@ -2,7 +2,7 @@
 setlocal
 
 REM USDJPY: capture charts -> analyze OpenAI; MT5 chỉ dry-run (không lệnh thật)
-REM (Tuỳ chọn) thêm --headed vào lệnh capture nếu TradingView/Coinmap không ổn khi headless.
+REM Mặc định headless (tiết kiệm RAM). Nếu cần debug UI: thêm --headed vào lệnh capture bên dưới.
 cd /d "%~dp0"
 
 if not exist "logs" mkdir "logs"

@@ -12,8 +12,8 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo [%date% %time%] INFO: Starting coinmap-automation update --headed>> "logs\update.log"
-coinmap-automation update --headed >> "logs\update.log" 2>&1
+echo [%date% %time%] INFO: Starting coinmap-automation update>> "logs\update.log"
+coinmap-automation update >> "logs\update.log" 2>&1
 set "EXIT_CODE=%ERRORLEVEL%"
 echo [%date% %time%] INFO: Finished with exit code %EXIT_CODE%>> "logs\update.log"
 
