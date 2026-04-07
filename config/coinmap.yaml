@@ -201,6 +201,8 @@ tradingview_capture:
         - "15 phút"
         - "5 phút"
   watchlist_button_aria_label: "Danh sách theo dõi, thông tin chi tiết và tin tức"
+  # Khi giao diện TradingView tiếng Anh (aria khác); có thể ghi đè
+  watchlist_button_aria_label_fallback: "Watchlist, details, and news"
   watchlist_open_ms: 500
   symbol_name_class_prefix: "symbolNameText-"
   after_symbol_select_ms: 1500

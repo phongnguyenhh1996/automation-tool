@@ -688,6 +688,50 @@ def _login_form_is_visible(page, email_sel: str, password_sel: str, timeout_ms: 
         return False
 
 
+def _coinmap_maybe_relogin_if_login_form_visible(
+    page,
+    cd: dict[str, Any],
+    *,
+    email: Optional[str],
+    password: Optional[str],
+    login_cfg: Optional[dict[str, Any]],
+    settle_ms: int,
+) -> None:
+    """
+    Mid-flow: session may expire so the chart step shows the Coinmap login form again.
+    If email + password fields are visible, submit then return to the chart URL if still on /login.
+    """
+    if not email or not password:
+        return
+    base = login_cfg if isinstance(login_cfg, dict) else {}
+    email_sel = base.get("email_selector") or 'input[type="email"]'
+    password_sel = base.get("password_selector") or 'input[type="password"]'
+    submit_sel = base.get("submit_selector") or 'button[type="submit"]'
+    form_timeout = int(base.get("mid_flow_login_form_detect_timeout_ms", 4_000))
+    if not _login_form_is_visible(page, email_sel, password_sel, timeout_ms=form_timeout):
+        return
+    page.locator(email_sel).first.fill(email, timeout=15_000)
+    page.locator(password_sel).first.fill(password, timeout=15_000)
+    page.locator(submit_sel).first.click(timeout=15_000)
+    page.wait_for_load_state("networkidle", timeout=60_000)
+    page.wait_for_timeout(settle_ms)
+    post_wait = (base.get("post_login_wait_selector") or "").strip()
+    if post_wait:
+        try:
+            page.locator(post_wait).first.wait_for(state="visible", timeout=30_000)
+        except Exception:
+            pass
+    chart_url = cd.get("chart_page_url") or "https://coinmap.tech/chart"
+    u = (page.url or "").lower()
+    if "login" in u:
+        page.goto(chart_url, wait_until="domcontentloaded", timeout=90_000)
+        page.wait_for_timeout(settle_ms)
+        _maybe_dismiss_coinmap_symbol_search_modal(page, cd)
+        _maybe_switch_to_dark_mode(page, cd)
+        _maybe_dismiss_light_theme_modal(page, cd)
+        _maybe_dismiss_coinmap_symbol_search_modal(page, cd)
+
+
 def _chart_drag_in_box(
     page,
     box: dict[str, float],
@@ -866,8 +910,24 @@ def _coinmap_resolve_capture_plan(cd: dict[str, Any]) -> Optional[list[dict[str,
     return _coinmap_default_capture_plan()
 
 
-def _coinmap_toggle_right_sidebar(page, cd: dict[str, Any]) -> None:
+def _coinmap_toggle_right_sidebar(
+    page,
+    cd: dict[str, Any],
+    *,
+    login_email: Optional[str] = None,
+    login_password: Optional[str] = None,
+    login_cfg: Optional[dict[str, Any]] = None,
+    settle_ms: int = 2000,
+) -> None:
     """One click on the sidebar control (open or close depending on current state)."""
+    _coinmap_maybe_relogin_if_login_form_visible(
+        page,
+        cd,
+        email=login_email,
+        password=login_password,
+        login_cfg=login_cfg,
+        settle_ms=settle_ms,
+    )
     prefix = (cd.get("right_sidebar_container_class_prefix") or "ChartDesktopPage_rightSidebar__").strip()
     ms = int(cd.get("sidebar_toggle_after_click_ms", 450))
     force = bool(cd.get("right_sidebar_toggle_click_force", True))
@@ -882,7 +942,15 @@ def _coinmap_toggle_right_sidebar(page, cd: dict[str, Any]) -> None:
     page.wait_for_timeout(ms)
 
 
-def _coinmap_ensure_right_sidebar_open(page, cd: dict[str, Any]) -> None:
+def _coinmap_ensure_right_sidebar_open(
+    page,
+    cd: dict[str, Any],
+    *,
+    login_email: Optional[str] = None,
+    login_password: Optional[str] = None,
+    login_cfg: Optional[dict[str, Any]] = None,
+    settle_ms: int = 2000,
+) -> None:
     """
     Keep clicking the sidebar toggle until ChartWatchList title is visible.
     Handles: sidebar starts closed, narrow rail needs a second click, or wrong initial state.
@@ -894,12 +962,27 @@ def _coinmap_ensure_right_sidebar_open(page, cd: dict[str, Any]) -> None:
     final_timeout = int(cd.get("watchlist_title_visible_timeout_ms", 20_000))
 
     for _ in range(max_toggles):
+        _coinmap_maybe_relogin_if_login_form_visible(
+            page,
+            cd,
+            email=login_email,
+            password=login_password,
+            login_cfg=login_cfg,
+            settle_ms=settle_ms,
+        )
         try:
             title.wait_for(state="visible", timeout=quick_ms)
             return
         except Exception:
             pass
-        _coinmap_toggle_right_sidebar(page, cd)
+        _coinmap_toggle_right_sidebar(
+            page,
+            cd,
+            login_email=login_email,
+            login_password=login_password,
+            login_cfg=login_cfg,
+            settle_ms=settle_ms,
+        )
 
     title.wait_for(state="visible", timeout=final_timeout)
 
@@ -1073,6 +1156,9 @@ def _run_coinmap_multi_shot_flow(
     plan: list[dict[str, Any]],
     api_cd: Optional[dict[str, Any]] = None,
     net_capture: Optional[CoinmapNetworkCapture] = None,
+    coinmap_email: Optional[str] = None,
+    coinmap_password: Optional[str] = None,
+    coinmap_login_cfg: Optional[dict[str, Any]] = None,
 ) -> list[Path]:
     written: list[Path] = []
     prev_symbol: Optional[str] = None
@@ -1085,11 +1171,25 @@ def _run_coinmap_multi_shot_flow(
         cat = step.get("watchlist_category")
         need_pick = cat is not None or prev_symbol != sym
         if need_pick:
-            _coinmap_ensure_right_sidebar_open(page, cd)
+            _coinmap_ensure_right_sidebar_open(
+                page,
+                cd,
+                login_email=coinmap_email,
+                login_password=coinmap_password,
+                login_cfg=coinmap_login_cfg,
+                settle_ms=settle_ms,
+            )
             if cat:
                 _coinmap_select_watchlist_category(page, cd, cat)
             _coinmap_select_watchlist_symbol(page, cd, sym)
-            _coinmap_toggle_right_sidebar(page, cd)
+            _coinmap_toggle_right_sidebar(
+                page,
+                cd,
+                login_email=coinmap_email,
+                login_password=coinmap_password,
+                login_cfg=coinmap_login_cfg,
+                settle_ms=settle_ms,
+            )
 
         _coinmap_maybe_bump_interval_before_target(
             page,
@@ -1157,6 +1257,9 @@ def _run_chart_screenshot_flow(
     stamp: str,
     settle_ms: int,
     cd: dict[str, Any],
+    coinmap_email: Optional[str] = None,
+    coinmap_password: Optional[str] = None,
+    coinmap_login_cfg: Optional[dict[str, Any]] = None,
 ) -> list[Path]:
     """Open chart: multi-shot watchlist sidebar flow, or single fullscreen on current symbol (no modal search)."""
     api_cd = _api_export_config(cd)
@@ -1185,6 +1288,9 @@ def _run_chart_screenshot_flow(
                 plan=plan,
                 api_cd=api_cd,
                 net_capture=net_capture,
+                coinmap_email=coinmap_email,
+                coinmap_password=coinmap_password,
+                coinmap_login_cfg=coinmap_login_cfg,
             )
             return paths
 
@@ -1463,11 +1569,19 @@ def _tradingview_resolve_capture_plan(tv: dict[str, Any]) -> Optional[list[tuple
 
 
 def _tradingview_ensure_watchlist_open(page, tv: dict[str, Any]) -> None:
-    aria = (tv.get("watchlist_button_aria_label") or "").strip()
-    if not aria:
-        aria = "Danh sách theo dõi, thông tin chi tiết và tin tức"
+    primary = (tv.get("watchlist_button_aria_label") or "").strip()
+    if not primary:
+        primary = "Danh sách theo dõi, thông tin chi tiết và tin tức"
+    fallback = (tv.get("watchlist_button_aria_label_fallback") or "").strip()
+    if not fallback:
+        fallback = "Watchlist, details, and news"
     ms = int(tv.get("watchlist_open_ms", 500))
-    btn = page.locator(f'button[aria-label="{aria}"]').first
+    if primary == fallback:
+        btn = page.locator(f'button[aria-label="{primary}"]').first
+    else:
+        btn = page.locator(
+            f'button[aria-label="{primary}"], button[aria-label="{fallback}"]'
+        ).first
     btn.wait_for(state="visible", timeout=30_000)
     pressed = (btn.get_attribute("aria-pressed") or "").lower()
     if pressed != "true":
@@ -1701,6 +1815,9 @@ def _capture_charts_in_context(
                     stamp=stamp,
                     settle_ms=settle_ms,
                     cd=cd,
+                    coinmap_email=email,
+                    coinmap_password=password,
+                    coinmap_login_cfg=cfg,
                 )
                 written.extend(dl_paths)
             except Exception as e:
