@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Optional, Sequence
@@ -783,6 +784,9 @@ def cmd_capture_many(args: argparse.Namespace) -> None:
         storage,
     )
 
+    # One stamp per symbol so Coinmap + TradingView artifacts line up for OpenAI ordering.
+    stamps: dict[str, str] = {sym: time.strftime("%Y%m%d_%H%M%S") for sym in symbols}
+
     with sync_playwright() as p:
         browser, context = launch_chrome_context(
             p,
@@ -811,6 +815,7 @@ def cmd_capture_many(args: argparse.Namespace) -> None:
                     enable_coinmap=True,
                     enable_tradingview=False,
                     clear_charts_before_capture=True,
+                    stamp_override=stamps[sym],
                 )
 
             # Phase 2: TradingView for all symbols (must NOT clear prior Coinmap outputs).
@@ -832,6 +837,7 @@ def cmd_capture_many(args: argparse.Namespace) -> None:
                     enable_coinmap=False,
                     enable_tradingview=True,
                     clear_charts_before_capture=False,
+                    stamp_override=stamps[sym],
                 )
 
             if not args.no_save_storage and storage:

@@ -1918,6 +1918,7 @@ def capture_charts(
     enable_coinmap: Optional[bool] = None,
     enable_tradingview: Optional[bool] = None,
     clear_charts_before_capture: Optional[bool] = None,
+    stamp_override: Optional[str] = None,
 ) -> list[Path]:
     """
     Optionally clear prior images in charts_dir, then log in (if credentials given),
@@ -1984,7 +1985,7 @@ def capture_charts(
         write_main_chart_symbol_marker(charts_dir, get_active_main_symbol())
     if bool(cfg.get("clear_charts_before_capture", True)):
         _clear_charts_dir(charts_dir)
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    stamp = (stamp_override or "").strip() or datetime.now().strftime("%Y%m%d_%H%M%S")
 
     if reuse_browser_context is not None:
         return _capture_charts_in_context(
