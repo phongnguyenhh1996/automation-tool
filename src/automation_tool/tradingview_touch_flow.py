@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, time as dt_time, timedelta
@@ -61,6 +62,69 @@ _EPS = 0.01
 
 # In the inner loop: only commit LOAI after repeated confirmations.
 LOAI_CONFIRM_ROUNDS = 4
+
+
+class _AbortLongOp(RuntimeError):
+    """
+    Internal control-flow exception to abort long sync operations (Coinmap capture,
+    OpenAI wait) when we detect SL hit, supersede touch, or cutoff.
+    """
+
+    def __init__(
+        self,
+        *,
+        reason: str,
+        supersede: Optional[tuple[float, str, str]] = None,
+    ) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.supersede = supersede
+
+
+@dataclass
+class _AsyncOpenAIResult:
+    done: bool = False
+    out_text: str = ""
+    new_id: str = ""
+    error: Optional[BaseException] = None
+
+
+def _run_worker_in_background_with_poll(
+    *,
+    worker: Callable[[], tuple[str, str]],
+    poll_abort: Callable[[], None],
+    poll_interval_s: float = 0.75,
+) -> tuple[str, str]:
+    """
+    Run a blocking worker in a daemon thread while the caller continues polling.
+
+    - ``poll_abort`` may raise ``_AbortLongOp`` to abort early.
+    - Any worker exception is raised in the caller thread.
+    """
+    result = _AsyncOpenAIResult()
+
+    def _bg() -> None:
+        try:
+            out_text0, new_id0 = worker()
+            result.out_text = out_text0
+            result.new_id = new_id0
+        except BaseException as e:  # noqa: BLE001 - re-raise in caller thread
+            result.error = e
+        finally:
+            result.done = True
+
+    th = threading.Thread(target=_bg, name="tv-touch-worker", daemon=True)
+    th.start()
+
+    while not result.done:
+        poll_abort()
+        time.sleep(max(0.05, float(poll_interval_s)))
+
+    if result.error is not None:
+        raise result.error
+    if not result.out_text or not result.new_id:
+        raise SystemExit("Background worker returned empty result unexpectedly.")
+    return result.out_text, result.new_id
 
 
 def _ts_log(timezone_name: str, prefix: str, msg: str) -> None:
@@ -276,19 +340,67 @@ def run_intraday_touch_flow(
 
         _ts_log(tz, "tv-touch", f"Vòng trong #{inner_i}: chụp Coinmap M5 + hỏi OpenAI…")
 
-        paths = capture_charts(
-            coinmap_yaml=params.capture_coinmap_yaml,
-            charts_dir=params.charts_dir,
-            storage_state_path=params.storage_state_path,
-            email=settings.coinmap_email,
-            password=settings.coinmap_password,
-            tradingview_password=settings.tradingview_password,
-            save_storage_state=not params.no_save_storage,
-            headless=params.headless,
-            reuse_browser_context=browser_context,
-            main_chart_symbol=read_main_chart_symbol(params.charts_dir),
-        )
-        _ts_log(tz, "tv-touch", f"Coinmap capture xong: {len(paths)} file(s).")
+        def _poll_abort_during_long_ops(*, phase: str) -> None:
+            if not before_cutoff(
+                params.timezone_name, params.until_hour, session_cutoff_end=params.session_cutoff_end
+            ):
+                raise _AbortLongOp(reason="cutoff")
+
+            st2 = read_last_alert_state(last_alert_path)
+            if st2 is None:
+                return
+
+            sym2 = read_main_chart_symbol(params.charts_dir)
+            sym_parse2 = normalize_broker_xau_symbol((params.mt5_symbol or "").strip() or sym2)
+
+            # Poll last price for SL hit.
+            tl_sl2 = (st2.trade_line_by_label.get(touched_label) or "").strip()
+            if tl_sl2:
+                pt_sl2 = parse_trade_line(tl_sl2, sym_parse2)
+                if pt_sl2 is not None:
+                    p_chk2 = read_watchlist_last_price_wait_stable(
+                        page, tv, symbol=sym2, timeout_ms=2500, poll_ms=250
+                    )
+                    if p_chk2 is not None and is_last_price_hit_stop_loss(p_chk2, pt_sl2, eps=_EPS):
+                        raise _AbortLongOp(reason="sl_hit")
+
+            # Poll for a superseding touch (another label touched).
+            sup2 = poll_supersede_touch(touched_label, touched_price)
+            if sup2 is not None:
+                raise _AbortLongOp(reason="supersede", supersede=sup2)
+
+        try:
+            paths = capture_charts(
+                coinmap_yaml=params.capture_coinmap_yaml,
+                charts_dir=params.charts_dir,
+                storage_state_path=params.storage_state_path,
+                email=settings.coinmap_email,
+                password=settings.coinmap_password,
+                tradingview_password=settings.tradingview_password,
+                save_storage_state=not params.no_save_storage,
+                headless=params.headless,
+                reuse_browser_context=browser_context,
+                main_chart_symbol=read_main_chart_symbol(params.charts_dir),
+                progress_hook=lambda: _poll_abort_during_long_ops(phase="capture"),
+            )
+            _ts_log(tz, "tv-touch", f"Coinmap capture xong: {len(paths)} file(s).")
+        except _AbortLongOp as a:
+            if a.reason == "sl_hit":
+                _ts_log(tz, "tv-touch", "Chạm SL trong lúc capture Coinmap — loại ngay.")
+                update_single_plan_status(touched_label, LOAI, path=last_alert_path)
+                return "rejected"
+            if a.reason == "supersede" and a.supersede is not None:
+                _ts_log(
+                    tz,
+                    "tv-touch",
+                    f"Touch khác đã chạm trong lúc capture Coinmap — loại {touched_label} và chuyển touch mới.",
+                )
+                update_single_plan_status(touched_label, LOAI, path=last_alert_path)
+                touched_price, touch_line, touched_label = a.supersede[0], a.supersede[1], a.supersede[2]
+                first = True
+                loai_streak = 0
+                continue
+            return "cutoff"
         json_path = coinmap_xauusd_5m_json_path(params.charts_dir)
         if json_path is None or not json_path.is_file():
             raise SystemExit(
@@ -312,18 +424,40 @@ def run_intraday_touch_flow(
                 journal_line=touch_line,
             )
 
+        # Run OpenAI request in background so we can continue polling `last` and supersede touches.
         try:
-            out_text, new_id = run_single_followup_responses(
-                api_key=settings.openai_api_key,
-                prompt_id=settings.openai_prompt_id,
-                prompt_version=settings.openai_prompt_version,
-                user_text=user_msg,
-                coinmap_json_path=json_path,
-                previous_response_id=prev_id,
-                vector_store_ids=settings.openai_vector_store_ids,
-                store=settings.openai_responses_store,
-                include=settings.openai_responses_include,
+            out_text, new_id = _run_worker_in_background_with_poll(
+                worker=lambda: run_single_followup_responses(
+                    api_key=settings.openai_api_key,
+                    prompt_id=settings.openai_prompt_id,
+                    prompt_version=settings.openai_prompt_version,
+                    user_text=user_msg,
+                    coinmap_json_path=json_path,
+                    previous_response_id=prev_id,
+                    vector_store_ids=settings.openai_vector_store_ids,
+                    store=settings.openai_responses_store,
+                    include=settings.openai_responses_include,
+                ),
+                poll_abort=lambda: _poll_abort_during_long_ops(phase="waiting_openai"),
+                poll_interval_s=0.75,
             )
+        except _AbortLongOp as a:
+            if a.reason == "sl_hit":
+                _ts_log(tz, "tv-touch", "Chạm SL trong lúc chờ OpenAI — loại ngay (ignore output).")
+                update_single_plan_status(touched_label, LOAI, path=last_alert_path)
+                return "rejected"
+            if a.reason == "supersede" and a.supersede is not None:
+                _ts_log(
+                    tz,
+                    "tv-touch",
+                    f"Touch khác đã chạm trong lúc chờ OpenAI — loại {touched_label} và chuyển touch mới (ignore output).",
+                )
+                update_single_plan_status(touched_label, LOAI, path=last_alert_path)
+                touched_price, touch_line, touched_label = a.supersede[0], a.supersede[1], a.supersede[2]
+                first = True
+                loai_streak = 0
+                continue
+            return "cutoff"
         except Exception as e:
             re_raise_unless_openai(e)
             raise

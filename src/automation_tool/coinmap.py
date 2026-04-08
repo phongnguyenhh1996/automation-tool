@@ -1769,6 +1769,7 @@ def _capture_charts_in_context(
     tradingview_password: Optional[str],
     save_storage_state: bool,
     stamp: str,
+    progress_hook: Optional[Callable[[], None]] = None,
 ) -> list[Path]:
     """
     Run Coinmap (+ optional TradingView) capture using an existing browser context.
@@ -1790,8 +1791,12 @@ def _capture_charts_in_context(
 
     page = context.new_page()
     try:
+        if progress_hook is not None:
+            progress_hook()
         page.goto(login_url, wait_until="domcontentloaded", timeout=60_000)
         page.wait_for_timeout(settle_ms)
+        if progress_hook is not None:
+            progress_hook()
 
         if email and password:
             if _login_form_is_visible(page, email_sel, password_sel):
@@ -1800,6 +1805,8 @@ def _capture_charts_in_context(
                 page.locator(submit_sel).first.click(timeout=15_000)
                 page.wait_for_load_state("networkidle", timeout=60_000)
                 page.wait_for_timeout(settle_ms)
+                if progress_hook is not None:
+                    progress_hook()
             else:
                 print(
                     "Already logged in (no login form visible); skipping credential submit.",
@@ -1817,6 +1824,8 @@ def _capture_charts_in_context(
             cd = {}
         if cd.get("enabled", False):
             try:
+                if progress_hook is not None:
+                    progress_hook()
                 dl_paths = _run_chart_screenshot_flow(
                     page,
                     charts_dir=charts_dir,
@@ -1828,6 +1837,8 @@ def _capture_charts_in_context(
                     coinmap_login_cfg=cfg,
                 )
                 written.extend(dl_paths)
+                if progress_hook is not None:
+                    progress_hook()
             except Exception as e:
                 snap = _maybe_save_capture_error_screenshot(
                     page, logs_dir=logs_dir, stamp=stamp, label="coinmap_chart_download"
@@ -1842,6 +1853,8 @@ def _capture_charts_in_context(
         if isinstance(tv, dict) and tv.get("enabled", False):
             tv_page = context.new_page()
             try:
+                if progress_hook is not None:
+                    progress_hook()
                 tv_paths = _run_tradingview_screenshot_flow(
                     tv_page,
                     charts_dir=charts_dir,
@@ -1852,6 +1865,8 @@ def _capture_charts_in_context(
                     tradingview_password=tradingview_password,
                 )
                 written.extend(tv_paths)
+                if progress_hook is not None:
+                    progress_hook()
             except Exception as e:
                 snap = _maybe_save_capture_error_screenshot(
                     tv_page, logs_dir=logs_dir, stamp=stamp, label="tradingview_capture"
@@ -1882,6 +1897,8 @@ def _capture_charts_in_context(
                         locs.nth(i).screenshot(path=str(path), timeout=20_000)
                         written.append(path)
                         idx += 1
+                        if progress_hook is not None:
+                            progress_hook()
                     except Exception:
                         continue
 
@@ -1889,6 +1906,8 @@ def _capture_charts_in_context(
                 path = charts_dir / f"{stamp}_fullpage.png"
                 page.screenshot(path=str(path), full_page=True)
                 written.append(path)
+                if progress_hook is not None:
+                    progress_hook()
 
         if save_storage_state and storage_state_path:
             _ensure_dir(storage_state_path.parent)
@@ -1919,6 +1938,7 @@ def capture_charts(
     enable_tradingview: Optional[bool] = None,
     clear_charts_before_capture: Optional[bool] = None,
     stamp_override: Optional[str] = None,
+    progress_hook: Optional[Callable[[], None]] = None,
 ) -> list[Path]:
     """
     Optionally clear prior images in charts_dir, then log in (if credentials given),
@@ -1998,6 +2018,7 @@ def capture_charts(
             tradingview_password=tradingview_password,
             save_storage_state=save_storage_state,
             stamp=stamp,
+            progress_hook=progress_hook,
         )
 
     vw = int(cfg.get("viewport_width", 1920))
@@ -2022,6 +2043,7 @@ def capture_charts(
                 tradingview_password=tradingview_password,
                 save_storage_state=save_storage_state,
                 stamp=stamp,
+                progress_hook=progress_hook,
             )
         finally:
             close_browser_and_context(browser, context)
