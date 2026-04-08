@@ -27,6 +27,7 @@ from automation_tool.config import Settings
 from automation_tool.first_response_trade import apply_first_response_vao_lenh
 from automation_tool.images import coinmap_xauusd_5m_json_path, read_main_chart_symbol
 from automation_tool.mt5_execute import execute_trade, format_mt5_execution_for_telegram
+from automation_tool.mt5_manage import mt5_latest_position_ticket
 from automation_tool.mt5_openai_parse import (
     parse_journal_intraday_action_from_openai_text,
     parse_openai_output_md,
@@ -41,6 +42,7 @@ from automation_tool.state_files import (
     LOAI,
     VAO_LENH,
     read_last_alert_state,
+    update_plan_mt5_entry,
     update_single_plan_status,
     write_last_response_id,
 )
@@ -359,6 +361,21 @@ def run_intraday_touch_flow(
                         source="tv-touch",
                         text=format_mt5_execution_for_telegram(ex),
                     )
+                tid = int(ex.order) if ex.order else 0
+                if (not tid or tid <= 0) and not params.mt5_dry_run and (ex.resolved_symbol or "").strip():
+                    alt = mt5_latest_position_ticket(str(ex.resolved_symbol).strip())
+                    if alt:
+                        tid = int(alt)
+                if ex.ok and tid > 0 and (parsed.raw_line or "").strip():
+                    try:
+                        update_plan_mt5_entry(
+                            touched_label,
+                            trade_line=parsed.raw_line.strip(),
+                            mt5_ticket=tid,
+                            path=last_alert_path,
+                        )
+                    except SystemExit:
+                        pass
             if not params.no_telegram:
                 send_openai_output_to_telegram(
                     bot_token=settings.telegram_bot_token,

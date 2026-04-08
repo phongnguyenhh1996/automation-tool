@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from automation_tool.mt5_execute import execute_trade, format_mt5_execution_for_telegram
+from automation_tool.mt5_manage import mt5_latest_position_ticket
 from automation_tool.mt5_openai_parse import ParsedTrade, parse_openai_output_md
 from automation_tool.openai_analysis_json import (
     AUTO_MT5_HOP_LUU_THRESHOLD,
@@ -21,6 +22,7 @@ from automation_tool.openai_analysis_json import (
 from automation_tool.state_files import (
     VAO_LENH,
     read_last_alert_state,
+    update_plan_mt5_entry,
     update_single_plan_status,
     write_last_alert_prices,
 )
@@ -295,6 +297,21 @@ def apply_first_response_vao_lenh(
                 source=telegram_source_label,
                 text=format_mt5_execution_for_telegram(ex),
             )
+        tid = int(ex.order) if ex.order else 0
+        if (not tid or tid <= 0) and not mt5_dry_run and (ex.resolved_symbol or "").strip():
+            alt = mt5_latest_position_ticket(str(ex.resolved_symbol).strip())
+            if alt:
+                tid = int(alt)
+        if ex.ok and tid > 0:
+            try:
+                update_plan_mt5_entry(
+                    label,
+                    trade_line=zone_trade_line.strip(),
+                    mt5_ticket=tid,
+                    path=last_alert_path,
+                )
+            except SystemExit as pe:
+                _log.warning("first_response: không ghi trade_line/ticket — %s", pe)
         return True
     except SystemExit as e:
         _log.warning("first_response: MT5 không chạy — %s", e)

@@ -29,23 +29,23 @@ from automation_tool.config import Settings
 from automation_tool.images import DEFAULT_MAIN_CHART_SYMBOL, get_active_main_symbol
 from automation_tool.playwright_browser import close_browser_and_context, launch_chrome_context
 from automation_tool.state_files import (
-    LOAI,
     VUNG_CHO,
-    all_plans_terminal,
     default_last_alert_prices_path,
     read_last_alert_state,
-    update_single_plan_status,
+    read_last_response_id,
+    watchlist_journal_active_work,
     write_journal_monitor_first_run,
 )
+from automation_tool.tradingview_last_price import read_watchlist_last_price_stable
 from automation_tool.tradingview_touch_flow import (
     TouchFlowParams,
     before_cutoff,
     compute_session_cutoff,
-    parse_first_float_trunc0,
     run_intraday_touch_flow,
 )
 
 from automation_tool.coinmap import _tradingview_ensure_watchlist_open  # reuse internal helper
+from automation_tool.tp1_followup import maybe_post_entry_tp1_tick
 
 _log = logging.getLogger("automation_tool.tv_watchlist")
 
@@ -89,43 +89,6 @@ def _waiting_label_prices(state) -> list[tuple[str, float]]:
     return out
 
 
-def _read_watchlist_last_price(
-    page: Page,
-    tv: dict[str, Any],
-    *,
-    symbol: str,
-) -> Optional[float]:
-    """
-    Return float price when stable (no highlightUp/down class), else None.
-    """
-    row_tpl = (tv.get("watchlist_row_selector") or "").strip()
-    if not row_tpl:
-        row_tpl = '[data-symbol-short="{symbol}"]'
-    row_sel = row_tpl.format(symbol=symbol)
-    row = page.locator(row_sel).first
-    row.wait_for(state="visible", timeout=30_000)
-
-    cell_sel = (tv.get("watchlist_last_cell_selector") or "").strip()
-    if not cell_sel:
-        # Default for current TradingView watchlist DOM (may change; row selector is the stable anchor)
-        cell_sel = 'span[class*="cell"][class*="last"] span[class*="inner"]'
-    price_span = row.locator(cell_sel).first
-    price_span.wait_for(state="visible", timeout=15_000)
-
-    deny = tv.get("watchlist_price_stable_class_prefix_denylist")
-    prefixes = ["highlightUp-", "highlightDown-"]
-    if isinstance(deny, list) and deny:
-        prefixes = [str(x) for x in deny if str(x)]
-
-    cls = (price_span.get_attribute("class") or "").strip()
-    for pref in prefixes:
-        if pref and pref in cls:
-            return None
-
-    txt = price_span.inner_text(timeout=5_000)
-    return parse_first_float_trunc0(txt)
-
-
 def _poll_supersede_from_watchlist(
     *,
     page: Page,
@@ -146,7 +109,7 @@ def _poll_supersede_from_watchlist(
     if not waiting:
         return None
 
-    p = _read_watchlist_last_price(page, tv, symbol=symbol)
+    p = read_watchlist_last_price_stable(page, tv, symbol=symbol)
     if p is None:
         return None
 
@@ -237,29 +200,46 @@ def run_tv_watchlist_monitor(
                 st = read_last_alert_state(lap)
                 if st is None:
                     raise SystemExit(f"Lost last alert state at {lap}")
-                if all_plans_terminal(st):
-                    _tvw_log(tz, "Cả 3 plan đã vao_lenh/loai — dừng monitor.")
+                if not watchlist_journal_active_work(st):
+                    _tvw_log(tz, "Không còn vùng chờ và không còn theo dõi TP1 sau vào lệnh — dừng.")
                     return "all_plans_resolved"
 
-                waiting = _waiting_label_prices(st)
-                if not waiting:
-                    _tvw_log(tz, "Không còn plan vung_cho — dừng.")
-                    return "all_plans_resolved"
-
-                p_last = _read_watchlist_last_price(page, tv, symbol=sym)
+                p_last = read_watchlist_last_price_stable(page, tv, symbol=sym)
                 if p_last is None:
                     _tvw_log(tz, "Giá đang highlight (up/down) hoặc chưa đọc được — skip.")
                     page.wait_for_timeout(int(poll_s * 1000))
                     continue
 
+                waiting = _waiting_label_prices(st)
                 match = None
-                for lab, tp in waiting:
-                    if abs(p_last - tp) <= _EPS:
-                        match = (lab, tp)
-                        break
+                if waiting:
+                    for lab, tp in waiting:
+                        if abs(p_last - tp) <= _EPS:
+                            match = (lab, tp)
+                            break
 
                 if match is None:
-                    _tvw_log(tz, f"Không chạm vùng — last={p_last}. Chờ {poll_s}s…")
+                    rid = initial_response_id
+                    try:
+                        rid = maybe_post_entry_tp1_tick(
+                            settings=settings,
+                            params=params,
+                            last_alert_path=lap,
+                            page=page,
+                            tv=tv,
+                            symbol=sym,
+                            settle_ms=settle_ms,
+                            p_last=p_last,
+                            browser_context=context,
+                            initial_response_id=initial_response_id,
+                            tick_source="watchlist",
+                        )
+                    except Exception as e:
+                        _tvw_log(tz, f"post-entry TP1 tick lỗi (bỏ qua): {e!s}")
+                    else:
+                        if rid:
+                            initial_response_id = rid
+                    _tvw_log(tz, f"Không chạm vùng chờ — last={p_last}. Chờ {poll_s}s…")
                     page.wait_for_timeout(int(poll_s * 1000))
                     continue
 
@@ -309,6 +289,7 @@ def run_tv_watchlist_monitor(
                     poll_supersede_touch=_poll_sup,
                 )
                 _tvw_log(tz, f"Vòng trong kết thúc: {outcome}")
+                initial_response_id = read_last_response_id() or initial_response_id
 
                 # If superseded happened, the touch flow already marked LOAI for previous label.
                 # Continue outer loop.

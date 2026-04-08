@@ -89,6 +89,9 @@ def setup_automation_logging(settings: Settings) -> logging.Logger:
     ``threading.excepthook``) cũng được gửi lên cùng chat log.
 
     Idempotent: nếu đã có handler thì không thêm lần nữa.
+
+    Mọi logger con ``automation_tool.*`` (vd. ``automation_tool.tp1``, ``automation_tool.tp1_followup``,
+    ``automation_tool.journal``) propagate lên ``automation_tool`` → cùng stderr + Telegram log.
     """
     log = logging.getLogger("automation_tool")
     if log.handlers:

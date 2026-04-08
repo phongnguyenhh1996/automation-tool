@@ -9,14 +9,17 @@ from pathlib import Path
 import pytest
 
 from automation_tool.state_files import (
+    CHO_TP1,
     LOAI,
     VAO_LENH,
     VUNG_CHO,
     LastAlertState,
     all_plans_terminal,
     merge_alert_prices_with_status,
+    needs_post_entry_price_watch,
     read_last_alert_state,
     update_single_plan_status,
+    watchlist_journal_active_work,
     write_last_alert_state,
 )
 
@@ -68,6 +71,36 @@ def test_all_plans_terminal_true() -> None:
         labels=("plan_chinh", "plan_phu", "scalp"),
         status_by_label={
             "plan_chinh": VAO_LENH,
+            "plan_phu": LOAI,
+            "scalp": LOAI,
+        },
+    )
+    assert all_plans_terminal(st)
+
+
+def test_watchlist_journal_active_work_post_entry() -> None:
+    """Còn vao_lenh + trade_line + ticket → monitor không dừng dù hết vung_cho."""
+    st = LastAlertState(
+        prices=(1.0, 2.0, 3.0),
+        labels=("plan_chinh", "plan_phu", "scalp"),
+        status_by_label={
+            "plan_chinh": VAO_LENH,
+            "plan_phu": LOAI,
+            "scalp": LOAI,
+        },
+        trade_line_by_label={"plan_chinh": "BUY 0.1 @ 2600 SL … TP1 2610"},
+        mt5_ticket_by_label={"plan_chinh": 123456},
+    )
+    assert needs_post_entry_price_watch(st)
+    assert watchlist_journal_active_work(st)
+
+
+def test_cho_tp1_is_terminal_for_all_plans_terminal() -> None:
+    st = LastAlertState(
+        prices=(1.0, 2.0, 3.0),
+        labels=("plan_chinh", "plan_phu", "scalp"),
+        status_by_label={
+            "plan_chinh": CHO_TP1,
             "plan_phu": LOAI,
             "scalp": LOAI,
         },

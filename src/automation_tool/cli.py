@@ -53,6 +53,7 @@ from automation_tool.zone_prices import (
     prices_equal_triple,
 )
 from automation_tool.tradingview_alerts import sync_tradingview_alerts
+from automation_tool.tp1_followup import tp1_dry_run_report
 from automation_tool.tradingview_journal_monitor import JournalMonitorParams, run_tv_journal_monitor
 from automation_tool.tradingview_watchlist_monitor import (
     WatchlistMonitorParams,
@@ -566,6 +567,35 @@ def _parser() -> argparse.ArgumentParser:
         help="Chỉ dry-run MT5 (mặc định: gửi lệnh thật)",
     )
     tj.set_defaults(func=cmd_tv_journal_monitor)
+
+    tp1d = sub.add_parser(
+        "tp1-tick-dry-run",
+        help=(
+            "In so khớp ±5 / chạm TP1 từ last_alert + một giá Last (không browser, không OpenAI). "
+            "Dùng để kiểm tra local."
+        ),
+    )
+    tp1d.add_argument(
+        "--last",
+        type=float,
+        required=True,
+        metavar="PRICE",
+        help="Giá Last realtime (cùng quy ước với watchlist monitor)",
+    )
+    tp1d.add_argument(
+        "--last-alert-json",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help=f"File last_alert_prices.json (mặc định: {default_last_alert_prices_path()})",
+    )
+    tp1d.add_argument(
+        "--mt5-symbol",
+        default=None,
+        metavar="SYM",
+        help="Symbol override khi parse trade_line (giống các lệnh khác)",
+    )
+    tp1d.set_defaults(func=cmd_tp1_tick_dry_run)
 
     g = sub.add_parser(
         "chatgpt-project",
@@ -1417,6 +1447,16 @@ def cmd_tv_journal_monitor(args: argparse.Namespace) -> None:
         raise
     print(f"Kết thúc: {outcome}")
     _log.info("tv-journal-monitor: kết thúc | outcome=%s", outcome)
+
+
+def cmd_tp1_tick_dry_run(args: argparse.Namespace) -> None:
+    lap = args.last_alert_json or default_last_alert_prices_path()
+    text = tp1_dry_run_report(
+        last_alert_path=lap,
+        p_last=float(args.last),
+        symbol_override=args.mt5_symbol,
+    )
+    print(text, end="")
 
 
 def cmd_update(args: argparse.Namespace) -> None:

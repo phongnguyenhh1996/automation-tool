@@ -350,6 +350,23 @@ JOURNAL_INTRADAY_RETRY_USER_TEMPLATE = (
     "trade_line gốc tùy chọn nếu đã đủ trong prices[]."
 )
 
+# Sau khi giá last realtime chạm TP1 (vùng đang ``cho_tp1``).
+TP1_POST_TOUCH_USER_TEMPLATE = (
+    "Giá **last realtime** (TradingView watchlist) đã chạm mức **TP1** của lệnh đang theo dõi.\n"
+    "Vùng (label): {plan_label}\n"
+    "Dòng lệnh hiện tại (trade_line): {trade_line}\n"
+    "Giá last khi đánh giá: {last_price}\n"
+    "Mức TP1 parse từ trade_line: {tp1_price}\n\n"
+    "Đính kèm Coinmap khung M5 mới nhất.\n"
+    "Trả về **một JSON object** duy nhất (có thể bọc ```json):\n"
+    '- "sau_tp1_hanh_dong": "loại" | "chinh_trade_line"\n'
+    '- "trade_line_moi": string — bắt buộc nếu sau_tp1_hanh_dong là "chinh_trade_line" '
+    "(một dòng pipe MT5 đầy đủ: BUY/SELL … | SL … | TP1 … | Lot …); "
+    'nếu "loại" thì có thể "".\n'
+    '- "out_chi_tiet": string (phân tích chi tiết)\n'
+    '- "output_ngan_gon": string (tóm tắt ngắn)\n'
+)
+
 
 def run_single_followup_responses(
     *,

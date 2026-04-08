@@ -17,20 +17,26 @@ from zoneinfo import ZoneInfo
 from automation_tool.coinmap import (
     _maybe_tradingview_dark_mode,
     _maybe_tradingview_login,
+    _tradingview_ensure_watchlist_open,
     capture_charts,
     load_coinmap_yaml,
 )
 from automation_tool.config import Settings
-from automation_tool.images import coinmap_xauusd_5m_json_path, read_main_chart_symbol
+from automation_tool.images import (
+    DEFAULT_MAIN_CHART_SYMBOL,
+    coinmap_xauusd_5m_json_path,
+    get_active_main_symbol,
+    read_main_chart_symbol,
+)
 from automation_tool.openai_errors import re_raise_unless_openai
 from automation_tool.playwright_browser import close_browser_and_context, launch_chrome_context
 from automation_tool.state_files import (
     LastAlertState,
     VUNG_CHO,
-    all_plans_terminal,
     default_last_alert_prices_path,
     read_last_alert_state,
     read_last_response_id,
+    watchlist_journal_active_work,
     write_journal_monitor_first_run,
 )
 from automation_tool.telegram_bot import (
@@ -40,6 +46,8 @@ from automation_tool.tradingview_alerts import (
     _open_alerts_list_panel,
     parse_tv_alert_price_from_description,
 )
+from automation_tool.tradingview_last_price import read_watchlist_last_price_stable
+from automation_tool.tp1_followup import maybe_post_entry_tp1_tick
 from automation_tool.tradingview_touch_flow import TouchFlowParams, run_intraday_touch_flow
 
 _EPS = 0.01
@@ -766,6 +774,38 @@ def run_tv_journal_monitor(
             page.locator(f"#{intervals_id}").first.wait_for(state="visible", timeout=90_000)
             _journal_log(tz, "Khung thời gian chart sẵn sàng — bắt đầu vòng ngoài (reload → Nhật ký → parse).")
 
+            sym = (tv.get("watchlist_symbol_short") or "").strip().upper()
+            if not sym or sym == DEFAULT_MAIN_CHART_SYMBOL:
+                sym = get_active_main_symbol().strip().upper()
+            current_response_id = initial_response_id
+
+            def _tp1_tick_from_watchlist_last() -> None:
+                nonlocal current_response_id
+                _tradingview_ensure_watchlist_open(page, tv)
+                p_last = read_watchlist_last_price_stable(page, tv, symbol=sym)
+                if p_last is None:
+                    _journal_log(tz, "Giá Last watchlist chưa ổn định — bỏ qua tick TP1.")
+                    return
+                try:
+                    rid = maybe_post_entry_tp1_tick(
+                        settings=settings,
+                        params=params,
+                        last_alert_path=lap,
+                        page=page,
+                        tv=tv,
+                        symbol=sym,
+                        settle_ms=settle_ms,
+                        p_last=p_last,
+                        browser_context=context,
+                        initial_response_id=current_response_id,
+                        tick_source="journal",
+                    )
+                except Exception as e:
+                    _journal_log(tz, f"post-entry TP1 tick lỗi (bỏ qua): {e!s}")
+                else:
+                    if rid:
+                        current_response_id = rid
+
             while _before_cutoff(
                 params.timezone_name,
                 params.until_hour,
@@ -780,16 +820,21 @@ def run_tv_journal_monitor(
                 st = read_last_alert_state(lap)
                 if st is None:
                     raise SystemExit(f"Lost last alert state at {lap}")
-                if all_plans_terminal(st):
+                if not watchlist_journal_active_work(st):
                     _journal_log(
                         tz,
-                        "Cả 3 plan đã có trạng thái vao_lenh hoặc loai — dừng monitor.",
+                        "Không còn vùng chờ và không còn theo dõi TP1 sau vào lệnh — dừng monitor.",
                     )
                     return "all_plans_resolved"
                 waiting = _waiting_label_prices(st)
                 if not waiting:
-                    _journal_log(tz, "Không còn plan vung_cho — dừng.")
-                    return "all_plans_resolved"
+                    _journal_log(
+                        tz,
+                        "Không còn plan vung_cho — chỉ theo dõi Last watchlist (±5 / TP1) nếu có.",
+                    )
+                    _tp1_tick_from_watchlist_last()
+                    time.sleep(max(1.0, params.poll_seconds))
+                    continue
                 _journal_log(
                     tz,
                     f"Plan còn chờ ({VUNG_CHO}): "
@@ -822,7 +867,7 @@ def run_tv_journal_monitor(
                         f"KHỚP giá {touched} (plan {tlab}) — bắt đầu vòng trong (Coinmap + OpenAI).",
                     )
                     processed.add(line.strip())
-                    rid = read_last_response_id() or initial_response_id
+                    rid = read_last_response_id() or current_response_id
 
                     tfp = TouchFlowParams(
                         capture_coinmap_yaml=params.capture_coinmap_yaml,
@@ -877,9 +922,10 @@ def run_tv_journal_monitor(
                         poll_seconds=params.poll_seconds,
                         poll_supersede_touch=_poll_sup,
                     )
+                    current_response_id = read_last_response_id() or current_response_id
 
                     st2 = read_last_alert_state(lap)
-                    if st2 is not None and all_plans_terminal(st2):
+                    if st2 is not None and not watchlist_journal_active_work(st2):
                         _journal_log(tz, "Kết quả: all_plans_resolved (đã xử lý đủ 3 plan).")
                         return "all_plans_resolved"
                     if inner_outcome == "cutoff":
@@ -893,8 +939,9 @@ def run_tv_journal_monitor(
 
                 _journal_log(
                     tz,
-                    f"Chưa có dòng mới khớp plan đang chờ — nghỉ {params.poll_seconds}s trước chu kỳ reload tiếp theo.",
+                    f"Chưa có dòng mới khớp plan đang chờ — tick TP1 (Last) rồi nghỉ {params.poll_seconds}s.",
                 )
+                _tp1_tick_from_watchlist_last()
                 time.sleep(max(1.0, params.poll_seconds))
 
             if params.session_cutoff_end is not None:

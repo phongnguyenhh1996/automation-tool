@@ -15,8 +15,9 @@ from automation_tool.config import symbol_data_dir
 # Per-plan alert lifecycle for tv-journal-monitor (persisted in last_alert_prices.json).
 VUNG_CHO = "vung_cho"
 VAO_LENH = "vao_lenh"
+CHO_TP1 = "cho_tp1"
 LOAI = "loai"
-AlertTerminalStatus = Literal["vao_lenh", "loai"]
+AlertTerminalStatus = Literal["vao_lenh", "cho_tp1", "loai"]
 PLAN_LABELS_DEFAULT: tuple[str, str, str] = ("plan_chinh", "plan_phu", "scalp")
 # Float compare: treat as "same price" when syncing merge (no status reset).
 _PRICE_MERGE_EPS = 1e-9
@@ -158,12 +159,17 @@ class LastAlertState:
     """Snapshot of ``last_alert_prices.json`` including per-plan journal status.
 
     ``entry_manual_by_label``: True = vào lệnh thủ công (ghi tay ngoài bot); False = qua tool/MT5.
+    ``trade_line_by_label`` / ``mt5_ticket_by_label``: sau auto-MT5 thành công (TP1 pipeline).
+    ``tp1_followup_done_by_label``: đã gửi follow-up TP1 cho lần ``cho_tp1`` hiện tại (tránh spam).
     """
 
     prices: tuple[float, float, float]
     labels: tuple[str, str, str] = PLAN_LABELS_DEFAULT
     status_by_label: dict[str, str] = field(default_factory=dict)
     entry_manual_by_label: dict[str, bool] = field(default_factory=dict)
+    trade_line_by_label: dict[str, str] = field(default_factory=dict)
+    mt5_ticket_by_label: dict[str, int] = field(default_factory=dict)
+    tp1_followup_done_by_label: dict[str, bool] = field(default_factory=dict)
     updated_at: str = ""
 
     def to_json_dict(self) -> dict[str, Any]:
@@ -174,6 +180,17 @@ class LastAlertState:
             "status_by_label": {k: self.status_by_label.get(k, VUNG_CHO) for k in self.labels},
             "entry_manual_by_label": {
                 k: bool(self.entry_manual_by_label.get(k, False)) for k in self.labels
+            },
+            "trade_line_by_label": {
+                k: str(self.trade_line_by_label.get(k, "") or "") for k in self.labels
+            },
+            "mt5_ticket_by_label": {
+                k: int(self.mt5_ticket_by_label[k])
+                for k in self.labels
+                if k in self.mt5_ticket_by_label
+            },
+            "tp1_followup_done_by_label": {
+                k: bool(self.tp1_followup_done_by_label.get(k, False)) for k in self.labels
             },
             "updated_at": ts,
         }
@@ -231,12 +248,47 @@ def read_last_alert_state(path: Optional[Path] = None) -> Optional[LastAlertStat
         for lab in labels:
             entry_manual_by_label[lab] = False
 
+    trade_line_by_label: dict[str, str] = {}
+    tl = data.get("trade_line_by_label")
+    if isinstance(tl, dict):
+        for lab in labels:
+            v = tl.get(lab)
+            trade_line_by_label[lab] = str(v).strip() if isinstance(v, str) else ""
+    else:
+        for lab in labels:
+            trade_line_by_label[lab] = ""
+
+    mt5_ticket_by_label: dict[str, int] = {}
+    mtk = data.get("mt5_ticket_by_label")
+    if isinstance(mtk, dict):
+        for lab in labels:
+            v = mtk.get(lab)
+            if v is None:
+                continue
+            try:
+                mt5_ticket_by_label[lab] = int(v)
+            except (TypeError, ValueError):
+                pass
+
+    tp1_done: dict[str, bool] = {}
+    td = data.get("tp1_followup_done_by_label")
+    if isinstance(td, dict):
+        for lab in labels:
+            v = td.get(lab)
+            tp1_done[lab] = bool(v) if isinstance(v, bool) else False
+    else:
+        for lab in labels:
+            tp1_done[lab] = False
+
     ts = str(data.get("updated_at") or "")
     return LastAlertState(
         prices=tup,
         labels=labels,
         status_by_label=status_by_label,
         entry_manual_by_label=entry_manual_by_label,
+        trade_line_by_label=trade_line_by_label,
+        mt5_ticket_by_label=mt5_ticket_by_label,
+        tp1_followup_done_by_label=tp1_done,
         updated_at=ts,
     )
 
@@ -248,6 +300,9 @@ def write_last_alert_state(state: LastAlertState, path: Optional[Path] = None) -
         labels=state.labels,
         status_by_label=dict(state.status_by_label),
         entry_manual_by_label=dict(state.entry_manual_by_label),
+        trade_line_by_label=dict(state.trade_line_by_label),
+        mt5_ticket_by_label=dict(state.mt5_ticket_by_label),
+        tp1_followup_done_by_label=dict(state.tp1_followup_done_by_label),
         updated_at=datetime.now(timezone.utc).isoformat(),
     )
     _atomic_write_json(p, st.to_json_dict())
@@ -268,16 +323,25 @@ def merge_alert_prices_with_status(
             labels=labels,
             status_by_label={lab: VUNG_CHO for lab in labels},
             entry_manual_by_label={lab: False for lab in labels},
+            trade_line_by_label={lab: "" for lab in labels},
+            mt5_ticket_by_label={},
+            tp1_followup_done_by_label={lab: False for lab in labels},
             updated_at=datetime.now(timezone.utc).isoformat(),
         )
     new_status: dict[str, str] = {}
     new_manual: dict[str, bool] = {}
+    new_tl = {lab: old.trade_line_by_label.get(lab, "") for lab in labels}
+    new_tk = {k: v for k, v in old.mt5_ticket_by_label.items() if k in labels}
+    new_tp1d = {lab: old.tp1_followup_done_by_label.get(lab, False) for lab in labels}
     for i, lab in enumerate(labels):
         op = old.prices[i]
         np = new_prices[i]
         if not _price_equal(op, np):
             new_status[lab] = VUNG_CHO
             new_manual[lab] = False
+            new_tl[lab] = ""
+            new_tk.pop(lab, None)
+            new_tp1d[lab] = False
         else:
             new_status[lab] = old.status_by_label.get(lab, VUNG_CHO)
             new_manual[lab] = old.entry_manual_by_label.get(lab, False)
@@ -286,6 +350,9 @@ def merge_alert_prices_with_status(
         labels=labels,
         status_by_label=new_status,
         entry_manual_by_label=new_manual,
+        trade_line_by_label=new_tl,
+        mt5_ticket_by_label=new_tk,
+        tp1_followup_done_by_label=new_tp1d,
         updated_at=datetime.now(timezone.utc).isoformat(),
     )
 
@@ -319,19 +386,136 @@ def update_single_plan_status(
             labels=st.labels,
             status_by_label=d,
             entry_manual_by_label=em,
+            trade_line_by_label=dict(st.trade_line_by_label),
+            mt5_ticket_by_label=dict(st.mt5_ticket_by_label),
+            tp1_followup_done_by_label=dict(st.tp1_followup_done_by_label),
             updated_at=st.updated_at,
         ),
         path=path,
     )
 
 
+def no_waiting_zones(state: LastAlertState) -> bool:
+    """True when no plan is still ``vung_cho`` (all touched or beyond)."""
+    for lab in state.labels:
+        if state.status_by_label.get(lab, VUNG_CHO) == VUNG_CHO:
+            return False
+    return True
+
+
+def needs_post_entry_price_watch(state: LastAlertState) -> bool:
+    """True when a plan is ``vao_lenh``/``cho_tp1`` with saved trade_line + MT5 ticket (TP1 pipeline)."""
+    for lab in state.labels:
+        s = state.status_by_label.get(lab, VUNG_CHO)
+        if s not in (VAO_LENH, CHO_TP1):
+            continue
+        tl = (state.trade_line_by_label.get(lab) or "").strip()
+        tk = state.mt5_ticket_by_label.get(lab)
+        if tl and tk is not None and int(tk) > 0:
+            return True
+    return False
+
+
+def watchlist_journal_active_work(state: LastAlertState) -> bool:
+    """Còn việc cho watchlist/journal: còn vùng chờ hoặc còn theo dõi TP1 sau vào lệnh."""
+    return (not no_waiting_zones(state)) or needs_post_entry_price_watch(state)
+
+
 def all_plans_terminal(state: LastAlertState) -> bool:
-    """True when every plan is ``vao_lenh`` or ``loai`` (not ``vung_cho``)."""
+    """True when every plan is past ``vung_cho`` (``vao_lenh``, ``cho_tp1``, or ``loai``)."""
     for lab in state.labels:
         s = state.status_by_label.get(lab, VUNG_CHO)
         if s == VUNG_CHO:
             return False
     return True
+
+
+def update_plan_mt5_entry(
+    label: str,
+    *,
+    trade_line: str,
+    mt5_ticket: int,
+    path: Optional[Path] = None,
+) -> None:
+    """Ghi ``trade_line`` và ticket MT5 cho một plan (sau ``execute_trade`` thành công)."""
+    st = read_last_alert_state(path)
+    if st is None:
+        raise SystemExit(
+            f"No last alert state at {path or default_last_alert_prices_path()} — cannot update MT5 entry."
+        )
+    if label not in st.labels:
+        raise SystemExit(f"Unknown plan label {label!r}; expected one of {st.labels}.")
+    tl = dict(st.trade_line_by_label)
+    tk = dict(st.mt5_ticket_by_label)
+    tl[label] = trade_line.strip()
+    tk[label] = int(mt5_ticket)
+    write_last_alert_state(
+        LastAlertState(
+            prices=st.prices,
+            labels=st.labels,
+            status_by_label=dict(st.status_by_label),
+            entry_manual_by_label=dict(st.entry_manual_by_label),
+            trade_line_by_label=tl,
+            mt5_ticket_by_label=tk,
+            tp1_followup_done_by_label=dict(st.tp1_followup_done_by_label),
+            updated_at=st.updated_at,
+        ),
+        path=path,
+    )
+
+
+def update_plan_tp1_followup_done(
+    label: str,
+    done: bool,
+    path: Optional[Path] = None,
+) -> None:
+    st = read_last_alert_state(path)
+    if st is None:
+        raise SystemExit(f"No last alert state at {path or default_last_alert_prices_path()}.")
+    if label not in st.labels:
+        raise SystemExit(f"Unknown plan label {label!r}.")
+    d = {**st.tp1_followup_done_by_label, label: done}
+    write_last_alert_state(
+        LastAlertState(
+            prices=st.prices,
+            labels=st.labels,
+            status_by_label=dict(st.status_by_label),
+            entry_manual_by_label=dict(st.entry_manual_by_label),
+            trade_line_by_label=dict(st.trade_line_by_label),
+            mt5_ticket_by_label=dict(st.mt5_ticket_by_label),
+            tp1_followup_done_by_label=d,
+            updated_at=st.updated_at,
+        ),
+        path=path,
+    )
+
+
+def clear_plan_mt5_fields(label: str, path: Optional[Path] = None) -> None:
+    """Xoá trade_line/ticket/tp1_done cho một label (sau ``loại`` hoặc reset thủ công)."""
+    st = read_last_alert_state(path)
+    if st is None:
+        return
+    if label not in st.labels:
+        return
+    tl = dict(st.trade_line_by_label)
+    tk = dict(st.mt5_ticket_by_label)
+    td = dict(st.tp1_followup_done_by_label)
+    tl[label] = ""
+    tk.pop(label, None)
+    td[label] = False
+    write_last_alert_state(
+        LastAlertState(
+            prices=st.prices,
+            labels=st.labels,
+            status_by_label=dict(st.status_by_label),
+            entry_manual_by_label=dict(st.entry_manual_by_label),
+            trade_line_by_label=tl,
+            mt5_ticket_by_label=tk,
+            tp1_followup_done_by_label=td,
+            updated_at=st.updated_at,
+        ),
+        path=path,
+    )
 
 
 def read_last_alert_prices(path: Optional[Path] = None) -> Optional[tuple[float, float, float]]:
