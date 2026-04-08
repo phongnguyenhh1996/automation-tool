@@ -240,7 +240,7 @@ def _sleep_wait_minutes_respecting_cutoff_with_journal_poll(
     processed: Set[str],
     touched_label: str,
     touched_price: float,
-) -> tuple[bool, Optional[tuple[float, str, str]]]:
+) -> tuple[Literal["ok", "cutoff", "rejected"], Optional[tuple[float, str, str]]]:
     """
     Chờ tối đa ``wait_minutes`` nhưng chia nhỏ: mỗi ``poll_seconds`` (tối đa 30s) reload Nhật ký
     và kiểm tra chạm giá. Nếu có dòng khớp plan **khác** (label hoặc giá khác plan đang xử lý):
@@ -261,6 +261,10 @@ def _sleep_wait_minutes_respecting_cutoff_with_journal_poll(
     )
     last_progress_log = 0.0
     poll_iv = min(30.0, max(1.0, float(poll_seconds)))
+    sym = (tv.get("watchlist_symbol_short") or "").strip().upper()
+    if not sym or sym == DEFAULT_MAIN_CHART_SYMBOL:
+        sym = get_active_main_symbol().strip().upper()
+    sym_parse = normalize_broker_xau_symbol(sym)
 
     while time.time() < end:
         if not _before_cutoff(timezone_name, until_hour, session_cutoff_end):
@@ -268,7 +272,7 @@ def _sleep_wait_minutes_respecting_cutoff_with_journal_poll(
                 timezone_name,
                 "Hết khung giờ (session_cutoff hoặc --until-hour) trong lúc chờ — dừng.",
             )
-            return (False, None)
+            return ("cutoff", None)
 
         now = time.time()
         remain = end - now
@@ -282,6 +286,22 @@ def _sleep_wait_minutes_respecting_cutoff_with_journal_poll(
         st = read_last_alert_state(last_alert_path)
         if st is None:
             raise SystemExit(f"Missing last alert state at {last_alert_path}")
+
+        tl_sl = (st.trade_line_by_label.get(touched_label) or "").strip()
+        if tl_sl:
+            pt_sl = parse_trade_line(tl_sl, sym_parse)
+            if pt_sl is not None:
+                p_chk = read_watchlist_last_price_wait_stable(
+                    page, tv, symbol=sym, timeout_ms=3000, poll_ms=250
+                )
+                if p_chk is not None and is_last_price_hit_stop_loss(p_chk, pt_sl, eps=_EPS):
+                    _journal_log(
+                        timezone_name,
+                        f"Last={p_chk} chạm SL trong lúc chờ — loại {touched_label} và kết thúc vòng trong.",
+                    )
+                    update_single_plan_status(touched_label, LOAI, path=last_alert_path)
+                    return ("rejected", None)
+
         waiting = _waiting_label_prices(st)
         if waiting:
             _journal_log(timezone_name, "Poll Nhật ký (trong lúc chờ) — reload + đọc dòng…")
@@ -314,7 +334,7 @@ def _sleep_wait_minutes_respecting_cutoff_with_journal_poll(
                         update_single_plan_status(touched_label, LOAI, path=last_alert_path)
                         processed.add(new_line.strip())
                         _journal_log(timezone_name, f"Đã ghi status loại cho plan {touched_label}.")
-                        return (True, (new_price, new_line, new_label))
+                        return ("ok", (new_price, new_line, new_label))
 
         remain = end - time.time()
         if remain <= 0:
@@ -327,7 +347,7 @@ def _sleep_wait_minutes_respecting_cutoff_with_journal_poll(
                 timezone_name,
                 "Hết khung giờ trong lúc chờ — dừng.",
             )
-            return (False, None)
+            return ("cutoff", None)
 
     ok = _before_cutoff(timezone_name, until_hour, session_cutoff_end)
     if ok:
@@ -335,7 +355,7 @@ def _sleep_wait_minutes_respecting_cutoff_with_journal_poll(
             timezone_name,
             f"Đã chờ xong {wait_minutes} phút (không có chạm plan khác) — chụp Coinmap + gửi OpenAI lại.",
         )
-    return (ok, None)
+    return ("ok" if ok else "cutoff", None)
 
 
 def _waiting_label_prices(state: LastAlertState) -> list[tuple[str, float]]:
@@ -582,7 +602,10 @@ def _run_intraday_touch_loop(
                     touched_label=touched_label,
                     touched_price=touched_price,
                 )
-                if not ok_sleep:
+                if ok_sleep != "ok":
+                    if ok_sleep == "rejected":
+                        _journal_log(tz, "Chạm SL trong lúc chờ — kết thúc vòng trong (loại).")
+                        return InnerLoopResult("rejected")
                     _journal_log(tz, "Hết giờ trong lúc chờ (trade_line) — cutoff.")
                     return InnerLoopResult("cutoff")
                 if sup is not None:
@@ -648,7 +671,10 @@ def _run_intraday_touch_loop(
                     touched_label=touched_label,
                     touched_price=touched_price,
                 )
-                if not ok_sleep:
+                if ok_sleep != "ok":
+                    if ok_sleep == "rejected":
+                        _journal_log(tz, "Chạm SL trong lúc chờ — kết thúc vòng trong (loại).")
+                        return InnerLoopResult("rejected")
                     _journal_log(tz, "Hết giờ trong lúc chờ (xác nhận loại) — cutoff.")
                     return InnerLoopResult("cutoff")
                 if sup is not None:
@@ -678,7 +704,10 @@ def _run_intraday_touch_loop(
                 touched_label=touched_label,
                 touched_price=touched_price,
             )
-            if not ok_sleep:
+            if ok_sleep != "ok":
+                if ok_sleep == "rejected":
+                    _journal_log(tz, "Chạm SL trong lúc chờ — kết thúc vòng trong (loại).")
+                    return InnerLoopResult("rejected")
                 _journal_log(tz, "Hết giờ trong lúc chờ (chờ) — cutoff.")
                 return InnerLoopResult("cutoff")
             if sup is not None:
@@ -705,7 +734,10 @@ def _run_intraday_touch_loop(
             touched_label=touched_label,
             touched_price=touched_price,
         )
-        if not ok_sleep:
+        if ok_sleep != "ok":
+            if ok_sleep == "rejected":
+                _journal_log(tz, "Chạm SL trong lúc chờ — kết thúc vòng trong (loại).")
+                return InnerLoopResult("rejected")
             _journal_log(tz, "Hết giờ sau chờ mặc định — cutoff.")
             return InnerLoopResult("cutoff")
         if sup is not None:

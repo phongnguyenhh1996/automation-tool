@@ -151,10 +151,13 @@ def _sleep_wait_minutes_with_poll(
     touched_price: float,
     poll_seconds: float,
     poll_supersede_touch: PollSupersedeTouch,
-) -> tuple[bool, Optional[tuple[float, str, str]]]:
+    last_alert_path: Path,
+    page: Page,
+    tv: dict,
+) -> tuple[Literal["ok", "cutoff", "rejected"], Optional[tuple[float, str, str]]]:
     """
     Sleep up to wait_minutes, but periodically poll for another touch that should supersede
-    the current one. Returns (ok_before_cutoff, supersede_touch_or_none).
+    the current one. Returns (status, supersede_touch_or_none).
     """
     end = time.time() + params.wait_minutes * 60
     poll_iv = min(30.0, max(1.0, float(poll_seconds)))
@@ -163,16 +166,38 @@ def _sleep_wait_minutes_with_poll(
         "tv-touch",
         f"Chờ {params.wait_minutes} phút (poll mỗi ~{poll_iv:.0f}s) trước lần hỏi OpenAI tiếp theo.",
     )
+    sym = read_main_chart_symbol(params.charts_dir)
+    sym_parse = normalize_broker_xau_symbol((params.mt5_symbol or "").strip() or sym)
+
     while time.time() < end:
         if not before_cutoff(
             params.timezone_name, params.until_hour, session_cutoff_end=params.session_cutoff_end
         ):
             _ts_log(params.timezone_name, "tv-touch", "Hết khung giờ trong lúc chờ — dừng.")
-            return (False, None)
+            return ("cutoff", None)
+
+        st = read_last_alert_state(last_alert_path)
+        if st is not None:
+            tl_sl = (st.trade_line_by_label.get(touched_label) or "").strip()
+            if tl_sl:
+                pt_sl = parse_trade_line(tl_sl, sym_parse)
+                if pt_sl is not None:
+                    # Poll the Watchlist Last; if SL is already hit, reject immediately.
+                    p_chk = read_watchlist_last_price_wait_stable(
+                        page, tv, symbol=sym, timeout_ms=3000, poll_ms=250
+                    )
+                    if p_chk is not None and is_last_price_hit_stop_loss(p_chk, pt_sl, eps=_EPS):
+                        _ts_log(
+                            params.timezone_name,
+                            "tv-touch",
+                            f"Last={p_chk} chạm SL trong lúc chờ — loại {touched_label} và kết thúc vòng trong.",
+                        )
+                        update_single_plan_status(touched_label, LOAI, path=last_alert_path)
+                        return ("rejected", None)
 
         sup = poll_supersede_touch(touched_label, touched_price)
         if sup is not None:
-            return (True, sup)
+            return ("ok", sup)
 
         remain = end - time.time()
         if remain <= 0:
@@ -182,7 +207,7 @@ def _sleep_wait_minutes_with_poll(
     ok = before_cutoff(
         params.timezone_name, params.until_hour, session_cutoff_end=params.session_cutoff_end
     )
-    return (ok, None)
+    return ("ok" if ok else "cutoff", None)
 
 
 def run_intraday_touch_flow(
@@ -339,8 +364,13 @@ def run_intraday_touch_flow(
                     touched_price=touched_price,
                     poll_seconds=poll_seconds,
                     poll_supersede_touch=poll_supersede_touch,
+                    last_alert_path=last_alert_path,
+                    page=page,
+                    tv=tv,
                 )
-                if not ok_sleep:
+                if ok_sleep != "ok":
+                    if ok_sleep == "rejected":
+                        return "rejected"
                     return "cutoff"
                 if sup is not None:
                     update_single_plan_status(touched_label, LOAI, path=last_alert_path)
@@ -422,8 +452,13 @@ def run_intraday_touch_flow(
                     touched_price=touched_price,
                     poll_seconds=poll_seconds,
                     poll_supersede_touch=poll_supersede_touch,
+                    last_alert_path=last_alert_path,
+                    page=page,
+                    tv=tv,
                 )
-                if not ok_sleep:
+                if ok_sleep != "ok":
+                    if ok_sleep == "rejected":
+                        return "rejected"
                     return "cutoff"
                 if sup is not None:
                     update_single_plan_status(touched_label, LOAI, path=last_alert_path)
@@ -444,8 +479,13 @@ def run_intraday_touch_flow(
             touched_price=touched_price,
             poll_seconds=poll_seconds,
             poll_supersede_touch=poll_supersede_touch,
+            last_alert_path=last_alert_path,
+            page=page,
+            tv=tv,
         )
-        if not ok_sleep:
+        if ok_sleep != "ok":
+            if ok_sleep == "rejected":
+                return "rejected"
             return "cutoff"
         if sup is not None:
             update_single_plan_status(touched_label, LOAI, path=last_alert_path)
