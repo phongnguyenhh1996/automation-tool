@@ -461,16 +461,16 @@ def send_mt5_execution_log_to_ngan_gon_chat(
     )
 
 
-def send_first_response_log_to_analysis_detail_chat(
+def send_first_response_log_to_log_chat(
     *,
     bot_token: str,
-    telegram_analysis_detail_chat_id: Optional[str],
+    telegram_log_chat_id: Optional[str],
     source: str,
     text: str,
 ) -> None:
     """
     Log phản hồi đầu phân tích (giá / hop_luu / chọn vùng / lý do bỏ qua MT5) tới
-    ``TELEGRAM_ANALYSIS_DETAIL_CHAT_ID``. Plain text.
+    ``TELEGRAM_LOG_CHAT_ID``. Plain text.
     """
     body = (text or "").strip()
     if not body:
@@ -478,9 +478,25 @@ def send_first_response_log_to_analysis_detail_chat(
     out = f"📊 Phản hồi đầu — {source}\n\n{body}"
     _send_plain_text_to_chat_id(
         bot_token=bot_token,
-        chat_id=telegram_analysis_detail_chat_id,
+        chat_id=telegram_log_chat_id,
         text=out,
-        log_context="TELEGRAM_ANALYSIS_DETAIL_CHAT_ID",
+        log_context="TELEGRAM_LOG_CHAT_ID",
+    )
+
+
+# Backward-compatible alias (older call sites / docs).
+def send_first_response_log_to_analysis_detail_chat(
+    *,
+    bot_token: str,
+    telegram_analysis_detail_chat_id: Optional[str],
+    source: str,
+    text: str,
+) -> None:
+    send_first_response_log_to_log_chat(
+        bot_token=bot_token,
+        telegram_log_chat_id=telegram_analysis_detail_chat_id,
+        source=source,
+        text=text,
     )
 
 

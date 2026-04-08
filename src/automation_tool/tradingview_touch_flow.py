@@ -315,7 +315,7 @@ def run_intraday_touch_flow(
             mt5_symbol=params.mt5_symbol,
             telegram_bot_token=settings.telegram_bot_token,
             telegram_chat_id=settings.telegram_chat_id,
-            telegram_analysis_detail_chat_id=settings.telegram_analysis_detail_chat_id,
+            telegram_log_chat_id=settings.telegram_log_chat_id,
             telegram_output_ngan_gon_chat_id=settings.telegram_output_ngan_gon_chat_id,
             telegram_source_label="tv-touch (watch)",
             auto_mt5_zone_label=touched_label,
