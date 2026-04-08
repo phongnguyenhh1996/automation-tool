@@ -39,6 +39,8 @@ def default_analysis_prompt(main_symbol: str | None = None) -> str:
     """
     Prompt text mặc định cho bước phân tích multimodal; ``main_symbol`` là cặp chính (TradingView/Coinmap).
     Nếu None hoặc không hợp lệ → ``DEFAULT_MAIN_CHART_SYMBOL``.
+
+    Chỉ khi cặp là **XAUUSD** mới yêu cầu JSON có ``output_ngan_gon``; cặp khác: không thêm key đó.
     """
     sym = DEFAULT_MAIN_CHART_SYMBOL
     if main_symbol and str(main_symbol).strip():
@@ -46,15 +48,31 @@ def default_analysis_prompt(main_symbol: str | None = None) -> str:
             sym = normalize_main_chart_symbol(str(main_symbol).strip())
         except ValueError:
             pass
+    xauusd = sym == "XAUUSD"
+    json_schema_header = (
+        "Trả về một JSON object hợp lệ duy nhất (có thể bọc trong ```json). Schema gợi ý:\n"
+        '- "out_chi_tiet": string (phân tích chi tiết)\n'
+    )
+    if xauusd:
+        json_schema_header += '- "output_ngan_gon": string (tóm tắt)\n'
+    else:
+        json_schema_header += (
+            "- **Không** thêm key `output_ngan_gon`; "
+            f"dùng đủ thông tin trong `out_chi_tiet` cho {sym}.\n"
+        )
+    tail = (
+        "Trong output_ngan_gon: sau mỗi khối PLAN CHÍNH VÙNG CHỜ / PLAN PHỤ VÙNG CHỜ / SCALP VÙNG thêm một dòng lệnh tham khảo (pipe) để vào tay. "
+        "Lot tham khảo: USDJPY = giá/(10×SL pip); XAUUSD = 1/SL_giá (SL_giá = |entry−SL| theo giá).\n"
+    )
+    if not xauusd:
+        tail = tail.replace("output_ngan_gon", "out_chi_tiet")
     return (
         f"Chạy quy trình phân tích {sym}. "
         "Dữ liệu đính kèm theo thứ tự cố định (TradingView = ảnh; Coinmap = JSON export API nếu có, không thì ảnh): "
         "TradingView DXY (4h, 1h, 15m) → Coinmap USDINDEX 15m → "
         f"TradingView {sym} (4h, 1h, 15m, 5m) → Coinmap {sym} (15m, 5m).\n\n"
-        "Trả về một JSON object hợp lệ duy nhất (có thể bọc trong ```json). Schema gợi ý:\n"
-        '- "out_chi_tiet": string (phân tích chi tiết)\n'
-        '- "output_ngan_gon": string (tóm tắt)\n'
-        '- "prices": đúng 3 phần tử, mỗi phần tử:\n'
+        + json_schema_header
+        + '- "prices": đúng 3 phần tử, mỗi phần tử:\n'
         '  {"label":"plan_chinh"|"plan_phu"|"scalp","value":number,'
         '"hop_luu":integer 0–100,"trade_line":string} — '
         "``hop_luu`` = điểm hợp lưu của vùng đó. "
@@ -64,8 +82,7 @@ def default_analysis_prompt(main_symbol: str | None = None) -> str:
         '- "intraday_hanh_dong": "chờ" | "loại" | "VÀO LỆNH" hoặc null (tuỳ chọn; tool auto-MT5 sáng dùng ``hop_luu`` + ``trade_line`` trong ``prices``)\n'
         '- "trade_line" (gốc JSON): có thể `""` chỉ khi cả 3 phần tử trong ``prices`` đã có ``trade_line`` không rỗng như trên.\n'
         '- "no_change": boolean — chỉ dùng rõ trong luồng update intraday; phân tích sáng có thể bỏ qua hoặc false\n\n'
-        "Trong output_ngan_gon: sau mỗi khối PLAN CHÍNH VÙNG CHỜ / PLAN PHỤ VÙNG CHỜ / SCALP VÙNG thêm một dòng lệnh tham khảo (pipe) để vào tay. "
-        "Lot tham khảo: USDJPY = giá/(10×SL pip); XAUUSD = 1/SL_giá (SL_giá = |entry−SL| theo giá).\n"
+        + tail
     )
 
 
