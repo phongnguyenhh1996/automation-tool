@@ -310,8 +310,8 @@ DEFAULT_UPDATE_PROMPT_TEMPLATE = (
     "Baseline 3 mức (plan_chinh, plan_phu, scalp): {p1}, {p2}, {p3}\n\n"
     "Trả về một JSON object hợp lệ duy nhất (có thể bọc trong ```json). "
     "Schema **cùng kiểu** bước phân tích sáng (multimodal 10 chart):\n"
+    "- **Không** thêm key `out_chi_tiet` hay `output_ngan_gon` — không cần phân tích dài/tóm tắt văn bản ở bước cập nhật này.\n"
     '- "no_change": true nếu ba vùng giá không đổi so với baseline; false nếu có thay đổi.\n'
-    '- "out_chi_tiet": string (phân tích chi tiết); "output_ngan_gon": string (tóm tắt) — tùy cần.\n'
     '- "prices": đúng 3 phần tử, mỗi phần tử:\n'
     '  {{"label":"plan_chinh"|"plan_phu"|"scalp","value":number,'
     '"hop_luu":integer 0–100,"trade_line":string}} — '
@@ -329,6 +329,8 @@ JOURNAL_INTRADAY_FIRST_USER_TEMPLATE = (
     "Dòng Nhật ký TradingView: {journal_line}\n\n"
     "Đính kèm dữ liệu Coinmap XAUUSD khung M5 mới nhất.\n"
     "Trả về một JSON object duy nhất (schema giống phân tích sáng + intraday):\n"
+    "- **Không** thêm key `out_chi_tiet` hay `output_ngan_gon` — luồng Nhật ký chỉ cần "
+    "intraday_hanh_dong + prices (và trade_line gốc tùy chọn).\n"
     '- "intraday_hanh_dong": "chờ" | "loại" | "VÀO LỆNH"\n'
     '- "prices": đúng 3 phần tử, mỗi phần tử:\n'
     '  {{"label":"plan_chinh"|"plan_phu"|"scalp","value":number,'
@@ -336,8 +338,7 @@ JOURNAL_INTRADAY_FIRST_USER_TEMPLATE = (
     "**BẮT BUỘC:** mỗi phần tử có `trade_line` không rỗng (một dòng pipe MT5 đầy đủ cho đúng vùng); "
     "không `""`, không bỏ key. hop_luu = điểm hợp lưu. \n"
     '- "trade_line" (gốc): có thể `""` nếu cả 3 phần tử prices đã có trade_line không rỗng; '
-    'hoặc một dòng tóm tắt nếu cần.\n'
-    '- "output_ngan_gon", "out_chi_tiet": tùy cần.\n'
+    'hoặc một dòng pipe tóm tắt nếu cần.\n'
     "Không dùng giá trị khác cho intraday_hanh_dong trong luồng này."
 )
 
@@ -347,7 +348,8 @@ JOURNAL_INTRADAY_RETRY_USER_TEMPLATE = (
     "Đính kèm Coinmap XAUUSD M5 mới.\n"
     "Cùng schema JSON như tin đầu: intraday_hanh_dong; "
     "prices[3] — mỗi phần tử bắt buộc trade_line không rỗng (pipe MT5 đầy đủ); "
-    "trade_line gốc tùy chọn nếu đã đủ trong prices[]."
+    "trade_line gốc tùy chọn nếu đã đủ trong prices[]. "
+    "**Không** thêm `out_chi_tiet` hay `output_ngan_gon`."
 )
 
 # Sau khi giá last realtime chạm TP1 (vùng đang ``cho_tp1``).
@@ -363,8 +365,8 @@ TP1_POST_TOUCH_USER_TEMPLATE = (
     '- "trade_line_moi": string — bắt buộc nếu sau_tp1_hanh_dong là "chinh_trade_line" '
     "(một dòng pipe MT5 đầy đủ: BUY/SELL … | SL … | TP1 … | Lot …); "
     'nếu "loại" thì có thể "".\n'
-    '- "out_chi_tiet": string (phân tích chi tiết)\n'
-    '- "output_ngan_gon": string (tóm tắt ngắn)\n'
+    "- **Không** thêm key `out_chi_tiet` hay `output_ngan_gon` — chỉ cần quyết định sau TP1 "
+    "(sau_tp1_hanh_dong + trade_line_moi khi chỉnh dòng lệnh).\n"
 )
 
 
