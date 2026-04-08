@@ -110,8 +110,37 @@ def _poll_supersede_from_watchlist(
         return None
 
     p = read_watchlist_last_price_stable(page, tv, symbol=symbol)
+    # In touch-flow sleeps, this function may be called frequently (e.g. every 10s).
+    # To avoid Telegram/log spam, emit a lightweight heartbeat at most once per minute.
     if p is None:
+        # Optional heartbeat when price cannot be read (highlight up/down).
+        now_s = datetime.now().timestamp()
+        last_log = float(getattr(_poll_supersede_from_watchlist, "_last_heartbeat_s", 0.0))
+        if now_s - last_log >= 60.0:
+            setattr(_poll_supersede_from_watchlist, "_last_heartbeat_s", now_s)
+            # Log via the shared "journal" logger so it follows existing Telegram piping.
+            try:
+                z = ZoneInfo(tv.get("timezone") or tv.get("timezone_name") or "UTC")
+                ts = datetime.now(z).strftime("%Y-%m-%d %H:%M:%S %Z")
+            except Exception:
+                ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            logging.getLogger("automation_tool.journal").info(
+                f"[{ts}] tv-touch | Poll (chờ): watchlist last=unavailable (highlight) | waiting_plans={len(waiting)}"
+            )
         return None
+
+    now_s = datetime.now().timestamp()
+    last_log = float(getattr(_poll_supersede_from_watchlist, "_last_heartbeat_s", 0.0))
+    if now_s - last_log >= 60.0:
+        setattr(_poll_supersede_from_watchlist, "_last_heartbeat_s", now_s)
+        try:
+            z = ZoneInfo(tv.get("timezone") or tv.get("timezone_name") or "UTC")
+            ts = datetime.now(z).strftime("%Y-%m-%d %H:%M:%S %Z")
+        except Exception:
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        logging.getLogger("automation_tool.journal").info(
+            f"[{ts}] tv-touch | Poll (chờ): watchlist last={p} | waiting_plans={len(waiting)}"
+        )
 
     for lab, tp in waiting:
         if abs(p - tp) <= _EPS:
