@@ -30,12 +30,19 @@ from automation_tool.images import (
 )
 from automation_tool.openai_errors import re_raise_unless_openai
 from automation_tool.playwright_browser import close_browser_and_context, launch_chrome_context
+from automation_tool.mt5_openai_parse import (
+    is_last_price_hit_stop_loss,
+    normalize_broker_xau_symbol,
+    parse_trade_line,
+)
 from automation_tool.state_files import (
+    LOAI,
     LastAlertState,
     VUNG_CHO,
     default_last_alert_prices_path,
     read_last_alert_state,
     read_last_response_id,
+    update_single_plan_status,
     watchlist_journal_active_work,
     write_journal_monitor_first_run,
 )
@@ -46,7 +53,7 @@ from automation_tool.tradingview_alerts import (
     _open_alerts_list_panel,
     parse_tv_alert_price_from_description,
 )
-from automation_tool.tradingview_last_price import read_watchlist_last_price_stable
+from automation_tool.tradingview_last_price import read_watchlist_last_price_wait_stable
 from automation_tool.tp1_followup import maybe_post_entry_tp1_tick
 from automation_tool.tradingview_touch_flow import TouchFlowParams, run_intraday_touch_flow
 
@@ -54,7 +61,7 @@ _EPS = 0.01
 
 # Trong vòng trong (touch): chỉ ghi status loại sau khi model trả "loại" đủ nhiều lần liên tiếp
 # (mỗi lần chờ wait_minutes rồi chụp M5 + hỏi lại), tránh loại ngay từ lần đầu.
-JOURNAL_LOAI_CONFIRM_ROUNDS = 3
+JOURNAL_LOAI_CONFIRM_ROUNDS = 4
 
 
 def _journal_log(timezone_name: str, msg: str) -> None:
@@ -422,6 +429,27 @@ def _run_intraday_touch_loop(
             raise SystemExit(f"Missing last alert state at {last_alert_path}")
         p1, p2, p3 = st.prices
 
+        if not first:
+            sym_j = read_main_chart_symbol(params.charts_dir)
+            sym_parse = normalize_broker_xau_symbol((params.mt5_symbol or "").strip() or sym_j)
+            wait_ms = min(15_000, max(3_000, int(float(params.poll_seconds) * 1000)))
+            p_chk = read_watchlist_last_price_wait_stable(
+                page, tv, symbol=sym_j, timeout_ms=wait_ms, poll_ms=250
+            )
+            if p_chk is not None:
+                tl_sl = (st.trade_line_by_label.get(touched_label) or "").strip()
+                if tl_sl:
+                    pt_sl = parse_trade_line(tl_sl, sym_parse)
+                    if pt_sl is not None and is_last_price_hit_stop_loss(
+                        p_chk, pt_sl, eps=_EPS
+                    ):
+                        _journal_log(
+                            tz,
+                            f"Last={p_chk} chạm SL trước Coinmap (lặp) — loại {touched_label}.",
+                        )
+                        update_single_plan_status(touched_label, LOAI, path=last_alert_path)
+                        return InnerLoopResult("rejected")
+
         _journal_log(
             tz,
             f"Vòng trong #{inner_i}: chụp Coinmap (yaml={params.capture_coinmap_yaml.name}, charts_dir={params.charts_dir})",
@@ -782,9 +810,12 @@ def run_tv_journal_monitor(
             def _tp1_tick_from_watchlist_last() -> None:
                 nonlocal current_response_id
                 _tradingview_ensure_watchlist_open(page, tv)
-                p_last = read_watchlist_last_price_stable(page, tv, symbol=sym)
+                wms = min(15_000, max(3_000, int(float(params.poll_seconds) * 1000)))
+                p_last = read_watchlist_last_price_wait_stable(
+                    page, tv, symbol=sym, timeout_ms=wms, poll_ms=250
+                )
                 if p_last is None:
-                    _journal_log(tz, "Giá Last watchlist chưa ổn định — bỏ qua tick TP1.")
+                    _journal_log(tz, "Giá Last watchlist chưa ổn định sau chờ — bỏ qua tick TP1.")
                     return
                 try:
                     rid = maybe_post_entry_tp1_tick(

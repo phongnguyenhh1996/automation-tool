@@ -66,6 +66,20 @@ class ParsedTrade:
     raw_line: str
 
 
+def is_last_price_hit_stop_loss(
+    last_price: float,
+    parsed: ParsedTrade,
+    *,
+    eps: float = 0.01,
+) -> bool:
+    """
+    True nếu giá thị trường đã chạm/vượt mức SL (BUY: last <= SL; SELL: last >= SL), có epsilon.
+    """
+    if parsed.side == "BUY":
+        return last_price <= parsed.sl + eps
+    return last_price >= parsed.sl - eps
+
+
 def extract_output_ngan_gon_block(text: str) -> Optional[str]:
     """Trả về nội dung sau ``[OUTPUT_NGAN_GON]`` tới hết text hoặc tới section khác ``[...]``.
 

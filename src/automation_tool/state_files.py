@@ -159,7 +159,9 @@ class LastAlertState:
     """Snapshot of ``last_alert_prices.json`` including per-plan journal status.
 
     ``entry_manual_by_label``: True = vào lệnh thủ công (ghi tay ngoài bot); False = qua tool/MT5.
-    ``trade_line_by_label`` / ``mt5_ticket_by_label``: sau auto-MT5 thành công (TP1 pipeline).
+    ``trade_line_by_label``: dòng lệnh pipe MT5 theo vùng — ghi từ JSON phân tích OpenAI
+    (``prices[].trade_line``) khi parse; sau đó có thể cập nhật khi ``execute_trade`` thành công.
+    ``mt5_ticket_by_label``: ticket sau MT5 (TP1 pipeline).
     ``tp1_followup_done_by_label``: đã gửi follow-up TP1 cho lần ``cho_tp1`` hiện tại (tránh spam).
     """
 
@@ -437,7 +439,7 @@ def update_plan_mt5_entry(
     mt5_ticket: int,
     path: Optional[Path] = None,
 ) -> None:
-    """Ghi ``trade_line`` và ticket MT5 cho một plan (sau ``execute_trade`` thành công)."""
+    """Ghi / cập nhật ``trade_line`` và ticket MT5 cho một plan (sau ``execute_trade`` thành công)."""
     st = read_last_alert_state(path)
     if st is None:
         raise SystemExit(
@@ -534,6 +536,59 @@ def write_last_alert_prices(
     old = read_last_alert_state(p)
     merged = merge_alert_prices_with_status(old, prices)
     write_last_alert_state(merged, path=p)
+
+
+def merge_trade_lines_from_openai_analysis_text(
+    text: str,
+    path: Optional[Path] = None,
+) -> None:
+    """
+    Parse JSON phân tích từ ``text`` và merge mọi ``prices[].trade_line`` không rỗng
+    vào ``trade_line_by_label`` (theo ``label`` khớp ``plan_chinh`` / ``plan_phu`` / ``scalp``).
+
+    Không tạo file mới nếu chưa có ``last_alert_prices.json``.
+    """
+    from automation_tool.openai_analysis_json import parse_analysis_from_openai_text
+
+    st = read_last_alert_state(path)
+    if st is None:
+        return
+    payload = parse_analysis_from_openai_text(text)
+    if payload is None or not payload.prices:
+        return
+    by_norm: dict[str, str] = {}
+    for pe in payload.prices:
+        lab = (pe.label or "").strip().lower()
+        line = (pe.trade_line or "").strip()
+        if lab and line:
+            by_norm[lab] = line
+    if not by_norm:
+        return
+    tl = dict(st.trade_line_by_label)
+    changed = False
+    for lab in st.labels:
+        key = lab.strip().lower()
+        if key not in by_norm:
+            continue
+        new_line = by_norm[key]
+        if tl.get(lab) != new_line:
+            tl[lab] = new_line
+            changed = True
+    if not changed:
+        return
+    write_last_alert_state(
+        LastAlertState(
+            prices=st.prices,
+            labels=st.labels,
+            status_by_label=dict(st.status_by_label),
+            entry_manual_by_label=dict(st.entry_manual_by_label),
+            trade_line_by_label=tl,
+            mt5_ticket_by_label=dict(st.mt5_ticket_by_label),
+            tp1_followup_done_by_label=dict(st.tp1_followup_done_by_label),
+            updated_at=st.updated_at,
+        ),
+        path=path,
+    )
 
 
 def remove_last_alert_prices_file(path: Optional[Path] = None) -> bool:

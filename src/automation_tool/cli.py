@@ -40,6 +40,7 @@ from automation_tool.state_files import (
     default_last_alert_prices_path,
     default_last_response_id_path,
     default_morning_baseline_prices_path,
+    merge_trade_lines_from_openai_analysis_text,
     read_last_alert_prices,
     read_last_response_id,
     read_morning_baseline_prices,
@@ -1292,13 +1293,16 @@ def cmd_all(args: argparse.Namespace) -> None:
     zt, zerr, _nc = parse_three_zone_prices(out.after_charts or "")
     if zt:
         write_morning_baseline_prices(zt)
-        write_last_alert_prices(zt)
+        write_last_alert_prices(zt, path=lap_all)
         _log.info(
             "all: đã ghi morning_baseline + last_alert | giá=%s | %s | %s",
             zt[0],
             zt[1],
             zt[2],
         )
+    if out.after_charts:
+        merge_trade_lines_from_openai_analysis_text(out.after_charts, path=lap_all)
+    if zt:
         if not args.no_tradingview:
             if not args.no_tv_journal_monitor:
                 require_openai(s)

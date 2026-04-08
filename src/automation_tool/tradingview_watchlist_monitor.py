@@ -36,7 +36,7 @@ from automation_tool.state_files import (
     watchlist_journal_active_work,
     write_journal_monitor_first_run,
 )
-from automation_tool.tradingview_last_price import read_watchlist_last_price_stable
+from automation_tool.tradingview_last_price import read_watchlist_last_price_wait_stable
 from automation_tool.tradingview_touch_flow import (
     TouchFlowParams,
     before_cutoff,
@@ -109,7 +109,10 @@ def _poll_supersede_from_watchlist(
     if not waiting:
         return None
 
-    p = read_watchlist_last_price_stable(page, tv, symbol=symbol)
+    wms = min(15_000, max(2_000, int(float(tv.get("watchlist_poll_seconds", 10)) * 1000)))
+    p = read_watchlist_last_price_wait_stable(
+        page, tv, symbol=symbol, timeout_ms=wms, poll_ms=250
+    )
     # In touch-flow sleeps, this function may be called frequently (e.g. every 10s).
     # To avoid Telegram/log spam, emit a lightweight heartbeat at most once per minute.
     if p is None:
@@ -233,9 +236,12 @@ def run_tv_watchlist_monitor(
                     _tvw_log(tz, "Không còn vùng chờ và không còn theo dõi TP1 sau vào lệnh — dừng.")
                     return "all_plans_resolved"
 
-                p_last = read_watchlist_last_price_stable(page, tv, symbol=sym)
+                wms_outer = min(15_000, max(2_000, int(poll_s * 1000)))
+                p_last = read_watchlist_last_price_wait_stable(
+                    page, tv, symbol=sym, timeout_ms=wms_outer, poll_ms=250
+                )
                 if p_last is None:
-                    _tvw_log(tz, "Giá đang highlight (up/down) hoặc chưa đọc được — skip.")
+                    _tvw_log(tz, "Giá Last chưa ổn định sau chờ — skip nhịp.")
                     page.wait_for_timeout(int(poll_s * 1000))
                     continue
 

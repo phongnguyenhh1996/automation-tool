@@ -21,6 +21,7 @@ from automation_tool.openai_analysis_json import (
 )
 from automation_tool.state_files import (
     VAO_LENH,
+    merge_trade_lines_from_openai_analysis_text,
     read_last_alert_state,
     update_plan_mt5_entry,
     update_single_plan_status,
@@ -117,6 +118,11 @@ def apply_first_response_vao_lenh(
     if not text:
         _log.debug("first_response: bỏ qua — text rỗng.")
         return False
+
+    try:
+        merge_trade_lines_from_openai_analysis_text(text, path=last_alert_path)
+    except Exception as e:
+        _log.warning("first_response: merge trade_line từ JSON — %s", e)
 
     zt, zerr, nc = parse_three_zone_prices(text)
     if nc is True:

@@ -29,8 +29,11 @@ from automation_tool.images import coinmap_xauusd_5m_json_path, read_main_chart_
 from automation_tool.mt5_execute import execute_trade, format_mt5_execution_for_telegram
 from automation_tool.mt5_manage import mt5_latest_position_ticket
 from automation_tool.mt5_openai_parse import (
+    is_last_price_hit_stop_loss,
+    normalize_broker_xau_symbol,
     parse_journal_intraday_action_from_openai_text,
     parse_openai_output_md,
+    parse_trade_line,
 )
 from automation_tool.openai_errors import re_raise_unless_openai
 from automation_tool.openai_prompt_flow import (
@@ -50,13 +53,14 @@ from automation_tool.telegram_bot import (
     send_mt5_execution_log_to_ngan_gon_chat,
     send_openai_output_to_telegram,
 )
+from automation_tool.tradingview_last_price import read_watchlist_last_price_wait_stable
 
 _log = logging.getLogger("automation_tool.tv_touch")
 
 _EPS = 0.01
 
 # In the inner loop: only commit LOAI after repeated confirmations.
-LOAI_CONFIRM_ROUNDS = 3
+LOAI_CONFIRM_ROUNDS = 4
 
 
 def _ts_log(timezone_name: str, prefix: str, msg: str) -> None:
@@ -222,6 +226,29 @@ def run_intraday_touch_flow(
         if st is None:
             raise SystemExit(f"Missing last alert state at {last_alert_path}")
         p1, p2, p3 = st.prices
+
+        if not first:
+            sym = read_main_chart_symbol(params.charts_dir)
+            sym_parse = normalize_broker_xau_symbol((params.mt5_symbol or "").strip() or sym)
+            wait_ms = min(15_000, max(3_000, int(float(poll_seconds) * 1000)))
+            p_chk = read_watchlist_last_price_wait_stable(
+                page, tv, symbol=sym, timeout_ms=wait_ms, poll_ms=250
+            )
+            if p_chk is not None:
+                tl_sl = (st.trade_line_by_label.get(touched_label) or "").strip()
+                if tl_sl:
+                    pt_sl = parse_trade_line(tl_sl, sym_parse)
+                    if pt_sl is not None and is_last_price_hit_stop_loss(
+                        p_chk, pt_sl, eps=_EPS
+                    ):
+                        _ts_log(
+                            tz,
+                            "tv-touch",
+                            f"Last={p_chk} chạm SL trước Coinmap (lặp) — loại {touched_label}.",
+                        )
+                        update_single_plan_status(touched_label, LOAI, path=last_alert_path)
+                        return "rejected"
+
         _ts_log(tz, "tv-touch", f"Vòng trong #{inner_i}: chụp Coinmap M5 + hỏi OpenAI…")
 
         paths = capture_charts(

@@ -16,6 +16,7 @@ from automation_tool.state_files import (
     LastAlertState,
     all_plans_terminal,
     merge_alert_prices_with_status,
+    merge_trade_lines_from_openai_analysis_text,
     needs_post_entry_price_watch,
     read_last_alert_state,
     remove_last_alert_prices_file,
@@ -159,3 +160,29 @@ def test_update_single_plan_unknown_label_exits() -> None:
         )
         with pytest.raises(SystemExit):
             update_single_plan_status("nope", VAO_LENH, path=p)
+
+
+def test_merge_trade_lines_from_openai_analysis_text() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "last_alert_prices.json"
+        write_last_alert_state(
+            LastAlertState(
+                prices=(100.0, 200.0, 300.0),
+                labels=("plan_chinh", "plan_phu", "scalp"),
+                status_by_label={lab: VUNG_CHO for lab in ("plan_chinh", "plan_phu", "scalp")},
+            ),
+            path=p,
+        )
+        text = r"""
+{
+  "prices": [
+    {"label": "plan_chinh", "value": 100, "hop_luu": 80, "trade_line": "BUY LIMIT 100 | SL 99 | TP1 101 | Lot 0.01"},
+    {"label": "plan_phu", "value": 200, "hop_luu": 70, "trade_line": ""}
+  ]
+}
+"""
+        merge_trade_lines_from_openai_analysis_text(text, path=p)
+        st = read_last_alert_state(p)
+        assert st is not None
+        assert "BUY LIMIT 100" in (st.trade_line_by_label.get("plan_chinh") or "")
+        assert (st.trade_line_by_label.get("plan_phu") or "") == ""

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from automation_tool.mt5_openai_parse import (
     extract_output_ngan_gon_block,
+    is_last_price_hit_stop_loss,
     parse_journal_intraday_action,
     parse_journal_intraday_action_from_openai_text,
     parse_openai_output_md,
@@ -150,3 +151,15 @@ def test_journal_intraday_last_action_wins() -> None:
         "[OUTPUT_NGAN_GON]\nHành động: chờ\n...\nHành động: loại\n"
     )
     assert parse_journal_intraday_action(block or "") == "loại"
+
+
+def test_is_last_price_hit_stop_loss_buy_sell() -> None:
+    buy = parse_trade_line("BUY LIMIT 100.0 | SL 99.0 | TP1 101.0 | Lot 0.01", "XAUUSD")
+    assert buy is not None
+    assert is_last_price_hit_stop_loss(98.9, buy)
+    assert not is_last_price_hit_stop_loss(100.0, buy)
+
+    sell = parse_trade_line("SELL LIMIT 1.0 | SL 2.0 | TP1 0.5 | Lot 0.01", "XAUUSD")
+    assert sell is not None
+    assert is_last_price_hit_stop_loss(2.01, sell)
+    assert not is_last_price_hit_stop_loss(1.5, sell)
