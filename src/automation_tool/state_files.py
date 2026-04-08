@@ -534,3 +534,17 @@ def write_last_alert_prices(
     old = read_last_alert_state(p)
     merged = merge_alert_prices_with_status(old, prices)
     write_last_alert_state(merged, path=p)
+
+
+def remove_last_alert_prices_file(path: Optional[Path] = None) -> bool:
+    """
+    Xóa ``last_alert_prices.json`` nếu tồn tại (vd. đầu phiên ``all`` để bắt đầu sạch).
+
+    Returns:
+        ``True`` nếu đã xóa file, ``False`` nếu file không có.
+    """
+    p = path or default_last_alert_prices_path()
+    if p.is_file():
+        p.unlink()
+        return True
+    return False

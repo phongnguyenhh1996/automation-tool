@@ -43,6 +43,7 @@ from automation_tool.state_files import (
     read_last_alert_prices,
     read_last_response_id,
     read_morning_baseline_prices,
+    remove_last_alert_prices_file,
     write_last_alert_prices,
     write_last_response_id,
     write_morning_baseline_prices,
@@ -361,6 +362,15 @@ def _parser() -> argparse.ArgumentParser:
         "--mt5-dry-run",
         action="store_true",
         help="Chỉ dry-run MT5 (mặc định: gửi lệnh thật)",
+    )
+    al.add_argument(
+        "--no-clear-last-alert",
+        action="store_true",
+        help=(
+            "Không xóa last_alert_prices.json trước khi capture/phân tích "
+            f"(mặc định: xóa file tại --last-alert-json hoặc {default_last_alert_prices_path()} "
+            "để phiên all bắt đầu không kế thừa status/ticket cũ)"
+        ),
     )
     al.set_defaults(func=cmd_all)
 
@@ -1189,6 +1199,19 @@ def cmd_telegram_listen(args: argparse.Namespace) -> None:
 def cmd_all(args: argparse.Namespace) -> None:
     acquire_exclusive_all_update_run()
     s = load_settings()
+    from automation_tool.images import set_active_main_symbol_file
+
+    if getattr(args, "main_symbol", None):
+        set_active_main_symbol_file(args.main_symbol)
+
+    lap_all = args.last_alert_json or default_last_alert_prices_path()
+    if not args.no_clear_last_alert:
+        if remove_last_alert_prices_file(lap_all):
+            _log.info("all: đã xóa last_alert_prices trước phiên | %s", lap_all)
+            print(f"Đã xóa last_alert trước phiên all: {lap_all}", flush=True)
+        else:
+            _log.info("all: không có file last_alert để xóa | %s", lap_all)
+
     cfg = args.config or default_coinmap_config_path()
     storage = args.storage_state or default_storage_state_path()
     _log.info(
@@ -1225,8 +1248,6 @@ def cmd_all(args: argparse.Namespace) -> None:
             "No TradingView/Coinmap chart files found for OpenAI step "
             f"under {charts_dir}. Check capture and chart slot order (effective_chart_image_order)."
         )
-
-    lap_all = args.last_alert_json or default_last_alert_prices_path()
 
     def _on_first_all(text: str) -> None:
         apply_first_response_vao_lenh(

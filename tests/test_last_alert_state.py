@@ -18,6 +18,7 @@ from automation_tool.state_files import (
     merge_alert_prices_with_status,
     needs_post_entry_price_watch,
     read_last_alert_state,
+    remove_last_alert_prices_file,
     update_single_plan_status,
     watchlist_journal_active_work,
     write_last_alert_state,
@@ -125,6 +126,24 @@ def test_update_single_plan_status_roundtrip() -> None:
         assert st.status_by_label["plan_chinh"] == VAO_LENH
         assert st.status_by_label["plan_phu"] == VUNG_CHO
         assert st.entry_manual_by_label["plan_chinh"] is False
+
+
+def test_remove_last_alert_prices_file() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "last_alert_prices.json"
+        assert remove_last_alert_prices_file(p) is False
+        write_last_alert_state(
+            LastAlertState(
+                prices=(1.0, 2.0, 3.0),
+                labels=("plan_chinh", "plan_phu", "scalp"),
+                status_by_label={lab: VUNG_CHO for lab in ("plan_chinh", "plan_phu", "scalp")},
+            ),
+            path=p,
+        )
+        assert p.is_file()
+        assert remove_last_alert_prices_file(p) is True
+        assert not p.exists()
+        assert remove_last_alert_prices_file(p) is False
 
 
 def test_update_single_plan_unknown_label_exits() -> None:
