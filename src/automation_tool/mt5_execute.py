@@ -373,42 +373,78 @@ def _is_call_failed(last_err: Optional[tuple[Any, ...]]) -> bool:
     return "call failed" in m or "terminal" in m
 
 
-def _ensure_symbol(mt5: Any, symbol: str) -> Optional[str]:
+def _symbol_candidates(symbol: str) -> list[str]:
+    """
+    Candidate symbol names to try on broker.
+
+    Primary use-case: gold symbol differences across brokers, e.g. ``XAUUSD`` vs ``XAUUSDm``.
+    We keep the input first, then try common single-letter suffix toggle.
+    """
+    s = (symbol or "").strip()
+    if not s:
+        return []
+    out: list[str] = [s]
+    up = s.upper()
+    # Common broker suffix: "m"
+    if up.endswith("M") and len(s) > 1:
+        out.append(s[:-1])
+    else:
+        out.append(s + "m")
+    # De-dup while preserving order
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for c in out:
+        if c and c not in seen:
+            seen.add(c)
+            uniq.append(c)
+    return uniq
+
+
+def _ensure_symbol(mt5: Any, symbol: str) -> tuple[Optional[str], Optional[str]]:
     ti = mt5.terminal_info()
     if ti is None:
         return (
+            None,
             "terminal_info() trả về None — Python không nối được terminal MT5. "
-            f"{format_last_error(mt5)}"
+            f"{format_last_error(mt5)}",
         )
     if getattr(ti, "connected", True) is False:
         return (
+            None,
             "terminal connected=False — chưa nối server trong MT5 (kiểm tra đăng nhập / mạng). "
-            f"{format_last_error(mt5)}"
+            f"{format_last_error(mt5)}",
         )
 
-    info = mt5.symbol_info(symbol)
-    if info is None:
-        sug = _suggest_symbol_names(mt5, symbol)
-        tail = _format_last_error_if_meaningful(mt5)
-        return (
-            f"symbol_info({symbol!r}) không tồn tại trên broker — không thể giao dịch tên này. "
-            f"Đối chiếu tên trong Market Watch (vàng thường là XAUUSDm); có thể ``--symbol <tên đúng>``. "
-            f"{sug}{tail}"
-        )
+    for cand in _symbol_candidates(symbol):
+        info = mt5.symbol_info(cand)
+        if info is None:
+            continue
+        if not mt5.symbol_select(cand, True):
+            le = _last_error_tuple(mt5)
+            base = f"symbol_select({cand!r}) thất bại. {format_last_error(mt5)}"
+            if _is_call_failed(le):
+                base += (
+                    " | Gợi ý lỗi IPC (code=-1 / Terminal: Call failed): "
+                    "để MT5 đang mở và đã login; bật AutoTrading; chạy Python cùng user/session với terminal; "
+                    "thử chạy terminal không portable; tắt chặn từ antivirus/RDP."
+                )
+            else:
+                base += " | Thử thêm symbol vào Market Watch thủ công trong MT5."
+            return None, base
+        return cand, None
 
-    if not mt5.symbol_select(symbol, True):
-        le = _last_error_tuple(mt5)
-        base = f"symbol_select({symbol!r}) thất bại. {format_last_error(mt5)}"
-        if _is_call_failed(le):
-            base += (
-                " | Gợi ý lỗi IPC (code=-1 / Terminal: Call failed): "
-                "để MT5 đang mở và đã login; bật AutoTrading; chạy Python cùng user/session với terminal; "
-                "thử chạy terminal không portable; tắt chặn từ antivirus/RDP."
-            )
-        else:
-            base += " | Thử thêm symbol vào Market Watch thủ công trong MT5."
-        return base
-    return None
+    # None of the candidates exists on broker.
+    wanted = symbol
+    sug = _suggest_symbol_names(mt5, wanted)
+    tail = _format_last_error_if_meaningful(mt5)
+    tried = ", ".join(repr(s) for s in _symbol_candidates(wanted))
+    return (
+        None,
+        f"symbol_info({wanted!r}) không tồn tại trên broker — không thể giao dịch tên này. "
+        f"Đã thử: {tried}. "
+        f"Đối chiếu tên trong Market Watch; có thể ``--symbol <tên đúng>``. "
+        f"{sug}{tail}",
+    )
 
 
 def build_request(
@@ -419,10 +455,9 @@ def build_request(
     magic: int = 2222222,
     comment: str = "openai-auto",
 ) -> dict[str, Any]:
-    sym = trade.symbol
-    err = _ensure_symbol(mt5, sym)
-    if err:
-        raise RuntimeError(err)
+    sym, err = _ensure_symbol(mt5, trade.symbol)
+    if err or not sym:
+        raise RuntimeError(err or "Không resolve được symbol để trade.")
 
     filling = _filling_for_symbol(mt5, sym)
     if trade.kind == "MARKET":
@@ -583,7 +618,7 @@ def execute_trade(
                 message=f"order_check trả về None. {format_last_error(mt5)}",
                 last_error=le,
                 request=request,
-                resolved_symbol=trade.symbol,
+                resolved_symbol=str(request.get("symbol") or trade.symbol),
             )
         chk_rc = getattr(chk, "retcode", None)
         chk_d = _trade_check_dict(chk)
@@ -600,7 +635,7 @@ def execute_trade(
                 last_error=le,
                 trade_check=chk_d,
                 request=request,
-                resolved_symbol=trade.symbol,
+                resolved_symbol=str(request.get("symbol") or trade.symbol),
             )
         ret = mt5.order_send(request)
         if ret is None:
@@ -610,7 +645,7 @@ def execute_trade(
                 message=f"order_send trả về None. {format_last_error(mt5)}",
                 last_error=le,
                 request=request,
-                resolved_symbol=trade.symbol,
+                resolved_symbol=str(request.get("symbol") or trade.symbol),
             )
         rc = getattr(ret, "retcode", None)
         rd = _trade_result_dict(ret)
@@ -627,7 +662,7 @@ def execute_trade(
                 last_error=le,
                 trade_result=rd,
                 request=request,
-                resolved_symbol=trade.symbol,
+                resolved_symbol=str(request.get("symbol") or trade.symbol),
             )
         rc_int = int(rc) if rc is not None else None
         return MT5ExecutionResult(
@@ -641,7 +676,7 @@ def execute_trade(
             deal=getattr(ret, "deal", None),
             request=request,
             trade_result=rd,
-            resolved_symbol=trade.symbol,
+            resolved_symbol=str(request.get("symbol") or trade.symbol),
         )
     finally:
         mt5.shutdown()
