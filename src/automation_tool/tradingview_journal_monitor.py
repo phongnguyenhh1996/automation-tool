@@ -29,6 +29,7 @@ from automation_tool.images import (
     read_main_chart_symbol,
 )
 from automation_tool.openai_errors import re_raise_unless_openai
+from automation_tool.browser_client import try_attach_playwright_via_service
 from automation_tool.playwright_browser import close_browser_and_context, launch_chrome_context
 from automation_tool.mt5_openai_parse import (
     is_last_price_hit_stop_loss,
@@ -807,13 +808,19 @@ def run_tv_journal_monitor(
     outer_cycle = 0
 
     with sync_playwright() as p:
-        browser, context = launch_chrome_context(
-            p,
-            headless=params.headless,
-            storage_state_path=params.storage_state_path,
-            viewport_width=vw,
-            viewport_height=vh,
-        )
+        attached = try_attach_playwright_via_service(p)
+        if attached is not None:
+            browser, context = attached
+            use_browser_service = True
+        else:
+            browser, context = launch_chrome_context(
+                p,
+                headless=params.headless,
+                storage_state_path=params.storage_state_path,
+                viewport_width=vw,
+                viewport_height=vh,
+            )
+            use_browser_service = False
         page = context.new_page()
         try:
             url = str(tv.get("chart_url"))
@@ -1023,4 +1030,14 @@ def run_tv_journal_monitor(
             return "cutoff_time"
         finally:
             _journal_log(tz, "Đóng trình duyệt (Playwright).")
-            close_browser_and_context(browser, context)
+            if use_browser_service:
+                try:
+                    page.close()
+                except Exception:
+                    pass
+                try:
+                    browser.close()
+                except Exception:
+                    pass
+            else:
+                close_browser_and_context(browser, context)

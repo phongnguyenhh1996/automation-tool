@@ -14,6 +14,13 @@ if errorlevel 1 (
   exit /b 1
 )
 
+echo [%date% %time%] INFO: Ensuring browser service is up>> "logs\capture_headed.log"
+coinmap-automation browser up >> "logs\capture_headed.log" 2>&1
+if errorlevel 1 (
+  echo [%date% %time%] ERROR: browser service failed to start.>> "logs\capture_headed.log"
+  exit /b %ERRORLEVEL%
+)
+
 REM Capture charts (headless by default; this script name is legacy)
 echo [%date% %time%] INFO: Starting coinmap-automation capture>> "logs\capture_headed.log"
 coinmap-automation capture --main-symbol XAUUSD >> "logs\capture_headed.log" 2>&1

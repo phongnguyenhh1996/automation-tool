@@ -14,6 +14,7 @@ from playwright.sync_api import BrowserContext, Playwright, sync_playwright
 
 from automation_tool.coinmap_openai_slim import slim_coinmap_export_for_openai
 from automation_tool.config import default_logs_dir
+from automation_tool.browser_client import try_attach_playwright_via_service
 from automation_tool.playwright_browser import close_browser_and_context, launch_chrome_context
 
 
@@ -2130,13 +2131,19 @@ def capture_charts(
     vh = int(cfg.get("viewport_height", 1080))
 
     with sync_playwright() as p:
-        browser, context = launch_chrome_context(
-            p,
-            headless=headless,
-            storage_state_path=storage_state_path,
-            viewport_width=vw,
-            viewport_height=vh,
-        )
+        attached = try_attach_playwright_via_service(p)
+        if attached is not None:
+            browser, context = attached
+            use_browser_service = True
+        else:
+            browser, context = launch_chrome_context(
+                p,
+                headless=headless,
+                storage_state_path=storage_state_path,
+                viewport_width=vw,
+                viewport_height=vh,
+            )
+            use_browser_service = False
         try:
             return _capture_charts_in_context(
                 context,
@@ -2151,6 +2158,12 @@ def capture_charts(
                 progress_hook=progress_hook,
             )
         finally:
-            close_browser_and_context(browser, context)
+            if use_browser_service:
+                try:
+                    browser.close()
+                except Exception:
+                    pass
+            else:
+                close_browser_and_context(browser, context)
 
 

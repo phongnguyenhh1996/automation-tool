@@ -13,6 +13,13 @@ if errorlevel 1 (
   exit /b 1
 )
 
+echo [%date% %time%] INFO: Ensuring browser service is up>> "logs\capture_analyze_many_eurusd_usdjpy.log"
+coinmap-automation browser up >> "logs\capture_analyze_many_eurusd_usdjpy.log" 2>&1
+if errorlevel 1 (
+  echo [%date% %time%] ERROR: browser service failed to start.>> "logs\capture_analyze_many_eurusd_usdjpy.log"
+  exit /b %ERRORLEVEL%
+)
+
 echo [%date% %time%] INFO: Starting capture-many (EURUSD,USDJPY)>> "logs\capture_analyze_many_eurusd_usdjpy.log"
 coinmap-automation capture-many --symbols EURUSD,USDJPY >> "logs\capture_analyze_many_eurusd_usdjpy.log" 2>&1
 if errorlevel 1 (

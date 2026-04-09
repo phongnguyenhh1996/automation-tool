@@ -16,6 +16,7 @@ from automation_tool.coinmap import (
     _maybe_tradingview_login,
     load_coinmap_yaml,
 )
+from automation_tool.browser_client import try_attach_playwright_via_service
 from automation_tool.playwright_browser import close_browser_and_context, launch_chrome_context
 
 _EPS = 0.01
@@ -288,13 +289,19 @@ def sync_tradingview_alerts(
     vh = int(cfg.get("viewport_height", 1080))
 
     with sync_playwright() as p:
-        browser, context = launch_chrome_context(
-            p,
-            headless=headless,
-            storage_state_path=storage_state_path,
-            viewport_width=vw,
-            viewport_height=vh,
-        )
+        attached = try_attach_playwright_via_service(p)
+        if attached is not None:
+            browser, context = attached
+            use_browser_service = True
+        else:
+            browser, context = launch_chrome_context(
+                p,
+                headless=headless,
+                storage_state_path=storage_state_path,
+                viewport_width=vw,
+                viewport_height=vh,
+            )
+            use_browser_service = False
         page = context.new_page()
         try:
             url = str(tv.get("chart_url"))
@@ -303,4 +310,14 @@ def sync_tradingview_alerts(
             sync_alerts_on_page(page, tv, settle_ms, target_prices)
             _log_tv.info("sync_tradingview_alerts: đồng bộ 3 cảnh báo xong, đóng browser.")
         finally:
-            close_browser_and_context(browser, context)
+            if use_browser_service:
+                try:
+                    page.close()
+                except Exception:
+                    pass
+                try:
+                    browser.close()
+                except Exception:
+                    pass
+            else:
+                close_browser_and_context(browser, context)

@@ -14,6 +14,13 @@ if errorlevel 1 (
   exit /b 1
 )
 
+echo [%date% %time%] INFO: Ensuring browser service is up>> "logs\usdjpy_capture_analyze.log"
+coinmap-automation browser up >> "logs\usdjpy_capture_analyze.log" 2>&1
+if errorlevel 1 (
+  echo [%date% %time%] ERROR: browser service failed to start.>> "logs\usdjpy_capture_analyze.log"
+  exit /b %ERRORLEVEL%
+)
+
 echo [%date% %time%] capture --main-symbol USDJPY
 echo [%date% %time%] capture --main-symbol USDJPY>> "logs\usdjpy_capture_analyze.log"
 coinmap-automation capture --main-symbol USDJPY >> "logs\usdjpy_capture_analyze.log" 2>&1

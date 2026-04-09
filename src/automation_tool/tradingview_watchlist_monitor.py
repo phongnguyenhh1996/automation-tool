@@ -8,9 +8,12 @@ zone levels in last_alert_prices.json.
 Key requirement: only read/parse price when the price span does NOT have a CSS class
 starting with highlightUp- or highlightDown- (unstable highlight state).
 
-Optional: set ``AUTOMATION_USE_BROWSER_SERVICE=1`` and run ``coinmap-automation browser up``
-first so this monitor attaches via CDP (``connect_over_cdp``) to the long-lived service
-instead of launching a new browser (requires ``PLAYWRIGHT_CHROME_USER_DATA_DIR`` / same profile).
+Optional: run ``coinmap-automation browser up`` first so this monitor attaches via CDP
+(``connect_over_cdp``) to the long-lived service instead of launching a new browser
+(requires ``PLAYWRIGHT_CHROME_USER_DATA_DIR`` / same profile).
+
+Set ``AUTOMATION_USE_BROWSER_SERVICE=0`` (or ``false``/``no``) to disable auto-attach and
+always launch a new browser.
 """
 
 from __future__ import annotations

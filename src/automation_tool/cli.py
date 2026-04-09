@@ -971,18 +971,46 @@ def cmd_capture(args: argparse.Namespace) -> None:
                 except Exception:
                     pass
     else:
-        paths = capture_charts(
-            coinmap_yaml=cfg,
-            charts_dir=args.charts_dir,
-            storage_state_path=storage,
-            email=s.coinmap_email,
-            password=s.coinmap_password,
-            tradingview_password=s.tradingview_password,
-            save_storage_state=not args.no_save_storage,
-            headless=not args.headed,
-            reuse_browser_context=None,
-            main_chart_symbol=args.main_symbol,
-        )
+        # Default behavior: try service first; fallback to launching browser if service isn't running.
+        from playwright.sync_api import sync_playwright
+
+        from automation_tool.browser_client import try_attach_playwright_via_service
+
+        with sync_playwright() as p:
+            attached = try_attach_playwright_via_service(p, force=False)
+            if attached is not None:
+                browser, context = attached
+                try:
+                    paths = capture_charts(
+                        coinmap_yaml=cfg,
+                        charts_dir=args.charts_dir,
+                        storage_state_path=storage,
+                        email=s.coinmap_email,
+                        password=s.coinmap_password,
+                        tradingview_password=s.tradingview_password,
+                        save_storage_state=not args.no_save_storage,
+                        headless=not args.headed,
+                        reuse_browser_context=context,
+                        main_chart_symbol=args.main_symbol,
+                    )
+                finally:
+                    try:
+                        browser.close()
+                    except Exception:
+                        pass
+            else:
+                paths = capture_charts(
+                    coinmap_yaml=cfg,
+                    charts_dir=args.charts_dir,
+                    storage_state_path=storage,
+                    email=s.coinmap_email,
+                    password=s.coinmap_password,
+                    tradingview_password=s.tradingview_password,
+                    save_storage_state=not args.no_save_storage,
+                    headless=not args.headed,
+                    reuse_browser_context=None,
+                    main_chart_symbol=args.main_symbol,
+                )
 
     charts_dir = args.charts_dir or default_charts_dir()
     print(f"Saved {len(paths)} image(s) under {charts_dir}:")
