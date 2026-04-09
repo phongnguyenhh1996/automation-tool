@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, NamedTuple, Optional
 
@@ -14,6 +15,7 @@ from automation_tool.coinmap_openai_slim import (
 )
 from automation_tool.images import (
     DEFAULT_MAIN_CHART_SYMBOL,
+    ChartOpenAIPayload,
     chunk_payloads,
     image_to_data_url,
     normalize_main_chart_symbol,
@@ -131,26 +133,70 @@ def _json_file_to_input_text(path: Path, *, max_chars: int) -> str:
     return header + body
 
 
+def _filter_valid_chart_payloads(
+    payloads: list[ChartOpenAIPayload],
+) -> list[ChartOpenAIPayload]:
+    """Keep json/image files on disk and ``image_url`` https strings."""
+    out: list[ChartOpenAIPayload] = []
+    for k, p in payloads:
+        if k == "image_url":
+            if isinstance(p, str) and p.strip().lower().startswith("http"):
+                out.append((k, p.strip()))
+        elif isinstance(p, Path) and p.is_file():
+            out.append((k, p))
+    return out
+
+
+def _image_paths_to_data_urls(paths: list[Path]) -> dict[Path, str]:
+    """
+    Encode ảnh sang data URL; nhiều file thì đọc + base64 song song (I/O-bound).
+    Trùng path chỉ encode một lần.
+    """
+    if not paths:
+        return {}
+    unique = list(dict.fromkeys(paths))
+    if len(unique) == 1:
+        p0 = unique[0]
+        return {p0: image_to_data_url(p0)}
+    n = len(unique)
+    workers = min(n, max(4, (os.cpu_count() or 2) * 2))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        urls = ex.map(image_to_data_url, unique)
+    return dict(zip(unique, urls))
+
+
 def _build_mixed_chart_user_content(
     prompt: str,
-    payloads: list[tuple[str, Path]],
+    payloads: list[ChartOpenAIPayload],
     *,
     max_json_chars: int,
 ) -> list[dict[str, Any]]:
     parts: list[dict[str, Any]] = [{"type": "input_text", "text": prompt}]
+    image_paths = [p for k, p in payloads if k == "image" and isinstance(p, Path)]
+    data_urls = _image_paths_to_data_urls(image_paths)
     for kind, p in payloads:
         if kind == "json":
+            assert isinstance(p, Path)
             parts.append(
                 {
                     "type": "input_text",
                     "text": _json_file_to_input_text(p, max_chars=max_json_chars),
                 }
             )
-        else:
+        elif kind == "image_url":
             parts.append(
                 {
                     "type": "input_image",
-                    "image_url": image_to_data_url(p),
+                    "image_url": str(p),
+                    "detail": "auto",
+                }
+            )
+        else:
+            assert isinstance(p, Path)
+            parts.append(
+                {
+                    "type": "input_image",
+                    "image_url": data_urls[p],
                     "detail": "auto",
                 }
             )
@@ -177,7 +223,7 @@ def run_analysis_responses_flow(
     include: list[str],
     reasoning_summary: str = "auto",
     chart_paths: list[Path] | None = None,
-    chart_payloads: list[tuple[str, Path]] | None = None,
+    chart_payloads: list[ChartOpenAIPayload] | None = None,
     max_coinmap_json_chars: int | None = None,
     on_first_model_text: Optional[Callable[[str], None]] = None,
 ) -> PromptTwoStepResult:
@@ -221,7 +267,7 @@ def run_analysis_responses_flow(
     )
 
     if chart_payloads is not None:
-        payloads = [(k, p) for k, p in chart_payloads if p.is_file()]
+        payloads = _filter_valid_chart_payloads(list(chart_payloads))
     elif chart_paths is not None:
         payloads = [("image", p) for p in chart_paths if p.is_file()]
     else:
@@ -292,7 +338,7 @@ def run_prompt_two_step_flow(
     include: list[str],
     reasoning_summary: str = "auto",
     chart_paths: list[Path] | None = None,
-    chart_payloads: list[tuple[str, Path]] | None = None,
+    chart_payloads: list[ChartOpenAIPayload] | None = None,
     max_coinmap_json_chars: int | None = None,
 ) -> PromptTwoStepResult:
     """

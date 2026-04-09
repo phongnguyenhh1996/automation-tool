@@ -94,7 +94,7 @@ def _clear_charts_dir(charts_dir: Path) -> None:
     """Delete existing image files in charts_dir (keeps .gitkeep and non-image files)."""
     if not charts_dir.is_dir():
         return
-    exts = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".json"}
+    exts = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".json", ".url"}
     for p in charts_dir.iterdir():
         if not p.is_file():
             continue
@@ -1623,6 +1623,98 @@ def _tradingview_select_interval(
     page.wait_for_timeout(int(tv.get("after_interval_select_ms", settle_ms)))
 
 
+def _tradingview_snapshot_url_capture(
+    page,
+    tv: dict[str, Any],
+    charts_dir: Path,
+    stamp: str,
+    symbol_key: str,
+    interval_slug: str,
+    *,
+    dest_url_path: Optional[Path] = None,
+) -> Path:
+    """
+    Toolbar screenshot → "Open image in new tab" → read ``img.tv-snapshot-image`` src.
+    Writes ``{{stamp}}_tradingview_{{symbol}}_{{interval}}.url`` (one line, https) for OpenAI.
+    If src is not http(s), falls back to PNG via element screenshot on the snapshot tab.
+    """
+    shot_sel = (tv.get("screenshot_button_selector") or "#header-toolbar-screenshot").strip()
+    open_sel = (tv.get("snapshot_open_in_new_tab_selector") or '[data-qa-id="open-image-in-new-tab"]').strip()
+    img_sel = (tv.get("snapshot_image_selector") or "img.tv-snapshot-image").strip()
+    after_shot_ms = int(tv.get("after_screenshot_button_ms", 600))
+    tab_timeout = int(tv.get("snapshot_new_tab_timeout_ms", 45_000))
+    tab_settle_ms = int(tv.get("snapshot_tab_settle_ms", 1000))
+    after_esc_ms = int(tv.get("after_snapshot_escape_ms", 500))
+
+    page.locator(shot_sel).first.wait_for(state="visible", timeout=45_000)
+    page.locator(shot_sel).first.click(timeout=15_000)
+    page.wait_for_timeout(after_shot_ms)
+
+    open_btn = page.locator(open_sel).first
+    open_btn.wait_for(state="visible", timeout=20_000)
+
+    context = page.context
+    with context.expect_page(timeout=tab_timeout) as new_page_info:
+        open_btn.click(timeout=15_000)
+    snap_page = new_page_info.value
+    dest_base = charts_dir / f"{stamp}_tradingview_{symbol_key}_{interval_slug}"
+    out_url_path = dest_url_path or dest_base.with_suffix(".url")
+    out_png_path = dest_base.with_suffix(".png")
+    try:
+        snap_page.wait_for_load_state("domcontentloaded", timeout=30_000)
+        snap_page.wait_for_timeout(tab_settle_ms)
+        loc = snap_page.locator(img_sel).first
+        loc.wait_for(state="visible", timeout=25_000)
+        src = (loc.get_attribute("src") or "").strip()
+        if src.startswith("https://") or src.startswith("http://"):
+            out_url_path.parent.mkdir(parents=True, exist_ok=True)
+            out_url_path.write_text(src + "\n", encoding="utf-8")
+            return out_url_path
+        # blob: or missing: PNG snapshot of the image (OpenAI cannot fetch blob URLs)
+        loc.screenshot(path=str(out_png_path), timeout=30_000)
+        return out_png_path
+    finally:
+        try:
+            snap_page.close()
+        except Exception:
+            pass
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(after_esc_ms)
+
+
+def _tradingview_capture_one_chart_frame(
+    page,
+    tv: dict[str, Any],
+    charts_dir: Path,
+    stamp: str,
+    symbol_key: str,
+    interval_slug: str,
+    *,
+    dest_path: Optional[Path] = None,
+    dest_url_path: Optional[Path] = None,
+) -> Path:
+    """One TradingView frame: snapshot-URL flow (default) or legacy fullscreen PNG."""
+    if bool(tv.get("tradingview_snapshot_url_flow", True)):
+        return _tradingview_snapshot_url_capture(
+            page,
+            tv,
+            charts_dir,
+            stamp,
+            symbol_key,
+            interval_slug,
+            dest_url_path=dest_url_path,
+        )
+    return _tradingview_fullscreen_screenshot_then_escape(
+        page,
+        tv,
+        charts_dir,
+        stamp,
+        symbol_key,
+        interval_slug,
+        dest_path=dest_path,
+    )
+
+
 def _tradingview_fullscreen_screenshot_then_escape(
     page,
     tv: dict[str, Any],
@@ -1667,7 +1759,7 @@ def _run_tradingview_multi_shot_flow(
         for aria in intervals:
             slug = _tradingview_interval_slug(aria, tv)
             _tradingview_select_interval(page, toolbar, tv, aria, settle_ms)
-            path = _tradingview_fullscreen_screenshot_then_escape(
+            path = _tradingview_capture_one_chart_frame(
                 page, tv, charts_dir, stamp, sym_key, slug
             )
             written.append(path)
@@ -1706,8 +1798,9 @@ def _run_tradingview_screenshot_flow(
 ) -> list[Path]:
     """
     Open TradingView: optional login, dark mode, then either multi-shot (watchlist →
-    symbol → interval → fullscreen → screenshot → Esc, per capture_plan) or legacy
-    single fullscreen frame.
+    symbol → interval → snapshot toolbar → open image in new tab → save ``.url``, per
+    capture_plan) or legacy single frame. Set ``tradingview_snapshot_url_flow: false``
+    for fullscreen + Playwright PNG instead.
     """
     tw = int(tv.get("viewport_width", 0) or 0)
     th = int(tv.get("viewport_height", 0) or 0)
@@ -1745,16 +1838,28 @@ def _run_tradingview_screenshot_flow(
     interval_btn.click(timeout=15_000, force=use_force)
     page.wait_for_timeout(int(tv.get("after_interval_select_ms", settle_ms)))
 
-    legacy_path = charts_dir / f"{stamp}_tradingview_fullscreen.png"
-    dest = _tradingview_fullscreen_screenshot_then_escape(
-        page,
-        tv,
-        charts_dir,
-        stamp,
-        "fullscreen",
-        "single",
-        dest_path=legacy_path,
-    )
+    legacy_png = charts_dir / f"{stamp}_tradingview_fullscreen.png"
+    legacy_url = charts_dir / f"{stamp}_tradingview_fullscreen.url"
+    if bool(tv.get("tradingview_snapshot_url_flow", True)):
+        dest = _tradingview_capture_one_chart_frame(
+            page,
+            tv,
+            charts_dir,
+            stamp,
+            "fullscreen",
+            "single",
+            dest_url_path=legacy_url,
+        )
+    else:
+        dest = _tradingview_capture_one_chart_frame(
+            page,
+            tv,
+            charts_dir,
+            stamp,
+            "fullscreen",
+            "single",
+            dest_path=legacy_png,
+        )
     return [dest]
 
 

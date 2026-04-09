@@ -31,6 +31,7 @@ from automation_tool.openai_prompt_flow import (
     run_single_followup_responses,
 )
 from automation_tool.images import (
+    ChartOpenAIPayload,
     coinmap_xauusd_5m_json_path,
     effective_chart_image_order,
     ordered_chart_openai_payloads,
@@ -755,7 +756,7 @@ def _run_openai_flow(
     analysis_prompt: str,
     max_images: int,
     chart_paths: list[Path] | None = None,
-    chart_payloads: list[tuple[str, Path]] | None = None,
+    chart_payloads: list[ChartOpenAIPayload] | None = None,
     on_first_model_text: Optional[Callable[[str], None]] = None,
 ) -> PromptTwoStepResult:
     return run_analysis_responses_flow(
@@ -904,7 +905,7 @@ def _resolved_analysis_prompt(args: argparse.Namespace, charts_dir: Path) -> str
 
 
 def _warn_if_incomplete_chart_payloads(
-    charts_dir: Path, payloads: list[tuple[str, Path]]
+    charts_dir: Path, payloads: list[ChartOpenAIPayload]
 ) -> None:
     expected = len(effective_chart_image_order(charts_dir))
     if len(payloads) < expected:
@@ -927,7 +928,7 @@ def cmd_analyze(args: argparse.Namespace) -> None:
     _warn_if_incomplete_chart_payloads(charts_dir, payloads)
     if not payloads:
         raise SystemExit(
-            f"No chart files under {charts_dir} (TradingView PNG / Coinmap JSON or PNG). "
+            f"No chart files under {charts_dir} (TradingView .url / PNG, Coinmap JSON or PNG). "
             "Run capture first or check charts under data/{SYMBOL}/charts/."
         )
 

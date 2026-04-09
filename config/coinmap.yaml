@@ -186,7 +186,16 @@ tradingview_capture:
   dark_mode_menu_open_ms: 500
   dark_mode_after_theme_click_ms: 600
   intervals_toolbar_id: "header-toolbar-intervals"
-  # Multi-shot: watchlist → symbol → each interval → fullscreen → screenshot → Esc (7 images default: DXY×3 + XAUUSD×4)
+  # Multi-shot: watchlist → symbol → each interval → toolbar screenshot → open image in new tab → save .url (default).
+  # Set tradingview_snapshot_url_flow: false to use legacy fullscreen + Playwright PNG.
+  tradingview_snapshot_url_flow: true
+  screenshot_button_selector: "#header-toolbar-screenshot"
+  snapshot_open_in_new_tab_selector: '[data-qa-id="open-image-in-new-tab"]'
+  snapshot_image_selector: "img.tv-snapshot-image"
+  after_screenshot_button_ms: 600
+  snapshot_new_tab_timeout_ms: 45000
+  snapshot_tab_settle_ms: 1000
+  after_snapshot_escape_ms: 500
   multi_shot_enabled: true
   capture_plan:
     - symbol: DXY

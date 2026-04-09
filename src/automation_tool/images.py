@@ -4,7 +4,10 @@ import base64
 import mimetypes
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple, Union
+
+# OpenAI multimodal slot: ``json`` → Path; ``image`` → PNG on disk; ``image_url`` → https string.
+ChartOpenAIPayload = Tuple[str, Union[Path, str]]
 
 # Per-charts marker; global active pair is ``data/.main_chart_symbol`` (see ``get_active_main_symbol``).
 MAIN_CHART_SYMBOL_FILENAME = ".main_chart_symbol"
@@ -91,7 +94,7 @@ def set_active_main_symbol_file(main_chart_symbol: Optional[str]) -> None:
 
 def chart_image_order_for_main_symbol(main_sym: str) -> tuple[tuple[str, str, str], ...]:
     """
-    Filenames: ``{{stamp}}_tradingview_{{SYMBOL}}_{{interval}}.png`` / ``coinmap_…``.
+    Filenames: ``{{stamp}}_tradingview_{{SYMBOL}}_{{interval}}.url`` (https, one line) or ``.png`` / ``coinmap_…``.
     ``main_sym`` replaces the default XAUUSD block (DXY block unchanged).
     """
     m = normalize_main_chart_symbol(main_sym)
@@ -175,6 +178,10 @@ def latest_chart_stamp(charts_dir: Path) -> Optional[str]:
         m = _STAMP_RE.match(p.name)
         if m:
             stamps.add(m.group(1))
+    for p in charts_dir.glob("*.url"):
+        m = _STAMP_RE.match(p.name)
+        if m:
+            stamps.add(m.group(1))
     return max(stamps) if stamps else None
 
 
@@ -199,11 +206,11 @@ def coinmap_xauusd_5m_json_path(
 
 def ordered_chart_openai_payloads(
     charts_dir: Path, *, stamp: Optional[str] = None
-) -> list[tuple[str, Path]]:
+) -> list[ChartOpenAIPayload]:
     """
     Same slot order as ``effective_chart_image_order(charts_dir)`` (for OpenAI step 2).
 
-    * **TradingView** — ``.png`` only.
+    * **TradingView** — prefer ``.url`` (one line https, snapshot toolbar flow) else ``.png``.
     * **Coinmap** — prefer ``.json`` (API export) over ``.png`` so analysis can run
       without screenshots while keeping the same ordering as when images were used.
     """
@@ -213,7 +220,7 @@ def ordered_chart_openai_payloads(
     if not st:
         return []
     order = effective_chart_image_order(charts_dir)
-    out: list[tuple[str, Path]] = []
+    out: list[ChartOpenAIPayload] = []
     for src, sym, iv in order:
         if src == "coinmap":
             jp = charts_dir / f"{st}_coinmap_{sym}_{iv}.json"
@@ -223,8 +230,16 @@ def ordered_chart_openai_payloads(
             elif pp.is_file():
                 out.append(("image", pp))
         else:
+            up = charts_dir / f"{st}_tradingview_{sym}_{iv}.url"
             pp = charts_dir / f"{st}_tradingview_{sym}_{iv}.png"
-            if pp.is_file():
+            if up.is_file():
+                raw = up.read_text(encoding="utf-8").strip().splitlines()
+                line = (raw[0] if raw else "").strip()
+                if line.startswith("http://") or line.startswith("https://"):
+                    out.append(("image_url", line))
+                elif pp.is_file():
+                    out.append(("image", pp))
+            elif pp.is_file():
                 out.append(("image", pp))
     return out
 
@@ -273,8 +288,8 @@ def chunk_image_paths(paths: list[Path], max_per_chunk: int) -> list[list[Path]]
 
 
 def chunk_payloads(
-    payloads: list[tuple[str, Path]], max_per_chunk: int
-) -> list[list[tuple[str, Path]]]:
+    payloads: list[ChartOpenAIPayload], max_per_chunk: int
+) -> list[list[ChartOpenAIPayload]]:
     if max_per_chunk <= 0:
         return [payloads]
     return [payloads[i : i + max_per_chunk] for i in range(0, len(payloads), max_per_chunk)]
