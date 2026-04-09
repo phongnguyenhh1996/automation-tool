@@ -65,6 +65,8 @@ from automation_tool.tradingview_watchlist_monitor import (
     WatchlistMonitorParams,
     run_tv_watchlist_monitor,
 )
+from automation_tool.tv_watchlist_daemon import WatchlistDaemonParams, run_tv_watchlist_daemon
+from automation_tool.zones_state import ZonesState, read_zones_state, write_zones_state, zones_from_analysis_payload
 from automation_tool.telegram_bot import (
     send_message,
     send_mt5_execution_log_to_ngan_gon_chat,
@@ -479,6 +481,66 @@ def _parser() -> argparse.ArgumentParser:
         help="Chỉ dry-run MT5 cho auto-MT5 sau follow-up",
     )
     up.set_defaults(func=cmd_update)
+
+    wd = sub.add_parser(
+        "tv-watchlist-daemon",
+        help=(
+            "Daemon 24/24: đọc Watchlist Last mỗi 10s, so alert_price trong zones_state.json; "
+            "chạm → dispatch job (Coinmap M5 + OpenAI + MT5/Telegram) và không chờ."
+        ),
+    )
+    wd.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Yaml chứa tradingview_capture.chart_url (mặc định: config/coinmap.yaml)",
+    )
+    wd.add_argument(
+        "--capture-config",
+        type=Path,
+        default=None,
+        help="Yaml chụp Coinmap M5 cho job (mặc định: config/coinmap_update.yaml)",
+    )
+    wd.add_argument("--charts-dir", type=Path, default=None)
+    wd.add_argument("--storage-state", type=Path, default=None)
+    wd.add_argument("--no-save-storage", action="store_true")
+    wd.add_argument("--headed", action="store_true")
+    wd.add_argument("--no-telegram", action="store_true")
+    wd.add_argument("--poll-seconds", type=float, default=10.0)
+    wd.add_argument("--zones-json", type=Path, default=None, metavar="FILE", help="zones_state.json path override")
+    wd.add_argument("--no-mt5-execute", action="store_true")
+    wd.add_argument("--mt5-symbol", default=None, metavar="SYM")
+    wd.add_argument("--mt5-dry-run", action="store_true")
+    wd.set_defaults(func=cmd_tv_watchlist_daemon)
+
+    zt = sub.add_parser(
+        "zone-touch",
+        help="Chạy 1 job touch cho một zone_id (Coinmap M5 + OpenAI + MT5/Telegram).",
+    )
+    zt.add_argument("--zone-id", required=True, metavar="ID")
+    zt.add_argument("--last", type=float, required=True, metavar="PRICE", help="Watchlist Last tại thời điểm chạm")
+    zt.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Yaml chứa tradingview_capture (chỉ để đồng bộ params; mặc định: config/coinmap.yaml)",
+    )
+    zt.add_argument(
+        "--capture-config",
+        type=Path,
+        default=None,
+        help="Yaml chụp Coinmap M5 cho job (mặc định: config/coinmap_update.yaml)",
+    )
+    zt.add_argument("--charts-dir", type=Path, default=None)
+    zt.add_argument("--storage-state", type=Path, default=None)
+    zt.add_argument("--no-save-storage", action="store_true")
+    zt.add_argument("--headed", action="store_true")
+    zt.add_argument("--no-telegram", action="store_true")
+    zt.add_argument("--zones-json", type=Path, default=None, metavar="FILE", help="zones_state.json path override")
+    zt.add_argument("--no-mt5-execute", action="store_true")
+    zt.add_argument("--mt5-symbol", default=None, metavar="SYM")
+    zt.add_argument("--mt5-dry-run", action="store_true")
+    zt.set_defaults(func=cmd_zone_touch)
 
     tv = sub.add_parser(
         "tv-alerts",
@@ -1470,7 +1532,8 @@ def cmd_all(args: argparse.Namespace) -> None:
         apply_first_response_vao_lenh(
             text,
             last_alert_path=lap_all,
-            mt5_execute=not args.no_mt5_execute,
+            # Policy change: `all` no longer executes MT5. Daemon handles MT5 entry later.
+            mt5_execute=False,
             mt5_dry_run=args.mt5_dry_run,
             mt5_symbol=args.mt5_symbol,
             telegram_bot_token=s.telegram_bot_token,
@@ -1518,52 +1581,19 @@ def cmd_all(args: argparse.Namespace) -> None:
         )
     if out.after_charts:
         merge_trade_lines_from_openai_analysis_text(out.after_charts, path=lap_all)
-    if zt:
-        if not args.no_tradingview:
-            if not args.no_tv_journal_monitor:
-                require_openai(s)
-                prev_j = read_last_response_id()
-                if not prev_j:
-                    raise SystemExit(
-                        f"Thiếu {default_last_response_id_path()} — không chạy tv-watchlist-monitor."
-                    )
-                cfg_cap = args.capture_config or default_coinmap_update_config_path()
-                params = WatchlistMonitorParams(
-                    coinmap_tv_yaml=cfg,
-                    capture_coinmap_yaml=cfg_cap,
-                    charts_dir=charts_dir,
-                    storage_state_path=storage,
-                    headless=not args.headed,
-                    no_save_storage=args.no_save_storage,
-                    watchlist_poll_seconds=10.0,
-                    wait_minutes=args.wait_minutes,
-                    until_hour=args.until_hour,
-                    timezone_name=args.timezone,
-                    no_telegram=args.no_telegram,
-                    last_alert_path=args.last_alert_json or default_last_alert_prices_path(),
-                    mt5_execute=not args.no_mt5_execute,
-                    mt5_symbol=args.mt5_symbol,
-                    mt5_dry_run=args.mt5_dry_run,
-                )
-                print(
-                    f"tv-watchlist-monitor: giá {zt[0]} | {zt[1]} | {zt[2]} — "
-                    f"tới {args.until_hour}:00 ({args.timezone}), "
-                    "chu kỳ: đọc Watchlist (skip highlight) mỗi 10s.",
-                    flush=True,
-                )
-                _log.info("all: chạy tv-watchlist-monitor…")
-                try:
-                    outcome = run_tv_watchlist_monitor(
-                        settings=s,
-                        params=params,
-                        initial_response_id=prev_j,
-                    )
-                except Exception as e:
-                    re_raise_unless_openai(e)
-                    raise
-                print(f"Kết thúc tv-watchlist-monitor: {outcome}", flush=True)
-                _log.info("all: tv-watchlist-monitor kết thúc | outcome=%s", outcome)
-    else:
+
+    # Write zones_state.json (migration A: keep last_alert_prices.json for legacy flows)
+    if out.after_charts:
+        from automation_tool.openai_analysis_json import parse_analysis_from_openai_text
+
+        payload = parse_analysis_from_openai_text(out.after_charts)
+        if payload is not None and payload.prices:
+            sym = get_active_main_symbol().strip().upper()
+            zones = zones_from_analysis_payload(symbol=sym, payload=payload, source="all")
+            if zones:
+                write_zones_state(ZonesState(symbol=sym, zones=zones), path=None)
+                _log.info("all: đã ghi zones_state.json | zones=%d | symbol=%s", len(zones), sym)
+    if not zt:
         print(
             f"Warning: could not parse morning zone prices for persistence: {zerr}",
             file=sys.stderr,
@@ -1779,7 +1809,8 @@ def cmd_update(args: argparse.Namespace) -> None:
     apply_first_response_vao_lenh(
         out_text,
         last_alert_path=lap,
-        mt5_execute=not args.no_mt5_execute,
+        # Policy change: `update` no longer executes MT5. Daemon handles MT5 entry later.
+        mt5_execute=False,
         mt5_dry_run=args.mt5_dry_run,
         mt5_symbol=args.mt5_symbol,
         telegram_bot_token=s.telegram_bot_token,
@@ -1788,46 +1819,6 @@ def cmd_update(args: argparse.Namespace) -> None:
         telegram_output_ngan_gon_chat_id=s.telegram_output_ngan_gon_chat_id,
         telegram_source_label="update (follow-up M5)",
     )
-
-    def _run_tv_journal_after_update(
-        target_prices: tuple[float, float, float], *, log_label: str
-    ) -> None:
-        if args.no_journal_monitor_after_update:
-            _log.info(
-                "update: bỏ qua tv-journal-monitor (%s) — --no-journal-monitor-after-update",
-                log_label,
-            )
-            return
-        print(f"Chạy tv-journal-monitor ({log_label}).", flush=True)
-        _log.info("update: chạy tv-journal-monitor | %s", log_label)
-        jparams = WatchlistMonitorParams(
-            coinmap_tv_yaml=cfg_tv,
-            capture_coinmap_yaml=cfg_cap,
-            charts_dir=charts_dir,
-            storage_state_path=storage,
-            headless=not args.headed,
-            no_save_storage=args.no_save_storage,
-            watchlist_poll_seconds=10.0,
-            wait_minutes=15,
-            until_hour=23,
-            timezone_name="Asia/Ho_Chi_Minh",
-            no_telegram=args.no_telegram,
-            last_alert_path=lap,
-            mt5_execute=not args.no_mt5_execute,
-            mt5_symbol=args.mt5_symbol,
-            mt5_dry_run=args.mt5_dry_run,
-        )
-        try:
-            outcome = run_tv_watchlist_monitor(
-                settings=s,
-                params=jparams,
-                initial_response_id=new_id,
-            )
-        except Exception as e:
-            re_raise_unless_openai(e)
-            raise
-        print(f"Kết thúc tv-watchlist-monitor (sau update): {outcome}", flush=True)
-        _log.info("update: tv-watchlist-monitor sau update kết thúc | outcome=%s", outcome)
 
     new_triple, zerr, no_change_json = parse_three_zone_prices(out_text)
     if no_change_json is True:
@@ -1840,8 +1831,6 @@ def cmd_update(args: argparse.Namespace) -> None:
                 parse_mode=s.telegram_parse_mode,
             )
         _log.info("update: no_change (JSON) — không ghi giá mới")
-        p1, p2, p3 = baseline.prices
-        _run_tv_journal_after_update((p1, p2, p3), log_label="no_change JSON")
         return
     if new_triple is None:
         if is_no_change_action_line(out_text):
@@ -1854,8 +1843,6 @@ def cmd_update(args: argparse.Namespace) -> None:
                     parse_mode=s.telegram_parse_mode,
                 )
             _log.info("update: no_change (action line) — không ghi giá mới")
-            p1, p2, p3 = baseline.prices
-            _run_tv_journal_after_update((p1, p2, p3), log_label="no_change action line")
             return
         raise SystemExit(zerr or "Could not parse three zone prices from model output.")
 
@@ -1869,7 +1856,6 @@ def cmd_update(args: argparse.Namespace) -> None:
                 parse_mode=s.telegram_parse_mode,
             )
         _log.info("update: giá trùng baseline — không ghi giá mới")
-        _run_tv_journal_after_update(new_triple, log_label="giá trùng baseline")
         return
 
     write_last_alert_prices(new_triple)
@@ -1879,6 +1865,17 @@ def cmd_update(args: argparse.Namespace) -> None:
         new_triple[1],
         new_triple[2],
     )
+
+    # Write zones_state.json (migration A: keep last_alert_prices.json for legacy flows)
+    from automation_tool.openai_analysis_json import parse_analysis_from_openai_text
+
+    payload = parse_analysis_from_openai_text(out_text)
+    if payload is not None and payload.prices:
+        sym = get_active_main_symbol().strip().upper()
+        zones = zones_from_analysis_payload(symbol=sym, payload=payload, source="update")
+        if zones:
+            write_zones_state(ZonesState(symbol=sym, zones=zones), path=None)
+            _log.info("update: đã ghi zones_state.json | zones=%d | symbol=%s", len(zones), sym)
 
     # Không cần tạo TradingView alerts nữa; monitor đọc trực tiếp giá realtime từ Watchlist.
 
@@ -1912,7 +1909,69 @@ def cmd_update(args: argparse.Namespace) -> None:
                 "update: không tách được out_chi_tiet/output_ngan_gon — chỉ gửi dòng giá lên main"
             )
 
-    _run_tv_journal_after_update(new_triple, log_label="ghi giá mới")
+
+def cmd_tv_watchlist_daemon(args: argparse.Namespace) -> None:
+    s = load_settings()
+    require_openai(s)
+    cfg_tv = args.config or default_coinmap_config_path()
+    cfg_cap = args.capture_config or default_coinmap_update_config_path()
+    charts_dir = args.charts_dir or default_charts_dir()
+    storage = args.storage_state or default_storage_state_path()
+
+    params = WatchlistDaemonParams(
+        coinmap_tv_yaml=cfg_tv,
+        capture_coinmap_yaml=cfg_cap,
+        charts_dir=charts_dir,
+        storage_state_path=storage,
+        headless=not args.headed,
+        no_save_storage=args.no_save_storage,
+        poll_seconds=float(args.poll_seconds),
+        no_telegram=args.no_telegram,
+        zones_state_path=args.zones_json,
+        mt5_execute=not args.no_mt5_execute,
+        mt5_symbol=args.mt5_symbol,
+        mt5_dry_run=args.mt5_dry_run,
+    )
+    outcome = run_tv_watchlist_daemon(settings=s, params=params)
+    print(outcome, flush=True)
+
+
+def cmd_zone_touch(args: argparse.Namespace) -> None:
+    """
+    Manual run: execute one zone-touch job synchronously.
+    (Daemon uses the same underlying worker logic, but fire-and-forget.)
+    """
+    s = load_settings()
+    require_openai(s)
+    cfg_tv = args.config or default_coinmap_config_path()
+    cfg_cap = args.capture_config or default_coinmap_update_config_path()
+    charts_dir = args.charts_dir or default_charts_dir()
+    storage = args.storage_state or default_storage_state_path()
+
+    params = WatchlistDaemonParams(
+        coinmap_tv_yaml=cfg_tv,
+        capture_coinmap_yaml=cfg_cap,
+        charts_dir=charts_dir,
+        storage_state_path=storage,
+        headless=not args.headed,
+        no_save_storage=args.no_save_storage,
+        poll_seconds=10.0,
+        no_telegram=args.no_telegram,
+        zones_state_path=args.zones_json,
+        mt5_execute=not args.no_mt5_execute,
+        mt5_symbol=args.mt5_symbol,
+        mt5_dry_run=args.mt5_dry_run,
+    )
+
+    # Reuse daemon worker by importing and calling it directly.
+    from automation_tool.tv_watchlist_daemon import _zone_touch_job  # type: ignore
+
+    _zone_touch_job(
+        settings=s,
+        params=params,
+        zone_id=str(args.zone_id),
+        last_price=float(args.last),
+    )
 
 
 def main() -> None:

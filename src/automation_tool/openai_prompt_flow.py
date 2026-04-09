@@ -76,7 +76,10 @@ def default_analysis_prompt(main_symbol: str | None = None) -> str:
         + json_schema_header
         + '- "prices": đúng 3 phần tử, mỗi phần tử:\n'
         '  {"label":"plan_chinh"|"plan_phu"|"scalp","value":number,'
+        '"range_low":number,"range_high":number,'
         '"hop_luu":integer 0–100,"trade_line":string} — '
+        "Trong đó `range_low`/`range_high` là biên dưới/biên trên của vùng chờ. Ví dụ vùng 4709.0–4705.0 "
+        "thì range_low=4705.0, range_high=4709.0. "
         "``hop_luu`` = điểm hợp lưu của vùng đó. "
         "``trade_line`` = **một dòng pipe MT5 bắt buộc, chuỗi không rỗng** cho đúng vùng "
         "(BUY/SELL LIMIT|STOP|MARKET … | SL … | TP1 … | Lot …); **không** được bỏ key, **không** được `""`. "
@@ -378,7 +381,10 @@ DEFAULT_UPDATE_PROMPT_TEMPLATE = (
     '- "no_change": true nếu ba vùng giá không đổi so với baseline; false nếu có thay đổi.\n'
     '- "prices": đúng 3 phần tử, mỗi phần tử:\n'
     '  {{"label":"plan_chinh"|"plan_phu"|"scalp","value":number,'
+    '"range_low":number,"range_high":number,'
     '"hop_luu":integer 0–100,"trade_line":string}} — '
+    "Trong đó `range_low`/`range_high` là biên dưới/biên trên của vùng chờ. Ví dụ vùng 4709.0–4705.0 "
+    "thì range_low=4705.0, range_high=4709.0. "
     "hop_luu = điểm hợp lưu. **BẮT BUỘC:** mỗi phần tử phải có `trade_line` là chuỗi **không rỗng** "
     "(một dòng pipe MT5 đầy đủ: BUY/SELL LIMIT|STOP|MARKET … | SL … | TP1 … | Lot …); không `""`, không bỏ key. "
     "Kể cả no_change hoặc chờ — vẫn điền dòng pipe tham khảo cho từng vùng.\n"
@@ -388,17 +394,18 @@ DEFAULT_UPDATE_PROMPT_TEMPLATE = (
 
 # TradingView tab Nhật ký: giá chạm → Coinmap M5 + OpenAI (intraday).
 JOURNAL_INTRADAY_FIRST_USER_TEMPLATE = (
-    "Cảnh báo TradingView đã kích hoạt tại mức giá {touched_price} "
-    "(một trong ba vùng chờ: {p1}, {p2}, {p3}).\n"
-    "Dòng Nhật ký TradingView: {journal_line}\n\n"
+    "Cảnh báo TradingView đã kích hoạt tại mức giá {touched_price}, hãy phân tích đưa ra nhận định"
     "Đính kèm dữ liệu Coinmap XAUUSD khung M5 mới nhất.\n"
-    "Trả về một JSON object duy nhất (schema giống phân tích sáng + intraday):\n"
-    "- **Không** thêm key `out_chi_tiet` hay `output_ngan_gon` — luồng Nhật ký chỉ cần "
+    "Trả về một JSON object duy nhất:\n"
+    "- **Không** thêm key `out_chi_tiet` hay `output_ngan_gon`"
     "intraday_hanh_dong + prices (và trade_line gốc tùy chọn).\n"
     '- "intraday_hanh_dong": "chờ" | "loại" | "VÀO LỆNH"\n'
     '- "prices": đúng 3 phần tử, mỗi phần tử:\n'
     '  {{"label":"plan_chinh"|"plan_phu"|"scalp","value":number,'
+    '"range_low":number,"range_high":number,'
     '"hop_luu":integer 0–100,"trade_line":string}} — '
+    "Trong đó `range_low`/`range_high` là biên dưới/biên trên của vùng chờ (vd 4709.0–4705.0 "
+    "thì range_low=4705.0, range_high=4709.0). "
     "**BẮT BUỘC:** mỗi phần tử có `trade_line` không rỗng (một dòng pipe MT5 đầy đủ cho đúng vùng); "
     "không `""`, không bỏ key. hop_luu = điểm hợp lưu. \n"
     '- "trade_line" (gốc): có thể `""` nếu cả 3 phần tử prices đã có trade_line không rỗng; '
@@ -408,21 +415,21 @@ JOURNAL_INTRADAY_FIRST_USER_TEMPLATE = (
 
 JOURNAL_INTRADAY_RETRY_USER_TEMPLATE = (
     "Tiếp tục **đánh giá** sau {wait_minutes} phút: vẫn theo dõi mức đã chạm {touched_price}.\n"
-    "Bối cảnh Nhật ký (lần kích hoạt): {journal_line}\n\n"
     "Đính kèm Coinmap XAUUSD M5 mới.\n"
     "Cùng schema JSON như tin đầu: intraday_hanh_dong; "
     "prices[3] — mỗi phần tử bắt buộc trade_line không rỗng (pipe MT5 đầy đủ); "
+    "mỗi phần tử có thêm range_low/range_high (biên dưới/biên trên của vùng chờ); "
     "trade_line gốc tùy chọn nếu đã đủ trong prices[]. "
     "**Không** thêm `out_chi_tiet` hay `output_ngan_gon`."
 )
 
 # Sau khi giá last realtime chạm TP1 (vùng đang ``cho_tp1``).
 TP1_POST_TOUCH_USER_TEMPLATE = (
-    "Giá **last realtime** (TradingView watchlist) đã chạm mức **TP1** của lệnh đang theo dõi.\n"
+    "Giá đã chạm mức **TP1** của lệnh đang theo dõi.\n, lệnh trade_line còn hợp lệ không"
     "Vùng (label): {plan_label}\n"
     "Dòng lệnh hiện tại (trade_line): {trade_line}\n"
-    "Giá last khi đánh giá: {last_price}\n"
-    "Mức TP1 parse từ trade_line: {tp1_price}\n\n"
+    "Giá khi đánh giá: {last_price}\n"
+    "Mức TP1 từ trade_line: {tp1_price}\n\n"
     "Đính kèm Coinmap khung M5 mới nhất.\n"
     "Trả về **một JSON object** duy nhất (có thể bọc ```json):\n"
     '- "sau_tp1_hanh_dong": "loại" | "chinh_trade_line"\n'

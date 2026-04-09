@@ -119,6 +119,8 @@ def _as_int(x: Any) -> Optional[int]:
 class PriceZoneEntry:
     label: str
     value: float
+    range_low: Optional[float] = None
+    range_high: Optional[float] = None
     hop_luu: Optional[int] = None
     trade_line: str = ""
 
@@ -142,12 +144,16 @@ def _parse_price_entry(d: dict[str, Any]) -> Optional[PriceZoneEntry]:
     v = _as_float(d.get("value"))
     if v is None:
         return None
+    rl = _as_float(d.get("range_low"))
+    rh = _as_float(d.get("range_high"))
     hop = _as_int(d.get("hop_luu"))
     tl_raw = d.get("trade_line")
     trade_line = tl_raw.strip() if isinstance(tl_raw, str) else ""
     return PriceZoneEntry(
         label=lab.strip(),
         value=v,
+        range_low=rl,
+        range_high=rh,
         hop_luu=hop,
         trade_line=trade_line,
     )
