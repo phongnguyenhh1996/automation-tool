@@ -12,13 +12,6 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo [%date% %time%] INFO: Ensuring browser service is up>> "logs\update.log"
-coinmap-automation browser up >> "logs\update.log" 2>&1
-if errorlevel 1 (
-  echo [%date% %time%] ERROR: browser service failed to start.>> "logs\update.log"
-  exit /b %ERRORLEVEL%
-)
-
 echo [%date% %time%] INFO: Starting coinmap-automation update>> "logs\update.log"
 coinmap-automation update --main-symbol XAUUSD >> "logs\update.log" 2>&1
 set "EXIT_CODE=%ERRORLEVEL%"
