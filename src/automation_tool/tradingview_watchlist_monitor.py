@@ -7,6 +7,10 @@ zone levels in last_alert_prices.json.
 
 Key requirement: only read/parse price when the price span does NOT have a CSS class
 starting with highlightUp- or highlightDown- (unstable highlight state).
+
+Optional: set ``AUTOMATION_USE_BROWSER_SERVICE=1`` and run ``coinmap-automation browser up``
+first so this monitor attaches via CDP (``connect_over_cdp``) to the long-lived service
+instead of launching a new browser (requires ``PLAYWRIGHT_CHROME_USER_DATA_DIR`` / same profile).
 """
 
 from __future__ import annotations
@@ -27,6 +31,7 @@ from automation_tool.coinmap import (
 )
 from automation_tool.config import Settings
 from automation_tool.images import DEFAULT_MAIN_CHART_SYMBOL, get_active_main_symbol
+from automation_tool.browser_client import try_attach_playwright_via_service
 from automation_tool.playwright_browser import close_browser_and_context, launch_chrome_context
 from automation_tool.state_files import (
     VUNG_CHO,
@@ -204,13 +209,19 @@ def run_tv_watchlist_monitor(
     )
 
     with sync_playwright() as p:
-        browser, context = launch_chrome_context(
-            p,
-            headless=params.headless,
-            storage_state_path=params.storage_state_path,
-            viewport_width=vw,
-            viewport_height=vh,
-        )
+        attached = try_attach_playwright_via_service(p)
+        if attached is not None:
+            browser, context = attached
+            use_browser_service = True
+        else:
+            browser, context = launch_chrome_context(
+                p,
+                headless=params.headless,
+                storage_state_path=params.storage_state_path,
+                viewport_width=vw,
+                viewport_height=vh,
+            )
+            use_browser_service = False
         page = context.new_page()
         try:
             url = str(tv.get("chart_url"))
@@ -334,5 +345,15 @@ def run_tv_watchlist_monitor(
             return "cutoff_time"
         finally:
             _tvw_log(tz, "Đóng trình duyệt (Playwright).")
-            close_browser_and_context(browser, context)
+            try:
+                page.close()
+            except Exception:
+                pass
+            if use_browser_service:
+                try:
+                    browser.close()
+                except Exception:
+                    pass
+            else:
+                close_browser_and_context(browser, context)
 

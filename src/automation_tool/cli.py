@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import json
 import logging
 import os
+import signal
 import sys
 import threading
 import time
@@ -16,6 +18,7 @@ from automation_tool.config import (
     default_charts_dir,
     default_coinmap_config_path,
     default_coinmap_update_config_path,
+    default_data_dir,
     default_storage_state_path,
     load_settings,
     require_openai,
@@ -113,6 +116,15 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "Thay cặp mặc định XAUUSD trong config (Coinmap + TradingView chart_url/plan) bằng SYM "
             "(vd. USDJPY). Ghi data/.main_chart_symbol và dùng data/{{SYM}}/charts/."
+        ),
+    )
+    c.add_argument(
+        "--use-service",
+        action="store_true",
+        help=(
+            "Dùng browser service đang chạy (coinmap-automation browser up): attach qua CDP, "
+            "reuse_browser_context. Cần data/browser_service_state.json và PLAYWRIGHT_CHROME_USER_DATA_DIR "
+            "khớp profile của service."
         ),
     )
     c.set_defaults(func=cmd_capture)
@@ -721,6 +733,36 @@ def _parser() -> argparse.ArgumentParser:
     mt5l.add_argument("--server", default=None, help="Ghi đè MT5_SERVER")
     mt5l.set_defaults(func=cmd_mt5_login)
 
+    br = sub.add_parser(
+        "browser",
+        help="Browser worker service: long-lived Playwright + TCP control (see data/browser_service_state.json)",
+    )
+    br_sub = br.add_subparsers(dest="browser_cmd", required=True)
+    br_up = br_sub.add_parser("up", help="Start browser service in background (detached process)")
+    br_up.set_defaults(func=cmd_browser_up)
+    br_down = br_sub.add_parser("down", help="Stop browser service (shutdown + SIGTERM if needed)")
+    br_down.set_defaults(func=cmd_browser_down)
+    br_ex = br_sub.add_parser("exec", help="Send one JSON-RPC request to the control TCP port")
+    br_ex.add_argument(
+        "request_json",
+        nargs="?",
+        default=None,
+        help='JSON object, e.g. {"method":"ping","params":{}} (omit request_id/type)',
+    )
+    br_ex.set_defaults(func=cmd_browser_exec)
+    br_tail = br_sub.add_parser(
+        "tail",
+        help="Keep pinging the service every few seconds until Ctrl+C (smoke / watch)",
+    )
+    br_tail.add_argument(
+        "--interval",
+        type=float,
+        default=5.0,
+        metavar="SEC",
+        help="Seconds between pings (default: 5)",
+    )
+    br_tail.set_defaults(func=cmd_browser_tail)
+
     return p
 
 
@@ -750,6 +792,114 @@ def _parse_symbols_arg(raw: str | Sequence[str]) -> list[str]:
     return uniq
 
 
+def cmd_browser_up(args: argparse.Namespace) -> None:
+    load_all_dotenv()
+    from automation_tool.browser_client import (
+        is_service_responding,
+        load_browser_service_state,
+        spawn_browser_service_detached,
+        wait_for_state_file,
+    )
+
+    if is_service_responding():
+        print("Browser service already running (ping ok).", flush=True)
+        st = load_browser_service_state()
+        if st:
+            print(json.dumps(st, indent=2), flush=True)
+        return
+
+    proc = spawn_browser_service_detached(cwd=Path.cwd())
+    st = wait_for_state_file(timeout_s=90.0)
+    if not st:
+        proc.kill()
+        err = ""
+        if proc.stderr:
+            try:
+                err = proc.stderr.read().decode("utf-8", errors="replace")[:2000]
+            except Exception:
+                pass
+        raise SystemExit(
+            "Browser service did not write state file in time. "
+            f"Check PLAYWRIGHT_CHROME_USER_DATA_DIR / Playwright install. stderr: {err!r}"
+        )
+    print("Browser service started.", flush=True)
+    print(json.dumps(st, indent=2), flush=True)
+
+
+def cmd_browser_down(args: argparse.Namespace) -> None:
+    from automation_tool.browser_client import (
+        BrowserClient,
+        browser_service_state_path,
+        load_browser_service_state,
+    )
+
+    st = load_browser_service_state()
+    if not st:
+        print("No browser service state file.", flush=True)
+        return
+    pid = int(st.get("pid") or 0)
+    try:
+        c = BrowserClient.from_state_file()
+        if c:
+            c.shutdown()
+    except OSError:
+        pass
+    if pid > 0:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            _log.warning("No permission to signal pid %s", pid)
+    p = browser_service_state_path()
+    try:
+        if p.is_file():
+            p.unlink()
+    except OSError:
+        pass
+    print("Browser service stop requested.", flush=True)
+
+
+def cmd_browser_exec(args: argparse.Namespace) -> None:
+    from automation_tool.browser_client import BrowserClient
+
+    raw = args.request_json
+    if not raw or not str(raw).strip():
+        raw = sys.stdin.read()
+    obj = json.loads(raw)
+    method = str(obj.get("method") or "")
+    params = obj.get("params") if isinstance(obj.get("params"), dict) else {}
+    if not method:
+        raise SystemExit("JSON must include method (and optional params)")
+    c = BrowserClient.from_state_file()
+    if not c:
+        raise SystemExit("No browser service state; run: coinmap-automation browser up")
+    resp = c.request(method, params)
+    print(json.dumps(resp, ensure_ascii=False, indent=2))
+
+
+def cmd_browser_tail(args: argparse.Namespace) -> None:
+    from automation_tool.browser_client import BrowserClient
+    import time
+
+    c = BrowserClient.from_state_file()
+    if not c:
+        raise SystemExit("No browser service state; run: coinmap-automation browser up")
+    interval = float(args.interval)
+    print("Pinging browser service (Ctrl+C to stop)…", flush=True)
+    try:
+        while True:
+            try:
+                r = c.request("ping", {}, timeout_s=5.0)
+                ok = bool(r.get("ok"))
+                print(time.strftime("%H:%M:%S"), "ping", "ok" if ok else "fail", r, flush=True)
+            except OSError as e:
+                print(time.strftime("%H:%M:%S"), "error", e, flush=True)
+            time.sleep(max(0.5, interval))
+    except KeyboardInterrupt:
+        print("\nStopped.", flush=True)
+
+
 def _run_openai_flow(
     s,
     charts_dir: Path,
@@ -777,31 +927,68 @@ def _run_openai_flow(
 
 def cmd_capture(args: argparse.Namespace) -> None:
     s = load_settings()
+    use_service = bool(getattr(args, "use_service", False))
     _log.info(
-        "capture: bắt đầu | config=%s charts_dir=%s headed=%s",
+        "capture: bắt đầu | config=%s charts_dir=%s headed=%s use_service=%s",
         args.config or default_coinmap_config_path(),
         args.charts_dir if args.charts_dir is not None else "(default theo data/.main_chart_symbol)",
         args.headed,
+        use_service,
     )
     cfg = args.config or default_coinmap_config_path()
     storage = args.storage_state or default_storage_state_path()
-    paths = capture_charts(
-        coinmap_yaml=cfg,
-        charts_dir=args.charts_dir,
-        storage_state_path=storage,
-        email=s.coinmap_email,
-        password=s.coinmap_password,
-        tradingview_password=s.tradingview_password,
-        save_storage_state=not args.no_save_storage,
-        headless=not args.headed,
-        reuse_browser_context=None,
-        main_chart_symbol=args.main_symbol,
-    )
+
+    if use_service:
+        from playwright.sync_api import sync_playwright
+
+        from automation_tool.browser_client import try_attach_playwright_via_service
+
+        with sync_playwright() as p:
+            attached = try_attach_playwright_via_service(p, force=True)
+            if attached is None:
+                raise SystemExit(
+                    "capture --use-service: không attach được tới browser service. "
+                    "Chạy trước: coinmap-automation browser up "
+                    f"(và cần {default_data_dir() / 'browser_service_state.json'} với cdp_http)."
+                )
+            browser, context = attached
+            try:
+                paths = capture_charts(
+                    coinmap_yaml=cfg,
+                    charts_dir=args.charts_dir,
+                    storage_state_path=storage,
+                    email=s.coinmap_email,
+                    password=s.coinmap_password,
+                    tradingview_password=s.tradingview_password,
+                    save_storage_state=not args.no_save_storage,
+                    headless=not args.headed,
+                    reuse_browser_context=context,
+                    main_chart_symbol=args.main_symbol,
+                )
+            finally:
+                try:
+                    browser.close()
+                except Exception:
+                    pass
+    else:
+        paths = capture_charts(
+            coinmap_yaml=cfg,
+            charts_dir=args.charts_dir,
+            storage_state_path=storage,
+            email=s.coinmap_email,
+            password=s.coinmap_password,
+            tradingview_password=s.tradingview_password,
+            save_storage_state=not args.no_save_storage,
+            headless=not args.headed,
+            reuse_browser_context=None,
+            main_chart_symbol=args.main_symbol,
+        )
+
     charts_dir = args.charts_dir or default_charts_dir()
     print(f"Saved {len(paths)} image(s) under {charts_dir}:")
     _log.info("capture: xong | %s file(s) → %s", len(paths), charts_dir)
-    for p in paths:
-        print(f"  {p}")
+    for pth in paths:
+        print(f"  {pth}")
 
 
 def cmd_capture_many(args: argparse.Namespace) -> None:
