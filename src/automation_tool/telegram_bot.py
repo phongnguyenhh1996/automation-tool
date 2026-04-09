@@ -370,6 +370,12 @@ def send_message(
     Returns the ``message_id`` of the **first** chunk (for permalinks when the
     message was split). Returns ``None`` if the API response has no message id.
     """
+    # Some model outputs (especially JSON-encoded strings) may contain literal
+    # backslash sequences like "\\n" instead of real newlines. Telegram would
+    # show those as the raw characters "\n". Normalize them before formatting.
+    if text:
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        text = text.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\r", "\n")
     base = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     if parse_mode == "HTML":
         if not html_ready:

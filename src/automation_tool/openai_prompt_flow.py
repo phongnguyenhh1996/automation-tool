@@ -84,6 +84,9 @@ def default_analysis_prompt(main_symbol: str | None = None) -> str:
         '- "intraday_hanh_dong": "chờ" | "loại" | "VÀO LỆNH" hoặc null (tuỳ chọn; tool auto-MT5 sáng dùng ``hop_luu`` + ``trade_line`` trong ``prices``)\n'
         '- "trade_line" (gốc JSON): có thể `""` chỉ khi cả 3 phần tử trong ``prices`` đã có ``trade_line`` không rỗng như trên.\n'
         '- "no_change": boolean — chỉ dùng rõ trong luồng update intraday; phân tích sáng có thể bỏ qua hoặc false\n\n'
+        + "YÊU CẦU ĐỊNH DẠNG BẮT BUỘC:\n"
+        "- Nếu output có `out_chi_tiet` và/hoặc `output_ngan_gon` thì **phải trả đúng format y như mẫu trong file** "
+        "`/Users/phong.nguyen/Downloads/output.md` (đúng header, emoji, thứ tự mục, và cách viết trade_line).\n\n"
         + tail
     )
 
