@@ -136,12 +136,21 @@ def try_attach_playwright_via_service(
                     browser_service_state_path(),
                 )
                 return None
+    except OSError as e:
+        # Common on Windows when the service crashed but state file still exists:
+        # ConnectionRefusedError / WinError 10061.
+        _log.info(
+            "playwright-attach skip | reason=service_ping_failed | err=%s | state_path=%s",
+            str(e),
+            browser_service_state_path(),
+        )
+        return None
     except Exception as e:
+        # Keep the message, but avoid printing a scary traceback in normal runs.
         _log.warning(
             "playwright-attach skip | reason=service_ping_failed | err=%s | state_path=%s",
             str(e),
             browser_service_state_path(),
-            exc_info=True,
         )
         return None
 
