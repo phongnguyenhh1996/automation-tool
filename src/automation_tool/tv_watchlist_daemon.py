@@ -744,11 +744,14 @@ def run_tv_watchlist_daemon(
     )
 
     with sync_playwright() as p:
+        _log.info("tv-watchlist-daemon playwright ready | attempting_attach_via_service=true")
         attached = try_attach_playwright_via_service(p)
         if attached is not None:
             browser, context = attached
             use_browser_service = True
+            _log.info("tv-watchlist-daemon using_browser_service=true")
         else:
+            _log.info("tv-watchlist-daemon using_browser_service=false | fallback=launch_chrome_context")
             browser, context = launch_chrome_context(
                 p,
                 headless=params.headless,

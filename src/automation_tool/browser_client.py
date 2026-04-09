@@ -7,6 +7,7 @@ State file: data/browser_service_state.json
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import socket
@@ -21,6 +22,7 @@ from automation_tool.browser_protocol import encode_message
 from automation_tool.config import default_data_dir
 
 _STATE_FILENAME = "browser_service_state.json"
+_log = logging.getLogger(__name__)
 
 
 def browser_service_state_path() -> Path:
@@ -117,21 +119,45 @@ def try_attach_playwright_via_service(
     """
     st = load_browser_service_state()
     if not st:
+        _log.info("playwright-attach skip | reason=no_state_file | state_path=%s", browser_service_state_path())
         return None
     url = str(st.get("cdp_http") or "").strip()
     if not url:
+        _log.warning(
+            "playwright-attach skip | reason=missing_cdp_http | state_path=%s keys=%s",
+            browser_service_state_path(),
+            sorted(list(st.keys())),
+        )
         return None
     if not force:
         v = os.getenv("AUTOMATION_USE_BROWSER_SERVICE", "").strip().lower()
         if v in ("0", "false", "no", "off"):
+            _log.info(
+                "playwright-attach skip | reason=disabled_by_env | env.AUTOMATION_USE_BROWSER_SERVICE=%r | cdp_http=%s",
+                v,
+                url,
+            )
             return None
     try:
+        _log.info(
+            "playwright-attach attempt | cdp_http=%s | force=%s | state_path=%s",
+            url,
+            force,
+            browser_service_state_path(),
+        )
         browser = p.chromium.connect_over_cdp(url)
         if not browser.contexts:
+            _log.warning("playwright-attach failed | reason=no_contexts | cdp_http=%s", url)
             return None
         context = browser.contexts[0]
+        _log.info(
+            "playwright-attach ok | cdp_http=%s | contexts=%d",
+            url,
+            len(browser.contexts),
+        )
         return browser, context
-    except Exception:
+    except Exception as e:
+        _log.warning("playwright-attach failed | cdp_http=%s | err=%s", url, str(e), exc_info=True)
         return None
 
 
