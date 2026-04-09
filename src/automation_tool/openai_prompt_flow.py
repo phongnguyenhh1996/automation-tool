@@ -373,7 +373,6 @@ def run_prompt_two_step_flow(
 
 DEFAULT_UPDATE_PROMPT_TEMPLATE = (
     "Dựa trên dữ liệu footprint XAUUSD M5 mới, phân tích và đưa ra nhận định.\n"
-    "Baseline 3 mức (plan_chinh, plan_phu, scalp): {p1}, {p2}, {p3}\n\n"
     "Trả về một JSON object hợp lệ duy nhất (có thể bọc trong ```json). "
     "- **Không** thêm key `out_chi_tiet` hay `output_ngan_gon` — không cần phân tích dài/tóm tắt văn bản ở bước cập nhật này.\n"
     '- "no_change": true nếu ba vùng giá không đổi so với baseline; false nếu có thay đổi.\n'
