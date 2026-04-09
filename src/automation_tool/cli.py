@@ -1000,79 +1000,54 @@ def cmd_capture(args: argparse.Namespace) -> None:
     cfg = args.config or default_coinmap_config_path()
     storage = args.storage_state or default_storage_state_path()
 
-    if use_service:
-        from playwright.sync_api import sync_playwright
+    # Service-first: prefer asking browser service to run capture in its own worker.
+    from automation_tool.browser_client import BrowserClient, is_service_responding
+    from automation_tool.browser_protocol import METHOD_CAPTURE_CHARTS
 
-        from automation_tool.browser_client import try_attach_playwright_via_service
+    if use_service and not is_service_responding():
+        raise SystemExit(
+            "capture --use-service: browser service không chạy hoặc không phản hồi. "
+            "Chạy trước: coinmap-automation browser up "
+            f"(và cần {default_data_dir() / 'browser_service_state.json'} với cdp_http)."
+        )
 
-        with sync_playwright() as p:
-            attached = try_attach_playwright_via_service(p, force=True)
-            if attached is None:
-                raise SystemExit(
-                    "capture --use-service: không attach được tới browser service. "
-                    "Chạy trước: coinmap-automation browser up "
-                    f"(và cần {default_data_dir() / 'browser_service_state.json'} với cdp_http)."
-                )
-            browser, context = attached
-            try:
-                paths = capture_charts(
-                    coinmap_yaml=cfg,
-                    charts_dir=args.charts_dir,
-                    storage_state_path=storage,
-                    email=s.coinmap_email,
-                    password=s.coinmap_password,
-                    tradingview_password=s.tradingview_password,
-                    save_storage_state=not args.no_save_storage,
-                    headless=not args.headed,
-                    reuse_browser_context=context,
-                    main_chart_symbol=args.main_symbol,
-                )
-            finally:
-                try:
-                    browser.close()
-                except Exception:
-                    pass
+    if is_service_responding():
+        c = BrowserClient.from_state_file()
+        if not c:
+            raise SystemExit("browser service state missing (unexpected). Run: coinmap-automation browser up")
+        resp = c.request(
+            METHOD_CAPTURE_CHARTS,
+            {
+                "coinmap_yaml": str(cfg),
+                "charts_dir": str(args.charts_dir) if args.charts_dir is not None else None,
+                "storage_state_path": str(storage) if storage is not None else None,
+                "email": s.coinmap_email,
+                "password": s.coinmap_password,
+                "tradingview_password": s.tradingview_password,
+                "save_storage_state": not args.no_save_storage,
+                "headless": not args.headed,
+                "main_chart_symbol": args.main_symbol,
+            },
+            timeout_s=600.0,
+        )
+        if not bool(resp.get("ok")):
+            raise SystemExit(f"capture via service failed: {resp.get('error')}")
+        result = resp.get("result") or {}
+        paths = [Path(p) for p in (result.get("paths") or []) if isinstance(p, str)]
     else:
-        # Default behavior: try service first; fallback to launching browser if service isn't running.
-        from playwright.sync_api import sync_playwright
-
-        from automation_tool.browser_client import try_attach_playwright_via_service
-
-        with sync_playwright() as p:
-            attached = try_attach_playwright_via_service(p, force=False)
-            if attached is not None:
-                browser, context = attached
-                try:
-                    paths = capture_charts(
-                        coinmap_yaml=cfg,
-                        charts_dir=args.charts_dir,
-                        storage_state_path=storage,
-                        email=s.coinmap_email,
-                        password=s.coinmap_password,
-                        tradingview_password=s.tradingview_password,
-                        save_storage_state=not args.no_save_storage,
-                        headless=not args.headed,
-                        reuse_browser_context=context,
-                        main_chart_symbol=args.main_symbol,
-                    )
-                finally:
-                    try:
-                        browser.close()
-                    except Exception:
-                        pass
-            else:
-                paths = capture_charts(
-                    coinmap_yaml=cfg,
-                    charts_dir=args.charts_dir,
-                    storage_state_path=storage,
-                    email=s.coinmap_email,
-                    password=s.coinmap_password,
-                    tradingview_password=s.tradingview_password,
-                    save_storage_state=not args.no_save_storage,
-                    headless=not args.headed,
-                    reuse_browser_context=None,
-                    main_chart_symbol=args.main_symbol,
-                )
+        # Fallback: run capture locally (legacy behavior).
+        paths = capture_charts(
+            coinmap_yaml=cfg,
+            charts_dir=args.charts_dir,
+            storage_state_path=storage,
+            email=s.coinmap_email,
+            password=s.coinmap_password,
+            tradingview_password=s.tradingview_password,
+            save_storage_state=not args.no_save_storage,
+            headless=not args.headed,
+            reuse_browser_context=None,
+            main_chart_symbol=args.main_symbol,
+        )
 
     charts_dir = args.charts_dir or default_charts_dir()
     print(f"Saved {len(paths)} image(s) under {charts_dir}:")

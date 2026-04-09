@@ -25,6 +25,7 @@ from automation_tool.browser_protocol import (
     METHOD_CLOSE_TAB,
     METHOD_EVAL,
     METHOD_GOTO,
+    METHOD_CAPTURE_CHARTS,
     METHOD_OPEN_TAB,
     METHOD_PING,
     METHOD_QUERY_TEXT,
@@ -293,6 +294,46 @@ async def _handle_one_request(
             params.get("arg"),
         )
         return {"type": "response", "request_id": rid, "ok": True, "result": r, "error": None}
+
+    if method == METHOD_CAPTURE_CHARTS:
+        # High-level capture: execute in a separate worker process to avoid mixing
+        # Playwright async API (service) with sync API (existing capture code).
+        #
+        # Params are passed as a single JSON object string to the worker.
+        import subprocess
+
+        payload = dict(params)
+        # If the client didn't specify headless, default to service mode.
+        payload.setdefault("headless", bool(os.getenv("PLAYWRIGHT_HEADLESS", "1").strip() not in ("0", "false", "False")))
+
+        cmd = [sys.executable, "-m", "automation_tool.capture_worker", "--payload", json.dumps(payload, ensure_ascii=False)]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            out_b, err_b = await proc.communicate()
+        except Exception as e:
+            return {
+                "type": "response",
+                "request_id": rid,
+                "ok": False,
+                "result": None,
+                "error": {"message": f"capture_charts spawn failed: {e}"},
+            }
+
+        if proc.returncode != 0:
+            msg = (err_b or b"").decode("utf-8", errors="replace").strip() or "capture_worker failed"
+            return {"type": "response", "request_id": rid, "ok": False, "result": None, "error": {"message": msg}}
+
+        raw = (out_b or b"").decode("utf-8", errors="replace").strip()
+        try:
+            doc = json.loads(raw) if raw else {}
+        except Exception:
+            doc = {"ok": True, "paths": []}
+        return {"type": "response", "request_id": rid, "ok": True, "result": doc, "error": None}
 
     if method == METHOD_SUBSCRIBE_DOM:
         return {

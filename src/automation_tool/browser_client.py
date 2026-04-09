@@ -121,6 +121,30 @@ def try_attach_playwright_via_service(
     if not st:
         _log.info("playwright-attach skip | reason=no_state_file | state_path=%s", browser_service_state_path())
         return None
+
+    # Best-effort health check via control plane (more reliable signal than CDP url alone).
+    # If this fails, the state file is likely stale (service crashed/restarted, ports changed).
+    try:
+        addr = control_address_from_state(st)
+        if addr is not None:
+            c = BrowserClient(addr[0], addr[1])
+            if not c.ping():
+                _log.warning(
+                    "playwright-attach skip | reason=service_not_responding | control_tcp=%s:%d | state_path=%s",
+                    addr[0],
+                    addr[1],
+                    browser_service_state_path(),
+                )
+                return None
+    except Exception as e:
+        _log.warning(
+            "playwright-attach skip | reason=service_ping_failed | err=%s | state_path=%s",
+            str(e),
+            browser_service_state_path(),
+            exc_info=True,
+        )
+        return None
+
     url = str(st.get("cdp_http") or "").strip()
     if not url:
         _log.warning(
