@@ -50,6 +50,15 @@ _ARM_THRESHOLD = 5.0
 _RETRY_WAIT_MINUTES = 15
 
 
+def _price_trunc0(v: object) -> float:
+    """
+    Normalize price like TradingView watchlist UI: truncate to integer.
+    Watchlist `last` is already trunc0 (see `tradingview_last_price.parse_first_float_trunc0`).
+    We apply the same normalization to `alert_price` to ensure touch matching is consistent.
+    """
+    return float(int(float(v)))  # type: ignore[arg-type]
+
+
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -807,7 +816,14 @@ def _tv_watchlist_daemon_main_loop(
         for z in st.zones:
             if z.status != "vung_cho":
                 continue
-            if abs(float(p_last) - float(z.alert_price)) <= float(params.eps):
+            # `p_last` from watchlist is trunc0; normalize `alert_price` similarly.
+            try:
+                p_last_n = _price_trunc0(p_last)
+                alert_n = _price_trunc0(z.alert_price)
+            except Exception:
+                p_last_n = float(p_last)
+                alert_n = float(z.alert_price)
+            if abs(p_last_n - alert_n) <= float(params.eps):
                 matched.append(z)
 
         for z in matched:
