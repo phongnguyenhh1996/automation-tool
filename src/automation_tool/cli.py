@@ -1640,6 +1640,8 @@ def cmd_all(args: argparse.Namespace) -> None:
 
         payload = parse_analysis_from_openai_text(out.after_charts)
         if payload is not None and payload.prices:
+            from automation_tool.images import get_active_main_symbol
+
             sym = get_active_main_symbol().strip().upper()
             zones = zones_from_analysis_payload(symbol=sym, payload=payload, source="all")
             if zones:
@@ -1923,6 +1925,8 @@ def cmd_update(args: argparse.Namespace) -> None:
 
     payload = parse_analysis_from_openai_text(out_text)
     if payload is not None and payload.prices:
+        from automation_tool.images import get_active_main_symbol
+
         sym = get_active_main_symbol().strip().upper()
         zones = zones_from_analysis_payload(symbol=sym, payload=payload, source="update")
         if zones:
