@@ -507,3 +507,51 @@ def run_single_followup_responses(
     )
     out = (r.output_text or "").strip()
     return out, r.id
+
+
+def run_text_followup_responses(
+    *,
+    api_key: str,
+    prompt_id: str,
+    prompt_version: str | None,
+    user_text: str,
+    previous_response_id: str,
+    vector_store_ids: list[str],
+    store: bool,
+    include: list[str],
+    reasoning_summary: str = "auto",
+) -> tuple[str, str]:
+    """
+    One text-only user turn chained to ``previous_response_id``.
+
+    Returns ``(output_text, new_response_id)``.
+    """
+    client = OpenAI(api_key=api_key)
+    prompt = _prompt_dict(prompt_id, prompt_version)
+    tools: list[dict[str, Any]] = []
+    if vector_store_ids:
+        tools.append(
+            {
+                "type": "file_search",
+                "vector_store_ids": list(vector_store_ids),
+            }
+        )
+
+    reasoning: dict[str, Any] = {"summary": reasoning_summary}
+
+    common: dict[str, Any] = {
+        "prompt": prompt,
+        "store": store,
+        "include": include,
+        "reasoning": reasoning,
+    }
+    if tools:
+        common["tools"] = tools
+
+    r = client.responses.create(
+        **common,
+        previous_response_id=previous_response_id,
+        input=(user_text or "").strip(),
+    )
+    out = (r.output_text or "").strip()
+    return out, r.id

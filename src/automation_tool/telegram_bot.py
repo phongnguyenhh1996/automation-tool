@@ -364,6 +364,8 @@ def send_message(
     text: str,
     parse_mode: Optional[str] = None,
     html_ready: bool = False,
+    reply_to_message_id: Optional[int] = None,
+    message_thread_id: Optional[int] = None,
     timeout: float = 120.0,
 ) -> Optional[int]:
     """
@@ -386,9 +388,13 @@ def send_message(
     first_message_id: Optional[int] = None
     with httpx.Client(timeout=timeout) as client:
         for i, part in enumerate(chunks):
-            data: dict[str, str] = {"chat_id": chat_id, "text": part}
+            data: dict[str, Any] = {"chat_id": chat_id, "text": part}
             if parse_mode:
                 data["parse_mode"] = parse_mode
+            if i == 0 and reply_to_message_id is not None:
+                data["reply_to_message_id"] = int(reply_to_message_id)
+            if message_thread_id is not None:
+                data["message_thread_id"] = int(message_thread_id)
             r = client.post(base, data=data)
             if r.status_code != 200:
                 body = r.text
@@ -514,6 +520,8 @@ def send_openai_output_to_telegram(
     default_parse_mode: Optional[str],
     summary_chat_id: Optional[str] = None,
     detail_chat_id: Optional[str] = None,
+    reply_to_message_id: Optional[int] = None,
+    message_thread_id: Optional[int] = None,
 ) -> None:
     """
     Send OpenAI multimodal step output: either structured JSON (see
@@ -548,6 +556,8 @@ def send_openai_output_to_telegram(
                     text=chi_tiet,
                     parse_mode=default_parse_mode,
                     html_ready=False,
+                    reply_to_message_id=reply_to_message_id,
+                    message_thread_id=message_thread_id,
                 )
             if ngan_gon:
                 text_out = ngan_gon
@@ -569,6 +579,8 @@ def send_openai_output_to_telegram(
                         text=text_out,
                         parse_mode=pm_out,
                         html_ready=hr_out,
+                        reply_to_message_id=reply_to_message_id,
+                        message_thread_id=message_thread_id,
                     )
                 except RuntimeError as e:
                     if not _should_fallback_summary_to_main(e):
@@ -586,6 +598,8 @@ def send_openai_output_to_telegram(
                         text=text_out,
                         parse_mode=pm_out,
                         html_ready=hr_out,
+                        reply_to_message_id=reply_to_message_id,
+                        message_thread_id=message_thread_id,
                     )
             return
         send_message(
@@ -594,6 +608,8 @@ def send_openai_output_to_telegram(
             text=raw,
             parse_mode=default_parse_mode,
             html_ready=False,
+            reply_to_message_id=reply_to_message_id,
+            message_thread_id=message_thread_id,
         )
         return
     for chunk in parsed:
@@ -604,5 +620,7 @@ def send_openai_output_to_telegram(
             text=chunk.text,
             parse_mode=pm,
             html_ready=chunk.html_ready,
+            reply_to_message_id=reply_to_message_id,
+            message_thread_id=message_thread_id,
         )
 

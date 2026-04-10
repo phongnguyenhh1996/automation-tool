@@ -15,7 +15,8 @@ from typing import Any, Optional
 import httpx
 
 from automation_tool.config import Settings
-from automation_tool.telegram_bot import send_message
+from automation_tool.openai_prompt_flow import run_text_followup_responses
+from automation_tool.telegram_bot import send_message, send_openai_output_to_telegram
 
 _log = logging.getLogger("automation_tool.telegram_listen")
 
@@ -79,6 +80,15 @@ def _message_id_from_envelope(env: dict[str, Any]) -> Optional[int]:
     return mid if isinstance(mid, int) else None
 
 
+def _message_thread_id_from_envelope(env: dict[str, Any]) -> Optional[int]:
+    """
+    Telegram forums/topics: messages can carry message_thread_id.
+    If present, we should send replies into the same thread.
+    """
+    tid = env.get("message_thread_id")
+    return tid if isinstance(tid, int) else None
+
+
 def _parse_command(text: str) -> tuple[Optional[str], str]:
     """
     Parse "/full", "/update", "/stop", "/analyze-many", "/full@BotName".
@@ -92,6 +102,22 @@ def _parse_command(text: str) -> tuple[Optional[str], str]:
     rest = parts[1].strip() if len(parts) > 1 else ""
     cmd = head[1:].split("@", 1)[0].strip().lower()
     return (cmd or None), rest
+
+
+def _parse_ask_args(args_text: str) -> tuple[Optional[str], str]:
+    """
+    Accept: "<openai_response_id> <noi_dung...>".
+    Returns (openai_response_id, noi_dung). openai_response_id may be None.
+    """
+    raw = (args_text or "").strip()
+    if not raw:
+        return None, ""
+    parts = raw.split(maxsplit=1)
+    rid = parts[0].strip()
+    msg = parts[1].strip() if len(parts) > 1 else ""
+    if not rid:
+        return None, msg
+    return rid, msg
 
 
 def _parse_symbols_from_args_text(args_text: str) -> Optional[str]:
@@ -441,8 +467,51 @@ def run_telegram_listener(
                     cmd, args_text = _parse_command(text)
                     if cmd == "stop":
                         _stop_all_processes(settings, listen_chat_id)
+                    elif cmd == "ask":
+                        mid = _message_id_from_envelope(env)
+                        thread_id = _message_thread_id_from_envelope(env)
+                        openai_response_id, noi_dung = _parse_ask_args(args_text)
+                        if not openai_response_id or not noi_dung:
+                            _send_status(
+                                settings,
+                                listen_chat_id,
+                                "Cú pháp: /ask <openai_response_id> <noi_dung>\n"
+                                "Ví dụ: /ask resp_abc123 Hãy tóm tắt 3 vùng giá và gợi ý trade_line.",
+                            )
+                            continue
+                        try:
+                            out_text, new_id = run_text_followup_responses(
+                                api_key=settings.openai_api_key,
+                                prompt_id=settings.openai_prompt_id,
+                                prompt_version=settings.openai_prompt_version,
+                                user_text=noi_dung,
+                                previous_response_id=openai_response_id,
+                                vector_store_ids=settings.openai_vector_store_ids,
+                                store=settings.openai_responses_store,
+                                include=settings.openai_responses_include,
+                            )
+                            # Best-effort: show the chained response id for traceability.
+                            if new_id:
+                                out_text = f"(openai_response_id={new_id})\n\n{out_text}".strip()
+                            send_openai_output_to_telegram(
+                                bot_token=settings.telegram_bot_token,
+                                chat_id=listen_chat_id,
+                                raw=out_text,
+                                default_parse_mode=settings.telegram_parse_mode,
+                                summary_chat_id=None,
+                                detail_chat_id=None,
+                                reply_to_message_id=mid,
+                                message_thread_id=thread_id,
+                            )
+                        except Exception as e:
+                            _send_status(
+                                settings,
+                                listen_chat_id,
+                                f"❌ /ask failed: {e!s}",
+                            )
                     elif cmd == "update":
                         mid = _message_id_from_envelope(env)
+                        thread_id = _message_thread_id_from_envelope(env)
                         t = threading.Thread(
                             target=_run_update_pipeline_in_thread,
                             kwargs={
@@ -459,6 +528,7 @@ def run_telegram_listener(
                         t.start()
                     elif cmd == "full":
                         mid = _message_id_from_envelope(env)
+                        thread_id = _message_thread_id_from_envelope(env)
                         t = threading.Thread(
                             target=_run_full_pipeline_in_thread,
                             kwargs={
@@ -473,6 +543,7 @@ def run_telegram_listener(
                         t.start()
                     elif cmd == "analyze-many":
                         mid = _message_id_from_envelope(env)
+                        thread_id = _message_thread_id_from_envelope(env)
                         symbols_csv = _parse_symbols_from_args_text(args_text) or "EURUSD,USDJPY"
                         t = threading.Thread(
                             target=_run_analyze_many_pipeline_in_thread,
