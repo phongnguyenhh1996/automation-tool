@@ -1,6 +1,14 @@
 @echo off
 setlocal
 
+title automation-tool - %~nx0
+echo.
+echo ============================================================
+echo Running: %~nx0
+echo CWD    : %cd%
+echo Args   : %*
+echo ============================================================
+
 REM Multi-symbol: Coinmap(all) -> TradingView(all) -> OpenAI parallel analyze
 REM Symbols: EURUSD, USDJPY
 REM Browser: chạy browser_up.bat trước.

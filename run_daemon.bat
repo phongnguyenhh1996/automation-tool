@@ -1,6 +1,14 @@
 @echo off
 setlocal
 
+title automation-tool - %~nx0
+echo.
+echo ============================================================
+echo Running: %~nx0
+echo CWD    : %cd%
+echo Args   : %*
+echo ============================================================
+
 REM 24/24 daemon: TradingView watchlist + zones_state orchestration
 REM Intended for Windows Task Scheduler ("At startup" / "On log on")
 REM Browser: chạy browser_up.bat trước (hoặc lịch Task Scheduler riêng).

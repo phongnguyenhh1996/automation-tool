@@ -1,6 +1,14 @@
 @echo off
 setlocal
 
+title automation-tool - %~nx0
+echo.
+echo ============================================================
+echo Running: %~nx0
+echo CWD    : %cd%
+echo Args   : %*
+echo ============================================================
+
 REM USDJPY: capture charts -> analyze OpenAI; MT5 chỉ dry-run (không lệnh thật)
 REM Mặc định headless (tiết kiệm RAM). Nếu cần debug UI: thêm --headed vào lệnh capture bên dưới.
 REM Browser: chạy browser_up.bat trước.

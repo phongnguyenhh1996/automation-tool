@@ -1,6 +1,14 @@
 @echo off
 setlocal
 
+title automation-tool - %~nx0
+echo.
+echo ============================================================
+echo Running: %~nx0
+echo CWD    : %cd%
+echo Args   : %*
+echo ============================================================
+
 REM Dừng browser service (đối chiếu với browser_up.bat).
 cd /d "%~dp0"
 

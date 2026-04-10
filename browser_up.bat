@@ -1,6 +1,14 @@
 @echo off
 setlocal
 
+title automation-tool - %~nx0
+echo.
+echo ============================================================
+echo Running: %~nx0
+echo CWD    : %cd%
+echo Args   : %*
+echo ============================================================
+
 REM Khởi động browser service (Playwright CDP) — chạy riêng trước các task capture/daemon/telegram.
 cd /d "%~dp0"
 

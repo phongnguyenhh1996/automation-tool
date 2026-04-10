@@ -1,6 +1,14 @@
 @echo off
 setlocal
 
+title automation-tool - %~nx0
+echo.
+echo ============================================================
+echo Running: %~nx0
+echo CWD    : %cd%
+echo Args   : %*
+echo ============================================================
+
 REM Ensure script runs from project root
 REM Browser: chạy browser_up.bat trước (telegram-listen cần browser service).
 cd /d "%~dp0"

@@ -1,6 +1,14 @@
 @echo off
 setlocal
 
+title automation-tool - %~nx0
+echo.
+echo ============================================================
+echo Running: %~nx0
+echo CWD    : %cd%
+echo Args   : (hidden)
+echo ============================================================
+
 REM Login MT5 account via automation-tool CLI (Windows only).
 REM Server/login are fixed for this account; password is NOT hardcoded.
 REM Usage:

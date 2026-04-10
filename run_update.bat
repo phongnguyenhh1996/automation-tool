@@ -1,6 +1,14 @@
 @echo off
 setlocal
 
+title automation-tool - %~nx0
+echo.
+echo ============================================================
+echo Running: %~nx0
+echo CWD    : %cd%
+echo Args   : %*
+echo ============================================================
+
 REM Intraday update: Coinmap XAUUSD M5 + OpenAI follow-up + TradingView (if zones changed)
 cd /d "%~dp0"
 
