@@ -21,7 +21,7 @@ if errorlevel 1 (
 )
 
 echo [%date% %time%] INFO: Starting capture-many (EURUSD,USDJPY)>> "logs\capture_analyze_many_eurusd_usdjpy.log"
-coinmap-automation capture-many --symbols EURUSD,USDJPY >> "logs\capture_analyze_many_eurusd_usdjpy.log" 2>&1
+coinmap-automation capture-many --use-service --symbols EURUSD,USDJPY >> "logs\capture_analyze_many_eurusd_usdjpy.log" 2>&1
 if errorlevel 1 (
   echo [%date% %time%] ERROR: capture-many failed code %ERRORLEVEL%>> "logs\capture_analyze_many_eurusd_usdjpy.log"
   exit /b %ERRORLEVEL%

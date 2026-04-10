@@ -215,6 +215,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     cm.add_argument("--no-save-storage", action="store_true", help="Do not write storage state after run")
     cm.add_argument("--headed", action="store_true", help="Show browser window")
+    cm.add_argument(
+        "--use-service",
+        action="store_true",
+        help=(
+            "Bắt buộc browser service: capture-many qua RPC (capture_many_worker attach CDP). "
+            "Nếu service không chạy thì thoát lỗi."
+        ),
+    )
     cm.set_defaults(func=cmd_capture_many)
 
     am = sub.add_parser(
@@ -1088,20 +1096,64 @@ def cmd_capture_many(args: argparse.Namespace) -> None:
     2) TradingView for all symbols
     """
     s = load_settings()
+    use_service = bool(getattr(args, "use_service", False))
     symbols = _parse_symbols_arg(args.symbols)
     cfg_path = args.config or default_coinmap_config_path()
     storage = args.storage_state or default_storage_state_path()
-    cfg = load_coinmap_yaml(cfg_path)
-    vw = int(cfg.get("viewport_width", 1920))
-    vh = int(cfg.get("viewport_height", 1080))
 
     _log.info(
-        "capture-many: start | symbols=%s config=%s headed=%s storage=%s",
+        "capture-many: start | symbols=%s config=%s headed=%s storage=%s use_service=%s",
         ",".join(symbols),
         cfg_path,
         args.headed,
         storage,
+        use_service,
     )
+
+    from automation_tool.browser_client import BrowserClient, is_service_responding
+    from automation_tool.browser_protocol import METHOD_CAPTURE_MANY
+
+    if use_service and not is_service_responding():
+        raise SystemExit(
+            "capture-many --use-service: browser service không chạy hoặc không phản hồi. "
+            "Chạy trước: coinmap-automation browser up "
+            f"(và cần {default_data_dir() / 'browser_service_state.json'} với cdp_http)."
+        )
+
+    if is_service_responding():
+        c = BrowserClient.from_state_file()
+        if not c:
+            raise SystemExit("browser service state missing. Run: coinmap-automation browser up")
+        per_sym = max(1, len(symbols))
+        timeout_s = min(7200.0, max(1200.0, 600.0 * float(per_sym)))
+        _log.info("capture-many: mode=rpc | METHOD_CAPTURE_MANY (capture_many_worker) timeout_s=%s", timeout_s)
+        resp = c.request(
+            METHOD_CAPTURE_MANY,
+            {
+                "symbols": symbols,
+                "coinmap_yaml": str(cfg_path),
+                "storage_state_path": str(storage) if storage is not None else None,
+                "email": s.coinmap_email,
+                "password": s.coinmap_password,
+                "tradingview_password": s.tradingview_password,
+                "save_storage_state": not args.no_save_storage,
+                "headless": not args.headed,
+            },
+            timeout_s=timeout_s,
+        )
+        if not bool(resp.get("ok")):
+            raise SystemExit(f"capture-many RPC failed: {resp.get('error')}")
+        result = resp.get("result") or {}
+        npaths = len([p for p in (result.get("paths") or []) if isinstance(p, str)])
+        _log.info("capture-many: xong | rpc | %s file(s)", npaths)
+        print("capture-many finished. Charts dirs:")
+        for sym in symbols:
+            print(f"  {sym}: {symbol_data_dir(sym) / 'charts'}")
+        return
+
+    cfg = load_coinmap_yaml(cfg_path)
+    vw = int(cfg.get("viewport_width", 1920))
+    vh = int(cfg.get("viewport_height", 1080))
 
     # One stamp per symbol so Coinmap + TradingView artifacts line up for OpenAI ordering.
     stamps: dict[str, str] = {sym: time.strftime("%Y%m%d_%H%M%S") for sym in symbols}
