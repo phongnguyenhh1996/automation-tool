@@ -221,6 +221,22 @@ def is_service_responding() -> bool:
         return False
 
 
+def wait_for_service_ping(*, timeout_s: float = 20.0, poll_s: float = 0.25) -> bool:
+    """
+    Poll until the control plane answers ping or timeout.
+
+    Use before spawning a new browser service when multiple ``browser up`` may run
+    concurrently (e.g. two .bat): the peer process may be mid-startup and not
+    yet visible to the first ``is_service_responding()`` check.
+    """
+    deadline = time.time() + max(0.0, float(timeout_s))
+    while time.time() < deadline:
+        if is_service_responding():
+            return True
+        time.sleep(max(0.05, float(poll_s)))
+    return False
+
+
 def wait_for_state_file(*, timeout_s: float = 60.0, poll_s: float = 0.25) -> Optional[dict[str, Any]]:
     deadline = time.time() + timeout_s
     while time.time() < deadline:

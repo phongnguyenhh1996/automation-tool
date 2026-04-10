@@ -859,11 +859,20 @@ def cmd_browser_up(args: argparse.Namespace) -> None:
         is_service_responding,
         load_browser_service_state,
         spawn_browser_service_detached,
+        wait_for_service_ping,
         wait_for_state_file,
     )
 
     if is_service_responding():
         print("Browser service already running (ping ok).", flush=True)
+        st = load_browser_service_state()
+        if st:
+            print(json.dumps(st, indent=2), flush=True)
+        return
+
+    # Concurrent ``browser up`` (e.g. two .bat): peer may be between spawn and first ping.
+    if wait_for_service_ping(timeout_s=20.0):
+        print("Browser service already running (ping ok after brief wait).", flush=True)
         st = load_browser_service_state()
         if st:
             print(json.dumps(st, indent=2), flush=True)
@@ -879,10 +888,27 @@ def cmd_browser_up(args: argparse.Namespace) -> None:
                 err = proc.stderr.read().decode("utf-8", errors="replace")[:2000]
             except Exception:
                 pass
+        # Lost lock race: another process owns the service; state may still appear.
+        if is_service_responding():
+            print("Browser service already running (another process holds the lock).", flush=True)
+            st2 = load_browser_service_state()
+            if st2:
+                print(json.dumps(st2, indent=2), flush=True)
+            return
         raise SystemExit(
             "Browser service did not write state file in time. "
             f"Check PLAYWRIGHT_CHROME_USER_DATA_DIR / Playwright install. stderr: {err!r}"
         )
+
+    # Our subprocess may have lost the exclusive lock and exited; peer still wrote state.
+    if proc.poll() is not None and proc.returncode not in (0,):
+        if is_service_responding():
+            print("Browser service already running (spawn exited; peer owns service).", flush=True)
+            st3 = load_browser_service_state()
+            if st3:
+                print(json.dumps(st3, indent=2), flush=True)
+            return
+
     print("Browser service started.", flush=True)
     print(json.dumps(st, indent=2), flush=True)
 

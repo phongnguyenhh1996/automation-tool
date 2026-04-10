@@ -116,15 +116,24 @@ def _release_stale_lock() -> None:
 
 
 def _acquire_lock() -> None:
+    """
+    Exclusive lock file so two concurrent ``browser_service`` processes cannot both
+    pass a check-then-write race (would launch two Chrome instances).
+    """
     default_data_dir().mkdir(parents=True, exist_ok=True)
     _release_stale_lock()
     p = _lock_path()
-    if p.is_file():
+    try:
+        fd = os.open(str(p), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
         raise SystemExit(
             f"Another browser service may be running (lock: {p}). "
             "Stop it with: coinmap-automation browser down"
-        )
-    p.write_text(f"{os.getpid()}\n", encoding="utf-8")
+        ) from None
+    try:
+        os.write(fd, f"{os.getpid()}\n".encode("utf-8"))
+    finally:
+        os.close(fd)
 
 
 def _release_lock() -> None:
