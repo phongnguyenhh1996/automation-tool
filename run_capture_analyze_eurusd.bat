@@ -3,6 +3,7 @@ setlocal
 
 REM EURUSD: capture charts -> analyze OpenAI; MT5 chỉ dry-run (không lệnh thật)
 REM Mặc định headless (tiết kiệm RAM). Nếu cần debug UI: thêm --headed vào lệnh capture bên dưới.
+REM Browser: chạy browser_up.bat trước.
 cd /d "%~dp0"
 
 if not exist "logs" mkdir "logs"
@@ -12,13 +13,6 @@ if errorlevel 1 (
   echo ERROR: Failed to activate virtual environment. See logs\eurusd_capture_analyze.log
   echo [%date% %time%] ERROR: venv>> "logs\eurusd_capture_analyze.log"
   exit /b 1
-)
-
-echo [%date% %time%] INFO: Ensuring browser service is up>> "logs\eurusd_capture_analyze.log"
-coinmap-automation browser up >> "logs\eurusd_capture_analyze.log" 2>&1
-if errorlevel 1 (
-  echo [%date% %time%] ERROR: browser service failed to start.>> "logs\eurusd_capture_analyze.log"
-  exit /b %ERRORLEVEL%
 )
 
 echo [%date% %time%] capture --main-symbol EURUSD

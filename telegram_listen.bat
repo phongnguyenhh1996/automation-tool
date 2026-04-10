@@ -2,6 +2,7 @@
 setlocal
 
 REM Ensure script runs from project root
+REM Browser: chạy browser_up.bat trước (telegram-listen cần browser service).
 cd /d "%~dp0"
 
 REM Create logs directory if missing
@@ -12,13 +13,6 @@ call ".venv\Scripts\activate.bat"
 if errorlevel 1 (
   echo [%date% %time%] ERROR: Failed to activate virtual environment.>> "logs\telegram_listen.log"
   exit /b 1
-)
-
-echo [%date% %time%] INFO: Ensuring browser service is up>> "logs\telegram_listen.log"
-coinmap-automation browser up >> "logs\telegram_listen.log" 2>&1
-if errorlevel 1 (
-  echo [%date% %time%] ERROR: browser service failed to start.>> "logs\telegram_listen.log"
-  exit /b %ERRORLEVEL%
 )
 
 REM Listen inbound Telegram commands (/full, /update, /stop)

@@ -131,14 +131,14 @@ def _touch_prompt(
     """
     return (
         "Bạn là trợ lý giao dịch intraday.\n"
-        "Dưới đây là 1 vùng giá (zone) đã CHẠM theo TradingView Watchlist Last.\n\n"
+        "Cảnh báo TradingView đã kích hoạt tại mức giá {zone.alert_price}, hãy phân tích đưa ra nhận định"
         f"- label: {zone.label}\n"
         f"- side (gợi ý): {zone.side}\n"
         f"- alert_price: {zone.alert_price}\n"
         f"- range_low: {zone.range_low}\n"
         f"- range_high: {zone.range_high}\n"
         f"- last_price (watchlist): {last_price}\n\n"
-        "Hãy xem Coinmap M5 JSON đính kèm và trả về 1 JSON object DUY NHẤT với keys:\n"
+        "Hãy xem footprint Coinmap M5 JSON đính kèm và trả về 1 JSON object DUY NHẤT với keys:\n"
         '- "intraday_hanh_dong": "VÀO LỆNH" | "chờ" | "loại"\n'
         '- "trade_line": string (bắt buộc nếu intraday_hanh_dong là "VÀO LỆNH")\n'
         '- "prices": array gồm ít nhất 1 phần tử cho đúng label ở trên, ví dụ:\n'
