@@ -26,7 +26,13 @@ if errorlevel 1 (
 
 echo [%date% %time%] INFO: Starting coinmap-automation tv-watchlist-daemon>> "logs\daemon.log"
 REM Headless by default; do NOT pass --headed.
-coinmap-automation tv-watchlist-daemon >> "logs\daemon.log" 2>&1
+set "ZONES_JSON=data\XAUUSD\zones_state.json"
+if not exist "%ZONES_JSON%" (
+  echo [%date% %time%] ERROR: zones_state.json not found at %ZONES_JSON%>> "logs\daemon.log"
+  echo [%date% %time%] ERROR: Run coinmap-automation all/update to generate zones_state.json.>> "logs\daemon.log"
+  exit /b 2
+)
+coinmap-automation tv-watchlist-daemon --zones-json "%ZONES_JSON%" >> "logs\daemon.log" 2>&1
 set "EXIT_CODE=%ERRORLEVEL%"
 echo [%date% %time%] INFO: Finished with exit code %EXIT_CODE%>> "logs\daemon.log"
 
