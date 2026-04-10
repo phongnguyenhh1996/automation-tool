@@ -160,6 +160,11 @@ def _release_stale_lock() -> None:
             pass
 
 
+def release_stale_browser_service_lock() -> None:
+    """Remove ``browser_service.lock`` if corrupt or owning PID is not alive (CLI / recovery)."""
+    _release_stale_lock()
+
+
 def _acquire_lock() -> None:
     """
     Exclusive lock file so two concurrent ``browser_service`` processes cannot both

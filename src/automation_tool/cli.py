@@ -927,10 +927,12 @@ def cmd_browser_down(args: argparse.Namespace) -> None:
         browser_service_state_path,
         load_browser_service_state,
     )
+    from automation_tool.browser_service import release_stale_browser_service_lock
 
     st = load_browser_service_state()
     if not st:
         print("No browser service state file.", flush=True)
+        release_stale_browser_service_lock()
         return
     pid = int(st.get("pid") or 0)
     try:
@@ -952,6 +954,7 @@ def cmd_browser_down(args: argparse.Namespace) -> None:
             p.unlink()
     except OSError:
         pass
+    release_stale_browser_service_lock()
     print("Browser service stop requested.", flush=True)
 
 
