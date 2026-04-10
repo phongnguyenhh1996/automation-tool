@@ -16,7 +16,12 @@ from typing import Any, Optional
 from playwright.sync_api import sync_playwright
 
 from automation_tool.browser_client import BrowserClient, is_service_responding, try_attach_playwright_via_service
-from automation_tool.browser_protocol import METHOD_CLOSE_TAB, METHOD_TV_WATCHLIST_INIT, METHOD_TV_WATCHLIST_POLL
+from automation_tool.browser_protocol import (
+    METHOD_CLOSE_TAB,
+    METHOD_EVAL,
+    METHOD_TV_WATCHLIST_INIT,
+    METHOD_TV_WATCHLIST_POLL,
+)
 from automation_tool.coinmap import (
     _maybe_tradingview_dark_mode,
     _maybe_tradingview_login,
