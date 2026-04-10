@@ -127,17 +127,16 @@ def _touch_prompt(
     - trade_line: required when "VÀO LỆNH"
     - prices: include a matching entry for this zone label with `hop_luu` so daemon can
       decide whether to execute MT5 (plan >=80, scalp >=70).
-    - optional out_chi_tiet/output_ngan_gon
+    Must not include out_chi_tiet or output_ngan_gon (touch flow is compact only).
     """
     return (
-        "Bạn là trợ lý giao dịch intraday.\n"
         f"Cảnh báo TradingView đã kích hoạt tại mức giá {zone.alert_price}, hãy phân tích đưa ra nhận định\n"
-        f"- label: {zone.label}\n"
         "Hãy xem footprint Coinmap M5 JSON đính kèm và trả về 1 JSON object DUY NHẤT với keys:\n"
         '- "intraday_hanh_dong": "VÀO LỆNH" | "chờ" | "loại"\n'
         '- "trade_line": string (bắt buộc nếu intraday_hanh_dong là "VÀO LỆNH")\n'
         '- "prices": array gồm ít nhất 1 phần tử cho đúng label ở trên, ví dụ:\n'
         f'  [{{"label": "plan_chinh", "value": {zone.alert_price}, "hop_luu": 85, "trade_line": "..."}}]\n'
+        "- **Không** thêm key `out_chi_tiet` hay `output_ngan_gon` — không cần phân tích dài hay tóm tắt văn bản; chỉ JSON gọn như trên.\n"
     )
 
 
