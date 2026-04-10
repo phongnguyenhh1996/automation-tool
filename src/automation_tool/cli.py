@@ -124,9 +124,9 @@ def _parser() -> argparse.ArgumentParser:
         "--use-service",
         action="store_true",
         help=(
-            "Dùng browser service đang chạy (coinmap-automation browser up): attach qua CDP, "
-            "reuse_browser_context. Cần data/browser_service_state.json và PLAYWRIGHT_CHROME_USER_DATA_DIR "
-            "khớp profile của service."
+            "Bắt buộc dùng browser service (coinmap-automation browser up): attach qua CDP rồi "
+            "chạy capture_charts trong process hiện tại — không spawn capture_worker. "
+            "Cần data/browser_service_state.json và PLAYWRIGHT_CHROME_USER_DATA_DIR khớp profile của service."
         ),
     )
     c.set_defaults(func=cmd_capture)
@@ -1000,9 +1000,7 @@ def cmd_capture(args: argparse.Namespace) -> None:
     cfg = args.config or default_coinmap_config_path()
     storage = args.storage_state or default_storage_state_path()
 
-    # Service-first: prefer asking browser service to run capture in its own worker.
-    from automation_tool.browser_client import BrowserClient, is_service_responding
-    from automation_tool.browser_protocol import METHOD_CAPTURE_CHARTS
+    from automation_tool.browser_client import is_service_responding
 
     if use_service and not is_service_responding():
         raise SystemExit(
@@ -1011,43 +1009,19 @@ def cmd_capture(args: argparse.Namespace) -> None:
             f"(và cần {default_data_dir() / 'browser_service_state.json'} với cdp_http)."
         )
 
-    if is_service_responding():
-        c = BrowserClient.from_state_file()
-        if not c:
-            raise SystemExit("browser service state missing (unexpected). Run: coinmap-automation browser up")
-        resp = c.request(
-            METHOD_CAPTURE_CHARTS,
-            {
-                "coinmap_yaml": str(cfg),
-                "charts_dir": str(args.charts_dir) if args.charts_dir is not None else None,
-                "storage_state_path": str(storage) if storage is not None else None,
-                "email": s.coinmap_email,
-                "password": s.coinmap_password,
-                "tradingview_password": s.tradingview_password,
-                "save_storage_state": not args.no_save_storage,
-                "headless": not args.headed,
-                "main_chart_symbol": args.main_symbol,
-            },
-            timeout_s=600.0,
-        )
-        if not bool(resp.get("ok")):
-            raise SystemExit(f"capture via service failed: {resp.get('error')}")
-        result = resp.get("result") or {}
-        paths = [Path(p) for p in (result.get("paths") or []) if isinstance(p, str)]
-    else:
-        # Fallback: run capture locally (legacy behavior).
-        paths = capture_charts(
-            coinmap_yaml=cfg,
-            charts_dir=args.charts_dir,
-            storage_state_path=storage,
-            email=s.coinmap_email,
-            password=s.coinmap_password,
-            tradingview_password=s.tradingview_password,
-            save_storage_state=not args.no_save_storage,
-            headless=not args.headed,
-            reuse_browser_context=None,
-            main_chart_symbol=args.main_symbol,
-        )
+    paths = capture_charts(
+        coinmap_yaml=cfg,
+        charts_dir=args.charts_dir,
+        storage_state_path=storage,
+        email=s.coinmap_email,
+        password=s.coinmap_password,
+        tradingview_password=s.tradingview_password,
+        save_storage_state=not args.no_save_storage,
+        headless=not args.headed,
+        reuse_browser_context=None,
+        main_chart_symbol=args.main_symbol,
+        require_browser_service=use_service,
+    )
 
     charts_dir = args.charts_dir or default_charts_dir()
     print(f"Saved {len(paths)} image(s) under {charts_dir}:")

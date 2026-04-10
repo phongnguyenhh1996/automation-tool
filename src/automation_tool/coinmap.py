@@ -14,7 +14,7 @@ from playwright.sync_api import BrowserContext, Playwright, sync_playwright
 
 from automation_tool.coinmap_openai_slim import slim_coinmap_export_for_openai
 from automation_tool.config import default_logs_dir
-from automation_tool.browser_client import try_attach_playwright_via_service
+from automation_tool.browser_client import browser_service_state_path, try_attach_playwright_via_service
 from automation_tool.playwright_browser import close_browser_and_context, launch_chrome_context
 
 
@@ -2045,6 +2045,7 @@ def capture_charts(
     clear_charts_before_capture: Optional[bool] = None,
     stamp_override: Optional[str] = None,
     progress_hook: Optional[Callable[[], None]] = None,
+    require_browser_service: bool = False,
 ) -> list[Path]:
     """
     Optionally clear prior images in charts_dir, then log in (if credentials given),
@@ -2054,6 +2055,9 @@ def capture_charts(
     If ``reuse_browser_context`` is provided (e.g. ``tv-journal-monitor`` already runs
     inside ``sync_playwright``), capture uses that context instead of starting a nested
     Playwright sync session.
+
+    If ``require_browser_service`` is True, attaches via CDP to the running browser service
+    with ``force=True`` and raises if attach fails (no local Chrome launch).
     """
     from automation_tool.config import default_charts_dir
     from automation_tool.images import (
@@ -2131,10 +2135,16 @@ def capture_charts(
     vh = int(cfg.get("viewport_height", 1080))
 
     with sync_playwright() as p:
-        attached = try_attach_playwright_via_service(p)
+        attached = try_attach_playwright_via_service(p, force=require_browser_service)
         if attached is not None:
             browser, context = attached
             use_browser_service = True
+        elif require_browser_service:
+            raise SystemExit(
+                "capture requires browser service but could not attach via CDP. "
+                "Run: coinmap-automation browser up "
+                f"(state file: {browser_service_state_path()})."
+            )
         else:
             browser, context = launch_chrome_context(
                 p,
