@@ -726,6 +726,8 @@ def _tv_watchlist_daemon_main_loop(
     zs_path: Optional[Path],
     get_price: Callable[[int], Optional[float]],
 ) -> None:
+    heartbeat_s = 30.0
+    last_heartbeat_at = 0.0
     while True:
         st = read_zones_state(zs_path)
         if st is None or not st.zones:
@@ -737,6 +739,25 @@ def _tv_watchlist_daemon_main_loop(
         if p_last is None:
             time.sleep(poll_s)
             continue
+
+        # Heartbeat: log every ~30s so it's obvious the daemon is alive.
+        try:
+            now_mono = time.monotonic()
+            if (now_mono - last_heartbeat_at) >= heartbeat_s:
+                last_heartbeat_at = now_mono
+                _log.info(
+                    "tv-watchlist-daemon alive | symbol=%s last=%s zones=%d",
+                    sym,
+                    p_last,
+                    len(st.zones),
+                )
+                _send_log(
+                    settings,
+                    f"[heartbeat] alive | symbol={sym} last={p_last} zones={len(st.zones)}",
+                )
+        except Exception:
+            # Never let logging break the daemon.
+            pass
 
         # Best-effort: record last observed in zones_state.json
         try:
