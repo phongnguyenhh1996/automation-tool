@@ -31,6 +31,8 @@ from automation_tool.browser_protocol import (
     METHOD_QUERY_TEXT,
     METHOD_SHUTDOWN,
     METHOD_SUBSCRIBE_DOM,
+    METHOD_TV_WATCHLIST_INIT,
+    METHOD_TV_WATCHLIST_POLL,
     METHOD_UNSUBSCRIBE,
     decode_message_line,
 )
@@ -246,6 +248,58 @@ class BrowserServiceState:
         value = await page.evaluate(script, arg)
         return {"value": value}
 
+    async def tv_watchlist_init(
+        self,
+        *,
+        chart_url: str,
+        tv: dict[str, Any],
+        email: Optional[str],
+        password: Optional[str],
+        initial_settle_ms: int,
+    ) -> dict[str, Any]:
+        """
+        Open a TradingView tab inside the service browser (single CDP owner): goto, login, dark mode, watchlist.
+        """
+        from automation_tool.coinmap_tradingview_async import (
+            maybe_tradingview_dark_mode_async,
+            maybe_tradingview_login_async,
+            tradingview_ensure_watchlist_open_async,
+        )
+
+        ctx = self._require_context()
+        page = await ctx.new_page()
+        tid = str(uuid.uuid4())
+        self._tabs[tid] = page
+        await page.goto(chart_url, wait_until="domcontentloaded", timeout=120_000)
+        await maybe_tradingview_login_async(page, tv, email, password)
+        await page.wait_for_timeout(max(0, int(initial_settle_ms)))
+        await maybe_tradingview_dark_mode_async(page, tv)
+        await tradingview_ensure_watchlist_open_async(page, tv)
+        return {"tab_id": tid}
+
+    async def tv_watchlist_poll(
+        self,
+        *,
+        tab_id: str,
+        tv: dict[str, Any],
+        symbol: str,
+        timeout_ms: int,
+        poll_ms: int,
+    ) -> dict[str, Any]:
+        from automation_tool.coinmap_tradingview_async import read_watchlist_last_price_wait_stable_async
+
+        page = self._tabs.get(tab_id)
+        if page is None:
+            raise ValueError(f"unknown tab_id: {tab_id}")
+        price = await read_watchlist_last_price_wait_stable_async(
+            page,
+            tv,
+            symbol=str(symbol).strip().upper(),
+            timeout_ms=int(timeout_ms),
+            poll_ms=int(poll_ms),
+        )
+        return {"price": price}
+
 
 class ServiceRuntime:
     def __init__(self) -> None:
@@ -292,6 +346,32 @@ async def _handle_one_request(
             str(params.get("tab_id") or ""),
             str(params.get("script") or ""),
             params.get("arg"),
+        )
+        return {"type": "response", "request_id": rid, "ok": True, "result": r, "error": None}
+
+    if method == METHOD_TV_WATCHLIST_INIT:
+        tv_raw = params.get("tv")
+        if not isinstance(tv_raw, dict):
+            raise ValueError("tv_watchlist_init requires params.tv as object")
+        r = await st.tv_watchlist_init(
+            chart_url=str(params.get("chart_url") or ""),
+            tv=tv_raw,
+            email=str(params["email"]) if params.get("email") else None,
+            password=str(params["password"]) if params.get("password") else None,
+            initial_settle_ms=int(params.get("initial_settle_ms") or 3000),
+        )
+        return {"type": "response", "request_id": rid, "ok": True, "result": r, "error": None}
+
+    if method == METHOD_TV_WATCHLIST_POLL:
+        tv_raw = params.get("tv")
+        if not isinstance(tv_raw, dict):
+            raise ValueError("tv_watchlist_poll requires params.tv as object")
+        r = await st.tv_watchlist_poll(
+            tab_id=str(params.get("tab_id") or ""),
+            tv=tv_raw,
+            symbol=str(params.get("symbol") or ""),
+            timeout_ms=int(params.get("timeout_ms") or 10_000),
+            poll_ms=int(params.get("poll_ms") or 250),
         )
         return {"type": "response", "request_id": rid, "ok": True, "result": r, "error": None}
 
