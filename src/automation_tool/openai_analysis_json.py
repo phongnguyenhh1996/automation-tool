@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any, Literal, Optional
 
@@ -63,6 +64,31 @@ def extract_json_object(raw: str) -> Optional[dict[str, Any]]:
         except json.JSONDecodeError:
             continue
     return None
+
+
+_VUNG_CHO_FLOATS = re.compile(r"-?\d+(?:\.\d+)?")
+
+
+def _parse_vung_cho_string(s: str) -> tuple[Optional[float], Optional[float]]:
+    """
+    Parse a single waiting-zone string like ``4762.0–4766.0`` or ``4709.0–4705.0``
+    into ``(range_low, range_high)`` as min/max of the two bounds.
+    """
+    if not isinstance(s, str) or not s.strip():
+        return None, None
+    text = s.strip().replace(",", "")
+    nums: list[float] = []
+    for m in _VUNG_CHO_FLOATS.finditer(text):
+        try:
+            nums.append(float(m.group(0)))
+        except ValueError:
+            continue
+        if len(nums) >= 2:
+            break
+    if len(nums) < 2:
+        return None, None
+    a, b = nums[0], nums[1]
+    return (min(a, b), max(a, b))
 
 
 def _as_float(x: Any) -> Optional[float]:
@@ -146,6 +172,11 @@ def _parse_price_entry(d: dict[str, Any]) -> Optional[PriceZoneEntry]:
         return None
     rl = _as_float(d.get("range_low"))
     rh = _as_float(d.get("range_high"))
+    vc_raw = d.get("vung_cho")
+    if isinstance(vc_raw, str) and vc_raw.strip():
+        pl, ph = _parse_vung_cho_string(vc_raw)
+        if pl is not None and ph is not None:
+            rl, rh = pl, ph
     hop = _as_int(d.get("hop_luu"))
     tl_raw = d.get("trade_line")
     trade_line = tl_raw.strip() if isinstance(tl_raw, str) else ""

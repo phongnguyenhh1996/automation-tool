@@ -76,10 +76,10 @@ def default_analysis_prompt(main_symbol: str | None = None) -> str:
         + json_schema_header
         + '- "prices": đúng 3 phần tử, mỗi phần tử:\n'
         '  {"label":"plan_chinh"|"plan_phu"|"scalp","value":number,'
-        '"range_low":number,"range_high":number,'
+        '"vung_cho":string,'
         '"hop_luu":integer 0–100,"trade_line":string} — '
-        "Trong đó `range_low`/`range_high` là biên dưới/biên trên của vùng chờ. Ví dụ vùng 4709.0–4705.0 "
-        "thì range_low=4705.0, range_high=4709.0. "
+        "Trong đó `vung_cho` là **một chuỗi** hai mức giá, dấu gạch (– hoặc -) giữa hai số, ví dụ "
+        "`\"4762.0–4766.0\"`. "
         "``hop_luu`` = điểm hợp lưu của vùng đó. "
         "``trade_line`` = **một dòng pipe MT5 bắt buộc, chuỗi không rỗng** cho đúng vùng "
         "(BUY/SELL LIMIT|STOP|MARKET … | SL … | TP1 … | Lot …); **không** được bỏ key, **không** được `""`. "
@@ -381,10 +381,9 @@ DEFAULT_UPDATE_PROMPT_TEMPLATE = (
     '- "no_change": true nếu ba vùng giá không đổi so với baseline; false nếu có thay đổi.\n'
     '- "prices": đúng 3 phần tử, mỗi phần tử:\n'
     '  {{"label":"plan_chinh"|"plan_phu"|"scalp","value":number,'
-    '"range_low":number,"range_high":number,'
+    '"vung_cho":string,'
     '"hop_luu":integer 0–100,"trade_line":string}} — '
-    "Trong đó `range_low`/`range_high` là biên dưới/biên trên của vùng chờ. Ví dụ vùng 4709.0–4705.0 "
-    "thì range_low=4705.0, range_high=4709.0. "
+    "Trong đó `vung_cho` là chuỗi hai mức (vd `\"4762.0–4766.0\"`); "
     "hop_luu = điểm hợp lưu. **BẮT BUỘC:** mỗi phần tử phải có `trade_line` là chuỗi **không rỗng** "
     "(một dòng pipe MT5 đầy đủ: BUY/SELL LIMIT|STOP|MARKET … | SL … | TP1 … | Lot …); không `""`, không bỏ key. "
     "Kể cả no_change hoặc chờ — vẫn điền dòng pipe tham khảo cho từng vùng.\n"
@@ -402,10 +401,9 @@ JOURNAL_INTRADAY_FIRST_USER_TEMPLATE = (
     '- "intraday_hanh_dong": "chờ" | "loại" | "VÀO LỆNH"\n'
     '- "prices": đúng 3 phần tử, mỗi phần tử:\n'
     '  {{"label":"plan_chinh"|"plan_phu"|"scalp","value":number,'
-    '"range_low":number,"range_high":number,'
+    '"vung_cho":string,'
     '"hop_luu":integer 0–100,"trade_line":string}} — '
-    "Trong đó `range_low`/`range_high` là biên dưới/biên trên của vùng chờ (vd 4709.0–4705.0 "
-    "thì range_low=4705.0, range_high=4709.0). "
+    "`vung_cho` là chuỗi hai mức (vd `\"4762.0–4766.0\"`); "
     "**BẮT BUỘC:** mỗi phần tử có `trade_line` không rỗng (một dòng pipe MT5 đầy đủ cho đúng vùng); "
     "không `""`, không bỏ key. hop_luu = điểm hợp lưu. \n"
     '- "trade_line" (gốc): có thể `""` nếu cả 3 phần tử prices đã có trade_line không rỗng; '
@@ -418,7 +416,7 @@ JOURNAL_INTRADAY_RETRY_USER_TEMPLATE = (
     "Đính kèm Coinmap XAUUSD M5 mới.\n"
     "Cùng schema JSON như tin đầu: intraday_hanh_dong; "
     "prices[3] — mỗi phần tử bắt buộc trade_line không rỗng (pipe MT5 đầy đủ); "
-    "mỗi phần tử có thêm range_low/range_high (biên dưới/biên trên của vùng chờ); "
+    "mỗi phần tử có `vung_cho` (chuỗi hai mức, vd `\"4762.0–4766.0\"`); "
     "trade_line gốc tùy chọn nếu đã đủ trong prices[]. "
     "**Không** thêm `out_chi_tiet` hay `output_ngan_gon`."
 )

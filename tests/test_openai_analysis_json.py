@@ -6,8 +6,10 @@ from automation_tool.openai_analysis_json import (
     AUTO_MT5_HOP_LUU_THRESHOLD,
     AUTO_MT5_HOP_LUU_THRESHOLD_SCALP,
     PriceZoneEntry,
+    parse_analysis_from_openai_text,
     select_zone_for_auto_mt5,
     select_zone_for_auto_mt5_for_label,
+    try_parse_analysis_payload,
 )
 
 
@@ -58,6 +60,79 @@ def test_select_zone_for_label_scalp_threshold() -> None:
     assert select_zone_for_auto_mt5_for_label(
         [PriceZoneEntry("scalp", 1.0, hop_luu=70, trade_line=tl)], "scalp"
     ) is None
+
+
+def test_vung_cho_string_parses_to_range_low_high() -> None:
+    raw = """
+    {
+      "prices": [
+        {"label": "plan_chinh", "value": 2650.0, "vung_cho": "4762.0–4766.0", "hop_luu": 85, "trade_line": "x"}
+      ]
+    }
+    """
+    p = parse_analysis_from_openai_text(raw)
+    assert p is not None and len(p.prices) == 1
+    z = p.prices[0]
+    assert z.range_low == 4762.0
+    assert z.range_high == 4766.0
+
+
+def test_vung_cho_reversed_order_uses_min_max() -> None:
+    data = {
+        "prices": [
+            {
+                "label": "plan_chinh",
+                "value": 1.0,
+                "vung_cho": "4709.0–4705.0",
+                "hop_luu": 80,
+                "trade_line": "t",
+            }
+        ]
+    }
+    p = try_parse_analysis_payload(data)
+    assert p is not None
+    z = p.prices[0]
+    assert z.range_low == 4705.0
+    assert z.range_high == 4709.0
+
+
+def test_legacy_range_low_high_without_vung_cho() -> None:
+    data = {
+        "prices": [
+            {
+                "label": "plan_chinh",
+                "value": 1.0,
+                "range_low": 10.0,
+                "range_high": 20.0,
+                "hop_luu": 80,
+                "trade_line": "t",
+            }
+        ]
+    }
+    p = try_parse_analysis_payload(data)
+    assert p is not None
+    assert p.prices[0].range_low == 10.0
+    assert p.prices[0].range_high == 20.0
+
+
+def test_invalid_vung_cho_keeps_range_low_high() -> None:
+    data = {
+        "prices": [
+            {
+                "label": "plan_chinh",
+                "value": 1.0,
+                "vung_cho": "not-a-range",
+                "range_low": 3.0,
+                "range_high": 4.0,
+                "hop_luu": 80,
+                "trade_line": "t",
+            }
+        ]
+    }
+    p = try_parse_analysis_payload(data)
+    assert p is not None
+    assert p.prices[0].range_low == 3.0
+    assert p.prices[0].range_high == 4.0
 
 
 def test_select_zone_for_label_ignores_other_plans() -> None:
