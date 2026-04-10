@@ -40,6 +40,27 @@ from automation_tool.config import default_data_dir
 
 _log = logging.getLogger("automation_tool.browser_service")
 
+
+def _parse_capture_worker_stdout_json(out_b: bytes) -> dict[str, Any]:
+    """
+    ``capture_worker`` prints exactly one JSON object as its protocol, but the process may
+    also write warnings to stdout (e.g. Playwright). Parse the last line that looks like
+    a JSON object so we do not lose ``paths`` when ``json.loads`` on the full buffer fails.
+    """
+    text = (out_b or b"").decode("utf-8", errors="replace")
+    for line in reversed(text.splitlines()):
+        s = line.strip()
+        if not s or not s.startswith("{"):
+            continue
+        try:
+            doc = json.loads(s)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(doc, dict):
+            return doc
+    return {"ok": True, "paths": []}
+
+
 _STATE_FILENAME = "browser_service_state.json"
 _LOCK_FILENAME = "browser_service.lock"
 
@@ -408,11 +429,7 @@ async def _handle_one_request(
             msg = (err_b or b"").decode("utf-8", errors="replace").strip() or "capture_worker failed"
             return {"type": "response", "request_id": rid, "ok": False, "result": None, "error": {"message": msg}}
 
-        raw = (out_b or b"").decode("utf-8", errors="replace").strip()
-        try:
-            doc = json.loads(raw) if raw else {}
-        except Exception:
-            doc = {"ok": True, "paths": []}
+        doc = _parse_capture_worker_stdout_json(out_b)
         return {"type": "response", "request_id": rid, "ok": True, "result": doc, "error": None}
 
     if method == METHOD_SUBSCRIBE_DOM:
