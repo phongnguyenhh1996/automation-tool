@@ -10,6 +10,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any, Optional
 
@@ -59,16 +60,18 @@ _RETRY_WAIT_MINUTES = 15
 _TV_TITLE_PRICE_RE = re.compile(r"^\s*(?P<sym>[A-Z0-9:_-]+)\s+(?P<price>\d[\d,]*(?:\.\d+)?)\b")
 
 
-def _price_round_down_1dp(v: object) -> float:
+def _price_round_nearest_1dp(v: object) -> float:
     """
-    Normalize price by rounding down to 1 decimal place (step=0.1).
+    Normalize price by rounding to nearest 1 decimal place (step=0.1).
     Examples:
     - 4755.145 -> 4755.1
+    - 4755.150 -> 4755.2
     - 4755.50  -> 4755.5
     - 4755.0   -> 4755.0
     """
-    x = float(v)  # type: ignore[arg-type]
-    return math.floor(x * 10.0) / 10.0
+    # Use decimal rounding to avoid Python's banker's rounding surprises.
+    d = Decimal(str(v)).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+    return float(d)
 
 
 def _now_utc() -> datetime:
@@ -828,10 +831,10 @@ def _tv_watchlist_daemon_main_loop(
         for z in st.zones:
             if z.status != "vung_cho":
                 continue
-            # Normalize both prices to step=0.1 (round down 1dp) before comparing.
+            # Normalize both prices to step=0.1 (round nearest 1dp) before comparing.
             try:
-                p_last_n = _price_round_down_1dp(p_last)
-                alert_n = _price_round_down_1dp(z.alert_price)
+                p_last_n = _price_round_nearest_1dp(p_last)
+                alert_n = _price_round_nearest_1dp(z.alert_price)
             except Exception:
                 p_last_n = float(p_last)
                 alert_n = float(z.alert_price)
