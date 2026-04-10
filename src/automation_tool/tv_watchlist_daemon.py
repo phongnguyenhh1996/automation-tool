@@ -40,7 +40,7 @@ from automation_tool.telegram_bot import (
 )
 from automation_tool.tradingview_last_price import read_watchlist_last_price_wait_stable
 from automation_tool.openai_analysis_json import auto_mt5_hop_luu_threshold_for_label, parse_analysis_from_openai_text
-from automation_tool.zones_state import Zone, ZonesState, read_zones_state, upsert_last_observed, write_zones_state
+from automation_tool.zones_state import Zone, ZonesState, read_zones_state, write_zones_state
 
 _log = logging.getLogger("automation_tool.tv_watchlist_daemon")
 
@@ -742,18 +742,8 @@ def _tv_watchlist_daemon_main_loop(
                     p_last,
                     len(st.zones),
                 )
-                _send_log(
-                    settings,
-                    f"[heartbeat] alive | symbol={sym} last={p_last} zones={len(st.zones)}",
-                )
         except Exception:
             # Never let logging break the daemon.
-            pass
-
-        # Best-effort: record last observed in zones_state.json
-        try:
-            upsert_last_observed(tv_watchlist_last=float(p_last), path=zs_path)
-        except Exception:
             pass
 
         # Auto-entry: every tick, if zone has hop_luu above threshold and no mt5_ticket, enter immediately.
