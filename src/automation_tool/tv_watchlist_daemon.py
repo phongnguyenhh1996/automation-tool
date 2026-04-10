@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import re
 import threading
 import time
 import uuid
@@ -38,7 +40,6 @@ from automation_tool.telegram_bot import (
     send_mt5_execution_log_to_ngan_gon_chat,
     send_openai_output_to_telegram,
 )
-from automation_tool.tradingview_last_price import read_watchlist_last_price_wait_stable
 from automation_tool.openai_analysis_json import auto_mt5_hop_luu_threshold_for_label, parse_analysis_from_openai_text
 from automation_tool.zones_state import Zone, ZonesState, read_zones_state, write_zones_state
 
@@ -50,13 +51,19 @@ _ARM_THRESHOLD = 5.0
 _RETRY_WAIT_MINUTES = 15
 
 
-def _price_trunc0(v: object) -> float:
+_TV_TITLE_PRICE_RE = re.compile(r"^\s*(?P<sym>[A-Z0-9:_-]+)\s+(?P<price>\d[\d,]*(?:\.\d+)?)\b")
+
+
+def _price_round_up_half(v: object) -> float:
     """
-    Normalize price like TradingView watchlist UI: truncate to integer.
-    Watchlist `last` is already trunc0 (see `tradingview_last_price.parse_first_float_trunc0`).
-    We apply the same normalization to `alert_price` to ensure touch matching is consistent.
+    Normalize price to .0 or .5 by rounding up to the nearest 0.5.
+    Examples:
+    - 4755.145 -> 4755.5
+    - 4755.50  -> 4755.5
+    - 4755.0   -> 4755.0
     """
-    return float(int(float(v)))  # type: ignore[arg-type]
+    x = float(v)  # type: ignore[arg-type]
+    return math.ceil(x * 2.0) / 2.0
 
 
 def _now_utc() -> datetime:
@@ -92,7 +99,7 @@ class WatchlistDaemonParams:
     storage_state_path: Optional[Path]
     headless: bool
     no_save_storage: bool
-    poll_seconds: float = 10.0
+    poll_seconds: float = 2.0
     timezone_name: str = "Asia/Ho_Chi_Minh"
     no_telegram: bool = False
     mt5_execute: bool = True
@@ -816,10 +823,10 @@ def _tv_watchlist_daemon_main_loop(
         for z in st.zones:
             if z.status != "vung_cho":
                 continue
-            # `p_last` from watchlist is trunc0; normalize `alert_price` similarly.
+            # Normalize both prices to step=0.5 (.0 or .5) before comparing.
             try:
-                p_last_n = _price_trunc0(p_last)
-                alert_n = _price_trunc0(z.alert_price)
+                p_last_n = _price_round_up_half(p_last)
+                alert_n = _price_round_up_half(z.alert_price)
             except Exception:
                 p_last_n = float(p_last)
                 alert_n = float(z.alert_price)
@@ -907,28 +914,54 @@ def _tv_watchlist_rpc_poll_price(
     sym: str,
     wms: int,
 ) -> Optional[float]:
-    timeout_rpc = max(180.0, float(wms) / 1000.0 + 90.0)
-    resp = client.request(
-        METHOD_TV_WATCHLIST_POLL,
-        {
-            "tab_id": tab_id,
-            "tv": tv,
-            "symbol": sym,
-            "timeout_ms": wms,
-            "poll_ms": 250,
-        },
-        timeout_s=timeout_rpc,
-    )
-    if not resp.get("ok"):
-        _log.warning("tv_watchlist_poll RPC failed: %s", resp.get("error"))
+    # Backward-compat: old watchlist polling (kept for reference).
+    # The daemon now uses chart tab `document.title` as the source of truth.
+    return None
+
+
+def _parse_price_from_tv_title(title: str, *, sym: str) -> Optional[float]:
+    """
+    Title example: "XAUUSD 4,755.145 ▼ −0.22% Vô danh"
+    We parse the first number after the symbol.
+    """
+    t = (title or "").strip()
+    if not t:
         return None
-    raw = (resp.get("result") or {}).get("price")
-    if raw is None:
+    m = _TV_TITLE_PRICE_RE.match(t)
+    if not m:
+        return None
+    sym_in_title = str(m.group("sym") or "").strip().upper()
+    if sym_in_title != str(sym or "").strip().upper():
+        return None
+    raw = str(m.group("price") or "").replace(",", "").strip()
+    if not raw:
         return None
     try:
         return float(raw)
-    except (TypeError, ValueError):
+    except ValueError:
         return None
+
+
+def _tv_rpc_poll_title_price(
+    client: BrowserClient,
+    *,
+    tab_id: str,
+    sym: str,
+    wms: int,
+) -> Optional[float]:
+    timeout_rpc = max(30.0, float(wms) / 1000.0 + 10.0)
+    resp = client.request(
+        METHOD_EVAL,
+        {"tab_id": tab_id, "script": "() => document.title", "arg": None},
+        timeout_s=timeout_rpc,
+    )
+    if not resp.get("ok"):
+        _log.warning("eval(document.title) RPC failed: %s", resp.get("error"))
+        return None
+    title = (resp.get("result") or {}).get("value")
+    if not isinstance(title, str):
+        return None
+    return _parse_price_from_tv_title(title, sym=sym)
 
 
 def run_tv_watchlist_daemon(
@@ -941,9 +974,9 @@ def run_tv_watchlist_daemon(
     if not isinstance(tv, dict) or not tv.get("chart_url"):
         raise SystemExit("tradingview_capture.chart_url missing in coinmap yaml.")
 
-    poll_s = float(params.poll_seconds or 10.0)
+    poll_s = float(params.poll_seconds or 2.0)
     if poll_s <= 0:
-        poll_s = 10.0
+        poll_s = 2.0
 
     # Which symbol to read from watchlist?
     sym = (tv.get("watchlist_symbol_short") or "").strip().upper()
@@ -988,9 +1021,7 @@ def run_tv_watchlist_daemon(
                 sym=sym,
                 poll_s=poll_s,
                 zs_path=zs_path,
-                get_price=lambda wms: _tv_watchlist_rpc_poll_price(
-                    c, tab_id=tab_id, tv=tv, sym=sym, wms=wms
-                ),
+                get_price=lambda wms: _tv_rpc_poll_title_price(c, tab_id=tab_id, sym=sym, wms=wms),
             )
         finally:
             try:
@@ -1030,9 +1061,7 @@ def run_tv_watchlist_daemon(
                 sym=sym,
                 poll_s=poll_s,
                 zs_path=zs_path,
-                get_price=lambda wms: read_watchlist_last_price_wait_stable(
-                    page, tv, symbol=sym, timeout_ms=wms, poll_ms=250
-                ),
+                get_price=lambda wms: _parse_price_from_tv_title(page.title(), sym=sym),
             )
         finally:
             try:

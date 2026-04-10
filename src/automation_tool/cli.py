@@ -492,7 +492,8 @@ def _parser() -> argparse.ArgumentParser:
     wd = sub.add_parser(
         "tv-watchlist-daemon",
         help=(
-            "Daemon 24/24: đọc Watchlist Last mỗi 10s, so alert_price trong zones_state.json; "
+            "Daemon 24/24: đọc giá từ title tab TradingView (vd: 'XAUUSD 4,755.145 ...') mỗi 2s, "
+            "so alert_price trong zones_state.json; "
             "chạm → dispatch job (Coinmap M5 + OpenAI + MT5/Telegram) và không chờ."
         ),
     )
@@ -513,7 +514,7 @@ def _parser() -> argparse.ArgumentParser:
     wd.add_argument("--no-save-storage", action="store_true")
     wd.add_argument("--headed", action="store_true")
     wd.add_argument("--no-telegram", action="store_true")
-    wd.add_argument("--poll-seconds", type=float, default=10.0)
+    wd.add_argument("--poll-seconds", type=float, default=2.0)
     wd.add_argument("--zones-json", type=Path, default=None, metavar="FILE", help="zones_state.json path override")
     wd.add_argument("--no-mt5-execute", action="store_true")
     wd.add_argument("--mt5-symbol", default=None, metavar="SYM")
