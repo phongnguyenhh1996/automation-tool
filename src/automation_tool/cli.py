@@ -871,11 +871,24 @@ def cmd_browser_up(args: argparse.Namespace) -> None:
         wait_for_state_file,
     )
 
+    def _log_browser_up_ready(st: Optional[dict], *, note: str) -> None:
+        cdp = str((st or {}).get("cdp_http") or "")
+        ctrl = str((st or {}).get("control_tcp") or "")
+        pid = (st or {}).get("pid")
+        _log.info(
+            "browser up: ready | note=%s | pid=%s | cdp_http=%s | control_tcp=%s",
+            note,
+            pid,
+            cdp,
+            ctrl,
+        )
+
     if is_service_responding():
         print("Browser service already running (ping ok).", flush=True)
         st = load_browser_service_state()
         if st:
             print(json.dumps(st, indent=2), flush=True)
+        _log_browser_up_ready(st, note="already_running")
         return
 
     # Concurrent ``browser up`` (e.g. two .bat): peer may be between spawn and first ping.
@@ -884,6 +897,7 @@ def cmd_browser_up(args: argparse.Namespace) -> None:
         st = load_browser_service_state()
         if st:
             print(json.dumps(st, indent=2), flush=True)
+        _log_browser_up_ready(st, note="already_running_after_wait")
         return
 
     proc = spawn_browser_service_detached(cwd=Path.cwd())
@@ -902,6 +916,7 @@ def cmd_browser_up(args: argparse.Namespace) -> None:
             st2 = load_browser_service_state()
             if st2:
                 print(json.dumps(st2, indent=2), flush=True)
+            _log_browser_up_ready(st2, note="already_running_lock_race")
             return
         raise SystemExit(
             "Browser service did not write state file in time. "
@@ -915,10 +930,18 @@ def cmd_browser_up(args: argparse.Namespace) -> None:
             st3 = load_browser_service_state()
             if st3:
                 print(json.dumps(st3, indent=2), flush=True)
+            _log_browser_up_ready(st3, note="already_running_peer_spawn_exited")
             return
 
-    print("Browser service started.", flush=True)
+    # State file can appear before the TCP control plane accepts connections; wait for ping.
+    if not wait_for_service_ping(timeout_s=45.0):
+        raise SystemExit(
+            "Browser service wrote state but control plane did not respond to ping in time."
+        )
+    st = load_browser_service_state() or st
+    print("Browser service ready.", flush=True)
     print(json.dumps(st, indent=2), flush=True)
+    _log_browser_up_ready(st, note="started")
 
 
 def cmd_browser_down(args: argparse.Namespace) -> None:
