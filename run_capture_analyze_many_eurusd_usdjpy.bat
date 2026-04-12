@@ -29,8 +29,8 @@ if errorlevel 1 (
   exit /b %ERRORLEVEL%
 )
 
-echo [%date% %time%] INFO: Starting analyze-many (EURUSD,USDJPY) parallel=2 (MT5 disabled by default)>> "logs\capture_analyze_many_eurusd_usdjpy.log"
-coinmap-automation analyze-many --symbols EURUSD,USDJPY --parallel 2 >> "logs\capture_analyze_many_eurusd_usdjpy.log" 2>&1
+echo [%date% %time%] INFO: Starting analyze-many (EURUSD,USDJPY) parallel=1 (MT5 disabled by default)>> "logs\capture_analyze_many_eurusd_usdjpy.log"
+coinmap-automation analyze-many --symbols EURUSD,USDJPY --parallel 1 >> "logs\capture_analyze_many_eurusd_usdjpy.log" 2>&1
 set "EXIT_CODE=%ERRORLEVEL%"
 echo [%date% %time%] INFO: Finished with exit code %EXIT_CODE%>> "logs\capture_analyze_many_eurusd_usdjpy.log"
 
