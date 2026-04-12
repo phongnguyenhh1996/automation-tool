@@ -373,16 +373,31 @@ def run_tvdatafeed_export(
     def _run_task(meta: dict[str, Any]) -> Path:
         row = meta["row"]
         label = meta["label"]
-        slug, records, iv_name = _fetch_one_barset(
-            tv_symbol=meta["tv_symbol"],
-            exchange=meta["exchange"],
-            interval_label=label,
-            interval_map=interval_map,
-            n_bars=n_bars,
-            extended_session=extended_session,
-            row=row,
-            tv_cfg=tv,
-        )
+        ex_s = str(meta["exchange"])
+        sym_s = str(meta["tv_symbol"])
+        try:
+            slug, records, iv_name = _fetch_one_barset(
+                tv_symbol=meta["tv_symbol"],
+                exchange=meta["exchange"],
+                interval_label=label,
+                interval_map=interval_map,
+                n_bars=n_bars,
+                extended_session=extended_session,
+                row=row,
+                tv_cfg=tv,
+            )
+        except Exception as e:
+            _log.error(
+                "tvdatafeed: LỖI khi get_hist | %s:%s | %s (%s) | requested=%d bars | %s",
+                ex_s,
+                sym_s,
+                label,
+                type(e).__name__,
+                n_bars,
+                e,
+                exc_info=True,
+            )
+            raise
         path = charts_dir / f"{stamp}_tradingview_{meta['file_sym_key']}_{slug}.json"
         payload = {
             "source": "tvdatafeed",
@@ -395,6 +410,28 @@ def run_tvdatafeed_export(
             "bars": records,
         }
         path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        nb = len(records)
+        if nb == 0:
+            _log.warning(
+                "tvdatafeed: thành công nhưng 0 nến | %s:%s | %s → interval=%s | file=%s "
+                "(TradingView/tvdatafeed không trả dữ liệu — kiểm tra sàn, đăng nhập, mạng)",
+                ex_s,
+                sym_s,
+                label,
+                iv_name,
+                path.name,
+            )
+        else:
+            _log.info(
+                "tvdatafeed: OK | %s:%s | %s → interval=%s | n_bars=%d/%d | file=%s",
+                ex_s,
+                sym_s,
+                label,
+                iv_name,
+                nb,
+                n_bars,
+                path.name,
+            )
         return path
 
     # One TvDatafeed per worker thread (parallel get_hist); initializer sets thread-local client
@@ -407,6 +444,14 @@ def run_tvdatafeed_export(
     workers = min(parallel_max_workers, max(1, len(tasks)))
     if len(tasks) == 1:
         workers = 1
+
+    _log.info(
+        "tvdatafeed: bắt đầu export | stamp=%s | jobs=%d | parallel=%d | đăng_nhập_tv=%s",
+        stamp,
+        len(tasks),
+        workers,
+        "có" if (init_u and init_p) else "không (nologin — dữ liệu có thể giới hạn)",
+    )
 
     if workers == 1:
         _init_thread_tv(init_u, init_p)
@@ -424,4 +469,5 @@ def run_tvdatafeed_export(
                 written.append(fut.result())
 
     written.sort(key=lambda p: p.name)
+    _log.info("tvdatafeed: hoàn tất export | stamp=%s | files=%d", stamp, len(written))
     return written
