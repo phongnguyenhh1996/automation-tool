@@ -26,23 +26,23 @@ M5:
 
 
 
-👉 Trạng thái hiện tại:
+👉 Trạng thái hiện tại: (ngắn gọn)
 
 
 
 📍 PLAN CHÍNH 
 
-📊 CHẤM ĐIỂM PLAN CHÍNH: thang điểm 100
+📊 CHẤM ĐIỂM PLAN CHÍNH: thang điểm 100 (chỉ chấm điểm không phân tích)
 
 
 
 ⚡️ PLAN PHỤ 
 
-📊 CHẤM ĐIỂM PLAN PHỤ: thang điểm 100
+📊 CHẤM ĐIỂM PLAN PHỤ: thang điểm 100 (chỉ chấm điểm không phân tích)
 
 📊 SCALP:
 
-📊 CHẤM ĐIỂM SCALP: thang điểm 100
+📊 CHẤM ĐIỂM SCALP: thang điểm 100 (chỉ chấm điểm không phân tích)
 
 🤖 EA GRID PLAN:
 
@@ -52,9 +52,9 @@ Trend DXY:
 Trend {symbol} H1 - M15: 
 Bias chính:
 
-📍 PLAN CHÍNH VÙNG CHỜ: (chỉ đưa ra 1 plan điểm điểm cao nhất, lệnh trade_line, hop_luu)
-📍 PLAN PHỤ VÙNG CHỜ: (chỉ đưa ra 1 plan điểm cao nhất, lệnh trade_line, hop_luu)
-⚡️SCALP VÙNG: (chỉ đưa ra 1 plan điểm cao nhất, lệnh trade_line, hop_luu)
+📍 PLAN CHÍNH VÙNG CHỜ: (chỉ đưa ra 1 plan điểm điểm cao nhất, hop_luu, lệnh trade_line)
+📍 PLAN PHỤ VÙNG CHỜ: (chỉ đưa ra 1 plan điểm cao nhất, hop_luu, lệnh trade_line)
+⚡️SCALP VÙNG: (chỉ đưa ra 1 plan điểm cao nhất, hop_luu, lệnh trade_line)
 
 
 ## đối với [OUTPUT_NGAN_GON]

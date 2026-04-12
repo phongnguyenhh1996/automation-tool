@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, Optional
+from zoneinfo import ZoneInfo
 
 from automation_tool.config import symbol_data_dir
 from automation_tool.openai_analysis_json import AnalysisPayload, PriceZoneEntry, ZONE_LABELS_ORDER
@@ -231,6 +232,92 @@ def upsert_last_observed(
 
 def _default_zone_id(label: str) -> str:
     return label.strip().lower()
+
+
+def _zone_status_phrase_vn(z: Zone) -> str:
+    """Một câu tiếng Việt mô tả trạng thái (dùng sau chữ 'vùng {label} …')."""
+    s = z.status
+    if s == "vung_cho":
+        return "vẫn đang là vùng chờ"
+    if s == "cham":
+        return "đã chạm và vẫn đang chờ"
+    if s == "dang_thuc_thi":
+        return "đang thực thi / chờ xác nhận"
+    if s == "loai":
+        return "đã loại"
+    if s == "vao_lenh":
+        return "đã vào lệnh"
+    if s == "cho_tp1":
+        return "đã vào lệnh và đang theo dõi TP1"
+    if s == "done":
+        return "đã hoàn tất (done)"
+    return f"trạng thái={s}"
+
+
+def format_zones_snapshot_for_intraday_update(
+    st: Optional[ZonesState],
+    *,
+    timezone_name: str = "Asia/Ho_Chi_Minh",
+) -> str:
+    """
+    Human-readable block for [INTRADAY_UPDATE] user text: current local time + one line per
+    canonical label (plan_chinh, plan_phu, scalp) in that order, then compact details.
+    """
+    try:
+        tz = ZoneInfo((timezone_name or "UTC").strip() or "UTC")
+    except Exception:
+        tz = ZoneInfo("UTC")
+    now = datetime.now(tz)
+    header = f"Thời gian hiện tại ({timezone_name}): {now.strftime('%Y-%m-%d %H:%M:%S')}\n"
+    if st is None or not st.zones:
+        return (
+            header
+            + "Chưa có snapshot zone trên disk (zones_state.json) — chỉ dùng baseline + footprint đính kèm.\n"
+        )
+    by_label: dict[str, Zone] = {}
+    for z in st.zones:
+        key = (z.label or "").strip().lower()
+        if key:
+            by_label[key] = z
+
+    lines: list[str] = [
+        header,
+        f"Symbol: {st.symbol}",
+        "",
+        "Tóm tắt theo label (thứ tự plan_chinh → plan_phu → scalp):",
+        "",
+    ]
+
+    ordered: list[Zone] = []
+    for lab in ZONE_LABELS_ORDER:
+        z = by_label.get(lab)
+        if z is None:
+            lines.append(f"vùng {lab}: không có trong zones_state.")
+            lines.append("")
+            continue
+        phrase = _zone_status_phrase_vn(z)
+        lines.append(f"vùng {lab} {phrase}")
+        ordered.append(z)
+
+    lines.append("Chi tiết (status kỹ thuật + giá + trade_line):")
+    lines.append("")
+
+    def _one(z: Zone) -> str:
+        tl = (z.trade_line or "").strip()
+        if len(tl) > 160:
+            tl = tl[:157] + "..."
+        hop = "" if z.hop_luu is None else f" hop_luu={z.hop_luu}"
+        return (
+            f"  - {z.label} | status={z.status} | "
+            f"alert={z.alert_price} | range=[{z.range_low},{z.range_high}]{hop}\n"
+            f"    trade_line: {tl or '(trống)'}"
+        )
+
+    for z in ordered:
+        lines.append(_one(z))
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def zones_from_analysis_payload(

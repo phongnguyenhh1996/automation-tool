@@ -10,9 +10,11 @@ from automation_tool.images import (
     chart_image_order_for_main_symbol,
     clear_main_chart_symbol_marker,
     coinmap_main_pair_5m_json_path,
+    coinmap_main_pair_interval_json_path,
     effective_chart_image_order,
     normalize_main_chart_symbol,
     read_main_chart_symbol,
+    stamp_from_capture_paths,
     write_main_chart_symbol_marker,
 )
 
@@ -64,3 +66,19 @@ def test_coinmap_main_pair_5m_json_path_uses_marker(tmp_path: Path) -> None:
     p.write_text("{}", encoding="utf-8")
     got = coinmap_main_pair_5m_json_path(tmp_path)
     assert got == p
+
+
+def test_coinmap_main_pair_interval_json_path_15m(tmp_path: Path) -> None:
+    write_main_chart_symbol_marker(tmp_path, "XAUUSD")
+    p = tmp_path / "20260102_130000_coinmap_XAUUSD_15m.json"
+    p.write_text("{}", encoding="utf-8")
+    got = coinmap_main_pair_interval_json_path(tmp_path, "15m", stamp="20260102_130000")
+    assert got == p
+
+
+def test_stamp_from_capture_paths_max_stamp(tmp_path: Path) -> None:
+    a = tmp_path / "20260101_120000_coinmap_XAUUSD_5m.json"
+    b = tmp_path / "20260102_130000_coinmap_XAUUSD_15m.json"
+    a.write_text("{}", encoding="utf-8")
+    b.write_text("{}", encoding="utf-8")
+    assert stamp_from_capture_paths([a, b]) == "20260102_130000"

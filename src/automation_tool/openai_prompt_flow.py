@@ -1,8 +1,17 @@
 from __future__ import annotations
 
+"""
+OpenAI Responses: user turns are short routing tags + context.
+
+Full trading/output rules live in the OpenAI Prompt (``OPENAI_PROMPT_ID``) — keep that
+prompt in sync with ``system-prompt.md`` at the repo root. Do not duplicate schema here.
+"""
+
+import io
 import json
+import logging
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, NamedTuple, Optional
@@ -23,6 +32,8 @@ from automation_tool.images import (
     read_main_chart_symbol,
 )
 
+_log = logging.getLogger(__name__)
+
 
 class PromptTwoStepResult(NamedTuple):
     """``first_text`` luôn rỗng; ``after_charts`` chứa toàn bộ output phân tích (một hoặc nhiều batch)."""
@@ -39,10 +50,11 @@ class PromptTwoStepResult(NamedTuple):
 
 def default_analysis_prompt(main_symbol: str | None = None) -> str:
     """
-    Prompt text mặc định cho bước phân tích multimodal; ``main_symbol`` là cặp chính (TradingView/Coinmap).
-    Nếu None hoặc không hợp lệ → ``DEFAULT_MAIN_CHART_SYMBOL``.
+    Default user message for multimodal analysis.
 
-    Chỉ khi cặp là **XAUUSD** mới yêu cầu JSON có ``output_ngan_gon``; cặp khác: không thêm key đó.
+    ``main_symbol`` is the main pair (TradingView/Coinmap); invalid/empty →
+    ``DEFAULT_MAIN_CHART_SYMBOL``. Schema and rules are defined in Prompt Studio
+    (``system-prompt.md``): ``[FULL_ANALYSIS]`` → Schema A.
     """
     sym = DEFAULT_MAIN_CHART_SYMBOL
     if main_symbol and str(main_symbol).strip():
@@ -50,47 +62,12 @@ def default_analysis_prompt(main_symbol: str | None = None) -> str:
             sym = normalize_main_chart_symbol(str(main_symbol).strip())
         except ValueError:
             pass
-    xauusd = sym == "XAUUSD"
-    json_schema_header = (
-        "Trả về một JSON object hợp lệ duy nhất (có thể bọc trong ```json). Schema gợi ý:\n"
-        '- "out_chi_tiet": string (phân tích chi tiết)\n'
-    )
-    if xauusd:
-        json_schema_header += '- "output_ngan_gon": string (tóm tắt)\n'
-    else:
-        json_schema_header += (
-            "- **Không** thêm key `output_ngan_gon`; "
-            f"dùng đủ thông tin trong `out_chi_tiet` cho {sym}.\n"
-        )
-    tail = (
-        "Trong output_ngan_gon: sau mỗi khối PLAN CHÍNH VÙNG CHỜ / PLAN PHỤ VÙNG CHỜ / SCALP VÙNG thêm một dòng lệnh tham khảo (pipe) để vào tay. "
-        "Lot tham khảo: USDJPY = giá/(10×SL pip); XAUUSD = 1/SL_giá (SL_giá = |entry−SL| theo giá).\n"
-    )
-    if not xauusd:
-        tail = tail.replace("output_ngan_gon", "out_chi_tiet")
     return (
-        f"Chạy quy trình phân tích {sym}. "
-        "Dữ liệu đính kèm theo thứ tự cố định (TradingView = ảnh; Coinmap = JSON export API nếu có, không thì ảnh): "
-        "TradingView DXY (4h, 1h, 15m) → Coinmap USDINDEX 15m → "
-        f"TradingView {sym} (4h, 1h, 15m, 5m) → Coinmap {sym} (15m, 5m).\n\n"
-        + json_schema_header
-        + '- "prices": đúng 3 phần tử, mỗi phần tử:\n'
-        '  {"label":"plan_chinh"|"plan_phu"|"scalp","value":number,'
-        '"vung_cho":string,'
-        '"hop_luu":integer 0–100,"trade_line":string} — '
-        "Trong đó `vung_cho` là **một chuỗi** hai mức giá, dấu gạch (– hoặc -) giữa hai số, ví dụ "
-        "`\"4762.0–4766.0\"`. "
-        "``hop_luu`` = điểm hợp lưu của vùng đó. "
-        "``trade_line`` = **một dòng pipe MT5 bắt buộc, chuỗi không rỗng** cho đúng vùng "
-        "(BUY/SELL LIMIT|STOP|MARKET … | SL … | TP1 … | Lot …); **không** được bỏ key, **không** được `""`. "
-        "Mỗi vùng luôn có ít nhất một dòng lệnh tham khảo pipe đầy đủ.\n"
-        '- "intraday_hanh_dong": "chờ" | "loại" | "VÀO LỆNH" hoặc null (tuỳ chọn; tool auto-MT5 sáng dùng ``hop_luu`` + ``trade_line`` trong ``prices``)\n'
-        '- "trade_line" (gốc JSON): có thể `""` chỉ khi cả 3 phần tử trong ``prices`` đã có ``trade_line`` không rỗng như trên.\n'
-        '- "no_change": boolean — chỉ dùng rõ trong luồng update intraday; phân tích sáng có thể bỏ qua hoặc false\n\n'
-        + "YÊU CẦU ĐỊNH DẠNG BẮT BUỘC:\n"
-        "- Nếu output có `out_chi_tiet` và/hoặc `output_ngan_gon` thì **phải trả đúng format y như mẫu trong file** "
-        "`output.md` (đúng header, emoji, thứ tự mục, và cách viết trade_line).\n\n"
-        + tail
+        "[FULL_ANALYSIS]\n"
+        f"Cặp chính: {sym}.\n"
+        "Đính kèm theo thứ tự (TradingView = JSON; Coinmap = JSON): "
+        "TradingView DXY (H4, H1, M15) → Coinmap USDINDEX Footprint 15m → "
+        f"TradingView {sym} (H4, H1, M15, M5) → Coinmap {sym} (Footprint M15, M5).\n"
     )
 
 
@@ -107,6 +84,10 @@ def _default_max_coinmap_json_chars() -> int:
     return 1_500_000
 
 
+# Files API: ``expires_after`` must be 3600–2592000 seconds per OpenAI docs.
+_FILE_EXPIRES_AFTER_SECONDS = 86400  # 1 day
+
+
 def _coinmap_openai_slim_enabled() -> bool:
     """
     Extra slim when *reading* JSON for the API. Default off: exports are already slimmed
@@ -119,7 +100,11 @@ def _coinmap_openai_slim_enabled() -> bool:
     return raw not in ("0", "false", "no")
 
 
-def _json_file_to_input_text(path: Path, *, max_chars: int) -> str:
+def _json_file_header_and_body(path: Path, *, max_chars: int) -> tuple[str, str]:
+    """
+    Header (input_text) + body string for upload. Slim only Coinmap paths when enabled;
+    TradingView JSON is compacted but not passed through ``slim_coinmap_export_for_openai``.
+    """
     raw = path.read_text(encoding="utf-8")
     try:
         data = json.loads(raw)
@@ -132,11 +117,65 @@ def _json_file_to_input_text(path: Path, *, max_chars: int) -> str:
         compact = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     except json.JSONDecodeError:
         compact = raw
-    header = f"[Coinmap API export — file: {path.name}]\n"
+    if "_tradingview_" in path.name:
+        header = f"[TradingView OHLC (tvdatafeed) — file: {path.name}]\n"
+    else:
+        header = f"[Coinmap API export — file: {path.name}]\n"
     body = compact
     if max_chars > 0 and len(body) > max_chars:
         body = body[:max_chars] + f"\n… [truncated: {len(compact)} chars → {max_chars}; raise COINMAP_JSON_MAX_CHARS]"
-    return header + body
+    return header, body
+
+
+def _upload_user_data_json(client: OpenAI, path: Path, body: str) -> str:
+    raw = body.encode("utf-8")
+    bio = io.BytesIO(raw)
+    fo = client.files.create(
+        file=(path.name, bio),
+        purpose="user_data",
+        expires_after={"anchor": "created_at", "seconds": _FILE_EXPIRES_AFTER_SECONDS},
+    )
+    _log.info(
+        "[openai files] %s → %s (%d B, user_data, expires 1d)",
+        path.name,
+        fo.id,
+        len(raw),
+    )
+    return fo.id
+
+
+def _json_paths_to_headers_and_file_ids(
+    client: OpenAI,
+    paths: list[Path],
+    *,
+    max_json_chars: int,
+) -> list[tuple[str, str]]:
+    """``(header, file_id)`` per path, same order as ``paths``."""
+    if not paths:
+        return []
+    n = len(paths)
+    if n > 1:
+        _log.info("[openai files] uploading %d JSON file(s) in parallel → OpenAI Files API", n)
+    if n == 1:
+        p0 = paths[0]
+        h, b = _json_file_header_and_body(p0, max_chars=max_json_chars)
+        return [(h, _upload_user_data_json(client, p0, b))]
+    workers = min(n, max(4, (os.cpu_count() or 2) * 2))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        prepared = list(
+            ex.map(
+                lambda pp: _json_file_header_and_body(pp, max_chars=max_json_chars),
+                paths,
+            )
+        )
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        file_ids = list(
+            ex.map(
+                lambda t: _upload_user_data_json(client, t[0], t[1][1]),
+                zip(paths, prepared),
+            )
+        )
+    return [(h, fid) for (h, _), fid in zip(prepared, file_ids)]
 
 
 def _filter_valid_chart_payloads(
@@ -175,20 +214,24 @@ def _build_mixed_chart_user_content(
     prompt: str,
     payloads: list[ChartOpenAIPayload],
     *,
+    client: OpenAI,
     max_json_chars: int,
 ) -> list[dict[str, Any]]:
+    json_paths = [p for k, p in payloads if k == "json" and isinstance(p, Path)]
+    json_queue = iter(
+        _json_paths_to_headers_and_file_ids(
+            client, json_paths, max_json_chars=max_json_chars
+        )
+    )
     parts: list[dict[str, Any]] = [{"type": "input_text", "text": prompt}]
     image_paths = [p for k, p in payloads if k == "image" and isinstance(p, Path)]
     data_urls = _image_paths_to_data_urls(image_paths)
     for kind, p in payloads:
         if kind == "json":
             assert isinstance(p, Path)
-            parts.append(
-                {
-                    "type": "input_text",
-                    "text": _json_file_to_input_text(p, max_chars=max_json_chars),
-                }
-            )
+            h, fid = next(json_queue)
+            parts.append({"type": "input_text", "text": h})
+            parts.append({"type": "input_file", "file_id": fid})
         elif kind == "image_url":
             parts.append(
                 {
@@ -302,7 +345,7 @@ def run_analysis_responses_flow(
                 f"(Batch {bi + 1} of {total}: {n_img} image(s), {n_json} Coinmap JSON block(s).)"
             )
         content = _build_mixed_chart_user_content(
-            p_text, batch, max_json_chars=mx_json
+            p_text, batch, client=client, max_json_chars=mx_json
         )
         kwargs: dict[str, Any] = {
             **common,
@@ -375,67 +418,60 @@ def run_prompt_two_step_flow(
 
 
 DEFAULT_UPDATE_PROMPT_TEMPLATE = (
-    "Dựa trên dữ liệu footprint XAUUSD M5 mới, phân tích và đưa ra nhận định.\n"
-    "Trả về một JSON object hợp lệ duy nhất (có thể bọc trong ```json). "
-    "- **Không** thêm key `out_chi_tiet` hay `output_ngan_gon` — không cần phân tích dài/tóm tắt văn bản ở bước cập nhật này.\n"
-    '- "no_change": true nếu ba vùng giá không đổi so với baseline; false nếu có thay đổi.\n'
-    '- "prices": đúng 3 phần tử, mỗi phần tử:\n'
-    '  {{"label":"plan_chinh"|"plan_phu"|"scalp","value":number,'
-    '"vung_cho":string,'
-    '"hop_luu":integer 0–100,"trade_line":string}} — '
-    "Trong đó `vung_cho` là chuỗi hai mức (vd `\"4762.0–4766.0\"`); "
-    "hop_luu = điểm hợp lưu. **BẮT BUỘC:** mỗi phần tử phải có `trade_line` là chuỗi **không rỗng** "
-    "(một dòng pipe MT5 đầy đủ: BUY/SELL LIMIT|STOP|MARKET … | SL … | TP1 … | Lot …); không `""`, không bỏ key. "
-    "Kể cả no_change hoặc chờ — vẫn điền dòng pipe tham khảo cho từng vùng.\n"
-    '- "intraday_hanh_dong": "chờ" | "loại" | "VÀO LỆNH" hoặc null (tuỳ chọn; auto-MT5 intraday dùng hop_luu + trade_line trong prices).\n'
-    '- "trade_line" (gốc): có thể `""` nếu đã điền đủ trade_line không rỗng trong cả 3 phần tử prices.'
+    "[INTRADAY_UPDATE]\n"
+    "So sánh baseline sáng với footprint XAUUSD M15 + M5 (JSON đính kèm theo thứ tự file).\n"
+    "Baseline giá cảnh báo — plan_chinh: {p1}, plan_phu: {p2}, scalp: {p3}.\n"
 )
+
+
+def build_intraday_update_user_text(
+    p1: float,
+    p2: float,
+    p3: float,
+    *,
+    zones_snapshot: str,
+) -> str:
+    """
+    User message for ``coinmap-automation update``: baseline + zone snapshot + tasking.
+    Coinmap JSON files (M15 then M5) are attached separately via Files API.
+    """
+    snap = (zones_snapshot or "").strip()
+    if not snap.endswith("\n"):
+        snap = snap + "\n"
+    return (
+        "[INTRADAY_UPDATE]\n"
+        "So sánh **baseline sáng** với tình hình **hiện tại** dựa trên footprint Coinmap.\n"
+        "Đính kèm **hai** file JSON theo thứ tự: **(1) M15**, **(2) M5**.\n"
+        f"Baseline giá cảnh báo — plan_chinh: {p1}, plan_phu: {p2}, scalp: {p3}.\n"
+        "\n"
+        "--- Trạng thái các vùng chờ cho tới hiện tại ---\n"
+        f"{snap}"
+        "\n"
+        "Yêu cầu phân tích:\n"
+        "- Với các zone **đang chờ** (vung_cho): còn hợp lý với cấu trúc + order flow hiện tại không? "
+        "Có nên giữ / điều chỉnh dữ liệu vùng chờ không?\n"
+        "- Với zone **đã loại** hoặc **đã vào lệnh / done**: trên M15+M5 có **vùng thay thế** tốt hơn không?"
+    )
 
 # TradingView tab Nhật ký: giá chạm → Coinmap M5 + OpenAI (intraday).
 JOURNAL_INTRADAY_FIRST_USER_TEMPLATE = (
-    "Cảnh báo TradingView đã kích hoạt tại mức giá {touched_price}, hãy phân tích đưa ra nhận định"
-    "Đính kèm dữ liệu Coinmap XAUUSD khung M5 mới nhất.\n"
-    "Trả về một JSON object duy nhất:\n"
-    "- **Không** thêm key `out_chi_tiet` hay `output_ngan_gon`"
-    "intraday_hanh_dong + prices (và trade_line gốc tùy chọn).\n"
-    '- "intraday_hanh_dong": "chờ" | "loại" | "VÀO LỆNH"\n'
-    '- "prices": đúng 3 phần tử, mỗi phần tử:\n'
-    '  {{"label":"plan_chinh"|"plan_phu"|"scalp","value":number,'
-    '"vung_cho":string,'
-    '"hop_luu":integer 0–100,"trade_line":string}} — '
-    "`vung_cho` là chuỗi hai mức (vd `\"4762.0–4766.0\"`); "
-    "**BẮT BUỘC:** mỗi phần tử có `trade_line` không rỗng (một dòng pipe MT5 đầy đủ cho đúng vùng); "
-    "không `""`, không bỏ key. hop_luu = điểm hợp lưu. \n"
-    '- "trade_line" (gốc): có thể `""` nếu cả 3 phần tử prices đã có trade_line không rỗng; '
-    'hoặc một dòng pipe tóm tắt nếu cần.\n'
-    "Không dùng giá trị khác cho intraday_hanh_dong trong luồng này."
+    "[INTRADAY_ALERT]\n"
+    "Cảnh báo TradingView đã kích hoạt tại mức giá {touched_price}.\n"
+    "Đính kèm footprint Coinmap XAUUSD M5 mới nhất.\n"
 )
 
 JOURNAL_INTRADAY_RETRY_USER_TEMPLATE = (
-    "Tiếp tục **đánh giá** sau {wait_minutes} phút: vẫn theo dõi mức đã chạm {touched_price}.\n"
-    "Đính kèm Coinmap XAUUSD M5 mới.\n"
-    "Cùng schema JSON như tin đầu: intraday_hanh_dong; "
-    "prices[3] — mỗi phần tử bắt buộc trade_line không rỗng (pipe MT5 đầy đủ); "
-    "mỗi phần tử có `vung_cho` (chuỗi hai mức, vd `\"4762.0–4766.0\"`); "
-    "trade_line gốc tùy chọn nếu đã đủ trong prices[]. "
-    "**Không** thêm `out_chi_tiet` hay `output_ngan_gon`."
+    "[INTRADAY_ALERT]\n"
+    "Tiếp tục đánh giá sau {wait_minutes} phút; vẫn theo dõi mức đã chạm {touched_price}.\n"
+    "Đính kèm footprint Coinmap XAUUSD M5 mới.\n"
 )
 
 # Sau khi giá last realtime chạm TP1 (vùng đang ``cho_tp1``).
 TP1_POST_TOUCH_USER_TEMPLATE = (
-    "Giá đã chạm mức **TP1** của lệnh đang theo dõi.\n, lệnh trade_line còn hợp lệ không"
+    "[TRADE_MANAGEMENT]\n"
+    "Giá đã chạm mức TP1 của lệnh đang theo dõi; đánh giá Footprint M5 đính kèm (giữ hay thoát / chỉnh dòng lệnh).\n"
     "Vùng (label): {plan_label}\n"
-    "Dòng lệnh hiện tại (trade_line): {trade_line}\n"
-    "Giá khi đánh giá: {last_price}\n"
     "Mức TP1 từ trade_line: {tp1_price}\n\n"
-    "Đính kèm Coinmap khung M5 mới nhất.\n"
-    "Trả về **một JSON object** duy nhất (có thể bọc ```json):\n"
-    '- "sau_tp1_hanh_dong": "loại" | "chinh_trade_line"\n'
-    '- "trade_line_moi": string — bắt buộc nếu sau_tp1_hanh_dong là "chinh_trade_line" '
-    "(một dòng pipe MT5 đầy đủ: BUY/SELL … | SL … | TP1 … | Lot …); "
-    'nếu "loại" thì có thể "".\n'
-    "- **Không** thêm key `out_chi_tiet` hay `output_ngan_gon` — chỉ cần quyết định sau TP1 "
-    "(sau_tp1_hanh_dong + trade_line_moi khi chỉnh dòng lệnh).\n"
 )
 
 
@@ -445,7 +481,7 @@ def run_single_followup_responses(
     prompt_id: str,
     prompt_version: str | None,
     user_text: str,
-    coinmap_json_path: Path,
+    coinmap_json_paths: Sequence[Path],
     previous_response_id: str,
     vector_store_ids: list[str],
     store: bool,
@@ -456,10 +492,17 @@ def run_single_followup_responses(
     """
     One multimodal user turn chained to ``previous_response_id`` (intraday update).
 
+    ``coinmap_json_paths``: one or more Coinmap export JSON paths, uploaded in order
+    (same Files API + ``input_file`` pattern as multi-json in ``run_analysis_responses_flow``).
+
     Returns ``(output_text, new_response_id)``.
     """
-    if not coinmap_json_path.is_file():
-        raise FileNotFoundError(f"Coinmap JSON not found: {coinmap_json_path}")
+    paths = [p for p in coinmap_json_paths if isinstance(p, Path)]
+    if not paths:
+        raise ValueError("coinmap_json_paths must contain at least one Path")
+    for p in paths:
+        if not p.is_file():
+            raise FileNotFoundError(f"Coinmap JSON not found: {p}")
 
     client = OpenAI(api_key=api_key)
     prompt = _prompt_dict(prompt_id, prompt_version)
@@ -489,9 +532,11 @@ def run_single_followup_responses(
         else _default_max_coinmap_json_chars()
     )
 
+    json_payloads: list[tuple[str, Path]] = [("json", p) for p in paths]
     content = _build_mixed_chart_user_content(
         user_text,
-        [("json", coinmap_json_path)],
+        json_payloads,
+        client=client,
         max_json_chars=mx_json,
     )
     r = client.responses.create(

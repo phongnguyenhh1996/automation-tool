@@ -4,6 +4,7 @@ import json
 import logging
 import math
 import re
+import sys
 import threading
 import time
 import uuid
@@ -51,7 +52,28 @@ from automation_tool.zones_state import Zone, ZonesState, read_zones_state, writ
 
 _log = logging.getLogger("automation_tool.tv_watchlist_daemon")
 
-_EPS_DEFAULT = 0.01
+
+def _poll_terminal_only_logger() -> logging.Logger:
+    """
+    Chỉ stderr — không propagate lên ``automation_tool`` → không qua TelegramLogHandler.
+    Dùng cho tick mỗi vòng poll; heartbeat Telegram vẫn dùng ``_log.info`` (mỗi ~30s).
+    """
+    name = "automation_tool.tv_watchlist_daemon.poll_tick"
+    lg = logging.getLogger(name)
+    if lg.handlers:
+        return lg
+    lg.setLevel(logging.INFO)
+    lg.propagate = False
+    h = logging.StreamHandler(sys.stderr)
+    h.setFormatter(logging.Formatter("%(message)s"))
+    lg.addHandler(h)
+    return lg
+
+
+_poll_terminal = _poll_terminal_only_logger()
+
+# After integer rounding of Last vs alert_price: touch if abs(diff) <= this (default 1 → 4755 vs 4756 counts).
+_EPS_DEFAULT = 1.0
 _TP1_EPS = 0.01
 _ARM_THRESHOLD = 5.0
 _RETRY_WAIT_MINUTES = 15
@@ -60,17 +82,13 @@ _RETRY_WAIT_MINUTES = 15
 _TV_TITLE_PRICE_RE = re.compile(r"^\s*(?P<sym>[A-Z0-9:_-]+)\s+(?P<price>\d[\d,]*(?:\.\d+)?)\b")
 
 
-def _price_round_nearest_1dp(v: object) -> float:
+def _price_round_nearest_int(v: object) -> float:
     """
-    Normalize price by rounding to nearest 1 decimal place (step=0.1).
-    Examples:
-    - 4755.145 -> 4755.1
-    - 4755.150 -> 4755.2
-    - 4755.50  -> 4755.5
-    - 4755.0   -> 4755.0
+    Normalize price by rounding to the nearest whole number (integer), returned as float.
+    Used for zone alert touch: compare Last vs alert_price after this rounding; touch if
+    ``abs(last_int - alert_int) <= eps`` (default eps=1 allows adjacent integers e.g. 4755 vs 4756).
     """
-    # Use decimal rounding to avoid Python's banker's rounding surprises.
-    d = Decimal(str(v)).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+    d = Decimal(str(v)).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
     return float(d)
 
 
@@ -107,14 +125,14 @@ class WatchlistDaemonParams:
     storage_state_path: Optional[Path]
     headless: bool
     no_save_storage: bool
-    poll_seconds: float = 2.0
+    poll_seconds: float = 1.0
     timezone_name: str = "Asia/Ho_Chi_Minh"
     no_telegram: bool = False
     mt5_execute: bool = True
     mt5_symbol: Optional[str] = None
     mt5_dry_run: bool = False
     zones_state_path: Optional[Path] = None
-    eps: float = _EPS_DEFAULT
+    eps: float = _EPS_DEFAULT  # max |Δ| between integer-rounded Last and alert_price (default 1.0)
 
 
 def _send_log(settings: Settings, text: str) -> None:
@@ -145,22 +163,16 @@ def _touch_prompt(
     last_price: float,
 ) -> str:
     """
-    Ask OpenAI to output a single JSON object.
-    We need:
-    - intraday_hanh_dong: "VÀO LỆNH" | "chờ" | "loại"
-    - trade_line: required when "VÀO LỆNH"
-    - prices: include a matching entry for this zone label with `hop_luu` so daemon can
-      decide whether to execute MT5 (plan >=80, scalp >=70).
-    Must not include out_chi_tiet or output_ngan_gon (touch flow is compact only).
+    User turn for zone-touch OpenAI follow-up: ``[INTRADAY_ALERT]`` / Schema B per system prompt.
+
+    Daemon still needs ``intraday_hanh_dong``, optional top-level ``trade_line`` when VÀO LỆNH,
+    and ``prices`` with ``hop_luu`` for the touched zone label (MT5 gating). Parsed via
+    ``parse_analysis_from_openai_text`` / ``parse_journal_intraday_action_from_openai_text``.
     """
     return (
-        f"Cảnh báo TradingView đã kích hoạt tại mức giá {zone.alert_price}, hãy phân tích đưa ra nhận định\n"
-        "Hãy xem footprint Coinmap M5 JSON đính kèm và trả về 1 JSON object DUY NHẤT với keys:\n"
-        '- "intraday_hanh_dong": "VÀO LỆNH" | "chờ" | "loại"\n'
-        '- "trade_line": string (bắt buộc nếu intraday_hanh_dong là "VÀO LỆNH")\n'
-        '- "prices": array gồm ít nhất 1 phần tử cho đúng label ở trên, ví dụ:\n'
-        f'  [{{"label": "plan_chinh", "value": {zone.alert_price}, "hop_luu": 85, "trade_line": "..."}}]\n'
-        "- **Không** thêm key `out_chi_tiet` hay `output_ngan_gon` — không cần phân tích dài hay tóm tắt văn bản; chỉ JSON gọn như trên.\n"
+        "[INTRADAY_ALERT]\n"
+        f"Cảnh báo chạm mức giá {zone.alert_price} (plan: {zone.label}).\n"
+        "Footprint Coinmap M5 JSON đính kèm.\n"
     )
 
 
@@ -297,8 +309,8 @@ def _tp1_followup_job(
             prompt_id=settings.openai_prompt_id,
             prompt_version=settings.openai_prompt_version,
             user_text=user_text,
-            coinmap_json_path=json_path,
-            previous_response_id=prev or None,
+            coinmap_json_paths=[json_path],
+            previous_response_id=prev or "",
             vector_store_ids=settings.openai_vector_store_ids,
             store=settings.openai_responses_store,
             include=settings.openai_responses_include,
@@ -560,8 +572,8 @@ def _zone_touch_job(
             prompt_id=settings.openai_prompt_id,
             prompt_version=settings.openai_prompt_version,
             user_text=user_text,
-            coinmap_json_path=json_path,
-            previous_response_id=prev or None,
+            coinmap_json_paths=[json_path],
+            previous_response_id=prev or "",
             vector_store_ids=settings.openai_vector_store_ids,
             store=settings.openai_responses_store,
             include=settings.openai_responses_include,
@@ -746,16 +758,31 @@ def _tv_watchlist_daemon_main_loop(
     while True:
         st = read_zones_state(zs_path)
         if st is None or not st.zones:
+            _poll_terminal.info(
+                "tv-watchlist-daemon | symbol=%s | tick | zones=0 (no state)",
+                sym,
+            )
             time.sleep(poll_s)
             continue
 
         wms = min(15_000, max(2_000, int(poll_s * 1000)))
         p_last = get_price(wms)
         if p_last is None:
+            _poll_terminal.info(
+                "tv-watchlist-daemon | symbol=%s | tick | last=(none)",
+                sym,
+            )
             time.sleep(poll_s)
             continue
 
-        # Heartbeat: log every ~30s so it's obvious the daemon is alive.
+        _poll_terminal.info(
+            "tv-watchlist-daemon | symbol=%s | tick | last=%s zones=%d",
+            sym,
+            p_last,
+            len(st.zones),
+        )
+
+        # Heartbeat: Telegram + stderr every ~30s (``_log`` propagates); tick mỗi poll chỉ stderr (``_poll_terminal``).
         try:
             now_mono = time.monotonic()
             if (now_mono - last_heartbeat_at) >= heartbeat_s:
@@ -831,10 +858,10 @@ def _tv_watchlist_daemon_main_loop(
         for z in st.zones:
             if z.status != "vung_cho":
                 continue
-            # Normalize both prices to step=0.1 (round nearest 1dp) before comparing.
+            # Normalize both prices to nearest integer before comparing (then ``eps``).
             try:
-                p_last_n = _price_round_nearest_1dp(p_last)
-                alert_n = _price_round_nearest_1dp(z.alert_price)
+                p_last_n = _price_round_nearest_int(p_last)
+                alert_n = _price_round_nearest_int(z.alert_price)
             except Exception:
                 p_last_n = float(p_last)
                 alert_n = float(z.alert_price)
@@ -982,9 +1009,9 @@ def run_tv_watchlist_daemon(
     if not isinstance(tv, dict) or not tv.get("chart_url"):
         raise SystemExit("tradingview_capture.chart_url missing in coinmap yaml.")
 
-    poll_s = float(params.poll_seconds or 2.0)
+    poll_s = float(params.poll_seconds or 1.0)
     if poll_s <= 0:
-        poll_s = 2.0
+        poll_s = 1.0
 
     # Which symbol to read from watchlist?
     sym = (tv.get("watchlist_symbol_short") or "").strip().upper()

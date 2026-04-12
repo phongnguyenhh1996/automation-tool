@@ -8,10 +8,11 @@ Tài liệu này mô tả **cấu trúc và ý nghĩa từng field** trong file 
 
 | Thuộc tính | Ý nghĩa |
 |------------|---------|
-| **Nguồn** | Response thật từ `https://gw.coinmap.tech/cm-api/api/v1/...` (bắt qua trình duyệt khi chart load). `network_capture_max_responses_per_endpoint` giới hạn số response **mỗi endpoint** đem vào gộp (0 = không giới hạn — nên dùng nếu response đầu `getcandlehistory` đôi khi rỗng trước khi chart kịp load). Tool **gộp** các mảng theo `t` (trùng `t` → giữ bản từ lần gọi sau). Tắt gộp: `merge_repeated_endpoint_responses: false`. |
+| **Nguồn** | **Mặc định (`api_data_export.mode: bearer_request`):** bắt Bearer từ trình duyệt rồi gọi cm-api bằng httpx — 3 endpoint song song mỗi shot (`bearer_http_parallel`, mặc định bật); API-only nhiều bước: các shot `capture_plan` có thể song song (`bearer_parallel_max_concurrency`). `bearer_skip_chart_ui: true` (mặc định trong `coinmap.yaml`) = không mở sidebar multi-shot Coinmap. **`network_capture`:** bắt response thật từ gateway khi chart load; `network_capture_max_responses_per_endpoint`, `merge_repeated_endpoint_responses`, v.v. **`bearer_request` + `bearer_skip_chart_ui: false`:** UI multi-shot tuần tự như `network_capture`, sau mỗi bước gọi API (httpx song song nếu bật parallel). |
 | **Tên file** | `{stamp}_coinmap_{SYMBOL}_{interval}.json` (ví dụ `20260329_164526_coinmap_XAUUSD_5m.json`). |
 | **Không bọc lỗi HTTP** | Mỗi khóa API chứa **body JSON đã parse** (mảng/object) hoặc `null` nếu không bắt được response. |
 | **Đúng khung thời gian** | Khi ghi file, tool **chỉ giữ** các phần tử có `i` trùng `interval` của shot (và `s` trùng `symbol` watchlist nếu có). Nếu sau lọc strict không còn dòng và `relax_symbol_filter_if_empty: true`, tool thử lọc **chỉ theo `i`** (cùng khung thời gian). |
+| **query_template (bearer_request / request)** | Placeholder: `{symbol}` (mã watchlist từng bước, ví dụ `USDINDEX`), `{export_symbol}` (nhãn file như `DXY` nếu có; không có thì bằng `{symbol}`), `{interval}`, `{watchlist_category}`, `{resolution}`, `{from_ms}` / `{to_ms}`, `{countback}`. **`{main_symbol}`** = mã active từ CLI (`--main-symbol`) — **cùng một giá trị cho mọi shot**; nếu `query_template.symbol` dùng `{main_symbol}` trong khi `capture_plan` có DXY/USDINDEX và main là XAUUSD, API sẽ trả dữ liệu XAUUSD cho mọi file (sai nghĩa). Multi-shot nhiều công cụ: dùng **`symbol: "{symbol}"`** (hoặc đúng mã gateway). File thử: `config/coinmap_bearer_test.yaml`; full: `config/coinmap_bearer_full.yaml`. |
 
 ### Các khóa ở root
 

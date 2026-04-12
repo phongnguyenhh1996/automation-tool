@@ -18,7 +18,8 @@ from playwright.sync_api import sync_playwright
 
 from automation_tool.browser_client import try_attach_playwright_via_service
 from automation_tool.coinmap import capture_charts
-from automation_tool.config import symbol_data_dir
+from automation_tool.config import load_settings, symbol_data_dir
+from automation_tool.telegram_logging import setup_automation_logging
 
 
 def _payload_from_cli(raw: str) -> dict[str, Any]:
@@ -32,6 +33,7 @@ def _payload_from_cli(raw: str) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> None:
+    setup_automation_logging(load_settings())
     ap = argparse.ArgumentParser(prog="python -m automation_tool.capture_many_worker")
     ap.add_argument("--payload", required=True, help="JSON object for capture-many RPC")
     ns = ap.parse_args(argv)

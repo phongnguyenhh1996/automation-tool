@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import mimetypes
 import re
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Optional, Tuple, Union
 
@@ -185,16 +186,36 @@ def latest_chart_stamp(charts_dir: Path) -> Optional[str]:
     return max(stamps) if stamps else None
 
 
+def stamp_from_capture_paths(paths: Sequence[Path]) -> Optional[str]:
+    """Largest ``YYYYMMDD_HHMMSS`` prefix found on capture artifact filenames (e.g. returned by ``capture_charts``)."""
+    stamps: set[str] = set()
+    for p in paths:
+        m = _STAMP_RE.match(p.name)
+        if m:
+            stamps.add(m.group(1))
+    return max(stamps) if stamps else None
+
+
+def coinmap_main_pair_interval_json_path(
+    charts_dir: Path, interval: str, *, stamp: Optional[str] = None
+) -> Optional[Path]:
+    """``{{stamp}}_coinmap_{{main_pair}}_{interval}.json`` (main pair from marker; ``interval`` e.g. ``5m``, ``15m``)."""
+    sym = read_main_chart_symbol(charts_dir)
+    iv = (interval or "").strip()
+    if not iv:
+        return None
+    st = stamp or latest_chart_stamp(charts_dir)
+    if not st:
+        return None
+    p = charts_dir / f"{st}_coinmap_{sym}_{iv}.json"
+    return p if p.is_file() else None
+
+
 def coinmap_main_pair_5m_json_path(
     charts_dir: Path, *, stamp: Optional[str] = None
 ) -> Optional[Path]:
     """Latest ``{{stamp}}_coinmap_{{main_pair}}_5m.json`` (main pair from marker or XAUUSD)."""
-    sym = read_main_chart_symbol(charts_dir)
-    st = stamp or latest_chart_stamp(charts_dir)
-    if not st:
-        return None
-    p = charts_dir / f"{st}_coinmap_{sym}_5m.json"
-    return p if p.is_file() else None
+    return coinmap_main_pair_interval_json_path(charts_dir, "5m", stamp=stamp)
 
 
 def coinmap_xauusd_5m_json_path(
@@ -210,7 +231,7 @@ def ordered_chart_openai_payloads(
     """
     Same slot order as ``effective_chart_image_order(charts_dir)`` (for OpenAI step 2).
 
-    * **TradingView** — prefer ``.url`` (one line https, snapshot toolbar flow) else ``.png``.
+    * **TradingView** — prefer ``.json`` (tvdatafeed OHLC) else ``.url`` (snapshot) else ``.png``.
     * **Coinmap** — prefer ``.json`` (API export) over ``.png`` so analysis can run
       without screenshots while keeping the same ordering as when images were used.
     """
@@ -230,9 +251,12 @@ def ordered_chart_openai_payloads(
             elif pp.is_file():
                 out.append(("image", pp))
         else:
+            jp = charts_dir / f"{st}_tradingview_{sym}_{iv}.json"
             up = charts_dir / f"{st}_tradingview_{sym}_{iv}.url"
             pp = charts_dir / f"{st}_tradingview_{sym}_{iv}.png"
-            if up.is_file():
+            if jp.is_file():
+                out.append(("json", jp))
+            elif up.is_file():
                 raw = up.read_text(encoding="utf-8").strip().splitlines()
                 line = (raw[0] if raw else "").strip()
                 if line.startswith("http://") or line.startswith("https://"):

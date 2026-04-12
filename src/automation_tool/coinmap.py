@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import copy
 import json
+import logging
 import re
 import time
 from datetime import datetime, timezone
@@ -9,6 +12,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 from urllib.parse import urlparse
 
+import httpx
 import yaml
 from playwright.sync_api import BrowserContext, Playwright, sync_playwright
 
@@ -121,9 +125,11 @@ _COINMAP_API_KEYS: tuple[str, ...] = (
 
 
 def _api_export_mode(api_cd: dict[str, Any]) -> str:
-    raw = (api_cd.get("mode") or "network_capture").strip().lower()
+    raw = (api_cd.get("mode") or "bearer_request").strip().lower()
     if raw in ("request", "http", "fetch"):
         return "request"
+    if raw in ("bearer_request", "request_bearer", "bearer"):
+        return "bearer_request"
     return "network_capture"
 
 
@@ -375,6 +381,102 @@ class CoinmapNetworkCapture:
         return out
 
 
+class CoinmapBearerCapture:
+    """
+    Records ``Authorization: Bearer …`` from outgoing requests to the Coinmap gateway
+    so ``context.request`` calls can reuse the same token (avoids 401 without response capture).
+    """
+
+    def __init__(self, page, api_cd: dict[str, Any]) -> None:
+        self.page = page
+        self.api_cd = api_cd
+        self._authorization: Optional[str] = None
+        self._handler: Optional[Callable[..., None]] = None
+        self._logged_first_token: bool = False
+
+    def install(self) -> None:
+        def handler(request) -> None:
+            self._on_request(request)
+
+        self._handler = handler
+        self.page.on("request", self._handler)
+        subs = self.api_cd.get("bearer_capture_url_substrings")
+        sub_note = (
+            f", url_substrings={subs!r}"
+            if isinstance(subs, list) and len(subs) > 0
+            else ", url_substrings=(any gw.coinmap.tech)"
+        )
+        _coinmap_bearer_log(
+            self.api_cd,
+            f"Installed gateway request listener{sub_note}",
+        )
+
+    def uninstall(self) -> None:
+        if self._handler is not None:
+            try:
+                self.page.remove_listener("request", self._handler)
+            except Exception:
+                pass
+            self._handler = None
+            _coinmap_bearer_log(self.api_cd, "Removed gateway request listener")
+
+    def _on_request(self, request) -> None:
+        url = request.url
+        if "gw.coinmap.tech" not in url and not self.api_cd.get("capture_any_host", False):
+            return
+        subs = self.api_cd.get("bearer_capture_url_substrings")
+        if isinstance(subs, list) and len(subs) > 0:
+            if not any(isinstance(s, str) and s and s in url for s in subs):
+                return
+        try:
+            hdrs = request.headers
+        except Exception:
+            return
+        auth: Optional[str] = None
+        if isinstance(hdrs, dict):
+            for k, v in hdrs.items():
+                if str(k).lower() == "authorization" and isinstance(v, str) and v.strip():
+                    auth = v.strip()
+                    break
+        if auth and auth.lower().startswith("bearer "):
+            self._authorization = auth
+            if not self._logged_first_token:
+                self._logged_first_token = True
+                n = len(auth)
+                _coinmap_bearer_log(
+                    self.api_cd,
+                    f"Saw Authorization on outgoing request ({n} chars; URL host matches filter)",
+                )
+            if bool(self.api_cd.get("bearer_log_verbose")):
+                _coinmap_bearer_log(self.api_cd, f"request: {url[:120]}{'…' if len(url) > 120 else ''}")
+
+    def get_authorization(self) -> Optional[str]:
+        return self._authorization
+
+    def wait_for_authorization(self, timeout_ms: int) -> Optional[str]:
+        poll_ms = max(50, int(self.api_cd.get("bearer_ready_poll_ms") or 100))
+        deadline = time.monotonic() + max(0, timeout_ms) / 1000.0
+        _coinmap_bearer_log(
+            self.api_cd,
+            f"Waiting for Authorization (timeout {timeout_ms}ms, poll {poll_ms}ms)",
+        )
+        t0 = time.monotonic()
+        while time.monotonic() < deadline:
+            if self._authorization:
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
+                _coinmap_bearer_log(
+                    self.api_cd,
+                    f"Authorization ready after {elapsed_ms}ms",
+                )
+                return self._authorization
+            self.page.wait_for_timeout(poll_ms)
+        _coinmap_bearer_log(
+            self.api_cd,
+            f"No Authorization within {timeout_ms}ms (poll {poll_ms}ms)",
+        )
+        return self._authorization
+
+
 def _api_export_config(cd: dict[str, Any]) -> Optional[dict[str, Any]]:
     raw = cd.get("api_data_export")
     if not isinstance(raw, dict) or not raw.get("enabled"):
@@ -382,15 +484,107 @@ def _api_export_config(cd: dict[str, Any]) -> Optional[dict[str, Any]]:
     return raw
 
 
-def _format_api_query_placeholders(template: str, step: dict[str, Any]) -> str:
+def _coinmap_bearer_log_enabled(api_cd: Optional[dict[str, Any]]) -> bool:
+    """When ``api_data_export.bearer_log`` is false, skip ``[coinmap bearer]`` messages."""
+    if api_cd is None:
+        return True
+    return api_cd.get("bearer_log", True) is not False
+
+
+def _coinmap_bearer_log(api_cd: Optional[dict[str, Any]], message: str) -> None:
+    """
+    Log bearer flow lines on ``automation_tool`` (INFO) → stderr + ``TELEGRAM_LOG_CHAT_ID``
+    when :func:`telegram_logging.setup_automation_logging` has run (CLI and capture workers).
+    """
+    if not _coinmap_bearer_log_enabled(api_cd):
+        return
+    logging.getLogger("automation_tool").info("[coinmap bearer] %s", message)
+
+
+_COINMAP_INTERVAL_MINUTES: dict[str, int] = {
+    "1m": 1,
+    "3m": 3,
+    "5m": 5,
+    "15m": 15,
+    "30m": 30,
+    "45m": 45,
+    "1h": 60,
+    "2h": 120,
+    "3h": 180,
+    "4h": 240,
+    "1d": 1440,
+}
+
+
+def _coinmap_interval_minutes(interval: str) -> int:
+    """Map capture plan interval (e.g. 5m, 15m, 1h) to Coinmap API ``resolution`` minutes."""
+    s = (interval or "").strip().lower()
+    if s in _COINMAP_INTERVAL_MINUTES:
+        return _COINMAP_INTERVAL_MINUTES[s]
+    m = re.match(r"^(\d+)m$", s)
+    if m:
+        return int(m.group(1))
+    m = re.match(r"^(\d+)h$", s)
+    if m:
+        return int(m.group(1)) * 60
+    m = re.match(r"^(\d+)d$", s)
+    if m:
+        return int(m.group(1)) * 1440
+    return 5
+
+
+def _coinmap_interval_to_resolution_num(interval: str) -> str:
+    return str(_coinmap_interval_minutes(interval))
+
+
+def _coinmap_auto_from_to_ms(api_cd: dict[str, Any], step: dict[str, Any]) -> tuple[int, int]:
+    """
+    ``to`` = UTC now (ms); ``from`` = ``to - countback * bar_duration`` so the window
+    fits ~countback bars at the step interval.
+    """
+    countback = max(1, int(api_cd.get("auto_countback") or 1000))
+    iv = str(step.get("interval") or "")
+    bar_ms = _coinmap_interval_minutes(iv) * 60 * 1000
+    to_ms = int(time.time() * 1000)
+    span = countback * bar_ms
+    pad = int(api_cd.get("auto_time_padding_ms") or 0)
+    from_ms = to_ms - span - max(0, pad)
+    return from_ms, to_ms
+
+
+def _format_api_query_placeholders(
+    template: str,
+    step: dict[str, Any],
+    api_cd: Optional[dict[str, Any]] = None,
+) -> str:
+    sym = str(step.get("symbol") or "")
     mapping = {
-        "symbol": str(step.get("symbol") or ""),
+        "symbol": sym,
         "interval": str(step.get("interval") or ""),
         "watchlist_category": str(step.get("watchlist_category") or ""),
     }
+    ex = step.get("export_symbol")
+    mapping["export_symbol"] = (
+        str(ex).strip() if isinstance(ex, str) and str(ex).strip() else sym
+    )
     out = template
     for key, val in mapping.items():
         out = out.replace("{" + key + "}", val)
+    if "{main_symbol}" in out:
+        from automation_tool.images import get_active_main_symbol
+
+        out = out.replace("{main_symbol}", get_active_main_symbol())
+    if "{resolution}" in out:
+        out = out.replace(
+            "{resolution}",
+            _coinmap_interval_to_resolution_num(str(step.get("interval") or "")),
+        )
+    if "{from_ms}" in out or "{to_ms}" in out:
+        fm, tm = _coinmap_auto_from_to_ms(api_cd or {}, step)
+        out = out.replace("{from_ms}", str(fm)).replace("{to_ms}", str(tm))
+    if "{countback}" in out:
+        cb = max(1, int((api_cd or {}).get("auto_countback") or 1000))
+        out = out.replace("{countback}", str(cb))
     return out
 
 
@@ -409,9 +603,9 @@ def _merge_api_query_params(api_cd: dict[str, Any], step: dict[str, Any]) -> dic
         elif isinstance(v, (int, float)):
             out[key] = str(v)
         elif isinstance(v, str):
-            out[key] = _format_api_query_placeholders(v, step)
+            out[key] = _format_api_query_placeholders(v, step, api_cd)
         else:
-            out[key] = _format_api_query_placeholders(str(v), step)
+            out[key] = _format_api_query_placeholders(str(v), step, api_cd)
     return out
 
 
@@ -457,15 +651,211 @@ def _coinmap_api_request_one(
         return {"ok": False, "status": 0, "body": str(e)}
 
 
-def _coinmap_collect_one_shot_api_data(page, api_cd: dict[str, Any], step: dict[str, Any]) -> dict[str, Any]:
+_COINMAP_HTTP_TIMEOUT_S = 90.0
+
+
+def _coinmap_asyncio_run(coro):
+    """
+    Run *coro* to completion from synchronous code.
+
+    ``asyncio.run`` fails with "cannot be called from a running event loop" when the
+    capture worker already runs inside an event loop (e.g. RPC). In that case we
+    execute ``asyncio.run`` in a worker thread with its own loop.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result()
+
+
+def _bearer_http_parallel_enabled(api_cd: dict[str, Any]) -> bool:
+    """Parallel httpx calls to cm-api only; Playwright stays sequential. Default on."""
+    return api_cd.get("bearer_http_parallel") is not False
+
+
+async def _coinmap_api_request_httpx_async(
+    client: httpx.AsyncClient,
+    *,
+    url: str,
+    method: str,
+    params: dict[str, str],
+    headers: Optional[dict[str, str]],
+    max_nonjson_body_chars: int,
+) -> dict[str, Any]:
+    method_u = (method or "GET").strip().upper() or "GET"
+    hdrs = {str(a): str(b) for a, b in (headers or {}).items()} if headers else None
+    try:
+        if method_u == "GET":
+            r = await client.get(url, params=params or None, headers=hdrs)
+        elif method_u == "POST":
+            r = await client.post(url, params=params or None, headers=hdrs)
+        else:
+            return {"ok": False, "status": 0, "body": f"unsupported http_method {method_u!r}"}
+        status = r.status_code
+        resp_text = r.text
+        ok = 200 <= status < 300
+        try:
+            body: Any = json.loads(resp_text)
+        except json.JSONDecodeError:
+            lim = max(256, int(max_nonjson_body_chars))
+            body = (
+                resp_text
+                if len(resp_text) <= lim
+                else resp_text[:lim] + "...(truncated)"
+            )
+        return {"ok": ok, "status": status, "body": body}
+    except Exception as e:
+        return {"ok": False, "status": 0, "body": str(e)}
+
+
+async def _coinmap_collect_one_shot_api_data_httpx_async(
+    client: httpx.AsyncClient,
+    api_cd: dict[str, Any],
+    step: dict[str, Any],
+    *,
+    bearer_authorization: Optional[str] = None,
+) -> dict[str, Any]:
+    endpoints = _merged_coinmap_api_endpoints(api_cd)
+    q = _merge_api_query_params(api_cd, step)
+    method = str(api_cd.get("http_method") or "GET")
+    headers = _coinmap_build_api_request_headers(
+        api_cd, bearer_authorization=bearer_authorization
+    )
+    max_ch = int(api_cd.get("max_nonjson_body_chars") or 8000)
+    fail = bool(api_cd.get("fail_on_api_error"))
+    out: dict[str, Any] = {
+        "symbol": step.get("symbol"),
+        "interval": step.get("interval"),
+        "watchlist_category": step.get("watchlist_category"),
+    }
+    ex = step.get("export_symbol")
+    if isinstance(ex, str) and ex.strip():
+        out["export_symbol"] = ex.strip()
+
+    async def fetch_one(key: str) -> tuple[str, dict[str, Any]]:
+        url = endpoints.get(key)
+        if not url:
+            return (
+                key,
+                {
+                    "ok": False,
+                    "status": 0,
+                    "body": "missing endpoint in api_data_export.endpoints",
+                },
+            )
+        res = await _coinmap_api_request_httpx_async(
+            client,
+            url=url,
+            method=method,
+            params=q,
+            headers=headers,
+            max_nonjson_body_chars=max_ch,
+        )
+        return key, res
+
+    pairs = await asyncio.gather(*[fetch_one(k) for k in _COINMAP_API_KEYS])
+    for key, res in pairs:
+        out[key] = res
+        if fail and not res["ok"]:
+            raise SystemExit(
+                f"api_data_export: request {key!r} failed status={res['status']} body={res['body']!r}"
+            )
+    return out
+
+
+def _coinmap_collect_one_shot_api_data_httpx(
+    api_cd: dict[str, Any],
+    step: dict[str, Any],
+    *,
+    bearer_authorization: Optional[str] = None,
+) -> dict[str, Any]:
+    """Sync: three cm-api GETs in parallel via httpx (no Playwright)."""
+
+    async def _run() -> dict[str, Any]:
+        timeout = httpx.Timeout(_COINMAP_HTTP_TIMEOUT_S)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            return await _coinmap_collect_one_shot_api_data_httpx_async(
+                client,
+                api_cd,
+                step,
+                bearer_authorization=bearer_authorization,
+            )
+
+    return _coinmap_asyncio_run(_run())
+
+
+async def _coinmap_api_only_plan_gather_shots(
+    api_cd: dict[str, Any],
+    plan: list[dict[str, Any]],
+    bearer_authorization: str,
+) -> list[dict[str, Any]]:
+    """Parallel plan steps; each step runs three endpoint GETs in parallel. No Playwright."""
+    max_raw = api_cd.get("bearer_parallel_max_concurrency")
+    max_c = int(max_raw) if isinstance(max_raw, int) and max_raw > 0 else 0
+    timeout = httpx.Timeout(_COINMAP_HTTP_TIMEOUT_S)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+
+        async def one_step(st: dict[str, Any]) -> dict[str, Any]:
+            step_ctx: dict[str, Any] = {
+                "symbol": st["symbol"],
+                "interval": st["interval"],
+                "watchlist_category": st.get("watchlist_category"),
+                "api_query": st.get("api_query"),
+            }
+            exs = st.get("export_symbol")
+            if isinstance(exs, str) and exs.strip():
+                step_ctx["export_symbol"] = exs.strip()
+            return await _coinmap_collect_one_shot_api_data_httpx_async(
+                client,
+                api_cd,
+                step_ctx,
+                bearer_authorization=bearer_authorization,
+            )
+
+        if max_c > 0:
+            sem = asyncio.Semaphore(max_c)
+
+            async def bounded(st: dict[str, Any]) -> dict[str, Any]:
+                async with sem:
+                    return await one_step(st)
+
+            return list(await asyncio.gather(*[bounded(s) for s in plan]))
+        return list(await asyncio.gather(*[one_step(s) for s in plan]))
+
+
+
+def _coinmap_build_api_request_headers(
+    api_cd: dict[str, Any], *, bearer_authorization: Optional[str] = None
+) -> Optional[dict[str, str]]:
+    rh = api_cd.get("request_headers")
+    headers: dict[str, str] = {}
+    if isinstance(rh, dict):
+        headers = {str(a): str(b) for a, b in rh.items()}
+    if bearer_authorization:
+        headers["Authorization"] = bearer_authorization.strip()
+        if api_cd.get("send_m_affiliate", True) and not any(
+            k.lower() == "m_affiliate" for k in headers
+        ):
+            headers["m_affiliate"] = str(api_cd.get("m_affiliate") or "CM")
+    return headers or None
+
+
+def _coinmap_collect_one_shot_api_data(
+    page,
+    api_cd: dict[str, Any],
+    step: dict[str, Any],
+    *,
+    bearer_authorization: Optional[str] = None,
+) -> dict[str, Any]:
     context = page.context
     endpoints = _merged_coinmap_api_endpoints(api_cd)
     q = _merge_api_query_params(api_cd, step)
     method = str(api_cd.get("http_method") or "GET")
-    rh = api_cd.get("request_headers")
-    headers: Optional[dict[str, str]] = None
-    if isinstance(rh, dict):
-        headers = {str(a): str(b) for a, b in rh.items()}
+    headers = _coinmap_build_api_request_headers(
+        api_cd, bearer_authorization=bearer_authorization
+    )
     max_ch = int(api_cd.get("max_nonjson_body_chars") or 8000)
     fail = bool(api_cd.get("fail_on_api_error"))
     out: dict[str, Any] = {
@@ -1165,6 +1555,7 @@ def _run_coinmap_multi_shot_flow(
     plan: list[dict[str, Any]],
     api_cd: Optional[dict[str, Any]] = None,
     net_capture: Optional[CoinmapNetworkCapture] = None,
+    bearer_authorization: Optional[str] = None,
     coinmap_email: Optional[str] = None,
     coinmap_password: Optional[str] = None,
     coinmap_login_cfg: Optional[dict[str, Any]] = None,
@@ -1205,7 +1596,8 @@ def _run_coinmap_multi_shot_flow(
             cd,
             target_interval=interval,
             settle_ms=settle_ms,
-            for_api_capture=net_capture is not None and api_cd is not None,
+            for_api_capture=api_cd is not None
+            and (net_capture is not None or bearer_authorization is not None),
         )
         _coinmap_select_interval(page, cd, interval)
         page.wait_for_timeout(int(cd.get("after_interval_change_settle_ms", settle_ms)))
@@ -1231,7 +1623,28 @@ def _run_coinmap_multi_shot_flow(
                 charts_dir, file_stem=stem, stamp=stamp, shot=shot, api_cd=api_cd
             )
         elif api_cd is not None:
-            shot = _coinmap_collect_one_shot_api_data(page, api_cd, step_ctx)
+            if bearer_authorization:
+                _coinmap_bearer_log(
+                    api_cd,
+                    f"After UI step: cm-api HTTP (symbol={sym!r} interval={interval!r})",
+                )
+            if (
+                bearer_authorization
+                and _api_export_mode(api_cd) == "bearer_request"
+                and _bearer_http_parallel_enabled(api_cd)
+            ):
+                shot = _coinmap_collect_one_shot_api_data_httpx(
+                    api_cd,
+                    step_ctx,
+                    bearer_authorization=bearer_authorization,
+                )
+            else:
+                shot = _coinmap_collect_one_shot_api_data(
+                    page,
+                    api_cd,
+                    step_ctx,
+                    bearer_authorization=bearer_authorization,
+                )
             stem = f"{stamp}_coinmap_{sym_slug}_{iv_slug}"
             json_path = _write_coinmap_api_shot_json(
                 charts_dir, file_stem=stem, stamp=stamp, shot=shot, api_cd=api_cd
@@ -1259,6 +1672,140 @@ def _run_coinmap_multi_shot_flow(
     return written
 
 
+def _run_bearer_request_api_only_flow(
+    page,
+    *,
+    charts_dir: Path,
+    stamp: str,
+    settle_ms: int,
+    cd: dict[str, Any],
+    api_cd: dict[str, Any],
+    bearer_capture: CoinmapBearerCapture,
+) -> list[Path]:
+    """
+    Login already completed; capture Bearer from network, optional one-shot navigation,
+    then fetch cm-api JSON via ``context.request`` (no sidebar / watchlist / pan UI).
+
+    When ``bearer_skip_chart_ui: false``, this function is not used; the main chart flow
+    runs multi-shot UI and passes ``bearer_authorization`` into ``_run_coinmap_multi_shot_flow``.
+    """
+    _coinmap_bearer_log(
+        api_cd,
+        "API-only bearer_request (no sidebar / watchlist / fullscreen chart UI)",
+    )
+    trigger = (
+        api_cd.get("bearer_trigger_url") or cd.get("chart_page_url") or "https://coinmap.tech/chart"
+    )
+    trigger = str(trigger).strip() or "https://coinmap.tech/chart"
+    _coinmap_bearer_log(api_cd, f"Navigating to bearer_trigger_url / chart: {trigger}")
+    page.goto(trigger, wait_until="domcontentloaded", timeout=90_000)
+    page.wait_for_timeout(settle_ms)
+    timeout_ms = int(
+        api_cd.get("bearer_ready_timeout_ms")
+        or api_cd.get("network_capture_wait_ms")
+        or 15_000
+    )
+    auth = bearer_capture.wait_for_authorization(timeout_ms)
+    if not auth:
+        raise SystemExit(
+            "api_data_export bearer_request: no Authorization on requests to gw.coinmap.tech "
+            f"within {timeout_ms}ms. Check login, bearer_trigger_url, or use mode network_capture."
+        )
+
+    written: list[Path] = []
+    plan = _coinmap_resolve_capture_plan(cd)
+    if plan:
+        n = len(plan)
+        if _bearer_http_parallel_enabled(api_cd):
+            _coinmap_bearer_log(
+                api_cd,
+                f"Fetching cm-api for {n} capture_plan step(s) (httpx: parallel shots + endpoints)",
+            )
+            shots = _coinmap_asyncio_run(
+                _coinmap_api_only_plan_gather_shots(api_cd, plan, auth)
+            )
+            for idx, (step, shot) in enumerate(zip(plan, shots), start=1):
+                sym = step["symbol"]
+                interval = step["interval"]
+                ex = step.get("export_symbol")
+                label = (ex.strip() if isinstance(ex, str) and ex.strip() else sym)
+                sym_slug = re.sub(r"[^\w.-]+", "_", label).strip("_")[:40] or "sym"
+                iv_slug = re.sub(r"[^\w]+", "_", interval).strip("_")[:20] or "iv"
+                _coinmap_bearer_log(
+                    api_cd,
+                    f"Step {idx}/{n}: wrote JSON (symbol={sym!r} interval={interval!r})",
+                )
+                _coinmap_maybe_fail_api_shot(api_cd, shot)
+                stem = f"{stamp}_coinmap_{sym_slug}_{iv_slug}"
+                json_path = _write_coinmap_api_shot_json(
+                    charts_dir, file_stem=stem, stamp=stamp, shot=shot, api_cd=api_cd
+                )
+                written.append(json_path)
+        else:
+            _coinmap_bearer_log(api_cd, f"Fetching cm-api for {n} capture_plan step(s)")
+            for idx, step in enumerate(plan, start=1):
+                sym = step["symbol"]
+                interval = step["interval"]
+                cat = step.get("watchlist_category")
+                step_ctx: dict[str, Any] = {
+                    "symbol": sym,
+                    "interval": interval,
+                    "watchlist_category": cat,
+                    "api_query": step.get("api_query"),
+                }
+                ex = step.get("export_symbol")
+                if isinstance(ex, str) and ex.strip():
+                    step_ctx["export_symbol"] = ex.strip()
+                label = (ex.strip() if isinstance(ex, str) and ex.strip() else sym)
+                sym_slug = re.sub(r"[^\w.-]+", "_", label).strip("_")[:40] or "sym"
+                iv_slug = re.sub(r"[^\w]+", "_", interval).strip("_")[:20] or "iv"
+                _coinmap_bearer_log(
+                    api_cd,
+                    f"Step {idx}/{n}: HTTP GET cm-api (symbol={sym!r} interval={interval!r})",
+                )
+                shot = _coinmap_collect_one_shot_api_data(
+                    page, api_cd, step_ctx, bearer_authorization=auth
+                )
+                _coinmap_maybe_fail_api_shot(api_cd, shot)
+                stem = f"{stamp}_coinmap_{sym_slug}_{iv_slug}"
+                json_path = _write_coinmap_api_shot_json(
+                    charts_dir, file_stem=stem, stamp=stamp, shot=shot, api_cd=api_cd
+                )
+                written.append(json_path)
+    else:
+        _coinmap_bearer_log(
+            api_cd,
+            "Single-shot cm-api (no multi_shot capture_plan): stem chart_fullscreen",
+        )
+        if _bearer_http_parallel_enabled(api_cd):
+            shot = _coinmap_collect_one_shot_api_data_httpx(
+                api_cd,
+                {"symbol": "", "interval": "", "watchlist_category": None},
+                bearer_authorization=auth,
+            )
+        else:
+            shot = _coinmap_collect_one_shot_api_data(
+                page,
+                api_cd,
+                {"symbol": "", "interval": "", "watchlist_category": None},
+                bearer_authorization=auth,
+            )
+        _coinmap_maybe_fail_api_shot(api_cd, shot)
+        json_path = _write_coinmap_api_shot_json(
+            charts_dir,
+            file_stem=f"{stamp}_chart_fullscreen",
+            stamp=stamp,
+            shot=shot,
+            api_cd=api_cd,
+        )
+        written.append(json_path)
+    _coinmap_bearer_log(
+        api_cd,
+        f"API-only flow finished: wrote {len(written)} JSON file(s)",
+    )
+    return written
+
+
 def _run_chart_screenshot_flow(
     page,
     *,
@@ -1269,15 +1816,42 @@ def _run_chart_screenshot_flow(
     coinmap_email: Optional[str] = None,
     coinmap_password: Optional[str] = None,
     coinmap_login_cfg: Optional[dict[str, Any]] = None,
+    bearer_capture: Optional[CoinmapBearerCapture] = None,
 ) -> list[Path]:
     """Open chart: multi-shot watchlist sidebar flow, or single fullscreen on current symbol (no modal search)."""
     api_cd = _api_export_config(cd)
+    mode = _api_export_mode(api_cd) if api_cd else "network_capture"
+    # bearer_request + API-only: no sidebar / fullscreen PNG (legacy fast path).
+    if (
+        mode == "bearer_request"
+        and api_cd is not None
+        and api_cd.get("bearer_skip_chart_ui") is not False
+    ):
+        _coinmap_bearer_log(
+            api_cd,
+            "chart_download: bearer_request branch = API-only (set bearer_skip_chart_ui: false for full UI)",
+        )
+        if bearer_capture is None:
+            raise SystemExit(
+                "api_data_export bearer_request requires bearer capture (internal error: bearer_capture missing)."
+            )
+        return _run_bearer_request_api_only_flow(
+            page,
+            charts_dir=charts_dir,
+            stamp=stamp,
+            settle_ms=settle_ms,
+            cd=cd,
+            api_cd=api_cd,
+            bearer_capture=bearer_capture,
+        )
+
     net_capture: Optional[CoinmapNetworkCapture] = None
-    if api_cd is not None and _api_export_mode(api_cd) != "request":
+    if api_cd is not None and mode not in ("request", "bearer_request"):
         net_capture = CoinmapNetworkCapture(page, api_cd)
         net_capture.install()
 
     url = cd.get("chart_page_url") or "https://coinmap.tech/chart"
+    bearer_auth: Optional[str] = None
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=90_000)
         page.wait_for_timeout(settle_ms)
@@ -1285,6 +1859,37 @@ def _run_chart_screenshot_flow(
         _maybe_switch_to_dark_mode(page, cd)
         _maybe_dismiss_light_theme_modal(page, cd)
         _maybe_dismiss_coinmap_symbol_search_modal(page, cd)
+
+        if (
+            mode == "bearer_request"
+            and api_cd is not None
+            and api_cd.get("bearer_skip_chart_ui") is False
+        ):
+            _coinmap_bearer_log(
+                api_cd,
+                "chart_download: bearer_request + full UI — wait for Bearer after chart load, "
+                "then multi-shot + cm-api per step",
+            )
+            if bearer_capture is None:
+                raise SystemExit(
+                    "api_data_export bearer_request with bearer_skip_chart_ui: false requires "
+                    "bearer capture (internal error: bearer_capture missing)."
+                )
+            timeout_ms = int(
+                api_cd.get("bearer_ready_timeout_ms")
+                or api_cd.get("network_capture_wait_ms")
+                or 15_000
+            )
+            _coinmap_bearer_log(
+                api_cd,
+                f"After chart modals: waiting for Bearer before multi-shot (timeout {timeout_ms}ms)",
+            )
+            bearer_auth = bearer_capture.wait_for_authorization(timeout_ms)
+            if not bearer_auth:
+                raise SystemExit(
+                    "api_data_export bearer_request: no Authorization on requests to gw.coinmap.tech "
+                    f"within {timeout_ms}ms. Check login, chart_page_url, or use mode network_capture."
+                )
 
         plan = _coinmap_resolve_capture_plan(cd)
         if plan:
@@ -1297,6 +1902,7 @@ def _run_chart_screenshot_flow(
                 plan=plan,
                 api_cd=api_cd,
                 net_capture=net_capture,
+                bearer_authorization=bearer_auth,
                 coinmap_email=coinmap_email,
                 coinmap_password=coinmap_password,
                 coinmap_login_cfg=coinmap_login_cfg,
@@ -1319,11 +1925,23 @@ def _run_chart_screenshot_flow(
                 api_cd=api_cd,
             )
         elif api_cd is not None:
-            shot = _coinmap_collect_one_shot_api_data(
-                page,
-                api_cd,
-                {"symbol": "", "interval": "", "watchlist_category": None},
-            )
+            if (
+                bearer_auth
+                and mode == "bearer_request"
+                and _bearer_http_parallel_enabled(api_cd)
+            ):
+                shot = _coinmap_collect_one_shot_api_data_httpx(
+                    api_cd,
+                    {"symbol": "", "interval": "", "watchlist_category": None},
+                    bearer_authorization=bearer_auth,
+                )
+            else:
+                shot = _coinmap_collect_one_shot_api_data(
+                    page,
+                    api_cd,
+                    {"symbol": "", "interval": "", "watchlist_category": None},
+                    bearer_authorization=bearer_auth,
+                )
             json_path = _write_coinmap_api_shot_json(
                 charts_dir,
                 file_stem=f"{stamp}_chart_fullscreen",
@@ -1896,6 +2514,13 @@ def _capture_charts_in_context(
     logs_dir = default_logs_dir()
 
     page = context.new_page()
+    bearer_capture: Optional[CoinmapBearerCapture] = None
+    cd_pre = cfg.get("chart_download")
+    if isinstance(cd_pre, dict) and cd_pre.get("enabled", False):
+        api_pre = _api_export_config(cd_pre)
+        if api_pre is not None and _api_export_mode(api_pre) == "bearer_request":
+            bearer_capture = CoinmapBearerCapture(page, api_pre)
+            bearer_capture.install()
     try:
         if progress_hook is not None:
             progress_hook()
@@ -1941,6 +2566,7 @@ def _capture_charts_in_context(
                     coinmap_email=email,
                     coinmap_password=password,
                     coinmap_login_cfg=cfg,
+                    bearer_capture=bearer_capture,
                 )
                 written.extend(dl_paths)
                 if progress_hook is not None:
@@ -1957,33 +2583,56 @@ def _capture_charts_in_context(
 
         tv = cfg.get("tradingview_capture") or {}
         if isinstance(tv, dict) and tv.get("enabled", False):
-            tv_page = context.new_page()
-            try:
-                if progress_hook is not None:
-                    progress_hook()
-                tv_paths = _run_tradingview_screenshot_flow(
-                    tv_page,
-                    charts_dir=charts_dir,
-                    stamp=stamp,
-                    settle_ms=settle_ms,
-                    tv=tv,
-                    coinmap_email=email,
-                    tradingview_password=tradingview_password,
-                )
-                written.extend(tv_paths)
-                if progress_hook is not None:
-                    progress_hook()
-            except Exception as e:
-                snap = _maybe_save_capture_error_screenshot(
-                    tv_page, logs_dir=logs_dir, stamp=stamp, label="tradingview_capture"
-                )
-                hint = f" Failure screenshot: {snap}" if snap else ""
-                raise SystemExit(
-                    "tradingview_capture failed. Check config/coinmap.yaml "
-                    f"(capture_plan, watchlist, symbols, intervals, fullscreen). Error: {e}.{hint}"
-                ) from e
-            finally:
-                tv_page.close()
+            tv_ds = str(tv.get("data_source") or "browser").strip().lower()
+            if tv_ds == "tvdatafeed":
+                from automation_tool.tvdatafeed_capture import run_tvdatafeed_export
+
+                try:
+                    if progress_hook is not None:
+                        progress_hook()
+                    tv_paths = run_tvdatafeed_export(
+                        tv=tv,
+                        charts_dir=charts_dir,
+                        stamp=stamp,
+                        tradingview_username=email,
+                        tradingview_password=tradingview_password,
+                    )
+                    written.extend(tv_paths)
+                    if progress_hook is not None:
+                        progress_hook()
+                except Exception as e:
+                    raise SystemExit(
+                        "tradingview_capture (tvdatafeed) failed. Check config/coinmap.yaml "
+                        f"tradingview_capture.tvdatafeed (exchange, symbol_exchanges, interval_map). Error: {e}"
+                    ) from e
+            else:
+                tv_page = context.new_page()
+                try:
+                    if progress_hook is not None:
+                        progress_hook()
+                    tv_paths = _run_tradingview_screenshot_flow(
+                        tv_page,
+                        charts_dir=charts_dir,
+                        stamp=stamp,
+                        settle_ms=settle_ms,
+                        tv=tv,
+                        coinmap_email=email,
+                        tradingview_password=tradingview_password,
+                    )
+                    written.extend(tv_paths)
+                    if progress_hook is not None:
+                        progress_hook()
+                except Exception as e:
+                    snap = _maybe_save_capture_error_screenshot(
+                        tv_page, logs_dir=logs_dir, stamp=stamp, label="tradingview_capture"
+                    )
+                    hint = f" Failure screenshot: {snap}" if snap else ""
+                    raise SystemExit(
+                        "tradingview_capture failed. Check config/coinmap.yaml "
+                        f"(capture_plan, watchlist, symbols, intervals, fullscreen). Error: {e}.{hint}"
+                    ) from e
+                finally:
+                    tv_page.close()
 
         screenshot_after = bool(cfg.get("screenshot_after_chart_download", True))
         skip_canvas = bool(cd.get("enabled")) and not screenshot_after
@@ -2019,6 +2668,11 @@ def _capture_charts_in_context(
             _ensure_dir(storage_state_path.parent)
             context.storage_state(path=str(storage_state_path))
     finally:
+        if bearer_capture is not None:
+            try:
+                bearer_capture.uninstall()
+            except Exception:
+                pass
         try:
             page.close()
         except Exception:

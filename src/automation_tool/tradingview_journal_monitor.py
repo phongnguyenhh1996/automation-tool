@@ -529,7 +529,7 @@ def _run_intraday_touch_loop(
                 prompt_id=settings.openai_prompt_id,
                 prompt_version=settings.openai_prompt_version,
                 user_text=user_msg,
-                coinmap_json_path=json_path,
+                coinmap_json_paths=[json_path],
                 previous_response_id=prev_id,
                 vector_store_ids=settings.openai_vector_store_ids,
                 store=settings.openai_responses_store,

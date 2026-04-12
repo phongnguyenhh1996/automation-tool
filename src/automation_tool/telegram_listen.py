@@ -479,12 +479,15 @@ def run_telegram_listener(
                                 "Ví dụ: /ask resp_abc123 Hãy tóm tắt 3 vùng giá và gợi ý trade_line.",
                             )
                             continue
+                        ask_body = (noi_dung or "").strip()
+                        if not ask_body.upper().startswith("[RETROSPECTIVE"):
+                            ask_body = f"[RETROSPECTIVE_ANALYSIS]\n{ask_body}"
                         try:
                             out_text, new_id = run_text_followup_responses(
                                 api_key=settings.openai_api_key,
                                 prompt_id=settings.openai_prompt_id,
                                 prompt_version=settings.openai_prompt_version,
-                                user_text=noi_dung,
+                                user_text=ask_body,
                                 previous_response_id=openai_response_id,
                                 vector_store_ids=settings.openai_vector_store_ids,
                                 store=settings.openai_responses_store,

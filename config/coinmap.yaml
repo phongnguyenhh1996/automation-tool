@@ -110,7 +110,7 @@ chart_download:
   chart_pan_y_ratio: 0.52
   chart_pan_drag_steps: 14
   chart_after_adjust_ms: 800
-  # false = không chụp PNG Coinmap, chỉ lưu JSON API (vẫn pan chart để merge response). TradingView không đổi.
+  # false = không chụp PNG Coinmap, chỉ lưu JSON API. Với mode network_capture + UI chart, tool vẫn pan để merge response; với bearer_request + skip UI thì không pan. TradingView không đổi.
   coinmap_screenshot_enabled: false
   # Before screenshot: if layer tooltip is open (height > threshold), click layer-list toggle.
   layer_tooltip_toggle_before_screenshot: true
@@ -119,21 +119,28 @@ chart_download:
   layer_tooltip_min_height_px: 19
   after_layer_toggle_click_ms: 400
 
-  # Lưu phản hồi 3 API do chính trang chart gọi (bắt response), không tự replay request → tránh 401 Unauthorized.
-  # Mỗi shot → một file JSON cạnh PNG: {stamp}_coinmap_{SYMBOL}_{interval}.json (single-chart: {stamp}_chart_fullscreen.json).
-  # Trong file: getcandlehistory / getorderflowhistory / getindicatorsvwap = payload JSON thô (hoặc null nếu lỗi/thiếu), không bọc ok/status.
-  # mode: network_capture (mặc định) | request (tự gọi context.request + query_template)
+  # JSON Coinmap: mặc định bearer_request — bắt Bearer từ trình duyệt rồi gọi cm-api bằng httpx (3 endpoint song song / shot; API-only: các shot capture_plan song song).
+  # mode: bearer_request (mặc định trong code nếu không khai báo) | network_capture (bắt response khi chart load) | request (Bearer tĩnh trong request_headers).
+  # network_capture: merge_repeated_endpoint_responses / network_capture_* áp dụng khi mode: network_capture.
+  # bearer_skip_chart_ui: true = không mở sidebar multi-shot Coinmap; chỉ trigger + Bearer + JSON. false = UI đầy đủ + Bearer sau mỗi bước.
+  # bearer_http_parallel: true = httpx song song 3 endpoint; bearer_parallel_max_concurrency: 0 = không giới hạn shot API-only.
   api_data_export:
     enabled: true
-    mode: network_capture
-    # Gộp các response cùng endpoint trong một shot (kéo chart → API gọi lại): merge theo ``t``, bản sau ghi đè trùng.
+    mode: bearer_request
+    bearer_skip_chart_ui: true
+    bearer_http_parallel: true
+    bearer_parallel_max_concurrency: 0
+    bearer_ready_timeout_ms: 25000
+    bearer_trigger_url: "https://coinmap.tech/chart"
+    bearer_capture_url_substrings: []
+    send_m_affiliate: true
+    m_affiliate: "CM"
+    auto_countback: 1000
+    auto_time_padding_ms: 0
+    # Gộp response khi mode: network_capture (kéo chart → API gọi lại).
     merge_repeated_endpoint_responses: true
-    # Chỉ xét N lần gọi đầu tiên mỗi endpoint (tránh gộp quá nhiều lần → data quá dài). 0 = không giới hạn.
-    # Giá trị 1 dễ bỏ sót: response đầu getcandlehistory đôi khi rỗng trước khi chart load xong; cần gộp thêm lần gọi sau.
     network_capture_max_responses_per_endpoint: 0
-    # Nếu sau lọc symbol+interval không còn dòng (ví dụ nến dùng mã khác orderflow), thử chỉ lọc theo interval.
     relax_symbol_filter_if_empty: true
-    # Ghi JSON đã cắt gọn (5m/15m: số nến + footprint + VWAP theo doc). false = file đĩa đầy đủ như API.
     slim_export_on_disk: true
     network_capture_wait_ms: 12000
     network_capture_poll_ms: 300
@@ -145,12 +152,33 @@ chart_download:
       getcandlehistory: "https://gw.coinmap.tech/cm-api/api/v1/getcandlehistory"
       getorderflowhistory: "https://gw.coinmap.tech/cm-api/api/v1/getorderflowhistory"
       getindicatorsvwap: "https://gw.coinmap.tech/cm-api/api/v1/getindicatorsvwap"
-    query_template: {}
+    query_template:
+      asset: ""
+      typedata: dly
+      type: forex
+      exchange: AXI
+      symbol: "{symbol}"
+      resolution: "{resolution}"
+      from: "{from_ms}"
+      to: "{to_ms}"
+      countback: "{countback}"
+      period: day
+      source: hlc3
+      bandsmultiplier: "1,2,3"
     extra_query: {}
 
 # Second browser tab after Coinmap chart step: [TradingView Vietnam XAUUSD](https://vn.tradingview.com/chart/?symbol=OANDA%3AXAUUSD)
 tradingview_capture:
   enabled: true
+  # data_source: browser | tvdatafeed — tvdatafeed = OHLC JSON (library tvdatafeed), không mở tab TradingView trong capture
+  data_source: tvdatafeed
+  tvdatafeed:
+    n_bars: 1000
+    parallel_max_workers: 4
+    exchange: OANDA
+    symbol_exchanges:
+      DXY: CAPITALCOM
+      XAUUSD: OANDA
   # Viewport: same as session `viewport_width` / `viewport_height` below (omit per-tab sizes).
   chart_url: "https://vn.tradingview.com/chart/?symbol=OANDA%3AXAUUSD"
   # Uses COINMAP_EMAIL + TRADINGVIEW_PASSWORD (.env). Opens top-left menu; if "Đăng nhập" is visible, logs in.

@@ -27,17 +27,18 @@ from automation_tool.config import (
 )
 from automation_tool.openai_errors import re_raise_unless_openai
 from automation_tool.openai_prompt_flow import (
-    DEFAULT_UPDATE_PROMPT_TEMPLATE,
     PromptTwoStepResult,
+    build_intraday_update_user_text,
     default_analysis_prompt,
     run_analysis_responses_flow,
     run_single_followup_responses,
 )
 from automation_tool.images import (
     ChartOpenAIPayload,
-    coinmap_xauusd_5m_json_path,
+    coinmap_main_pair_interval_json_path,
     effective_chart_image_order,
     ordered_chart_openai_payloads,
+    stamp_from_capture_paths,
 )
 from automation_tool.first_response_trade import apply_first_response_vao_lenh
 from automation_tool.state_files import (
@@ -66,7 +67,13 @@ from automation_tool.tradingview_watchlist_monitor import (
     run_tv_watchlist_monitor,
 )
 from automation_tool.tv_watchlist_daemon import WatchlistDaemonParams, run_tv_watchlist_daemon
-from automation_tool.zones_state import ZonesState, read_zones_state, write_zones_state, zones_from_analysis_payload
+from automation_tool.zones_state import (
+    ZonesState,
+    format_zones_snapshot_for_intraday_update,
+    read_zones_state,
+    write_zones_state,
+    zones_from_analysis_payload,
+)
 from automation_tool.telegram_bot import (
     send_message,
     send_mt5_execution_log_to_ngan_gon_chat,
@@ -146,8 +153,8 @@ def _parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help=(
-            "User message kèm hướng dẫn JSON; mặc định: theo cặp đang active "
-            "(marker charts-dir / data/.main_chart_symbol, xem default_analysis_prompt)"
+            "Override user message gửi kèm chart; mặc định: tag [FULL_ANALYSIS] + cặp active "
+            "(charts-dir / data/.main_chart_symbol). Schema nằm ở OpenAI Prompt / system-prompt.md."
         ),
     )
     a.add_argument(
@@ -251,7 +258,10 @@ def _parser() -> argparse.ArgumentParser:
         "--prompt",
         type=str,
         default=None,
-        help="Optional prompt override (applies to every symbol). Default: per-symbol analysis prompt.",
+        help=(
+            "Override user message (mọi symbol). Mặc định: tag [FULL_ANALYSIS] theo từng SYM; "
+            "chi tiết schema trong Prompt Studio / system-prompt.md."
+        ),
     )
     am.add_argument("--no-telegram", action="store_true", help="Do not send results to Telegram")
     am.add_argument(
@@ -305,7 +315,7 @@ def _parser() -> argparse.ArgumentParser:
         "--prompt",
         type=str,
         default=None,
-        help="Prompt user kèm JSON; mặc định: theo cặp active (giống analyze)",
+        help="Override user message; mặc định giống analyze ([FULL_ANALYSIS] + cặp active).",
     )
     al.add_argument(
         "--max-images-per-call",
@@ -492,8 +502,8 @@ def _parser() -> argparse.ArgumentParser:
     wd = sub.add_parser(
         "tv-watchlist-daemon",
         help=(
-            "Daemon 24/24: đọc giá từ title tab TradingView (vd: 'XAUUSD 4,755.145 ...') mỗi 2s, "
-            "so alert_price trong zones_state.json; "
+            "Daemon 24/24: đọc giá từ title tab TradingView (vd: 'XAUUSD 4,755.145 ...') mỗi 1s (mặc định), "
+            "so alert_price trong zones_state.json (Last và alert làm tròn số nguyên; chạm nếu |chênh|≤eps, mặc định 1 → 4755 và 4756 vẫn chạm); "
             "chạm → dispatch job (Coinmap M5 + OpenAI + MT5/Telegram) và không chờ."
         ),
     )
@@ -514,7 +524,14 @@ def _parser() -> argparse.ArgumentParser:
     wd.add_argument("--no-save-storage", action="store_true")
     wd.add_argument("--headed", action="store_true")
     wd.add_argument("--no-telegram", action="store_true")
-    wd.add_argument("--poll-seconds", type=float, default=2.0)
+    wd.add_argument("--poll-seconds", type=float, default=1.0)
+    wd.add_argument(
+        "--eps",
+        type=float,
+        default=1.0,
+        metavar="X",
+        help="Sau làm tròn nguyên: chạm nếu |Last−alert|≤X (mặc định 1.0 → lệch 1 giá vẫn chạm)",
+    )
     wd.add_argument("--zones-json", type=Path, default=None, metavar="FILE", help="zones_state.json path override")
     wd.add_argument("--no-mt5-execute", action="store_true")
     wd.add_argument("--mt5-symbol", default=None, metavar="SYM")
@@ -699,7 +716,7 @@ def _parser() -> argparse.ArgumentParser:
         "--prompt",
         type=str,
         default=None,
-        help="User message; default: analysis prompt theo cặp active + JSON schema",
+        help="User message; default: [FULL_ANALYSIS] theo cặp active (schema trong Prompt / system-prompt.md).",
     )
     g.add_argument("--charts-dir", type=Path, default=None)
     g.add_argument(
@@ -1251,7 +1268,7 @@ def cmd_capture_many(args: argparse.Namespace) -> None:
 
 
 def _resolved_analysis_prompt(args: argparse.Namespace, charts_dir: Path) -> str:
-    """Khi không truyền --prompt: dùng default_analysis_prompt theo read_main_chart_symbol(charts_dir)."""
+    """Khi không truyền --prompt: dùng default_analysis_prompt(read_main_chart_symbol(charts_dir))."""
     p = getattr(args, "prompt", None)
     if p is not None and str(p).strip():
         return str(p)
@@ -1852,20 +1869,35 @@ def cmd_update(args: argparse.Namespace) -> None:
         headless=not args.headed,
         reuse_browser_context=None,
         main_chart_symbol=args.main_symbol,
+        clear_charts_before_capture=True,
     )
     charts_dir = args.charts_dir or default_charts_dir()
     print(f"Captured {len(paths)} file(s) for update run.")
-    _log.info("update: capture xong | %s file(s) | json M5=%s", len(paths), coinmap_xauusd_5m_json_path(charts_dir))
-    json_path = coinmap_xauusd_5m_json_path(charts_dir)
-    if json_path is None:
+    stamp = stamp_from_capture_paths(paths)
+    m5 = coinmap_main_pair_interval_json_path(charts_dir, "5m", stamp=stamp)
+    m15 = coinmap_main_pair_interval_json_path(charts_dir, "15m", stamp=stamp)
+    _log.info(
+        "update: capture xong | %s file(s) | stamp=%s | M15=%s | M5=%s",
+        len(paths),
+        stamp,
+        m15,
+        m5,
+    )
+    if m5 is None:
         raise SystemExit(
-            f"No XAUUSD 5m Coinmap JSON under {charts_dir} after capture. "
+            f"No XAUUSD 5m Coinmap JSON under {charts_dir} after capture (stamp={stamp!r}). "
             "Check coinmap_update.yaml capture_plan and api_data_export."
+        )
+    if m15 is None:
+        raise SystemExit(
+            f"No XAUUSD 15m Coinmap JSON under {charts_dir} after capture (stamp={stamp!r}). "
+            "Check coinmap_update.yaml capture_plan includes 15m."
         )
 
     require_openai(s)
     p1, p2, p3 = baseline.prices
-    user_msg = DEFAULT_UPDATE_PROMPT_TEMPLATE.format(p1=p1, p2=p2, p3=p3)
+    zones_snap = format_zones_snapshot_for_intraday_update(read_zones_state())
+    user_msg = build_intraday_update_user_text(p1, p2, p3, zones_snapshot=zones_snap)
 
     try:
         out_text, new_id = run_single_followup_responses(
@@ -1873,7 +1905,7 @@ def cmd_update(args: argparse.Namespace) -> None:
             prompt_id=s.openai_prompt_id,
             prompt_version=s.openai_prompt_version,
             user_text=user_msg,
-            coinmap_json_path=json_path,
+            coinmap_json_paths=[m15, m5],
             previous_response_id=prev,
             vector_store_ids=s.openai_vector_store_ids,
             store=s.openai_responses_store,
@@ -1898,7 +1930,7 @@ def cmd_update(args: argparse.Namespace) -> None:
         telegram_chat_id=s.telegram_chat_id,
         telegram_log_chat_id=s.telegram_log_chat_id,
         telegram_output_ngan_gon_chat_id=s.telegram_output_ngan_gon_chat_id,
-        telegram_source_label="update (follow-up M5)",
+            telegram_source_label="update (follow-up M15+M5)",
     )
 
     new_triple, zerr, no_change_json = parse_three_zone_prices(out_text)
@@ -2014,6 +2046,7 @@ def cmd_tv_watchlist_daemon(args: argparse.Namespace) -> None:
         mt5_execute=not args.no_mt5_execute,
         mt5_symbol=args.mt5_symbol,
         mt5_dry_run=args.mt5_dry_run,
+        eps=float(args.eps),
     )
     outcome = run_tv_watchlist_daemon(settings=s, params=params)
     print(outcome, flush=True)

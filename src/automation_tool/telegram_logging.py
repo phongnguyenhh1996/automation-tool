@@ -92,6 +92,9 @@ def setup_automation_logging(settings: Settings) -> logging.Logger:
 
     Mọi logger con ``automation_tool.*`` (vd. ``automation_tool.tp1``, ``automation_tool.tp1_followup``,
     ``automation_tool.journal``) propagate lên ``automation_tool`` → cùng stderr + Telegram log.
+    Luồng Coinmap Bearer (``[coinmap bearer]``) dùng ``logging.getLogger("automation_tool").info(...)``
+    trong ``coinmap.py`` — cũng tới kênh log này khi đã gọi ``setup_automation_logging`` (CLI và
+    ``capture_worker`` / ``capture_many_worker``).
     """
     log = logging.getLogger("automation_tool")
     if log.handlers:

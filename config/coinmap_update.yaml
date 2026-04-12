@@ -1,6 +1,7 @@
-# Intraday update capture only: Coinmap XAUUSD 5m JSON (no TradingView tab in this run).
+# Intraday update: Coinmap XAUUSD M15 + M5 JSON (bearer_request; hai bước HTTP song song).
 # Use with: coinmap-automation update --config config/coinmap_update.yaml
 # TradingView alert sync reads tradingview_capture from config/coinmap.yaml by default.
+# api_data_export: mặc định bearer_request + skip Coinmap UI; chỉ login, trigger chart, Bearer, httpx song song.
 
 clear_charts_before_capture: true
 base_url: "https://coinmap.tech"
@@ -23,6 +24,9 @@ chart_download:
     - symbol: XAUUSD
       interval: "5m"
       watchlist_category: "forex 1"
+    - symbol: XAUUSD
+      interval: "15m"
+      watchlist_category: "forex 1"
   right_sidebar_container_class_prefix: "ChartDesktopPage_rightSidebar__"
   right_sidebar_toggle_click_force: true
   right_sidebar_action_button_class_prefix: "ChartDesktopPage_actionButton"
@@ -43,8 +47,7 @@ chart_download:
   interval_option_visible_timeout_ms: 15000
   after_interval_select_ms: 800
   after_interval_change_settle_ms: 2000
-  # Coinmap nhớ khung vừa dùng (không cố định M5). Chọn lại đúng khung đó → không gọi API → JSON null.
-  # Bước bump: chọn khung khác trước (vd. 15m), rồi tool chọn lại đích (5m). Trùng target trong yaml → code tự đổi.
+  # Chỉ dùng khi mode: network_capture (bắt response từ chart). Với bearer_request + skip UI, bước bump không chạy.
   api_network_capture_bump_interval: "15m"
   after_fullscreen_escape_ms: 600
   coinmap_fullscreen_exit_use_toolbar_click: true
@@ -94,7 +97,17 @@ chart_download:
 
   api_data_export:
     enabled: true
-    mode: network_capture
+    mode: bearer_request
+    bearer_skip_chart_ui: true
+    bearer_http_parallel: true
+    bearer_parallel_max_concurrency: 0
+    bearer_ready_timeout_ms: 25000
+    bearer_trigger_url: "https://coinmap.tech/chart"
+    bearer_capture_url_substrings: []
+    send_m_affiliate: true
+    m_affiliate: "CM"
+    auto_countback: 1000
+    auto_time_padding_ms: 0
     merge_repeated_endpoint_responses: true
     network_capture_max_responses_per_endpoint: 0
     relax_symbol_filter_if_empty: true
@@ -109,7 +122,19 @@ chart_download:
       getcandlehistory: "https://gw.coinmap.tech/cm-api/api/v1/getcandlehistory"
       getorderflowhistory: "https://gw.coinmap.tech/cm-api/api/v1/getorderflowhistory"
       getindicatorsvwap: "https://gw.coinmap.tech/cm-api/api/v1/getindicatorsvwap"
-    query_template: {}
+    query_template:
+      asset: ""
+      typedata: dly
+      type: forex
+      exchange: AXI
+      symbol: "{symbol}"
+      resolution: "{resolution}"
+      from: "{from_ms}"
+      to: "{to_ms}"
+      countback: "{countback}"
+      period: day
+      source: hlc3
+      bandsmultiplier: "1,2,3"
     extra_query: {}
 
 tradingview_capture:
