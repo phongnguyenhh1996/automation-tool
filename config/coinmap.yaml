@@ -177,7 +177,7 @@ tradingview_capture:
     # Khi get_hist trả 0 nến: gọi lại thêm tối đa N lần (pause empty_bars_retry_delay_ms giữa các lần).
     empty_bars_max_retries: 3
     empty_bars_retry_delay_ms: 300
-    parallel_max_workers: 4
+    parallel_max_workers: 3
     exchange: OANDA
     symbol_exchanges:
       DXY: CAPITALCOM
