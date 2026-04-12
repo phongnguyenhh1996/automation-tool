@@ -51,8 +51,6 @@ _DEFAULT_INTERVAL_MAP: dict[str, str] = {
     "1 month": "in_monthly",
 }
 
-_thread_local = threading.local()
-
 # Lazily loaded (tvDatafeed may be missing until `pip install -e .`)
 _tvdatafeed_classes: tuple[Any, Any] | None = None
 
@@ -255,22 +253,6 @@ def _df_to_records(df: Any) -> list[dict[str, Any]]:
         return []
 
 
-def _init_thread_tv(username: Optional[str], password: Optional[str]) -> None:
-    TvDatafeed, _ = _load_tvdatafeed()
-
-    if username and password:
-        _thread_local.tv = TvDatafeed(username, password)
-    else:
-        _thread_local.tv = TvDatafeed()
-
-
-def _get_thread_tv() -> Any:
-    tv = getattr(_thread_local, "tv", None)
-    if tv is None:
-        raise RuntimeError("tvdatafeed thread client not initialized")
-    return tv
-
-
 def _fetch_one_barset(
     *,
     tv_symbol: str,
@@ -281,19 +263,25 @@ def _fetch_one_barset(
     extended_session: bool,
     row: dict[str, Any],
     tv_cfg: dict[str, Any],
+    tv_client: Any,
+    tv_client_lock: threading.Lock,
 ) -> tuple[str, list[dict[str, Any]], str]:
-    """Returns (interval_slug, records, interval_attr_name)."""
+    """Returns (interval_slug, records, interval_attr_name).
+
+    ``tv_client`` is shared across worker threads; ``get_hist`` must run under
+    ``tv_client_lock`` (TvDatafeed websocket is not thread-safe).
+    """
     iv = _interval_enum_from_label(interval_label, interval_map=interval_map, row=row)
     iv_name = iv.name if hasattr(iv, "name") else str(iv)
     slug = _tradingview_interval_slug(interval_label, tv_cfg)
-    client = _get_thread_tv()
-    df = client.get_hist(
-        tv_symbol,
-        exchange,
-        interval=iv,
-        n_bars=n_bars,
-        extended_session=extended_session,
-    )
+    with tv_client_lock:
+        df = tv_client.get_hist(
+            tv_symbol,
+            exchange,
+            interval=iv,
+            n_bars=n_bars,
+            extended_session=extended_session,
+        )
     rec = _df_to_records(df)
     return slug, rec, iv_name
 
@@ -376,6 +364,17 @@ def run_tvdatafeed_export(
     if p is None:
         p = (tv.get("password") or "").strip() or None
 
+    TvDatafeed, _ = _load_tvdatafeed()
+    _log.info(
+        "tvdatafeed: khởi tạo một TvDatafeed (đăng nhập / nologin một lần) | đăng_nhập_tv=%s",
+        "có" if (u and p) else "không (nologin — dữ liệu có thể giới hạn)",
+    )
+    if u and p:
+        shared_client: Any = TvDatafeed(u, p)
+    else:
+        shared_client = TvDatafeed()
+    shared_lock = threading.Lock()
+
     def _run_task(meta: dict[str, Any]) -> Path:
         row = meta["row"]
         label = meta["label"]
@@ -395,6 +394,8 @@ def run_tvdatafeed_export(
                     extended_session=extended_session,
                     row=row,
                     tv_cfg=tv,
+                    tv_client=shared_client,
+                    tv_client_lock=shared_lock,
                 )
             except Exception as e:
                 _log.error(
@@ -467,34 +468,22 @@ def run_tvdatafeed_export(
             )
         return path
 
-    # One TvDatafeed per worker thread (parallel get_hist); initializer sets thread-local client
-    init_u = u
-    init_p = p
-
-    def _init() -> None:
-        _init_thread_tv(init_u, init_p)
-
     workers = min(parallel_max_workers, max(1, len(tasks)))
     if len(tasks) == 1:
         workers = 1
 
     _log.info(
-        "tvdatafeed: bắt đầu export | stamp=%s | jobs=%d | parallel=%d | đăng_nhập_tv=%s",
+        "tvdatafeed: bắt đầu export | stamp=%s | jobs=%d | parallel=%d | 1 TvDatafeed + lock cho get_hist",
         stamp,
         len(tasks),
         workers,
-        "có" if (init_u and init_p) else "không (nologin — dữ liệu có thể giới hạn)",
     )
 
     if workers == 1:
-        _init_thread_tv(init_u, init_p)
         for m in tasks:
             written.append(_run_task(m))
     else:
-        with ThreadPoolExecutor(
-            max_workers=workers,
-            initializer=_init,
-        ) as pool:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
             futs = []
             for m in tasks:
                 futs.append(pool.submit(_run_task, m))
