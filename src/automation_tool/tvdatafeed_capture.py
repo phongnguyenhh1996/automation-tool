@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Optional
@@ -320,6 +321,11 @@ def run_tvdatafeed_export(
 
     n_bars = int(tvd.get("n_bars") or 1000)
     n_bars = max(1, min(n_bars, 5000))
+    # Khi get_hist trả 0 nến: thử lại thêm tối đa N lần (tổng gọi = 1 + N).
+    empty_bars_max_retries = int(tvd.get("empty_bars_max_retries") or 3)
+    empty_bars_max_retries = max(0, min(empty_bars_max_retries, 20))
+    empty_bars_retry_delay_ms = int(tvd.get("empty_bars_retry_delay_ms") or 800)
+    empty_bars_retry_delay_ms = max(0, min(empty_bars_retry_delay_ms, 60_000))
     parallel_max_workers = int(tvd.get("parallel_max_workers") or 4)
     if parallel_max_workers < 1:
         parallel_max_workers = 1
@@ -375,29 +381,56 @@ def run_tvdatafeed_export(
         label = meta["label"]
         ex_s = str(meta["exchange"])
         sym_s = str(meta["tv_symbol"])
-        try:
-            slug, records, iv_name = _fetch_one_barset(
-                tv_symbol=meta["tv_symbol"],
-                exchange=meta["exchange"],
-                interval_label=label,
-                interval_map=interval_map,
-                n_bars=n_bars,
-                extended_session=extended_session,
-                row=row,
-                tv_cfg=tv,
-            )
-        except Exception as e:
-            _log.error(
-                "tvdatafeed: LỖI khi get_hist | %s:%s | %s (%s) | requested=%d bars | %s",
-                ex_s,
-                sym_s,
-                label,
-                type(e).__name__,
-                n_bars,
-                e,
-                exc_info=True,
-            )
-            raise
+        slug = ""
+        records: list[dict[str, Any]] = []
+        iv_name = ""
+        for attempt in range(empty_bars_max_retries + 1):
+            try:
+                slug, records, iv_name = _fetch_one_barset(
+                    tv_symbol=meta["tv_symbol"],
+                    exchange=meta["exchange"],
+                    interval_label=label,
+                    interval_map=interval_map,
+                    n_bars=n_bars,
+                    extended_session=extended_session,
+                    row=row,
+                    tv_cfg=tv,
+                )
+            except Exception as e:
+                _log.error(
+                    "tvdatafeed: LỖI khi get_hist | %s:%s | %s (%s) | requested=%d bars | %s",
+                    ex_s,
+                    sym_s,
+                    label,
+                    type(e).__name__,
+                    n_bars,
+                    e,
+                    exc_info=True,
+                )
+                raise
+            if len(records) > 0:
+                if attempt > 0:
+                    _log.info(
+                        "tvdatafeed: sau %d lần thử lại có dữ liệu | %s:%s | %s → n_bars=%d",
+                        attempt,
+                        ex_s,
+                        sym_s,
+                        label,
+                        len(records),
+                    )
+                break
+            if attempt < empty_bars_max_retries:
+                _log.warning(
+                    "tvdatafeed: 0 nến — thử lại %d/%d sau %dms | %s:%s | %s",
+                    attempt + 1,
+                    empty_bars_max_retries,
+                    empty_bars_retry_delay_ms,
+                    ex_s,
+                    sym_s,
+                    label,
+                )
+                if empty_bars_retry_delay_ms > 0:
+                    time.sleep(empty_bars_retry_delay_ms / 1000.0)
         path = charts_dir / f"{stamp}_tradingview_{meta['file_sym_key']}_{slug}.json"
         payload = {
             "source": "tvdatafeed",
