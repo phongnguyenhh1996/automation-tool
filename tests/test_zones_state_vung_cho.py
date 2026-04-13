@@ -9,7 +9,9 @@ from automation_tool.zones_state import (
     Zone,
     ZonesState,
     _parse_zone,
+    baseline_triple_from_zones_state,
     read_zones_state,
+    remove_zones_state_file,
     zones_from_analysis_payload,
     zones_from_analysis_payload_merged,
 )
@@ -115,3 +117,45 @@ def test_zones_from_analysis_merged_keeps_zone_when_no_change_true() -> None:
     assert by_label["plan_chinh"].trade_line == "old"
     assert by_label["plan_phu"].vung_cho == "2.0–2.0"
     assert by_label["scalp"].vung_cho == "3.0–3.0"
+
+
+def test_baseline_triple_from_zones_state_midpoints() -> None:
+    st = ZonesState(
+        symbol="XAUUSD",
+        zones=[
+            Zone(
+                id="plan_chinh",
+                label="plan_chinh",
+                vung_cho="4000.0–4010.0",
+                side="BUY",
+            ),
+            Zone(
+                id="plan_phu",
+                label="plan_phu",
+                vung_cho="3990.0–3995.0",
+                side="BUY",
+            ),
+            Zone(
+                id="scalp",
+                label="scalp",
+                vung_cho="3985.0–3985.0",
+                side="BUY",
+            ),
+        ],
+    )
+    t = baseline_triple_from_zones_state(st)
+    assert t is not None
+    assert t == (4005.0, 3992.5, 3985.0)
+
+
+def test_baseline_triple_from_zones_state_incomplete() -> None:
+    assert baseline_triple_from_zones_state(None) is None
+    assert baseline_triple_from_zones_state(ZonesState(symbol="X", zones=[])) is None
+
+
+def test_remove_zones_state_file(tmp_path: Path) -> None:
+    p = tmp_path / "zones_state.json"
+    assert remove_zones_state_file(p) is False
+    p.write_text("{}", encoding="utf-8")
+    assert remove_zones_state_file(p) is True
+    assert remove_zones_state_file(p) is False

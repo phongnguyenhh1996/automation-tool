@@ -42,6 +42,7 @@ from automation_tool.images import (
 )
 from automation_tool.first_response_trade import apply_first_response_vao_lenh
 from automation_tool.state_files import (
+    MorningBaselinePrices,
     default_last_alert_prices_path,
     default_last_response_id_path,
     default_morning_baseline_prices_path,
@@ -49,14 +50,11 @@ from automation_tool.state_files import (
     read_last_alert_prices,
     read_last_response_id,
     read_morning_baseline_prices,
-    remove_last_alert_prices_file,
     write_last_alert_prices,
     write_last_response_id,
-    write_morning_baseline_prices,
 )
 from automation_tool.zone_prices import (
     is_no_change_action_line,
-    parse_three_zone_prices,
     parse_update_zone_triple,
     prices_equal_triple,
 )
@@ -70,8 +68,11 @@ from automation_tool.tradingview_watchlist_monitor import (
 from automation_tool.tv_watchlist_daemon import WatchlistDaemonParams, run_tv_watchlist_daemon
 from automation_tool.zones_state import (
     ZonesState,
+    baseline_triple_from_zones_state,
+    default_zones_state_path,
     format_zones_snapshot_for_intraday_update,
     read_zones_state,
+    remove_zones_state_file,
     write_zones_state,
     zones_from_analysis_payload,
     zones_from_analysis_payload_merged,
@@ -86,7 +87,6 @@ from automation_tool.telegram_bot import (
 from automation_tool.telegram_listen import TelegramListenParams, run_telegram_listener
 from automation_tool.telegram_logging import setup_automation_logging
 from automation_tool.config import load_all_dotenv
-from automation_tool.exclusive_all_update import acquire_exclusive_all_update_run
 from automation_tool.mt5_openai_parse import parse_openai_output_md
 from automation_tool.mt5_execute import check_mt5_login, execute_trade, format_mt5_execution_for_telegram
 
@@ -301,8 +301,9 @@ def _parser() -> argparse.ArgumentParser:
     al = sub.add_parser(
         "all",
         help=(
-            "capture → OpenAI → parse 3 vùng giá → persist → "
-            "tv-watchlist-monitor (mặc định; dùng --no-tv-journal-monitor để bỏ)"
+            "đầu phiên: xóa zones_state.json (trừ --no-clear-zones-state) → capture → OpenAI → "
+            "ghi last_response_id + Telegram + zones_state.json "
+            "(không ghi morning_baseline / last_alert_prices)"
         ),
     )
     al.add_argument("--config", type=Path, default=None)
@@ -373,41 +374,21 @@ def _parser() -> argparse.ArgumentParser:
         help="Monitor: IANA timezone cho --until-hour",
     )
     al.add_argument(
-        "--last-alert-json",
+        "--zones-json",
         type=Path,
         default=None,
         metavar="FILE",
         help=(
-            "Phân tích chart + tv-journal-monitor: file last_alert_prices.json "
-            "(mặc định: data/last_alert_prices.json)"
+            "Đầu phiên all: xóa file zones_state này trước capture "
+            "(mặc định: data/<SYM>/zones_state.json theo cặp active sau --main-symbol / env)"
         ),
     )
     al.add_argument(
-        "--no-mt5-execute",
+        "--no-clear-zones-state",
         action="store_true",
         help=(
-            "Không gọi execute_trade (phản hồi đầu phân tích + journal sau VÀO LỆNH + trade_line; "
-            "mặc định: gọi; cần Windows + MetaTrader5 pip)"
-        ),
-    )
-    al.add_argument(
-        "--mt5-symbol",
-        default=None,
-        metavar="SYM",
-        help="Symbol MT5 (ghi đè parse từ trade_line)",
-    )
-    al.add_argument(
-        "--mt5-dry-run",
-        action="store_true",
-        help="Chỉ dry-run MT5 (mặc định: gửi lệnh thật)",
-    )
-    al.add_argument(
-        "--no-clear-last-alert",
-        action="store_true",
-        help=(
-            "Không xóa last_alert_prices.json trước khi capture/phân tích "
-            f"(mặc định: xóa file tại --last-alert-json hoặc {default_last_alert_prices_path()} "
-            "để phiên all bắt đầu không kế thừa status/ticket cũ)"
+            "Không xóa zones_state.json trước capture/phân tích "
+            "(mặc định: xóa để phiên all không kế thừa zone/status cũ)"
         ),
     )
     al.set_defaults(func=cmd_all)
@@ -1555,20 +1536,20 @@ def cmd_telegram_listen(args: argparse.Namespace) -> None:
 
 
 def cmd_all(args: argparse.Namespace) -> None:
-    acquire_exclusive_all_update_run()
     s = load_settings()
     from automation_tool.images import set_active_main_symbol_file
 
     if getattr(args, "main_symbol", None):
         set_active_main_symbol_file(args.main_symbol)
 
-    lap_all = args.last_alert_json or default_last_alert_prices_path()
-    if not args.no_clear_last_alert:
-        if remove_last_alert_prices_file(lap_all):
-            _log.info("all: đã xóa last_alert_prices trước phiên | %s", lap_all)
-            print(f"Đã xóa last_alert trước phiên all: {lap_all}", flush=True)
+    zs_path = args.zones_json  # None → default data/<SYM>/zones_state.json cho clear + write
+    zs_clear = zs_path or default_zones_state_path()
+    if not args.no_clear_zones_state:
+        if remove_zones_state_file(zs_path):
+            _log.info("all: đã xóa zones_state trước phiên | %s", zs_clear)
+            print(f"Đã xóa zones_state trước phiên all: {zs_clear}", flush=True)
         else:
-            _log.info("all: không có file last_alert để xóa | %s", lap_all)
+            _log.info("all: không có zones_state để xóa | %s", zs_clear)
 
     cfg = args.config or default_coinmap_config_path()
     storage = args.storage_state or default_storage_state_path()
@@ -1607,21 +1588,6 @@ def cmd_all(args: argparse.Namespace) -> None:
             f"under {charts_dir}. Check capture and chart slot order (effective_chart_image_order)."
         )
 
-    def _on_first_all(text: str) -> None:
-        apply_first_response_vao_lenh(
-            text,
-            last_alert_path=lap_all,
-            # Policy change: `all` no longer executes MT5. Daemon handles MT5 entry later.
-            mt5_execute=False,
-            mt5_dry_run=args.mt5_dry_run,
-            mt5_symbol=args.mt5_symbol,
-            telegram_bot_token=s.telegram_bot_token,
-            telegram_chat_id=s.telegram_chat_id,
-            telegram_log_chat_id=s.telegram_log_chat_id,
-            telegram_output_ngan_gon_chat_id=s.telegram_output_ngan_gon_chat_id,
-            telegram_source_label="all (phản hồi đầu)",
-        )
-
     prompt_all = _resolved_analysis_prompt(args, charts_dir)
     try:
         out = _run_openai_flow(
@@ -1630,7 +1596,7 @@ def cmd_all(args: argparse.Namespace) -> None:
             prompt_all,
             args.max_images_per_call,
             chart_payloads=payloads,
-            on_first_model_text=_on_first_all,
+            on_first_model_text=None,
         )
     except Exception as e:
         re_raise_unless_openai(e)
@@ -1648,20 +1614,6 @@ def cmd_all(args: argparse.Namespace) -> None:
             summary_chat_id=s.telegram_output_ngan_gon_chat_id,
         )
 
-    zt, zerr, _nc = parse_three_zone_prices(out.after_charts or "")
-    if zt:
-        write_morning_baseline_prices(zt)
-        write_last_alert_prices(zt, path=lap_all)
-        _log.info(
-            "all: đã ghi morning_baseline + last_alert | giá=%s | %s | %s",
-            zt[0],
-            zt[1],
-            zt[2],
-        )
-    if out.after_charts:
-        merge_trade_lines_from_openai_analysis_text(out.after_charts, path=lap_all)
-
-    # Write zones_state.json (migration A: keep last_alert_prices.json for legacy flows)
     if out.after_charts:
         from automation_tool.openai_analysis_json import parse_analysis_from_openai_text
 
@@ -1672,13 +1624,15 @@ def cmd_all(args: argparse.Namespace) -> None:
             sym = get_active_main_symbol().strip().upper()
             zones = zones_from_analysis_payload(symbol=sym, payload=payload, source="all")
             if zones:
-                write_zones_state(ZonesState(symbol=sym, zones=zones), path=None)
+                write_zones_state(ZonesState(symbol=sym, zones=zones), path=zs_path)
                 _log.info("all: đã ghi zones_state.json | zones=%d | symbol=%s", len(zones), sym)
-    if not zt:
-        print(
-            f"Warning: could not parse morning zone prices for persistence: {zerr}",
-            file=sys.stderr,
-        )
+            else:
+                _log.warning("all: parse JSON có prices nhưng không tạo được zones — không ghi zones_state")
+        elif out.after_charts.strip():
+            print(
+                "Warning: could not parse analysis JSON for zones_state.json (no `prices` or empty).",
+                file=sys.stderr,
+            )
 
 
 def cmd_tv_alerts(args: argparse.Namespace) -> None:
@@ -1812,7 +1766,6 @@ def cmd_tp1_tick_dry_run(args: argparse.Namespace) -> None:
 
 
 def cmd_update(args: argparse.Namespace) -> None:
-    acquire_exclusive_all_update_run()
     from automation_tool.images import set_active_main_symbol_file
 
     s = load_settings()
@@ -1831,9 +1784,13 @@ def cmd_update(args: argparse.Namespace) -> None:
 
     baseline = read_morning_baseline_prices()
     if baseline is None:
-        raise SystemExit(
-            f"Missing {default_morning_baseline_prices_path()} — run `coinmap-automation all` successfully first."
-        )
+        triple = baseline_triple_from_zones_state(read_zones_state())
+        if triple is None:
+            raise SystemExit(
+                f"Missing {default_morning_baseline_prices_path()} and could not derive baseline from "
+                f"{default_zones_state_path()} — run `coinmap-automation all` successfully first."
+            )
+        baseline = MorningBaselinePrices(prices=triple)
 
     prev = read_last_response_id()
     if not prev:

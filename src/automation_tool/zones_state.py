@@ -26,6 +26,20 @@ def default_zones_state_path() -> Path:
     return symbol_data_dir() / "zones_state.json"
 
 
+def remove_zones_state_file(path: Optional[Path] = None) -> bool:
+    """
+    Xóa ``zones_state.json`` nếu tồn tại (vd. đầu phiên ``all`` để bắt đầu sạch).
+
+    Returns:
+        ``True`` nếu đã xóa file, ``False`` nếu file không có.
+    """
+    p = path or default_zones_state_path()
+    if p.is_file():
+        p.unlink()
+        return True
+    return False
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -217,6 +231,31 @@ def read_zones_state(path: Optional[Path] = None) -> Optional[ZonesState]:
     updated_at = str(data.get("updated_at") or "")
     last_obs = _parse_last_observed(data.get("last_observed"))
     return ZonesState(symbol=sym.strip(), zones=zones, updated_at=updated_at, last_observed=last_obs)
+
+
+def baseline_triple_from_zones_state(st: Optional[ZonesState]) -> Optional[tuple[float, float, float]]:
+    """
+    Mid-price triple (plan_chinh, plan_phu, scalp) from persisted zones.
+
+    Used when ``morning_baseline_prices.json`` is absent (e.g. ``all`` only writes ``zones_state.json``).
+    """
+    if st is None or not st.zones:
+        return None
+    by_label: dict[str, Zone] = {}
+    for z in st.zones:
+        key = (z.label or "").strip().lower()
+        if key:
+            by_label[key] = z
+    mids: list[float] = []
+    for lab in ZONE_LABELS_ORDER:
+        z = by_label.get(lab)
+        if z is None:
+            return None
+        lo, hi = parse_vung_cho_bounds(z.vung_cho)
+        if lo is None or hi is None:
+            return None
+        mids.append((float(lo) + float(hi)) / 2.0)
+    return (mids[0], mids[1], mids[2])
 
 
 def write_zones_state(state: ZonesState, path: Optional[Path] = None) -> None:
