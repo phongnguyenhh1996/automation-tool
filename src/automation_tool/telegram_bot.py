@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import json
 import logging
+import random
 import re
 import sys
 from dataclasses import dataclass
@@ -18,6 +19,14 @@ TELEGRAM_MAX_MESSAGE = 4096
 
 _RE_OUTPUT_CHI_TIET = re.compile(r"\[OUTPUT_CHI_TIET\]", re.IGNORECASE)
 _RE_OUTPUT_NGAN_GON = re.compile(r"\[OUTPUT_NGAN_GON\]", re.IGNORECASE)
+
+_MT5_NGAN_GON_MESSAGES = (
+    "Sát thủ săn mồi đã xuất kích – MT5 rực lửa, chờ lúa về kho! 🐯🎯💰🔥",
+    "Không cảm xúc, không do dự – Tool đã vung đao, Market chỉ có khóc! ⚔️📉💸🚀",
+    "Tín hiệu gọi tên, lệnh lên nòng – Tiền vào túi là chuyện sớm muộn! 💎📞📈🔥",
+    "Market rung lắc kệ Market – Tool đã vào lệnh, ngồi mát ăn bát vàng thôi! 🌊🧘‍♂️💎💵",
+    "Vít ga vào lệnh, chốt lãi xuyên màn đêm – Đẳng cấp công nghệ là đây! 🏎️💨💰🔥",
+)
 
 
 @dataclass(frozen=True)
@@ -454,14 +463,15 @@ def send_mt5_execution_log_to_ngan_gon_chat(
     text: str,
 ) -> None:
     """
-    Gửi log thực thi MT5 (sau ``execute_trade``) chỉ tới ``TELEGRAM_CHAT_ID``.
+    Gửi thông báo sau thực thi MT5 (sau ``execute_trade``) tới ``TELEGRAM_CHAT_ID``.
 
+    Nội dung là một trong các câu cố định (chọn ngẫu nhiên), không gửi log chi tiết.
     Plain text; không dùng parse_mode để tránh lỗi ký tự đặc biệt từ broker/API.
     """
     body = (text or "").strip()
     if not body:
         return
-    out = f"📌 MT5 — {source}\n\n{body}"
+    out = random.choice(_MT5_NGAN_GON_MESSAGES)
     main = (telegram_chat_id or "").strip()
     if not main:
         return
