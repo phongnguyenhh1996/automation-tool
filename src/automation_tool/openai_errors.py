@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 
@@ -10,6 +11,27 @@ def _nested_code(body: Any) -> str | None:
     if isinstance(err, dict):
         return err.get("code") if isinstance(err.get("code"), str) else None
     return None
+
+
+def _openai_api_error_details(exc: BaseException) -> str:
+    """Human-readable lines from OpenAI SDK errors (status, JSON body, str)."""
+    lines: list[str] = []
+    sc = getattr(exc, "status_code", None)
+    if isinstance(sc, int):
+        lines.append(f"HTTP status: {sc}")
+    body = getattr(exc, "body", None)
+    if body is not None:
+        if isinstance(body, dict):
+            try:
+                lines.append("Response body: " + json.dumps(body, ensure_ascii=False))
+            except (TypeError, ValueError):
+                lines.append(f"Response body: {body!r}")
+        else:
+            lines.append(f"Response body: {body!r}")
+    raw = str(exc).strip()
+    if raw:
+        lines.append(f"SDK / API message: {raw}")
+    return "\n".join(lines)
 
 
 def format_openai_exception(exc: BaseException) -> str | None:
@@ -23,7 +45,9 @@ def format_openai_exception(exc: BaseException) -> str | None:
         return None
 
     if isinstance(exc, AuthenticationError):
-        return "OpenAI authentication failed: check OPENAI_API_KEY in .env."
+        base = "OpenAI authentication failed: check OPENAI_API_KEY in .env."
+        extra = _openai_api_error_details(exc)
+        return f"{base}\n{extra}" if extra else base
 
     if isinstance(exc, RateLimitError):
         code = _nested_code(getattr(exc, "body", None))

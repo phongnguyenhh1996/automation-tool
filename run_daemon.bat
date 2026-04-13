@@ -16,6 +16,9 @@ REM Browser: chạy browser_up.bat trước (hoặc lịch Task Scheduler riêng
 REM Ensure script runs from project root
 cd /d "%~dp0"
 
+REM Bắt buộc cặp active = XAUUSD (data/.main_chart_symbol bị ghi đè bởi env — xem images.get_active_main_symbol)
+set "AUTOMATION_MAIN_SYMBOL=XAUUSD"
+
 REM Create logs directory if missing
 if not exist "logs" mkdir "logs"
 
@@ -26,7 +29,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo [%date% %time%] INFO: Starting coinmap-automation tv-watchlist-daemon>> "logs\daemon.log"
+echo [%date% %time%] INFO: Starting coinmap-automation tv-watchlist-daemon symbol=%AUTOMATION_MAIN_SYMBOL%>> "logs\daemon.log"
 REM Headless by default; do NOT pass --headed.
 set "ZONES_JSON=data\XAUUSD\zones_state.json"
 if not exist "%ZONES_JSON%" (
