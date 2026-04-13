@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, NamedTuple, Optional
 
-from openai import OpenAI
+from openai import OpenAI, OpenAIError
 
 from automation_tool.coinmap_openai_slim import (
     should_slim_coinmap_json_path,
@@ -129,19 +129,34 @@ def _json_file_header_and_body(path: Path, *, max_chars: int) -> tuple[str, str]
 
 def _upload_user_data_json(client: OpenAI, path: Path, body: str) -> str:
     raw = body.encode("utf-8")
-    bio = io.BytesIO(raw)
-    fo = client.files.create(
-        file=(path.name, bio),
-        purpose="user_data",
-        expires_after={"anchor": "created_at", "seconds": _FILE_EXPIRES_AFTER_SECONDS},
-    )
-    _log.info(
-        "[openai files] %s → %s (%d B, user_data, expires 1d)",
-        path.name,
-        fo.id,
-        len(raw),
-    )
-    return fo.id
+    for attempt in range(2):
+        bio = io.BytesIO(raw)
+        try:
+            fo = client.files.create(
+                file=(path.name, bio),
+                purpose="user_data",
+                expires_after={
+                    "anchor": "created_at",
+                    "seconds": _FILE_EXPIRES_AFTER_SECONDS,
+                },
+            )
+        except OpenAIError as e:
+            if attempt == 0:
+                _log.warning(
+                    "[openai files] upload failed for %s (%s), retrying once: %s",
+                    path.name,
+                    type(e).__name__,
+                    e,
+                )
+                continue
+            raise
+        _log.info(
+            "[openai files] %s → %s (%d B, user_data, expires 1d)",
+            path.name,
+            fo.id,
+            len(raw),
+        )
+        return fo.id
 
 
 def _json_paths_to_headers_and_file_ids(

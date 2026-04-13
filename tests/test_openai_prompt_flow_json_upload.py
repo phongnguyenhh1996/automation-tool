@@ -5,6 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+from openai import OpenAIError
+
 from automation_tool.openai_prompt_flow import (
     _FILE_EXPIRES_AFTER_SECONDS,
     _build_mixed_chart_user_content,
@@ -36,6 +39,41 @@ def test_build_mixed_content_json_uses_input_file(tmp_path: Path) -> None:
         "anchor": "created_at",
         "seconds": _FILE_EXPIRES_AFTER_SECONDS,
     }
+
+
+def test_json_upload_retries_once_on_openai_error(tmp_path: Path) -> None:
+    j = tmp_path / "retry_tradingview_x.json"
+    j.write_text('{"ohlc":[]}', encoding="utf-8")
+    client = MagicMock()
+    client.files.create.side_effect = [
+        OpenAIError("transient"),
+        MagicMock(id="file-after-retry"),
+    ]
+
+    parts = _build_mixed_chart_user_content(
+        "prompt text",
+        [("json", j)],
+        client=client,
+        max_json_chars=100_000,
+    )
+    assert parts[2] == {"type": "input_file", "file_id": "file-after-retry"}
+    assert client.files.create.call_count == 2
+
+
+def test_json_upload_raises_after_second_openai_error(tmp_path: Path) -> None:
+    j = tmp_path / "fail_twice.json"
+    j.write_text("{}", encoding="utf-8")
+    client = MagicMock()
+    client.files.create.side_effect = [OpenAIError("a"), OpenAIError("b")]
+
+    with pytest.raises(OpenAIError):
+        _build_mixed_chart_user_content(
+            "p",
+            [("json", j)],
+            client=client,
+            max_json_chars=100_000,
+        )
+    assert client.files.create.call_count == 2
 
 
 def test_two_json_files_upload_order_and_count(tmp_path: Path) -> None:
