@@ -16,7 +16,16 @@ from automation_tool.openai_analysis_json import (
 )
 from automation_tool.state_files import _atomic_write_json  # type: ignore[attr-defined]
 
-ZoneStatus = Literal["vung_cho", "cham", "dang_thuc_thi", "vao_lenh", "cho_tp1", "loai", "done"]
+ZoneStatus = Literal[
+    "vung_cho",
+    "cham",
+    "dang_vao_lenh",
+    "dang_thuc_thi",
+    "vao_lenh",
+    "cho_tp1",
+    "loai",
+    "done",
+]
 
 # Separator for persisted vung_cho strings (Unicode en dash, same as model / system prompt).
 _VUNG_CHO_SEP = "–"
@@ -188,7 +197,16 @@ def _parse_zone(d: dict[str, Any]) -> Optional[Zone]:
     ra_raw = d.get("retry_at")
     retry_at = ra_raw.strip() if isinstance(ra_raw, str) else ""
     st = str(d.get("status") or "").strip()
-    if st not in ("vung_cho", "cham", "dang_thuc_thi", "vao_lenh", "cho_tp1", "loai", "done"):
+    if st not in (
+        "vung_cho",
+        "cham",
+        "dang_vao_lenh",
+        "dang_thuc_thi",
+        "vao_lenh",
+        "cho_tp1",
+        "loai",
+        "done",
+    ):
         st = "vung_cho"
     src = str(d.get("source") or "").strip()
     return Zone(
@@ -295,6 +313,8 @@ def _zone_status_phrase_vn(z: Zone) -> str:
         return "vẫn đang là vùng chờ"
     if s == "cham":
         return "đã chạm và vẫn đang chờ"
+    if s == "dang_vao_lenh":
+        return "đang xử lý vào lệnh (auto-entry)"
     if s == "dang_thuc_thi":
         return "đang thực thi / chờ xác nhận"
     if s == "loai":

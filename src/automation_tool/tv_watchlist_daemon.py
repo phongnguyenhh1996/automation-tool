@@ -437,11 +437,10 @@ def _auto_entry_job(
 ) -> None:
     """
     Fire-and-forget worker:
-    - re-check zone has hop_luu above threshold + has trade_line + no mt5_ticket
-    - execute MT5 and persist mt5_ticket + status=vao_lenh
+    - Zone must already be ``dang_vao_lenh`` (main loop sets this before spawn; next poll skips duplicate dispatch).
+    - Re-check hop_luu / trade_line / ticket; execute MT5; persist ``vao_lenh`` or revert to ``cham`` on failure.
 
-    Main loop may set status to ``dang_thuc_thi`` before spawning this thread so the next
-    poll does not dispatch duplicate auto-entry jobs; this worker must accept that status.
+    Does not use ``dang_thuc_thi``; that status remains for zone-touch / TP1 / other flows.
     """
     zs_path = params.zones_state_path
     try:
@@ -451,27 +450,28 @@ def _auto_entry_job(
         z0 = next((z for z in st0.zones if z.id == zone_id), None)
         if z0 is None:
             return
-        if z0.status in ("done", "loai"):
-            return
-        # vung_cho / cham: normal. dang_thuc_thi: main loop already set before spawn (anti duplicate tick).
-        if z0.status not in ("vung_cho", "cham", "dang_thuc_thi"):
+        if z0.status != "dang_vao_lenh":
             return
         if z0.mt5_ticket is not None and int(z0.mt5_ticket or 0) > 0:
             return
         if not z0.trade_line:
+            z0.status = "cham"
+            write_zones_state(st0, path=zs_path)
             return
         if z0.hop_luu is None:
+            z0.status = "cham"
+            write_zones_state(st0, path=zs_path)
             return
         thr = int(auto_mt5_hop_luu_threshold_for_label(z0.label))
         if int(z0.hop_luu) <= thr:
+            z0.status = "cham"
+            write_zones_state(st0, path=zs_path)
             return
         if not params.mt5_execute:
             _send_log(settings, f"[auto-entry] mt5_execute=off | zone_id={zone_id} skip")
+            z0.status = "cham"
+            write_zones_state(st0, path=zs_path)
             return
-
-        # Mark in-progress to prevent duplicate dispatch across ticks.
-        z0.status = "dang_thuc_thi"
-        write_zones_state(st0, path=zs_path)
 
         parsed, err = _parse_trade_from_zone_trade_line(z0.trade_line, symbol_override=params.mt5_symbol)
         if err or parsed is None:
@@ -838,8 +838,8 @@ def _tv_watchlist_daemon_main_loop(
                 thr = int(auto_mt5_hop_luu_threshold_for_label(z.label))
                 if int(z.hop_luu) <= thr:
                     continue
-                # mark in-progress and persist before dispatch
-                z.status = "dang_thuc_thi"
+                # Step 1: mark đang vào lệnh (auto-entry) so the next poll does not duplicate dispatch.
+                z.status = "dang_vao_lenh"
                 write_zones_state(st_auto, path=zs_path)
                 _send_log(
                     settings,
