@@ -439,6 +439,9 @@ def _auto_entry_job(
     Fire-and-forget worker:
     - re-check zone has hop_luu above threshold + has trade_line + no mt5_ticket
     - execute MT5 and persist mt5_ticket + status=vao_lenh
+
+    Main loop may set status to ``dang_thuc_thi`` before spawning this thread so the next
+    poll does not dispatch duplicate auto-entry jobs; this worker must accept that status.
     """
     zs_path = params.zones_state_path
     try:
@@ -450,8 +453,8 @@ def _auto_entry_job(
             return
         if z0.status in ("done", "loai"):
             return
-        # Only auto-entry from vung_cho or cham.
-        if z0.status not in ("vung_cho", "cham"):
+        # vung_cho / cham: normal. dang_thuc_thi: main loop already set before spawn (anti duplicate tick).
+        if z0.status not in ("vung_cho", "cham", "dang_thuc_thi"):
             return
         if z0.mt5_ticket is not None and int(z0.mt5_ticket or 0) > 0:
             return
