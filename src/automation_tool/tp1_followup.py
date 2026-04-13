@@ -1,4 +1,4 @@
-"""Theo dõi sau vào lệnh: last realtime ±5 → ``cho_tp1``; chạm TP1 → Coinmap M5 + OpenAI."""
+"""Theo dõi sau vào lệnh: last-ref trong [0,5] (BUY) / [-5,0] (SELL) → ``cho_tp1``; chạm TP1 → Coinmap M5 + OpenAI."""
 
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ _tp1_lock = threading.Lock()
 # Cùng epsilon touch vùng chờ
 _EPS = 0.01
 # Ngưỡng ± so với entry (đơn vị giá chart)
-_ARM_THRESHOLD = 5.0
+_ARM_THRESHOLD = 3.0
 
 
 @dataclass
@@ -66,10 +66,12 @@ def _entry_reference_price(parsed: ParsedTrade) -> float:
 
 
 def _arm_threshold_met(parsed: ParsedTrade, p_last: float) -> bool:
+    """BUY: 0 <= last - ref <= 5; SELL: -5 <= last - ref <= 0."""
     ref = _entry_reference_price(parsed)
+    diff = float(p_last) - ref
     if parsed.side == "BUY":
-        return p_last > ref + _ARM_THRESHOLD
-    return p_last < ref - _ARM_THRESHOLD
+        return 0.0 <= diff <= _ARM_THRESHOLD
+    return -_ARM_THRESHOLD <= diff <= 0.0
 
 
 def _tp1_touched(parsed: ParsedTrade, p_last: float) -> bool:
@@ -375,17 +377,20 @@ def maybe_post_entry_tp1_tick(
                 )
                 continue
             ref = _entry_reference_price(parsed)
-            need = ref + _ARM_THRESHOLD if parsed.side == "BUY" else ref - _ARM_THRESHOLD
-            cmp_op = ">" if parsed.side == "BUY" else "<"
+            diff = float(p_last) - ref
+            band = (
+                f"0≤last-ref≤{_ARM_THRESHOLD:g}"
+                if parsed.side == "BUY"
+                else f"-{_ARM_THRESHOLD:g}≤last-ref≤0"
+            )
             met = _arm_threshold_met(parsed, p_last)
             _log_tp1.info(
-                "tp1 arm: %s | side=%s entry_ref=%.5f cần last %s %.5f (±%.1f) | last=%.5f → %s",
+                "tp1 arm: %s | side=%s entry_ref=%.5f | last-ref=%.5f (%s) | last=%.5f → %s",
                 lab,
                 parsed.side,
                 ref,
-                cmp_op,
-                need,
-                _ARM_THRESHOLD,
+                diff,
+                band,
                 p_last,
                 "đạt → cho_tp1" if met else "chưa đạt",
             )
@@ -513,16 +518,20 @@ def tp1_dry_run_report(
         ref = _entry_reference_price(parsed)
         arm = _arm_threshold_met(parsed, p_last)
         tp_hit = _tp1_touched(parsed, p_last)
-        need_bound = ref + _ARM_THRESHOLD if parsed.side == "BUY" else ref - _ARM_THRESHOLD
-        cmp_w = ">" if parsed.side == "BUY" else "<"
+        diff = float(p_last) - ref
+        band_txt = (
+            f"0≤last-ref≤{_ARM_THRESHOLD:g}"
+            if parsed.side == "BUY"
+            else f"-{_ARM_THRESHOLD:g}≤last-ref≤0"
+        )
         tp1_done = bool(st.tp1_followup_done_by_label.get(lab, False))
         lines.append(f"[{lab}] status={s} | ticket={tk}")
         lines.append(
             f"  side={parsed.side} entry_ref={ref:.5f} tp1={float(parsed.tp1):.5f}"
         )
         lines.append(
-            f"  vao_lenh→cho_tp1 (±{_ARM_THRESHOLD}): "
-            f"{'đạt' if arm else 'chưa'} — cần last {cmp_w} {need_bound:.5f}"
+            f"  vao_lenh→cho_tp1 ({band_txt}): "
+            f"{'đạt' if arm else 'chưa'} — last-ref={diff:.5f}"
         )
         lines.append(
             f"  cho_tp1→chạm TP1: {'đạt' if tp_hit else 'chưa'} | tp1_followup_done={tp1_done}"

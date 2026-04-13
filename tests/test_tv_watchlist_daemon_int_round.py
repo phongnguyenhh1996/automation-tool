@@ -62,11 +62,18 @@ def test_zone_side_ref_buy_max_sell_min() -> None:
 
 
 def test_arm_uses_same_ref_as_touch() -> None:
+    """Arm khi last-ref nằm trong [0, 5] (BUY) hoặc [-5, 0] (SELL)."""
     z_buy = Zone(id="a", label="plan_chinh", vung_cho="4738.0–4742.0", side="BUY")
     ref = 4742.0
+    assert _arm_threshold_met_for_zone(z_buy, ref) is True  # diff 0
+    assert _arm_threshold_met_for_zone(z_buy, ref + 2.5) is True
     assert _arm_threshold_met_for_zone(z_buy, ref + _ARM_THRESHOLD) is True
-    assert _arm_threshold_met_for_zone(z_buy, ref + _ARM_THRESHOLD - 0.5) is False
+    assert _arm_threshold_met_for_zone(z_buy, ref + _ARM_THRESHOLD + 0.5) is False
+    assert _arm_threshold_met_for_zone(z_buy, ref - 0.5) is False
     z_sell = Zone(id="b", label="plan_phu", vung_cho="4738.0–4742.0", side="SELL")
     ref_s = 4738.0
+    assert _arm_threshold_met_for_zone(z_sell, ref_s) is True  # diff 0
+    assert _arm_threshold_met_for_zone(z_sell, ref_s - 2.5) is True
     assert _arm_threshold_met_for_zone(z_sell, ref_s - _ARM_THRESHOLD) is True
-    assert _arm_threshold_met_for_zone(z_sell, ref_s - _ARM_THRESHOLD + 0.5) is False
+    assert _arm_threshold_met_for_zone(z_sell, ref_s - _ARM_THRESHOLD - 0.5) is False
+    assert _arm_threshold_met_for_zone(z_sell, ref_s + 0.5) is False

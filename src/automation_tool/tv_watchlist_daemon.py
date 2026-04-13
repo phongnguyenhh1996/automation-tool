@@ -228,31 +228,31 @@ def _entry_reference_price(parsed) -> float:
 
 def _arm_threshold_met(parsed, p_last: float) -> bool:
     """
-    Arm rule (per requirement):
-    - BUY: (Last - range_high) >= +5
-    - SELL: (Last - range_low)  <= -5
+    Arm rule (đồng bộ ``_arm_threshold_met_for_zone``):
+    - BUY: 0 <= last - ref <= +5
+    - SELL: -5 <= last - ref <= 0
     """
-    # parsed is derived from trade_line; range info lives on the zone, not parsed.
-    # This function is kept for backward compatibility but is no longer used for arming.
     ref = _entry_reference_price(parsed)
+    diff = float(p_last) - ref
     if getattr(parsed, "side", "") == "BUY":
-        return p_last > ref + _ARM_THRESHOLD
-    return p_last < ref - _ARM_THRESHOLD
+        return 0.0 <= diff <= _ARM_THRESHOLD
+    return -_ARM_THRESHOLD <= diff <= 0.0
 
 
 def _arm_threshold_met_for_zone(zone: Zone, p_last: float) -> bool:
     """
     Arm after entry: same side ref as touch (BUY=max, SELL=min from ``vung_cho``).
-    - SELL: Last - ref <= -5
-    - BUY:  Last - ref >= +5
+    - BUY: 0 <= last - ref <= +5
+    - SELL: -5 <= last - ref <= 0
     """
     ref = _zone_side_ref_from_vung_cho(zone)
     if ref is None:
         return False
+    diff = float(p_last) - ref
     side = (zone.side or "").strip().upper()
     if side == "SELL":
-        return (float(p_last) - ref) <= (-_ARM_THRESHOLD)
-    return (float(p_last) - ref) >= _ARM_THRESHOLD
+        return -_ARM_THRESHOLD <= diff <= 0.0
+    return 0.0 <= diff <= _ARM_THRESHOLD
 
 
 def _tp1_touched(parsed, p_last: float) -> bool:
