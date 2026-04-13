@@ -12,9 +12,9 @@ IntradayHanhDong = Literal["chờ", "loại", "VÀO LỆNH"]
 ZONE_LABELS_ORDER = ("plan_chinh", "plan_phu", "scalp")
 
 # Morning auto-MT5: hop_luu strictly above this threshold (plan_chinh / plan_phu).
-AUTO_MT5_HOP_LUU_THRESHOLD = 80
+AUTO_MT5_HOP_LUU_THRESHOLD = 75
 # Lower bar for scalp-only auto-MT5.
-AUTO_MT5_HOP_LUU_THRESHOLD_SCALP = 70
+AUTO_MT5_HOP_LUU_THRESHOLD_SCALP = 60
 
 
 def auto_mt5_hop_luu_threshold_for_label(label: str) -> int:
