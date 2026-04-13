@@ -6,6 +6,7 @@ import pytest
 
 from automation_tool.tvdatafeed_capture import (
     _merge_interval_map,
+    _n_bars_for_interval_label,
     _parse_capture_plan_rows,
     effective_tvdatafeed_plan,
     parse_tradingview_chart_url,
@@ -23,6 +24,27 @@ def test_parse_tradingview_chart_url_empty() -> None:
     ex, sym = parse_tradingview_chart_url("")
     assert ex == ""
     assert sym == "XAUUSD"
+
+
+def test_n_bars_for_interval_label_map_and_fallback() -> None:
+    tvd = {
+        "n_bars_by_interval": {
+            "1 giờ": 50,
+            "15 phút": 70,
+            "5 phút": 100,
+        }
+    }
+    assert _n_bars_for_interval_label("1 giờ", tvd, 1000) == 50
+    assert _n_bars_for_interval_label("15 phút", tvd, 1000) == 70
+    assert _n_bars_for_interval_label("5 phút", tvd, 1000) == 100
+    assert _n_bars_for_interval_label("30 phút", tvd, 999) == 999
+    assert _n_bars_for_interval_label("30 phút", {}, 888) == 888
+
+
+def test_n_bars_for_interval_label_clamp_and_bad_value() -> None:
+    tvd = {"n_bars_by_interval": {"1 giờ": 6000, "x": "notint"}}
+    assert _n_bars_for_interval_label("1 giờ", tvd, 100) == 5000
+    assert _n_bars_for_interval_label("x", tvd, 200) == 200
 
 
 def test_merge_interval_map_overrides() -> None:

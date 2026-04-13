@@ -253,6 +253,24 @@ def _df_to_records(df: Any) -> list[dict[str, Any]]:
         return []
 
 
+def _n_bars_for_interval_label(
+    label: str,
+    tvd: dict[str, Any],
+    default_n_bars: int,
+) -> int:
+    """Resolve ``n_bars`` for ``get_hist``: optional ``tvdatafeed.n_bars_by_interval`` by exact label."""
+    raw = tvd.get("n_bars_by_interval")
+    if isinstance(raw, dict):
+        key = str(label).strip()
+        if key in raw:
+            try:
+                v = int(raw[key])
+            except (TypeError, ValueError):
+                return default_n_bars
+            return max(1, min(v, 5000))
+    return default_n_bars
+
+
 def _fetch_one_barset(
     *,
     tv_symbol: str,
@@ -307,8 +325,8 @@ def run_tvdatafeed_export(
     if not isinstance(tvd, dict):
         tvd = {}
 
-    n_bars = int(tvd.get("n_bars") or 1000)
-    n_bars = max(1, min(n_bars, 5000))
+    default_n_bars = int(tvd.get("n_bars") or 1000)
+    default_n_bars = max(1, min(default_n_bars, 5000))
     # Khi get_hist trả 0 nến: thử lại thêm tối đa N lần (tổng gọi = 1 + N).
     empty_bars_max_retries = int(tvd.get("empty_bars_max_retries") or 3)
     empty_bars_max_retries = max(0, min(empty_bars_max_retries, 20))
@@ -337,6 +355,7 @@ def run_tvdatafeed_export(
         file_sym = str(row["symbol"]).strip()
         file_sym_key = re.sub(r"[^\w.-]+", "_", file_sym).strip("_")[:40] or "sym"
         for label in row["intervals"]:
+            nb = _n_bars_for_interval_label(label, tvd, default_n_bars)
             tasks.append(
                 {
                     "row": row,
@@ -344,6 +363,7 @@ def run_tvdatafeed_export(
                     "tv_symbol": tv_sym,
                     "file_sym_key": file_sym_key,
                     "label": label,
+                    "n_bars": nb,
                 }
             )
 
@@ -378,6 +398,7 @@ def run_tvdatafeed_export(
     def _run_task(meta: dict[str, Any]) -> Path:
         row = meta["row"]
         label = meta["label"]
+        task_n_bars = int(meta["n_bars"])
         ex_s = str(meta["exchange"])
         sym_s = str(meta["tv_symbol"])
         slug = ""
@@ -390,7 +411,7 @@ def run_tvdatafeed_export(
                     exchange=meta["exchange"],
                     interval_label=label,
                     interval_map=interval_map,
-                    n_bars=n_bars,
+                    n_bars=task_n_bars,
                     extended_session=extended_session,
                     row=row,
                     tv_cfg=tv,
@@ -404,7 +425,7 @@ def run_tvdatafeed_export(
                     sym_s,
                     label,
                     type(e).__name__,
-                    n_bars,
+                    task_n_bars,
                     e,
                     exc_info=True,
                 )
@@ -440,7 +461,7 @@ def run_tvdatafeed_export(
             "interval": iv_name,
             "interval_label": label,
             "n_bars": len(records),
-            "n_bars_requested": n_bars,
+            "n_bars_requested": task_n_bars,
             "bars": records,
         }
         path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -463,7 +484,7 @@ def run_tvdatafeed_export(
                 label,
                 iv_name,
                 nb,
-                n_bars,
+                task_n_bars,
                 path.name,
             )
         return path

@@ -172,6 +172,11 @@ tradingview_capture:
   data_source: tvdatafeed
   tvdatafeed:
     n_bars: 1000
+    # Giới hạn nến theo nhãn interval (khớp capture_plan). Không có trong map → dùng n_bars ở trên.
+    n_bars_by_interval:
+      "1 giờ": 50
+      "15 phút": 70
+      "5 phút": 100
     # Khi get_hist trả 0 nến: gọi lại thêm tối đa N lần (pause empty_bars_retry_delay_ms giữa các lần).
     empty_bars_max_retries: 3
     empty_bars_retry_delay_ms: 300
