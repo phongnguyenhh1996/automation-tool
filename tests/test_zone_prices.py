@@ -6,6 +6,7 @@ from automation_tool.tradingview_alerts import (
 )
 from automation_tool.zone_prices import (
     parse_three_zone_prices,
+    parse_update_zone_triple,
     prices_equal_triple,
 )
 
@@ -62,6 +63,28 @@ def test_parse_no_change_json() -> None:
     assert zt is None
     assert err is None
     assert nc is True
+
+
+def test_parse_update_zone_triple_merges_per_no_change() -> None:
+    text = """{
+      "intraday_hanh_dong": "chờ",
+      "trade_line": "",
+      "prices": [
+        {"label": "plan_chinh", "value": 10.0, "vung_cho": "9.0–11.0", "hop_luu": 50, "trade_line": "", "no_change": false},
+        {"label": "plan_phu", "value": 99.0, "vung_cho": "98.0–100.0", "hop_luu": 50, "trade_line": "", "no_change": true},
+        {"label": "scalp", "value": 30.0, "vung_cho": "29.0–31.0", "hop_luu": 50, "trade_line": "", "no_change": false}
+      ]
+    }"""
+    baseline = (1.0, 2.0, 3.0)
+    zt, err, nc = parse_update_zone_triple(text, baseline)
+    assert err is None
+    assert nc is False
+    assert zt == (10.0, 2.0, 30.0)
+
+
+def test_parse_update_zone_triple_root_no_change() -> None:
+    zt, err, nc = parse_update_zone_triple('{"no_change": true}', (1.0, 2.0, 3.0))
+    assert zt is None and err is None and nc is True
 
 
 def test_format_tv_input() -> None:

@@ -74,13 +74,13 @@ Chèn dòng vào lệnh này vào dòng trước của "Hành động: VÀO LỆ
 - {symbol}: cặp đang phân tích ở lần gọi này (ví dụ: EURUSD, USDJPY, XAUUSD).
 
 - Nếu {symbol} không phải XAUUSD thì BỎ QUA/ KHÔNG ĐƯỢC sinh các mục sau trong [OUTPUT_CHI_TIET]:
-  - 📊 SCALP:
-  - ——————————
   - 🧭 1. BỐI CẢNH VĨ MÔ (DXY)
   - 👉 KẾT LUẬN DXY:
-  - ————————————-
   - 🧭 2. CẤU TRÚC {symbol} (🔴 H4 / 🔴 H1 / 🔴 M15)
   - 🧭 4. ORDER FLOW (CVD) (M15 / M5)
+  - 📊 SCALP:
+  - 🤖 EA GRID PLAN:
+
 
 
 

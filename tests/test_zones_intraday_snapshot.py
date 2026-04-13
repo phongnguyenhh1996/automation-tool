@@ -21,9 +21,7 @@ def test_format_zones_snapshot_grouped() -> None:
             Zone(
                 id="plan_chinh",
                 label="plan_chinh",
-                range_low=1.0,
-                range_high=2.0,
-                alert_price=1.5,
+                vung_cho="1.0–2.0",
                 side="BUY",
                 hop_luu=80,
                 trade_line="BUY LIMIT 1.5 | SL 1.0 | TP1 2.0 | Lot 0.01",
@@ -32,9 +30,7 @@ def test_format_zones_snapshot_grouped() -> None:
             Zone(
                 id="plan_phu",
                 label="plan_phu",
-                range_low=2.5,
-                range_high=3.0,
-                alert_price=2.8,
+                vung_cho="2.5–3.0",
                 side="SELL",
                 hop_luu=70,
                 trade_line="",
@@ -43,9 +39,7 @@ def test_format_zones_snapshot_grouped() -> None:
             Zone(
                 id="scalp",
                 label="scalp",
-                range_low=3.0,
-                range_high=4.0,
-                alert_price=3.5,
+                vung_cho="3.0–4.0",
                 side="SELL",
                 status="loai",
             ),

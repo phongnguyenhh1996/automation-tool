@@ -47,7 +47,11 @@ from automation_tool.telegram_bot import (
     send_mt5_execution_log_to_ngan_gon_chat,
     send_openai_output_to_telegram,
 )
-from automation_tool.openai_analysis_json import auto_mt5_hop_luu_threshold_for_label, parse_analysis_from_openai_text
+from automation_tool.openai_analysis_json import (
+    auto_mt5_hop_luu_threshold_for_label,
+    parse_analysis_from_openai_text,
+    parse_vung_cho_bounds,
+)
 from automation_tool.zones_state import Zone, ZonesState, read_zones_state, write_zones_state
 
 _log = logging.getLogger("automation_tool.tv_watchlist_daemon")
@@ -72,7 +76,7 @@ def _poll_terminal_only_logger() -> logging.Logger:
 
 _poll_terminal = _poll_terminal_only_logger()
 
-# After integer rounding of Last vs alert_price: touch if abs(diff) <= this (default 1 → 4755 vs 4756 counts).
+# After integer rounding of Last vs zone touch ref (from vung_cho + side): touch if abs(diff) <= this.
 _EPS_DEFAULT = 1.0
 _TP1_EPS = 0.01
 _ARM_THRESHOLD = 5.0
@@ -85,11 +89,24 @@ _TV_TITLE_PRICE_RE = re.compile(r"^\s*(?P<sym>[A-Z0-9:_-]+)\s+(?P<price>\d[\d,]*
 def _price_round_nearest_int(v: object) -> float:
     """
     Normalize price by rounding to the nearest whole number (integer), returned as float.
-    Used for zone alert touch: compare Last vs alert_price after this rounding; touch if
-    ``abs(last_int - alert_int) <= eps`` (default eps=1 allows adjacent integers e.g. 4755 vs 4756).
+    Used for zone touch: compare Last vs side ref (BUY=max, SELL=min from ``vung_cho``) after this
+    rounding; touch if ``abs(last_int - ref_int) <= eps`` (default eps=1 allows adjacent integers).
     """
     d = Decimal(str(v)).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
     return float(d)
+
+
+def _zone_side_ref_from_vung_cho(zone: Zone) -> Optional[float]:
+    """
+    Parse ``zone.vung_cho`` into (lo, hi); BUY uses max(hi), SELL uses min(lo) — same ref for touch and arm.
+    """
+    lo, hi = parse_vung_cho_bounds(zone.vung_cho)
+    if lo is None or hi is None:
+        return None
+    side = (zone.side or "").strip().upper()
+    if side == "SELL":
+        return float(lo)
+    return float(hi)
 
 
 def _now_utc() -> datetime:
@@ -132,7 +149,7 @@ class WatchlistDaemonParams:
     mt5_symbol: Optional[str] = None
     mt5_dry_run: bool = False
     zones_state_path: Optional[Path] = None
-    eps: float = _EPS_DEFAULT  # max |Δ| between integer-rounded Last and alert_price (default 1.0)
+    eps: float = _EPS_DEFAULT  # max |Δ| between integer-rounded Last and touch ref (default 1.0)
 
 
 def _send_log(settings: Settings, text: str) -> None:
@@ -169,9 +186,11 @@ def _touch_prompt(
     and ``prices`` with ``hop_luu`` for the touched zone label (MT5 gating). Parsed via
     ``parse_analysis_from_openai_text`` / ``parse_journal_intraday_action_from_openai_text``.
     """
+    ref = _zone_side_ref_from_vung_cho(zone)
+    ref_bit = f" (mức so Last: {ref})" if ref is not None else ""
     return (
         "[INTRADAY_ALERT]\n"
-        f"Cảnh báo chạm mức giá {zone.alert_price} (plan: {zone.label}).\n"
+        f"Cảnh báo chạm vùng chờ {zone.vung_cho}{ref_bit} (plan: {zone.label}).\n"
         "Footprint Coinmap M5 JSON đính kèm.\n"
     )
 
@@ -223,15 +242,17 @@ def _arm_threshold_met(parsed, p_last: float) -> bool:
 
 def _arm_threshold_met_for_zone(zone: Zone, p_last: float) -> bool:
     """
-    Arm condition based on zone range edges + side:
-    - SELL: Last - range_low <= -5  (Last <= range_low - 5)
-    - BUY:  Last - range_high >= +5 (Last >= range_high + 5)
+    Arm after entry: same side ref as touch (BUY=max, SELL=min from ``vung_cho``).
+    - SELL: Last - ref <= -5
+    - BUY:  Last - ref >= +5
     """
+    ref = _zone_side_ref_from_vung_cho(zone)
+    if ref is None:
+        return False
     side = (zone.side or "").strip().upper()
     if side == "SELL":
-        return (float(p_last) - float(zone.range_low)) <= (-_ARM_THRESHOLD)
-    # default BUY
-    return (float(p_last) - float(zone.range_high)) >= _ARM_THRESHOLD
+        return (float(p_last) - ref) <= (-_ARM_THRESHOLD)
+    return (float(p_last) - ref) >= _ARM_THRESHOLD
 
 
 def _tp1_touched(parsed, p_last: float) -> bool:
@@ -518,10 +539,11 @@ def _zone_touch_job(
         return
 
     try:
+        ref = _zone_side_ref_from_vung_cho(zone)
         _send_log(
             settings,
             f"[zone-touch] start | zone_id={zone_id} label={zone.label} "
-            f"alert={zone.alert_price} range=[{zone.range_low},{zone.range_high}] last={last_price}",
+            f"vung_cho={zone.vung_cho} ref={ref} last={last_price}",
         )
 
         loai_confirm_rounds = 4
@@ -853,19 +875,21 @@ def _tv_watchlist_daemon_main_loop(
                 )
                 th_retry.start()
 
-        # match zones by alert_price touch only
+        # match zones by vung_cho-derived touch ref (BUY max / SELL min) vs Last
         matched: list[Zone] = []
         for z in st.zones:
             if z.status != "vung_cho":
                 continue
-            # Normalize both prices to nearest integer before comparing (then ``eps``).
+            ref = _zone_side_ref_from_vung_cho(z)
+            if ref is None:
+                continue
             try:
                 p_last_n = _price_round_nearest_int(p_last)
-                alert_n = _price_round_nearest_int(z.alert_price)
+                ref_n = _price_round_nearest_int(ref)
             except Exception:
                 p_last_n = float(p_last)
-                alert_n = float(z.alert_price)
-            if abs(p_last_n - alert_n) <= float(params.eps):
+                ref_n = float(ref)
+            if abs(p_last_n - ref_n) <= float(params.eps):
                 matched.append(z)
 
         for z in matched:

@@ -6,6 +6,7 @@ from automation_tool.openai_analysis_json import (
     AUTO_MT5_HOP_LUU_THRESHOLD,
     AUTO_MT5_HOP_LUU_THRESHOLD_SCALP,
     PriceZoneEntry,
+    merge_triple_with_baseline,
     parse_analysis_from_openai_text,
     select_zone_for_auto_mt5,
     select_zone_for_auto_mt5_for_label,
@@ -52,6 +53,22 @@ def test_select_zone_scalp_uses_lower_threshold() -> None:
     assert select_zone_for_auto_mt5([PriceZoneEntry("scalp", 1.0, hop_luu=71, trade_line=tl)]) is not None
 
 
+def test_merge_triple_with_baseline_only_false_updates() -> None:
+    baseline = (1.0, 2.0, 3.0)
+    prices = [
+        PriceZoneEntry("plan_chinh", 10.0, no_change=False),
+        PriceZoneEntry("plan_phu", 99.0, no_change=True),
+        PriceZoneEntry("scalp", 30.0, no_change=False),
+    ]
+    assert merge_triple_with_baseline(baseline, prices) == (10.0, 2.0, 30.0)
+
+
+def test_merge_triple_missing_label_keeps_baseline_slot() -> None:
+    baseline = (1.0, 2.0, 3.0)
+    prices = [PriceZoneEntry("plan_chinh", 10.0, no_change=False)]
+    assert merge_triple_with_baseline(baseline, prices) == (10.0, 2.0, 3.0)
+
+
 def test_select_zone_for_label_scalp_threshold() -> None:
     tl = "BUY LIMIT 1 | SL 0 | TP1 2 | Lot 0.01"
     assert select_zone_for_auto_mt5_for_label(
@@ -75,6 +92,7 @@ def test_vung_cho_string_parses_to_range_low_high() -> None:
     z = p.prices[0]
     assert z.range_low == 4762.0
     assert z.range_high == 4766.0
+    assert z.vung_cho == "4762.0–4766.0"
 
 
 def test_vung_cho_reversed_order_uses_min_max() -> None:
@@ -94,6 +112,7 @@ def test_vung_cho_reversed_order_uses_min_max() -> None:
     z = p.prices[0]
     assert z.range_low == 4705.0
     assert z.range_high == 4709.0
+    assert z.vung_cho == "4709.0–4705.0"
 
 
 def test_legacy_range_low_high_without_vung_cho() -> None:
@@ -133,6 +152,7 @@ def test_invalid_vung_cho_keeps_range_low_high() -> None:
     assert p is not None
     assert p.prices[0].range_low == 3.0
     assert p.prices[0].range_high == 4.0
+    assert p.prices[0].vung_cho == "not-a-range"
 
 
 def test_select_zone_for_label_ignores_other_plans() -> None:

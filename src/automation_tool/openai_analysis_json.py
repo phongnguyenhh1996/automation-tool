@@ -69,10 +69,10 @@ def extract_json_object(raw: str) -> Optional[dict[str, Any]]:
 _VUNG_CHO_FLOATS = re.compile(r"-?\d+(?:\.\d+)?")
 
 
-def _parse_vung_cho_string(s: str) -> tuple[Optional[float], Optional[float]]:
+def parse_vung_cho_bounds(s: str) -> tuple[Optional[float], Optional[float]]:
     """
-    Parse a single waiting-zone string like ``4762.0–4766.0`` or ``4709.0–4705.0``
-    into ``(range_low, range_high)`` as min/max of the two bounds.
+    Parse a waiting-zone string (e.g. ``4738.0–4742.0``) into ``(lo, hi)`` = min/max of the two numbers.
+    Returns ``(None, None)`` if fewer than two floats can be read.
     """
     if not isinstance(s, str) or not s.strip():
         return None, None
@@ -89,6 +89,11 @@ def _parse_vung_cho_string(s: str) -> tuple[Optional[float], Optional[float]]:
         return None, None
     a, b = nums[0], nums[1]
     return (min(a, b), max(a, b))
+
+
+def _parse_vung_cho_string(s: str) -> tuple[Optional[float], Optional[float]]:
+    """Backward-compatible name; same as :func:`parse_vung_cho_bounds`."""
+    return parse_vung_cho_bounds(s)
 
 
 def _as_float(x: Any) -> Optional[float]:
@@ -147,8 +152,11 @@ class PriceZoneEntry:
     value: float
     range_low: Optional[float] = None
     range_high: Optional[float] = None
+    vung_cho: Optional[str] = None
     hop_luu: Optional[int] = None
     trade_line: str = ""
+    #: Schema B per-label: only ``False`` means apply new ``value``; ``True``/missing keeps baseline on merge.
+    no_change: Optional[bool] = None
 
 
 @dataclass
@@ -172,21 +180,29 @@ def _parse_price_entry(d: dict[str, Any]) -> Optional[PriceZoneEntry]:
         return None
     rl = _as_float(d.get("range_low"))
     rh = _as_float(d.get("range_high"))
+    vc_stored: Optional[str] = None
     vc_raw = d.get("vung_cho")
     if isinstance(vc_raw, str) and vc_raw.strip():
-        pl, ph = _parse_vung_cho_string(vc_raw)
+        vc_stored = vc_raw.strip()
+        pl, ph = parse_vung_cho_bounds(vc_raw)
         if pl is not None and ph is not None:
             rl, rh = pl, ph
     hop = _as_int(d.get("hop_luu"))
     tl_raw = d.get("trade_line")
     trade_line = tl_raw.strip() if isinstance(tl_raw, str) else ""
+    nc_raw = d.get("no_change")
+    no_change: Optional[bool] = None
+    if isinstance(nc_raw, bool):
+        no_change = nc_raw
     return PriceZoneEntry(
         label=lab.strip(),
         value=v,
         range_low=rl,
         range_high=rh,
+        vung_cho=vc_stored,
         hop_luu=hop,
         trade_line=trade_line,
+        no_change=no_change,
     )
 
 
@@ -253,6 +269,33 @@ def triple_from_zone_prices(prices: list[PriceZoneEntry]) -> Optional[tuple[floa
         if lab not in by_label:
             return None
         out.append(by_label[lab])
+    return (out[0], out[1], out[2])
+
+
+def merge_triple_with_baseline(
+    baseline: tuple[float, float, float],
+    prices: list[PriceZoneEntry],
+) -> tuple[float, float, float]:
+    """
+    Build (plan_chinh, plan_phu, scalp) for intraday update: for each label, use ``value`` from
+    JSON only when ``no_change is False``; otherwise keep the corresponding baseline slot.
+    Missing label in ``prices`` keeps baseline.
+    """
+    by_label: dict[str, PriceZoneEntry] = {}
+    for p in prices:
+        key = p.label.strip().lower()
+        by_label[key] = p
+    out: list[float] = []
+    for i, lab in enumerate(ZONE_LABELS_ORDER):
+        base_v = baseline[i]
+        pe = by_label.get(lab)
+        if pe is None:
+            out.append(base_v)
+            continue
+        if pe.no_change is False:
+            out.append(float(pe.value))
+        else:
+            out.append(base_v)
     return (out[0], out[1], out[2])
 
 

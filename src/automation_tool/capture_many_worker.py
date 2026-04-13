@@ -1,8 +1,12 @@
 """
-Worker process for multi-symbol capture (Coinmap all symbols → TradingView all symbols).
+Worker process for multi-symbol capture (per symbol: Coinmap bearer/API + TradingView).
 
 Runs in a subprocess spawned by ``browser_service`` for ``METHOD_CAPTURE_MANY`` RPC,
 mirroring ``cli.cmd_capture_many`` but attaching via CDP like ``capture_worker``.
+
+Each symbol uses one ``capture_charts`` call with both sides enabled (same order as
+single ``capture`` / ``capture_worker``): Coinmap ``chart_download`` including
+``bearer_request``, then ``tradingview_capture`` (e.g. ``data_source: tvdatafeed``).
 """
 
 from __future__ import annotations
@@ -81,29 +85,8 @@ def main(argv: list[str] | None = None) -> None:
                     main_chart_symbol=sym,
                     set_global_active_symbol=False,
                     enable_coinmap=True,
-                    enable_tradingview=False,
-                    clear_charts_before_capture=True,
-                    stamp_override=stamps[sym],
-                )
-                all_paths.extend(paths)
-
-            for sym in symbols:
-                charts_dir = symbol_data_dir(sym) / "charts"
-                paths = capture_charts(
-                    coinmap_yaml=coinmap_yaml,
-                    charts_dir=charts_dir,
-                    storage_state_path=storage_state_path,
-                    email=str(email) if email is not None else None,
-                    password=str(password) if password is not None else None,
-                    tradingview_password=str(tradingview_password) if tradingview_password is not None else None,
-                    save_storage_state=False,
-                    headless=headless,
-                    reuse_browser_context=context,
-                    main_chart_symbol=sym,
-                    set_global_active_symbol=False,
-                    enable_coinmap=False,
                     enable_tradingview=True,
-                    clear_charts_before_capture=False,
+                    clear_charts_before_capture=True,
                     stamp_override=stamps[sym],
                 )
                 all_paths.extend(paths)

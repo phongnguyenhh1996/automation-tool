@@ -8,10 +8,18 @@ from typing import Any, Literal, Optional
 from zoneinfo import ZoneInfo
 
 from automation_tool.config import symbol_data_dir
-from automation_tool.openai_analysis_json import AnalysisPayload, PriceZoneEntry, ZONE_LABELS_ORDER
+from automation_tool.openai_analysis_json import (
+    AnalysisPayload,
+    PriceZoneEntry,
+    ZONE_LABELS_ORDER,
+    parse_vung_cho_bounds,
+)
 from automation_tool.state_files import _atomic_write_json  # type: ignore[attr-defined]
 
 ZoneStatus = Literal["vung_cho", "cham", "dang_thuc_thi", "vao_lenh", "cho_tp1", "loai", "done"]
+
+# Separator for persisted vung_cho strings (Unicode en dash, same as model / system prompt).
+_VUNG_CHO_SEP = "–"
 
 
 def default_zones_state_path() -> Path:
@@ -54,9 +62,7 @@ class LastObserved:
 class Zone:
     id: str
     label: str
-    range_low: float
-    range_high: float
-    alert_price: float
+    vung_cho: str
     side: Literal["BUY", "SELL"]
     hop_luu: Optional[int] = None
     trade_line: str = ""
@@ -71,9 +77,7 @@ class Zone:
         return {
             "id": self.id,
             "label": self.label,
-            "range_low": self.range_low,
-            "range_high": self.range_high,
-            "alert_price": self.alert_price,
+            "vung_cho": self.vung_cho,
             "side": self.side,
             "hop_luu": self.hop_luu,
             "trade_line": self.trade_line,
@@ -119,11 +123,24 @@ def _parse_zone(d: dict[str, Any]) -> Optional[Zone]:
         return None
     if not isinstance(lab, str) or not lab.strip():
         return None
-    rl = _as_float(d.get("range_low"))
-    rh = _as_float(d.get("range_high"))
-    ap = _as_float(d.get("alert_price"))
-    if rl is None or rh is None or ap is None:
-        return None
+    vc_raw = d.get("vung_cho")
+    vung_cho: str = ""
+    if isinstance(vc_raw, str) and vc_raw.strip():
+        vung_cho = vc_raw.strip()
+        lo, hi = parse_vung_cho_bounds(vung_cho)
+        if lo is None or hi is None:
+            return None
+    else:
+        rl = _as_float(d.get("range_low"))
+        rh = _as_float(d.get("range_high"))
+        ap = _as_float(d.get("alert_price"))
+        if rl is not None and rh is not None:
+            a, b = float(min(rl, rh)), float(max(rl, rh))
+            vung_cho = f"{a}{_VUNG_CHO_SEP}{b}"
+        elif ap is not None:
+            vung_cho = f"{float(ap)}{_VUNG_CHO_SEP}{float(ap)}"
+        else:
+            return None
     side_raw = str(d.get("side") or "").strip().upper()
     if side_raw not in ("BUY", "SELL"):
         side_raw = "BUY"
@@ -163,9 +180,7 @@ def _parse_zone(d: dict[str, Any]) -> Optional[Zone]:
     return Zone(
         id=zid.strip(),
         label=lab.strip(),
-        range_low=float(rl),
-        range_high=float(rh),
-        alert_price=float(ap),
+        vung_cho=vung_cho,
         side=side_raw,  # type: ignore[assignment]
         hop_luu=hop_luu,
         trade_line=trade_line,
@@ -309,7 +324,7 @@ def format_zones_snapshot_for_intraday_update(
         hop = "" if z.hop_luu is None else f" hop_luu={z.hop_luu}"
         return (
             f"  - {z.label} | status={z.status} | "
-            f"alert={z.alert_price} | range=[{z.range_low},{z.range_high}]{hop}\n"
+            f"vung_cho={z.vung_cho} | {hop}\n"
             f"    trade_line: {tl or '(trống)'}"
         )
 
@@ -320,20 +335,50 @@ def format_zones_snapshot_for_intraday_update(
     return "\n".join(lines).rstrip() + "\n"
 
 
+def zone_from_price_entry(*, lab: str, pe: PriceZoneEntry, source: str) -> Zone:
+    """
+    Build a single :class:`Zone` from one :class:`PriceZoneEntry`.
+
+    Persists ``vung_cho`` (from model or synthesized from ``range_low``/``range_high`` or single ``value``).
+    Side is inferred from ``trade_line`` prefix (BUY/SELL) when present; defaults to BUY.
+    """
+    v = float(pe.value)
+    tl = (pe.trade_line or "").strip()
+    side: Literal["BUY", "SELL"] = "BUY"
+    if tl:
+        head = tl.lstrip().upper()
+        if head.startswith("SELL"):
+            side = "SELL"
+    vc = (pe.vung_cho or "").strip()
+    if not vc:
+        rl = pe.range_low
+        rh = pe.range_high
+        if rl is not None and rh is not None:
+            lo = float(min(rl, rh))
+            hi = float(max(rl, rh))
+            vc = f"{lo}{_VUNG_CHO_SEP}{hi}"
+        else:
+            vc = f"{v}{_VUNG_CHO_SEP}{v}"
+    return Zone(
+        id=_default_zone_id(lab),
+        label=lab,
+        vung_cho=vc,
+        side=side,
+        hop_luu=pe.hop_luu,
+        trade_line=tl,
+        mt5_ticket=None,
+        status="vung_cho",
+        source=source,
+    )
+
+
 def zones_from_analysis_payload(
     *,
     symbol: str,
     payload: AnalysisPayload,
     source: str,
 ) -> list[Zone]:
-    """
-    Convert analysis payload (prices[] entries) into zones.
-
-    Notes:
-    - Current analysis JSON only provides a single `value` per label; we default range_low=range_high=value,
-      and alert_price=value. User can widen ranges later.
-    - Side is inferred from `trade_line` prefix (BUY/SELL) when present; defaults to BUY.
-    """
+    """Convert analysis payload (prices[] entries) into zones (full replace per label present)."""
     by_label: dict[str, PriceZoneEntry] = {}
     for pe in payload.prices:
         key = pe.label.strip().lower()
@@ -345,35 +390,47 @@ def zones_from_analysis_payload(
         pe = by_label.get(lab)
         if pe is None:
             continue
-        v = float(pe.value)
-        tl = (pe.trade_line or "").strip()
-        side = "BUY"
-        if tl:
-            head = tl.lstrip().upper()
-            if head.startswith("SELL"):
-                side = "SELL"
-        rl = pe.range_low
-        rh = pe.range_high
-        if rl is None or rh is None:
-            range_low = v
-            range_high = v
-        else:
-            range_low = float(min(rl, rh))
-            range_high = float(max(rl, rh))
-        zones.append(
-            Zone(
-                id=_default_zone_id(lab),
-                label=lab,
-                range_low=range_low,
-                range_high=range_high,
-                alert_price=v,
-                side=side,  # type: ignore[arg-type]
-                hop_luu=pe.hop_luu,
-                trade_line=tl,
-                mt5_ticket=None,
-                status="vung_cho",
-                source=source,
-            )
-        )
+        zones.append(zone_from_price_entry(lab=lab, pe=pe, source=source))
+    return zones
+
+
+def zones_from_analysis_payload_merged(
+    *,
+    existing: ZonesState | None,
+    payload: AnalysisPayload,
+    source: str,
+) -> list[Zone]:
+    """
+    Like :func:`zones_from_analysis_payload`, but for Schema B update: keep an existing zone when
+    the model sets ``no_change`` to non-``False`` for that label; replace when ``no_change is False``.
+    If there is no existing zone and the model keeps baseline (non-False ``no_change``), synthesize
+    from the entry so the list still has three zones when all labels are present.
+    """
+    by_old: dict[str, Zone] = {}
+    if existing is not None:
+        for z in existing.zones:
+            by_old[z.label.strip().lower()] = z
+
+    by_price: dict[str, PriceZoneEntry] = {}
+    for pe in payload.prices:
+        k = pe.label.strip().lower()
+        if k:
+            by_price[k] = pe
+
+    zones: list[Zone] = []
+    for lab in ZONE_LABELS_ORDER:
+        pe = by_price.get(lab)
+        old = by_old.get(lab)
+        if pe is None:
+            if old is not None:
+                zones.append(old)
+            continue
+        if pe.no_change is not False:
+            if old is not None:
+                zones.append(old)
+            else:
+                zones.append(zone_from_price_entry(lab=lab, pe=pe, source=source))
+            continue
+        zones.append(zone_from_price_entry(lab=lab, pe=pe, source=source))
     return zones
 

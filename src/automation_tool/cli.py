@@ -57,6 +57,7 @@ from automation_tool.state_files import (
 from automation_tool.zone_prices import (
     is_no_change_action_line,
     parse_three_zone_prices,
+    parse_update_zone_triple,
     prices_equal_triple,
 )
 from automation_tool.tradingview_alerts import sync_tradingview_alerts
@@ -73,6 +74,7 @@ from automation_tool.zones_state import (
     read_zones_state,
     write_zones_state,
     zones_from_analysis_payload,
+    zones_from_analysis_payload_merged,
 )
 from automation_tool.telegram_bot import (
     send_message,
@@ -205,13 +207,16 @@ def _parser() -> argparse.ArgumentParser:
 
     cm = sub.add_parser(
         "capture-many",
-        help="Capture Coinmap + TradingView for multiple symbols (single browser session)",
+        help="Capture Coinmap + TradingView per symbol (single browser session; same flow as capture)",
     )
     cm.add_argument(
         "--symbols",
         required=True,
         metavar="SYMS",
-        help="Comma-separated symbols (e.g. EURUSD,USDJPY). Capture runs Coinmap(all) then TradingView(all).",
+        help=(
+            "Comma-separated symbols (e.g. EURUSD,USDJPY). "
+            "Each symbol: Coinmap (bearer/API per config) then TradingView (browser or tvdatafeed per yaml)."
+        ),
     )
     cm.add_argument("--config", type=Path, default=None, help="Path to coinmap.yaml")
     cm.add_argument(
@@ -503,7 +508,7 @@ def _parser() -> argparse.ArgumentParser:
         "tv-watchlist-daemon",
         help=(
             "Daemon 24/24: đọc giá từ title tab TradingView (vd: 'XAUUSD 4,755.145 ...') mỗi 1s (mặc định), "
-            "so alert_price trong zones_state.json (Last và alert làm tròn số nguyên; chạm nếu |chênh|≤eps, mặc định 1 → 4755 và 4756 vẫn chạm); "
+            "so Last với mức ref suy từ vung_cho trong zones_state.json (BUY=max hai giá, SELL=min; làm tròn số nguyên; chạm nếu |chênh|≤eps, mặc định 1); "
             "chạm → dispatch job (Coinmap M5 + OpenAI + MT5/Telegram) và không chờ."
         ),
     )
@@ -1135,9 +1140,10 @@ def cmd_capture(args: argparse.Namespace) -> None:
 
 def cmd_capture_many(args: argparse.Namespace) -> None:
     """
-    Multi-symbol capture in one browser session, 2 phases:
-    1) Coinmap for all symbols
-    2) TradingView for all symbols
+    Multi-symbol capture in one browser session.
+
+    Per symbol: one ``capture_charts`` (Coinmap bearer/API + TradingView, same as
+    single ``capture`` — e.g. ``tvdatafeed`` when ``tradingview_capture.data_source`` is set).
     """
     s = load_settings()
     use_service = bool(getattr(args, "use_service", False))
@@ -1211,10 +1217,9 @@ def cmd_capture_many(args: argparse.Namespace) -> None:
             viewport_height=vh,
         )
         try:
-            # Phase 1: Coinmap for all symbols (clears per-symbol charts dir).
             for sym in symbols:
                 charts_dir = symbol_data_dir(sym) / "charts"
-                _log.info("capture-many: coinmap phase | %s → %s", sym, charts_dir)
+                _log.info("capture-many: coinmap + tradingview | %s → %s", sym, charts_dir)
                 capture_charts(
                     coinmap_yaml=cfg_path,
                     charts_dir=charts_dir,
@@ -1228,30 +1233,8 @@ def cmd_capture_many(args: argparse.Namespace) -> None:
                     main_chart_symbol=sym,
                     set_global_active_symbol=False,
                     enable_coinmap=True,
-                    enable_tradingview=False,
-                    clear_charts_before_capture=True,
-                    stamp_override=stamps[sym],
-                )
-
-            # Phase 2: TradingView for all symbols (must NOT clear prior Coinmap outputs).
-            for sym in symbols:
-                charts_dir = symbol_data_dir(sym) / "charts"
-                _log.info("capture-many: tradingview phase | %s → %s", sym, charts_dir)
-                capture_charts(
-                    coinmap_yaml=cfg_path,
-                    charts_dir=charts_dir,
-                    storage_state_path=storage,
-                    email=s.coinmap_email,
-                    password=s.coinmap_password,
-                    tradingview_password=s.tradingview_password,
-                    save_storage_state=False,
-                    headless=not args.headed,
-                    reuse_browser_context=context,
-                    main_chart_symbol=sym,
-                    set_global_active_symbol=False,
-                    enable_coinmap=False,
                     enable_tradingview=True,
-                    clear_charts_before_capture=False,
+                    clear_charts_before_capture=True,
                     stamp_override=stamps[sym],
                 )
 
@@ -1919,21 +1902,8 @@ def cmd_update(args: argparse.Namespace) -> None:
     _log.info("update: OpenAI follow-up xong | new_response_id=%s", new_id)
 
     lap = args.last_alert_json or default_last_alert_prices_path()
-    apply_first_response_vao_lenh(
-        out_text,
-        last_alert_path=lap,
-        # Policy change: `update` no longer executes MT5. Daemon handles MT5 entry later.
-        mt5_execute=False,
-        mt5_dry_run=args.mt5_dry_run,
-        mt5_symbol=args.mt5_symbol,
-        telegram_bot_token=s.telegram_bot_token,
-        telegram_chat_id=s.telegram_chat_id,
-        telegram_log_chat_id=s.telegram_log_chat_id,
-        telegram_output_ngan_gon_chat_id=s.telegram_output_ngan_gon_chat_id,
-            telegram_source_label="update (follow-up M15+M5)",
-    )
 
-    new_triple, zerr, no_change_json = parse_three_zone_prices(out_text)
+    new_triple, zerr, no_change_json = parse_update_zone_triple(out_text, baseline.prices)
     if no_change_json is True:
         if not args.no_telegram:
             require_telegram(s)
@@ -1958,6 +1928,11 @@ def cmd_update(args: argparse.Namespace) -> None:
             _log.info("update: no_change (action line) — không ghi giá mới")
             return
         raise SystemExit(zerr or "Could not parse three zone prices from model output.")
+
+    try:
+        merge_trade_lines_from_openai_analysis_text(out_text, path=lap)
+    except Exception as e:
+        _log.warning("update: merge trade_line từ JSON — %s", e)
 
     if prices_equal_triple(new_triple, baseline.prices):
         if not args.no_telegram:
@@ -1987,7 +1962,11 @@ def cmd_update(args: argparse.Namespace) -> None:
         from automation_tool.images import get_active_main_symbol
 
         sym = get_active_main_symbol().strip().upper()
-        zones = zones_from_analysis_payload(symbol=sym, payload=payload, source="update")
+        zones = zones_from_analysis_payload_merged(
+            existing=read_zones_state(),
+            payload=payload,
+            source="update",
+        )
         if zones:
             write_zones_state(ZonesState(symbol=sym, zones=zones), path=None)
             _log.info("update: đã ghi zones_state.json | zones=%d | symbol=%s", len(zones), sym)
