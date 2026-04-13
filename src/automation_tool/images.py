@@ -96,15 +96,15 @@ def set_active_main_symbol_file(main_chart_symbol: Optional[str]) -> None:
 def chart_image_order_for_main_symbol(main_sym: str) -> tuple[tuple[str, str, str], ...]:
     """
     Filenames: ``{{stamp}}_tradingview_{{SYMBOL}}_{{interval}}.url`` (https, one line) or ``.png`` / ``coinmap_…``.
-    ``main_sym`` replaces the default XAUUSD block (DXY block unchanged).
+    ``main_sym`` replaces the default XAUUSD block (DXY TV block unchanged).
+
+    **7 slots (default full-analysis set):** DXY H1/M15 → main H1/M15/M5 → Coinmap footprint M15/M5.
+    No DXY H4, no DXY Coinmap footprint, no main H4.
     """
     m = normalize_main_chart_symbol(main_sym)
     return (
-        ("tradingview", "DXY", "4h"),
         ("tradingview", "DXY", "1h"),
         ("tradingview", "DXY", "15m"),
-        ("coinmap", "DXY", "15m"),
-        ("tradingview", m, "4h"),
         ("tradingview", m, "1h"),
         ("tradingview", m, "15m"),
         ("tradingview", m, "5m"),
@@ -117,6 +117,9 @@ def chart_image_order_for_main_symbol(main_sym: str) -> tuple[tuple[str, str, st
 CHART_IMAGE_ORDER: tuple[tuple[str, str, str], ...] = chart_image_order_for_main_symbol(
     DEFAULT_MAIN_CHART_SYMBOL
 )
+
+# Number of multimodal slots (must match ``chart_image_order_for_main_symbol`` length).
+CHART_SLOT_COUNT = len(CHART_IMAGE_ORDER)
 
 
 def read_main_chart_symbol(charts_dir: Optional[Path] = None) -> str:
@@ -270,7 +273,7 @@ def ordered_chart_openai_payloads(
 
 def ordered_chart_images(charts_dir: Path, *, stamp: Optional[str] = None) -> list[Path]:
     """
-    Return chart paths in analysis order (DXY TV → DXY coinmap → main pair TV → main pair coinmap).
+    Return chart paths in analysis order (DXY TV H1/M15 → main TV H1/M15/M5 → main Coinmap M15/M5).
     Only includes files that exist. Uses latest stamp in directory when ``stamp`` is omitted.
     """
     if not charts_dir.is_dir():

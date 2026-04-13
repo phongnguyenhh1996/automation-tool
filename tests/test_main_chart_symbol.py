@@ -7,6 +7,7 @@ import pytest
 from automation_tool.coinmap import apply_main_chart_symbol_to_config, load_coinmap_yaml
 from automation_tool.config import default_coinmap_config_path
 from automation_tool.images import (
+    CHART_SLOT_COUNT,
     chart_image_order_for_main_symbol,
     clear_main_chart_symbol_marker,
     coinmap_main_pair_5m_json_path,
@@ -45,9 +46,12 @@ def test_apply_main_chart_symbol_to_config() -> None:
 
 def test_chart_image_order_for_main_symbol() -> None:
     o = chart_image_order_for_main_symbol("EURUSD")
+    assert len(o) == CHART_SLOT_COUNT == 7
     assert ("tradingview", "EURUSD", "5m") in o
     assert ("coinmap", "EURUSD", "5m") in o
     assert all("XAUUSD" not in x for x in o)
+    assert ("tradingview", "DXY", "4h") not in o
+    assert ("coinmap", "DXY", "15m") not in o
 
 
 def test_marker_roundtrip(tmp_path: Path) -> None:

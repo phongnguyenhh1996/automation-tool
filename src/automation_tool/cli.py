@@ -34,6 +34,7 @@ from automation_tool.openai_prompt_flow import (
     run_single_followup_responses,
 )
 from automation_tool.images import (
+    CHART_SLOT_COUNT,
     ChartOpenAIPayload,
     coinmap_main_pair_interval_json_path,
     effective_chart_image_order,
@@ -162,7 +163,7 @@ def _parser() -> argparse.ArgumentParser:
     a.add_argument(
         "--max-images-per-call",
         type=int,
-        default=10,
+        default=CHART_SLOT_COUNT,
         help="Max items per OpenAI call (TradingView images + Coinmap JSON blocks)",
     )
     a.add_argument(
@@ -256,7 +257,7 @@ def _parser() -> argparse.ArgumentParser:
     am.add_argument(
         "--max-images-per-call",
         type=int,
-        default=10,
+        default=CHART_SLOT_COUNT,
         help="Max items per OpenAI call (TradingView images + Coinmap JSON blocks)",
     )
     am.add_argument(
@@ -326,7 +327,7 @@ def _parser() -> argparse.ArgumentParser:
     al.add_argument(
         "--max-images-per-call",
         type=int,
-        default=10,
+        default=CHART_SLOT_COUNT,
         help="Max items per OpenAI call (images + Coinmap JSON)",
     )
     al.add_argument("--no-telegram", action="store_true")
@@ -714,7 +715,7 @@ def _parser() -> argparse.ArgumentParser:
     g.add_argument(
         "--max-images-per-call",
         type=int,
-        default=10,
+        default=CHART_SLOT_COUNT,
         help="Max items per OpenAI call (images + Coinmap JSON)",
     )
     g.add_argument(

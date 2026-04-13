@@ -25,15 +25,13 @@ chart_download:
   multi_shot_enabled: true
   capture_plan:
     # symbol = watchlist id trên Coinmap; export_symbol = nhãn giống TradingView (file JSON/PNG + trường symbol).
-    - symbol: USDINDEX
-      export_symbol: DXY
-      interval: "15m"
-      watchlist_category: "forex 1"
+    # Chỉ cặp chính M15 + M5 (không còn DXY footprint — khớp bộ 7 slot OpenAI).
     - symbol: XAUUSD
       interval: "15m"
       watchlist_category: "forex 1"
     - symbol: XAUUSD
       interval: "5m"
+      watchlist_category: "forex 1"
   right_sidebar_container_class_prefix: "ChartDesktopPage_rightSidebar__"
   # Chart SVG can sit on top and block hit-testing — force click the sidebar toggle.
   right_sidebar_toggle_click_force: true
@@ -229,14 +227,13 @@ tradingview_capture:
   after_snapshot_escape_ms: 500
   multi_shot_enabled: true
   capture_plan:
+    # Bộ 7 slot: DXY H1/M15 + cặp chính H1/M15/M5 (không H4).
     - symbol: DXY
       intervals:
-        - "4 giờ"
         - "1 giờ"
         - "15 phút"
     - symbol: XAUUSD
       intervals:
-        - "4 giờ"
         - "1 giờ"
         - "15 phút"
         - "5 phút"

@@ -1261,14 +1261,8 @@ def _maybe_click_layer_toggle_if_tooltip_tall(page, cd: dict[str, Any]) -> None:
 
 def _coinmap_default_capture_plan() -> list[dict[str, Any]]:
     return [
-        {
-            "symbol": "USDINDEX",
-            "export_symbol": "DXY",
-            "interval": "15m",
-            "watchlist_category": "forex 1",
-        },
         {"symbol": "XAUUSD", "interval": "15m", "watchlist_category": "forex 1"},
-        {"symbol": "XAUUSD", "interval": "5m"},
+        {"symbol": "XAUUSD", "interval": "5m", "watchlist_category": "forex 1"},
     ]
 
 
@@ -2181,8 +2175,8 @@ def _tradingview_parse_capture_plan(tv: dict[str, Any]) -> Optional[list[tuple[s
 
 def _tradingview_default_capture_plan() -> list[tuple[str, list[str]]]:
     return [
-        ("DXY", ["4 giờ", "1 giờ", "15 phút"]),
-        ("XAUUSD", ["4 giờ", "1 giờ", "15 phút", "5 phút"]),
+        ("DXY", ["1 giờ", "15 phút"]),
+        ("XAUUSD", ["1 giờ", "15 phút", "5 phút"]),
     ]
 
 

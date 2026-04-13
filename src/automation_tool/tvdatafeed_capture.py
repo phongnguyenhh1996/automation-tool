@@ -173,13 +173,13 @@ def _default_multi_rows() -> list[dict[str, Any]]:
     return [
         {
             "symbol": "DXY",
-            "intervals": ["4 giờ", "1 giờ", "15 phút"],
+            "intervals": ["1 giờ", "15 phút"],
             "exchange": None,
             "tv_symbol": None,
         },
         {
             "symbol": "XAUUSD",
-            "intervals": ["4 giờ", "1 giờ", "15 phút", "5 phút"],
+            "intervals": ["1 giờ", "15 phút", "5 phút"],
             "exchange": None,
             "tv_symbol": None,
         },
