@@ -238,6 +238,50 @@ def _parser() -> argparse.ArgumentParser:
     )
     cm.set_defaults(func=cmd_capture_many)
 
+    tvl = sub.add_parser(
+        "tvdatafeed-login",
+        help="Kiểm tra đăng nhập thư viện tvdatafeed (get_hist thử); không mở browser",
+    )
+    tvl.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help=f"coinmap.yaml chứa tradingview_capture (mặc định: {default_coinmap_config_path()})",
+    )
+    tvl.add_argument(
+        "--exchange",
+        default=None,
+        metavar="EX",
+        help="Ghi đè sàn (mặc định: chart_url / capture_plan / tvdatafeed.exchange)",
+    )
+    tvl.add_argument(
+        "--symbol",
+        default=None,
+        metavar="SYM",
+        help="Ghi đè symbol (mặc định: chart_url / capture_plan)",
+    )
+    tvl.add_argument(
+        "--interval",
+        default=None,
+        metavar="LABEL",
+        help='Nhãn interval, ví dụ "15 phút" (mặc định: interval đầu trong capture_plan hoặc "15 phút")',
+    )
+    tvl.add_argument(
+        "--n-bars",
+        type=int,
+        default=3,
+        dest="n_bars",
+        metavar="N",
+        help="Số nến thử get_hist (mặc định: 3)",
+    )
+    tvl.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="DEBUG logging + traceback đầy đủ nếu get_hist lỗi (tvDatafeed.main, urllib3)",
+    )
+    tvl.set_defaults(func=cmd_tvdatafeed_login)
+
     am = sub.add_parser(
         "analyze-many",
         help="OpenAI analyze multiple symbols (parallel, best-effort)",
@@ -1118,6 +1162,36 @@ def cmd_capture(args: argparse.Namespace) -> None:
     _log.info("capture: xong | %s file(s) → %s", len(paths), charts_dir)
     for pth in paths:
         print(f"  {pth}")
+
+
+def cmd_tvdatafeed_login(args: argparse.Namespace) -> None:
+    """Probe TvDatafeed credentials with one ``get_hist`` (same env/yaml as capture)."""
+    if getattr(args, "verbose", False):
+        logging.getLogger().setLevel(logging.DEBUG)
+        logging.getLogger("automation_tool.tvdatafeed_capture").setLevel(logging.DEBUG)
+        logging.getLogger("urllib3").setLevel(logging.DEBUG)
+        logging.getLogger("tvDatafeed.main").setLevel(logging.DEBUG)
+    load_all_dotenv()
+    s = load_settings()
+    from automation_tool.tvdatafeed_capture import run_tvdatafeed_login_probe
+
+    cfg_path = args.config or default_coinmap_config_path()
+    raw = load_coinmap_yaml(cfg_path)
+    tv = raw.get("tradingview_capture")
+    tv = tv if isinstance(tv, dict) else {}
+    ok, msg, _n = run_tvdatafeed_login_probe(
+        tv=tv,
+        tradingview_username=s.coinmap_email,
+        tradingview_password=s.tradingview_password,
+        exchange=getattr(args, "exchange", None),
+        symbol=getattr(args, "symbol", None),
+        interval_label=getattr(args, "interval", None),
+        n_bars=int(getattr(args, "n_bars", 3)),
+        verbose=bool(getattr(args, "verbose", False)),
+    )
+    print(msg, flush=True)
+    if not ok:
+        raise SystemExit(1)
 
 
 def cmd_capture_many(args: argparse.Namespace) -> None:

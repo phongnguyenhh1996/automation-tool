@@ -13,10 +13,13 @@ import os
 import re
 import threading
 import time
+import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import parse_qs, unquote, urlparse
+
+import httpx
 
 from automation_tool.coinmap import (
     _tradingview_interval_slug,
@@ -271,6 +274,265 @@ def _n_bars_for_interval_label(
     return default_n_bars
 
 
+def resolve_tvdatafeed_credentials(
+    tv: dict[str, Any],
+    *,
+    tradingview_username: Optional[str],
+    tradingview_password: Optional[str],
+) -> tuple[Optional[str], Optional[str]]:
+    """
+    Same resolution as :func:`run_tvdatafeed_export`: ``tvdatafeed`` / ``tradingview_capture`` yaml,
+    then ``TRADINGVIEW_USERNAME``, ``COINMAP_EMAIL``, ``TRADINGVIEW_PASSWORD``.
+    """
+    if not isinstance(tv, dict):
+        tv = {}
+    tvd = tv.get("tvdatafeed")
+    tvd = tvd if isinstance(tvd, dict) else {}
+    u = (
+        (
+            tvd.get("username")
+            or os.getenv("TRADINGVIEW_USERNAME")
+            or tradingview_username
+            or os.getenv("COINMAP_EMAIL")
+            or ""
+        )
+        .strip()
+        or None
+    )
+    p = (tvd.get("password") or tradingview_password or os.getenv("TRADINGVIEW_PASSWORD") or "").strip() or None
+    if u is None:
+        u = (tv.get("username") or "").strip() or None
+    if p is None:
+        p = (tv.get("password") or "").strip() or None
+    return u, p
+
+
+_TV_BROWSER_HEADERS: dict[str, str] = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+
+def tradingview_signin_fetch_token(username: str, password: str) -> tuple[Optional[str], str]:
+    """
+    Sign in via HTTPS (browser-like headers + cookie warmup). Same endpoint as
+    ``tvDatafeed.main.TvDatafeed.__auth``, but that method uses bare ``requests`` and
+    often fails while this flow succeeds — token is then injected into ``TvDatafeed``
+    via :func:`_tvdatafeed_construct_with_token`.
+
+    Returns ``(auth_token_or_none, safe_detail)`` — never puts the raw token in ``detail``.
+    """
+    url = "https://www.tradingview.com/accounts/signin/"
+    data = {"username": username, "password": password, "remember": "on"}
+    post_headers = {
+        "Referer": "https://www.tradingview.com/",
+        "Origin": "https://www.tradingview.com",
+        "Accept": "application/json, text/plain, */*",
+    }
+    try:
+        with httpx.Client(
+            timeout=30.0,
+            follow_redirects=True,
+            headers=_TV_BROWSER_HEADERS,
+        ) as client:
+            client.get("https://www.tradingview.com/")
+            client.get("https://www.tradingview.com/accounts/signin/")
+            r = client.post(url, data=data, headers=post_headers)
+    except httpx.RequestError as e:
+        return None, f"signin request failed: {type(e).__name__}: {e}"
+    body = r.text or ""
+    try:
+        payload = r.json()
+    except Exception:
+        excerpt = body[:1500].replace("\n", " ")
+        return None, f"signin HTTP {r.status_code}, non-JSON body (excerpt): {excerpt!r}"
+    if isinstance(payload, str):
+        hint = (
+            " (TV thường trả câu này khi chặn/throttle request tự động — thử lại sau, "
+            "đổi mạng/VPN, hoặc đăng nhập tay trên tradingview.com để xác minh tài khoản.)"
+            if "trouble" in payload.lower()
+            else ""
+        )
+        return None, f"signin HTTP {r.status_code}, no auth_token | response: {payload!r}{hint}"[
+            :2800
+        ]
+    user = payload.get("user")
+    if isinstance(user, dict) and user.get("auth_token"):
+        tok = user.get("auth_token")
+        if isinstance(tok, str) and tok:
+            n = len(tok)
+            return tok, f"signin HTTP {r.status_code}, auth_token received (length={n})"
+    err = payload.get("error") or payload.get("detail") or payload.get("message")
+    if err is None:
+        err = payload
+    hint = ""
+    err_s = err if isinstance(err, str) else repr(err)
+    if isinstance(err, str) and "trouble" in err.lower():
+        hint = (
+            " — Gợi ý: request script dễ bị TV từ chối; thư viện tvdatafeed dùng POST tối giản "
+            "nên có thể vẫn lỗi dù diagnose khác. Thử lại sau, kiểm tra đăng nhập trên web."
+        )
+    return None, (
+        f"signin HTTP {r.status_code}, no auth_token | response: {err_s!r}{hint}"
+    )[:2800]
+
+
+def tradingview_signin_diagnose(username: str, password: str) -> tuple[bool, str]:
+    """
+    Same as :func:`tradingview_signin_fetch_token` but returns ``(ok, detail)`` for CLI/tests.
+
+    tvDatafeed only logs ``error while signin`` and swallows exceptions; this returns
+    HTTP status and a safe excerpt (no token text).
+    """
+    tok, detail = tradingview_signin_fetch_token(username, password)
+    return (tok is not None, detail)
+
+
+def _tvdatafeed_construct_with_token(TvDatafeed_cls: Any, auth_token: str) -> Any:
+    """
+    Build ``TvDatafeed`` using ``auth_token`` from our httpx sign-in.
+
+    The library's ``__auth`` uses ``requests.post`` without cookie warmup, so it often
+    returns no token while :func:`tradingview_signin_fetch_token` succeeds. We temporarily
+    replace the name-mangled ``__auth`` so ``TvDatafeed(u, p)`` receives the real token.
+    """
+    orig = TvDatafeed_cls._TvDatafeed__auth  # type: ignore[attr-defined]
+
+    def _inject(self: Any, username: Any, password: Any) -> str:
+        return auth_token
+
+    TvDatafeed_cls._TvDatafeed__auth = _inject  # type: ignore[attr-defined]
+    try:
+        return TvDatafeed_cls("__injected__", "__injected__")
+    finally:
+        TvDatafeed_cls._TvDatafeed__auth = orig  # type: ignore[attr-defined]
+
+
+def run_tvdatafeed_login_probe(
+    *,
+    tv: dict[str, Any],
+    tradingview_username: Optional[str],
+    tradingview_password: Optional[str],
+    exchange: Optional[str] = None,
+    symbol: Optional[str] = None,
+    interval_label: Optional[str] = None,
+    n_bars: int = 3,
+    verbose: bool = False,
+) -> tuple[bool, str, int]:
+    """
+    Try ``TvDatafeed(user, password)`` and one ``get_hist``.
+
+    Returns ``(ok, message, row_count)``.
+    """
+    TvDatafeed, _ = _load_tvdatafeed()
+    if not isinstance(tv, dict):
+        tv = {}
+    tvd = tv.get("tvdatafeed")
+    tvd = tvd if isinstance(tvd, dict) else {}
+
+    u, p = resolve_tvdatafeed_credentials(
+        tv,
+        tradingview_username=tradingview_username,
+        tradingview_password=tradingview_password,
+    )
+    if not u or not p:
+        return (
+            False,
+            "FAIL: thiếu tài khoản tvdatafeed (cần TRADINGVIEW_PASSWORD và "
+            "TRADINGVIEW_USERNAME hoặc COINMAP_EMAIL, hoặc tradingview_capture.tvdatafeed.username/password).",
+            0,
+        )
+
+    chart_url = str(tv.get("chart_url") or "")
+    chart_ex, chart_sym = parse_tradingview_chart_url(chart_url)
+    rows = effective_tvdatafeed_plan(tv)
+    row0: dict[str, Any] = rows[0] if rows else {}
+
+    ex_s = (exchange or "").strip().upper()
+    if not ex_s:
+        if rows:
+            ex_s = _resolve_row_exchange(rows[0], tvd, chart_ex)
+        else:
+            ex_tvd = tvd.get("exchange")
+            ex_s = str(ex_tvd).strip().upper() if ex_tvd else ""
+            if not ex_s:
+                ex_s = (chart_ex or "OANDA").strip().upper()
+
+    sym_s = (symbol or "").strip().upper()
+    if not sym_s:
+        if rows:
+            sym_s = _resolve_tv_symbol(rows[0])
+        else:
+            sym_s = (chart_sym or "XAUUSD").strip().upper()
+
+    label = (interval_label or "").strip()
+    if not label:
+        if rows and row0.get("intervals"):
+            ivs = row0["intervals"]
+            if isinstance(ivs, list) and ivs:
+                label = str(ivs[0]).strip()
+        if not label:
+            label = "15 phút"
+
+    nb = max(1, min(int(n_bars), 5000))
+    interval_map = _merge_interval_map(tv, tvd)
+    extended_session = bool(tvd.get("extended_session", False))
+
+    tok, signin_detail = tradingview_signin_fetch_token(u, p)
+    if not tok:
+        _log.error("tvdatafeed-login: %s", signin_detail)
+        return False, f"FAIL: {signin_detail}", 0
+
+    _log.info("tvdatafeed-login: %s", signin_detail)
+    _log.info("tvdatafeed-login: thử get_hist | %s:%s | %s | n_bars=%d", ex_s, sym_s, label, nb)
+    try:
+        client: Any = _tvdatafeed_construct_with_token(TvDatafeed, tok)
+        iv = _interval_enum_from_label(label, interval_map=interval_map, row=row0 or None)
+        df = client.get_hist(
+            sym_s,
+            ex_s,
+            interval=iv,
+            n_bars=nb,
+            extended_session=extended_session,
+        )
+    except Exception as e:
+        _log.error(
+            "tvdatafeed-login: get_hist lỗi | %s:%s | %s | %s",
+            ex_s,
+            sym_s,
+            label,
+            e,
+            exc_info=True,
+        )
+        msg = f"FAIL: {type(e).__name__}: {e}"
+        if verbose:
+            msg = msg + "\n" + traceback.format_exc()
+        return False, msg, 0
+
+    n = 0
+    if df is not None:
+        try:
+            n = len(df)
+        except Exception:
+            n = 0
+
+    if n == 0:
+        return (
+            False,
+            f"FAIL: get_hist trả 0 nến | {ex_s}:{sym_s} | {label} (kiểm tra sàn/symbol/đăng nhập/mạng).",
+            0,
+        )
+    iv_name = iv.name if hasattr(iv, "name") else str(iv)
+    return (
+        True,
+        f"OK: đăng nhập tvdatafeed + get_hist | {ex_s}:{sym_s} | {label} → {iv_name} | rows={n}/{nb}",
+        n,
+    )
+
+
 def _fetch_one_barset(
     *,
     tv_symbol: str,
@@ -367,22 +629,11 @@ def run_tvdatafeed_export(
                 }
             )
 
-    u = (
-        (
-            tvd.get("username")
-            or os.getenv("TRADINGVIEW_USERNAME")
-            or tradingview_username
-            or os.getenv("COINMAP_EMAIL")
-            or ""
-        )
-        .strip()
-        or None
+    u, p = resolve_tvdatafeed_credentials(
+        tv,
+        tradingview_username=tradingview_username,
+        tradingview_password=tradingview_password,
     )
-    p = (tvd.get("password") or tradingview_password or os.getenv("TRADINGVIEW_PASSWORD") or "").strip() or None
-    if u is None:
-        u = (tv.get("username") or "").strip() or None
-    if p is None:
-        p = (tv.get("password") or "").strip() or None
 
     TvDatafeed, _ = _load_tvdatafeed()
     _log.info(
@@ -390,7 +641,16 @@ def run_tvdatafeed_export(
         "có" if (u and p) else "không (nologin — dữ liệu có thể giới hạn)",
     )
     if u and p:
-        shared_client: Any = TvDatafeed(u, p)
+        tok, signin_detail = tradingview_signin_fetch_token(u, p)
+        if tok:
+            _log.info("tvdatafeed: %s — TvDatafeed dùng auth_token từ sign-in httpx", signin_detail)
+            shared_client = _tvdatafeed_construct_with_token(TvDatafeed, tok)
+        else:
+            _log.warning(
+                "tvdatafeed: không lấy token qua httpx (%s) — fallback TvDatafeed(user, password)",
+                signin_detail,
+            )
+            shared_client = TvDatafeed(u, p)
     else:
         shared_client = TvDatafeed()
     shared_lock = threading.Lock()

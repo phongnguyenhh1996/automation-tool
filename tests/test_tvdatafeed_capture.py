@@ -10,6 +10,8 @@ from automation_tool.tvdatafeed_capture import (
     _parse_capture_plan_rows,
     effective_tvdatafeed_plan,
     parse_tradingview_chart_url,
+    resolve_tvdatafeed_credentials,
+    tradingview_signin_diagnose,
 )
 
 
@@ -24,6 +26,93 @@ def test_parse_tradingview_chart_url_empty() -> None:
     ex, sym = parse_tradingview_chart_url("")
     assert ex == ""
     assert sym == "XAUUSD"
+
+
+def test_resolve_tvdatafeed_credentials_yaml_then_args(monkeypatch) -> None:
+    monkeypatch.delenv("TRADINGVIEW_USERNAME", raising=False)
+    monkeypatch.delenv("COINMAP_EMAIL", raising=False)
+    monkeypatch.delenv("TRADINGVIEW_PASSWORD", raising=False)
+    tv = {
+        "tvdatafeed": {"username": "u1", "password": "p1"},
+    }
+    u, p = resolve_tvdatafeed_credentials(tv, tradingview_username="u2", tradingview_password="p2")
+    assert u == "u1"
+    assert p == "p1"
+
+
+def test_tradingview_signin_diagnose_success(monkeypatch) -> None:
+    class FakeResp:
+        status_code = 200
+        text = "{}"
+
+        def json(self) -> dict:
+            return {"user": {"auth_token": "toktoktok"}}
+
+    class FakeClient:
+        def __init__(self, *a: object, **k: object) -> None:
+            pass
+
+        def __enter__(self) -> FakeClient:
+            return self
+
+        def __exit__(self, *a: object) -> None:
+            pass
+
+        def get(self, *a: object, **k: object) -> FakeResp:
+            return FakeResp()
+
+        def post(self, *a: object, **k: object) -> FakeResp:
+            return FakeResp()
+
+    monkeypatch.setattr(
+        "automation_tool.tvdatafeed_capture.httpx.Client", lambda *a, **k: FakeClient()
+    )
+    ok, msg = tradingview_signin_diagnose("u", "p")
+    assert ok is True
+    assert "auth_token received" in msg
+    assert "length=" in msg
+    assert "toktok" not in msg
+
+
+def test_tradingview_signin_diagnose_json_error(monkeypatch) -> None:
+    class FakeResp:
+        status_code = 403
+        text = "{}"
+
+        def json(self) -> dict:
+            return {"error": "Invalid credentials"}
+
+    class FakeClient:
+        def __init__(self, *a: object, **k: object) -> None:
+            pass
+
+        def __enter__(self) -> FakeClient:
+            return self
+
+        def __exit__(self, *a: object) -> None:
+            pass
+
+        def get(self, *a: object, **k: object) -> FakeResp:
+            return FakeResp()
+
+        def post(self, *a: object, **k: object) -> FakeResp:
+            return FakeResp()
+
+    monkeypatch.setattr(
+        "automation_tool.tvdatafeed_capture.httpx.Client", lambda *a, **k: FakeClient()
+    )
+    ok, msg = tradingview_signin_diagnose("u", "p")
+    assert ok is False
+    assert "403" in msg
+    assert "Invalid credentials" in msg
+
+
+def test_resolve_tvdatafeed_credentials_env_fallback(monkeypatch) -> None:
+    monkeypatch.setenv("TRADINGVIEW_USERNAME", "tvu")
+    monkeypatch.setenv("TRADINGVIEW_PASSWORD", "tvp")
+    u, p = resolve_tvdatafeed_credentials({}, tradingview_username=None, tradingview_password=None)
+    assert u == "tvu"
+    assert p == "tvp"
 
 
 def test_n_bars_for_interval_label_map_and_fallback() -> None:
