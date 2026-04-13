@@ -87,6 +87,39 @@ def _default_max_coinmap_json_chars() -> int:
 # Files API: ``expires_after`` must be 3600–2592000 seconds per OpenAI docs.
 _FILE_EXPIRES_AFTER_SECONDS = 86400  # 1 day
 
+# GET /v1/files: max limit per request (OpenAI docs: 1–10000, default 10000).
+_USER_DATA_LIST_LIMIT = 10_000
+
+
+def delete_all_openai_user_data_files(client: OpenAI) -> int:
+    """
+    Gọi ``GET /v1/files`` với ``purpose=user_data``, phân trang nếu cần, rồi ``DELETE`` từng file.
+
+    Dùng trước khi upload JSON mới (purpose ``user_data``) để tránh tích lũy file orphan trên tài khoản.
+    """
+    deleted = 0
+    page = client.files.list(
+        purpose="user_data",
+        limit=_USER_DATA_LIST_LIMIT,
+        order="desc",
+    )
+    while True:
+        for fo in page.data:
+            try:
+                client.files.delete(fo.id)
+                deleted += 1
+            except OpenAIError as e:
+                _log.warning("[openai files] delete %s failed: %s", fo.id, e)
+        if not page.has_next_page():
+            break
+        page = page.get_next_page()
+    if deleted:
+        _log.info(
+            "[openai files] deleted %d existing file(s) (purpose=user_data) before upload",
+            deleted,
+        )
+    return deleted
+
 
 def _coinmap_openai_slim_enabled() -> bool:
     """
@@ -290,6 +323,7 @@ def run_analysis_responses_flow(
     chart_payloads: list[ChartOpenAIPayload] | None = None,
     max_coinmap_json_chars: int | None = None,
     on_first_model_text: Optional[Callable[[str], None]] = None,
+    purge_openai_user_data_files: bool = False,
 ) -> PromptTwoStepResult:
     """
     Một lần (hoặc nhiều batch nếu quá nhiều ảnh): user message multimodal với ``analysis_prompt``
@@ -299,6 +333,9 @@ def run_analysis_responses_flow(
 
     ``on_first_model_text`` (tuỳ chọn): gọi với text assistant của **batch đầu tiên**
     (khi có multimodal); dùng cho VÀO LỆNH + MT5 / cập nhật ``last_alert_prices``.
+
+    ``purge_openai_user_data_files``: nếu True và payload có block JSON, gọi
+    ``GET /v1/files?purpose=user_data`` rồi xóa hết trước khi upload JSON mới (Files API).
     """
     if not (analysis_prompt or "").strip():
         analysis_prompt = default_analysis_prompt(read_main_chart_symbol(charts_dir))
@@ -336,6 +373,9 @@ def run_analysis_responses_flow(
         payloads = [("image", p) for p in chart_paths if p.is_file()]
     else:
         payloads = ordered_chart_openai_payloads(charts_dir)
+
+    if purge_openai_user_data_files and any(k == "json" for k, _ in payloads):
+        delete_all_openai_user_data_files(client)
 
     if not payloads:
         r = client.responses.create(**common, input=analysis_prompt.strip())
@@ -404,6 +444,7 @@ def run_prompt_two_step_flow(
     chart_paths: list[Path] | None = None,
     chart_payloads: list[ChartOpenAIPayload] | None = None,
     max_coinmap_json_chars: int | None = None,
+    purge_openai_user_data_files: bool = False,
 ) -> PromptTwoStepResult:
     """
     Tương thích ngược: gộp ``first_prompt`` và ``follow_up_prompt`` thành một ``analysis_prompt``.
@@ -429,6 +470,7 @@ def run_prompt_two_step_flow(
         chart_payloads=chart_payloads,
         max_coinmap_json_chars=max_coinmap_json_chars,
         on_first_model_text=None,
+        purge_openai_user_data_files=purge_openai_user_data_files,
     )
 
 

@@ -1078,6 +1078,8 @@ def _run_openai_flow(
     chart_paths: list[Path] | None = None,
     chart_payloads: list[ChartOpenAIPayload] | None = None,
     on_first_model_text: Optional[Callable[[str], None]] = None,
+    *,
+    purge_openai_user_data_files: bool = False,
 ) -> PromptTwoStepResult:
     return run_analysis_responses_flow(
         api_key=s.openai_api_key,
@@ -1092,6 +1094,7 @@ def _run_openai_flow(
         chart_paths=chart_paths,
         chart_payloads=chart_payloads,
         on_first_model_text=on_first_model_text,
+        purge_openai_user_data_files=purge_openai_user_data_files,
     )
 
 
@@ -1672,6 +1675,7 @@ def cmd_all(args: argparse.Namespace) -> None:
             args.max_images_per_call,
             chart_payloads=payloads,
             on_first_model_text=None,
+            purge_openai_user_data_files=True,
         )
     except Exception as e:
         re_raise_unless_openai(e)

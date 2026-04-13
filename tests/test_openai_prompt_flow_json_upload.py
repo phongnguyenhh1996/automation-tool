@@ -12,6 +12,7 @@ from automation_tool.openai_prompt_flow import (
     _FILE_EXPIRES_AFTER_SECONDS,
     _build_mixed_chart_user_content,
     _json_paths_to_headers_and_file_ids,
+    delete_all_openai_user_data_files,
 )
 
 
@@ -111,3 +112,27 @@ def test_json_paths_to_headers_single_path_no_nested_executor(tmp_path: Path) ->
     assert len(out) == 1
     assert out[0][1] == "solo"
     client.files.create.assert_called_once()
+
+
+def test_delete_all_user_data_lists_purpose_and_deletes_pages() -> None:
+    client = MagicMock()
+    p1 = MagicMock()
+    p1.data = [MagicMock(id="f1"), MagicMock(id="f2")]
+    p1.has_next_page.return_value = True
+    p2 = MagicMock()
+    p2.data = [MagicMock(id="f3")]
+    p2.has_next_page.return_value = False
+    p1.get_next_page.return_value = p2
+    client.files.list.return_value = p1
+
+    n = delete_all_openai_user_data_files(client)
+    assert n == 3
+    client.files.list.assert_called_once_with(
+        purpose="user_data",
+        limit=10_000,
+        order="desc",
+    )
+    assert client.files.delete.call_count == 3
+    client.files.delete.assert_any_call("f1")
+    client.files.delete.assert_any_call("f2")
+    client.files.delete.assert_any_call("f3")
