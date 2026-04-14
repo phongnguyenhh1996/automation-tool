@@ -16,7 +16,7 @@ from automation_tool.coinmap import capture_charts
 from automation_tool.config import Settings, resolved_openai_model
 from automation_tool.images import coinmap_xauusd_5m_json_path, read_main_chart_symbol
 from automation_tool.mt5_execute import execute_trade, format_mt5_execution_for_telegram
-from automation_tool.mt5_manage import mt5_cancel_pending_or_close_position
+from automation_tool.mt5_manage import mt5_cancel_pending_or_close_position, mt5_ticket_still_open
 from automation_tool.mt5_openai_parse import ParsedTrade, parse_openai_output_md
 from automation_tool.openai_prompt_flow import (
     TP1_POST_TOUCH_USER_TEMPLATE,
@@ -158,6 +158,21 @@ def _run_tp1_openai_and_act(
 
     st0 = read_last_alert_state(last_alert_path)
     tk0 = int(st0.mt5_ticket_by_label.get(label) or 0) if st0 else 0
+    dry = bool(getattr(params, "mt5_dry_run", False))
+    exe = getattr(params, "mt5_execute", True)
+    if exe and tk0 > 0:
+        still_open, ticket_msg = mt5_ticket_still_open(tk0, dry_run=dry)
+        _log_tp1.info("tp1-followup kiểm tra ticket | %s", ticket_msg)
+        if not still_open:
+            _log.info(
+                "tp1-followup bỏ qua (ticket không còn trên MT5) | label=%s | %s",
+                label,
+                ticket_msg,
+            )
+            update_single_plan_status(label, LOAI, path=last_alert_path)
+            clear_plan_mt5_fields(label, path=last_alert_path)
+            update_plan_tp1_followup_done(label, False, path=last_alert_path)
+            return None
     _log_tp1.info(
         "tp1-followup bắt đầu | label=%s symbol=%s last=%.5f tp1=%.5f side=%s ticket=%s | chart_dir=%s",
         label,
@@ -229,8 +244,6 @@ def _run_tp1_openai_and_act(
 
     st = read_last_alert_state(last_alert_path)
     tk = (st.mt5_ticket_by_label.get(label) if st else None) or 0
-    dry = bool(getattr(params, "mt5_dry_run", False))
-    exe = getattr(params, "mt5_execute", True)
     _log_tp1.info(
         "tp1-followup parse OK | sau_tp1=%s | mt5_execute=%s mt5_dry_run=%s | trade_line_moi_len=%d",
         dec.sau_tp1,

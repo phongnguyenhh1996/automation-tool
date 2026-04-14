@@ -176,6 +176,35 @@ def mt5_latest_position_ticket(
         mt5.shutdown()
 
 
+def mt5_ticket_still_open(ticket: int, *, dry_run: bool = False) -> tuple[bool, str]:
+    """
+    ``True`` nếu ``ticket`` vẫn là lệnh chờ *hoặc* position đang mở trên MT5.
+
+    ``False`` nếu không còn (đã khớp + đóng, chốt TP, huỷ, v.v.) — không gọi follow-up TP1.
+
+    Khi ``dry_run``: luôn coi như còn (không kết nối MT5).
+
+    Khi ``mt5.initialize`` thất bại: trả ``True`` (tiếp tục follow-up; không chặn vì lỗi mạng).
+    """
+    if dry_run:
+        return True, "[DRY-RUN] bỏ qua kiểm tra ticket"
+    if ticket <= 0:
+        return False, f"ticket không hợp lệ: {ticket}"
+    mt5 = _mt5_init()
+    if mt5 is None:
+        return True, "mt5.initialize thất bại — tiếp tục follow-up (không xác nhận được ticket)"
+    try:
+        has_order = any(int(o.ticket) == int(ticket) for o in (mt5.orders_get() or []))
+        has_pos = any(int(p.ticket) == int(ticket) for p in (mt5.positions_get() or []))
+    finally:
+        mt5.shutdown()
+    if has_order:
+        return True, f"ticket={ticket} còn (pending order)"
+    if has_pos:
+        return True, f"ticket={ticket} còn (position mở)"
+    return False, f"ticket={ticket} không còn (đã khớp đóng/chốt hoặc huỷ)"
+
+
 def mt5_cancel_pending_or_close_position(ticket: int, *, dry_run: bool = False) -> MT5ManageResult:
     """Thử tìm pending ``ticket``; không có thì đóng position ``ticket``."""
     if dry_run:

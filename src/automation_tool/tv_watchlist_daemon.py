@@ -37,7 +37,7 @@ from automation_tool.mt5_openai_parse import (
     parse_journal_intraday_action_from_openai_text,
     parse_openai_output_md,
 )
-from automation_tool.mt5_manage import mt5_cancel_pending_or_close_position
+from automation_tool.mt5_manage import mt5_cancel_pending_or_close_position, mt5_ticket_still_open
 from automation_tool.openai_errors import re_raise_unless_openai
 from automation_tool.openai_prompt_flow import TP1_POST_TOUCH_USER_TEMPLATE, run_single_followup_responses
 from automation_tool.playwright_browser import close_browser_and_context, launch_chrome_context
@@ -299,6 +299,27 @@ def _tp1_followup_job(
             z0.tp1_followup_done = False
             write_zones_state(st0, path=zs_path)
             return
+
+        tk_check = int(z0.mt5_ticket or 0)
+        dry = bool(params.mt5_dry_run)
+        exe = bool(params.mt5_execute)
+        if exe and tk_check > 0:
+            still_open, ticket_msg = mt5_ticket_still_open(tk_check, dry_run=dry)
+            _send_log(settings, f"[tp1] kiểm tra ticket | {ticket_msg}")
+            if not still_open:
+                st_done = read_zones_state(zs_path)
+                if st_done is not None:
+                    z_done = next((z for z in st_done.zones if z.id == zone_id), None)
+                    if z_done is not None:
+                        z_done.status = "done"
+                        z_done.mt5_ticket = None
+                        z_done.tp1_followup_done = True
+                        write_zones_state(st_done, path=zs_path)
+                _send_log(
+                    settings,
+                    f"[tp1] bỏ qua follow-up TP1 (ticket đã đóng trên MT5) | zone_id={zone_id} | {ticket_msg}",
+                )
+                return
 
         from automation_tool.coinmap import capture_charts
         from automation_tool.images import coinmap_xauusd_5m_json_path, read_main_chart_symbol
