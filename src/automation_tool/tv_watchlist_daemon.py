@@ -470,20 +470,24 @@ def _auto_entry_job(
             return
         if not z0.trade_line:
             z0.status = "cham"
+            z0.auto_entry_retry_after = ""
             write_zones_state(st0, path=zs_path)
             return
         if z0.hop_luu is None:
             z0.status = "cham"
+            z0.auto_entry_retry_after = ""
             write_zones_state(st0, path=zs_path)
             return
         thr = int(auto_mt5_hop_luu_threshold_for_label(z0.label))
         if int(z0.hop_luu) <= thr:
             z0.status = "cham"
+            z0.auto_entry_retry_after = ""
             write_zones_state(st0, path=zs_path)
             return
         if not params.mt5_execute:
             _send_log(settings, f"[auto-entry] mt5_execute=off | zone_id={zone_id} skip")
             z0.status = "cham"
+            z0.auto_entry_retry_after = ""
             write_zones_state(st0, path=zs_path)
             return
 
@@ -494,6 +498,7 @@ def _auto_entry_job(
                 for z in st1.zones:
                     if z.id == zone_id:
                         z.status = "cham"
+                        z.auto_entry_retry_after = ""
                         break
                 write_zones_state(st1, path=zs_path)
             _send_log(settings, f"[auto-entry] parse_trade_line_failed | zone_id={zone_id} err={err}")
@@ -523,9 +528,15 @@ def _auto_entry_job(
             if ex.ok and tid > 0:
                 z.mt5_ticket = tid
                 z.status = "vao_lenh"
+                z.auto_entry_retry_after = ""
             else:
-                # allow retry via touch flow or manual; keep cham for visibility
+                # allow retry sau cooldown; tránh auto-entry lặp mỗi tick khi MT5 lỗi (vd. INVALID_PRICE)
                 z.status = "cham"
+                z.auto_entry_retry_after = _retry_at_iso()
+                _send_log(
+                    settings,
+                    f"[auto-entry] mt5_failed -> cham cooldown_until={z.auto_entry_retry_after} | zone_id={zone_id}",
+                )
             break
         write_zones_state(st2, path=zs_path)
         return
@@ -853,8 +864,12 @@ def _tv_watchlist_daemon_main_loop(
                 thr = int(auto_mt5_hop_luu_threshold_for_label(z.label))
                 if int(z.hop_luu) <= thr:
                     continue
+                aer = (getattr(z, "auto_entry_retry_after", "") or "").strip()
+                if aer and not _is_retry_due(aer):
+                    continue
                 # Step 1: mark đang vào lệnh (auto-entry) so the next poll does not duplicate dispatch.
                 z.status = "dang_vao_lenh"
+                z.auto_entry_retry_after = ""
                 write_zones_state(st_auto, path=zs_path)
                 _send_log(
                     settings,
