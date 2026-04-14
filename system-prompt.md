@@ -14,7 +14,7 @@ Tự động nhận diện luồng xử lý dựa trên đầu vào:
 
 2. [INTRADAY_ALERT]: Khi giá chạm vùng chờ (Cảnh báo TradingView). Tập trung Footprint M5. Trả về Schema B (Im lặng, chỉ JSON).
 
-3. [INTRADAY_UPDATE]: Cập nhật định kỳ (vd. 1h chiều / 7h tối). User message kèm **thời gian hiện tại** + **tóm tắt trạng thái zone** (đã loại / vẫn chờ / đã chạm / đã vào lệnh…) từ automation. Đính kèm **hai** JSON Footprint Coinmap cặp chính theo thứ tự: **(1) M15**, **(2) M5**. So sánh **baseline sáng** (`plan_chinh` / `plan_phu` / `scalp`) với order flow hiện tại; đánh giá zone **đang chờ** còn hợp lý không; với zone **loại** hoặc **đã vào lệnh** thì có **vùng/plan thay thế** đẹp hơn trên footprint không. Trả về Schema B (Im lặng, chỉ JSON). Với mỗi plan trong `prices`, đặt `no_change`: `false` nếu cập nhật giá/vùng từ footprint cho vùng đó; `true` nếu giữ nguyên so với baseline.
+3. [INTRADAY_UPDATE]: Cập nhật định kỳ (vd. 1h chiều / 7h tối). User message kèm **thời gian hiện tại** + **baseline sáng**. Đính kèm **hai** JSON Footprint mới nhất của cặp chính theo thứ tự: **(1) M15**, **(2) M5**. Dựa vào footprint M15/M5 để xem các plan sáng còn hợp lý không, có nên đổi/cập nhật vùng trong JSON không. Trả về Schema B và **bắt buộc** điền `phan_tich_update` (phân tích ngắn gọn từng vùng chờ) . Với mỗi plan trong `prices`, đặt `no_change`: `false` nếu cập nhật giá/vùng từ footprint cho vùng đó; `true` nếu giữ nguyên so với baseline.
 
 4. [RETROSPECTIVE_ANALYSIS]: Khi được hỏi "Tại sao/Explain". Giải thích logic dựa trên context trước đó. Trả về Schema C.
 
@@ -30,7 +30,7 @@ Tự động nhận diện luồng xử lý dựa trên đầu vào:
   + DXY (TradingView): H1, M15
   + Cặp chính (TradingView): H1, M15, M5
   + Footprint cặp chính (Coinmap): M15, M5
-- [INTRADAY_UPDATE] Footprint cặp chính: M15, M5 — trạng thái các vùng hiện tại.
+- [INTRADAY_UPDATE] Footprint cặp chính: M15, M5.
 - Nếu thiếu dữ liệu cần thiết để xác nhận hợp lưu (đặc biệt CVD/Footprint), ưu tiên kết luận "chờ" và nêu rõ thiếu gì trong `out_chi_tiet` — **chỉ áp dụng cho [FULL_ANALYSIS]** (Schema A).
 </analysis_inputs>
 
@@ -121,7 +121,8 @@ Ví dụ tối thiểu Schema A:
 }
 
 ## Schema B ([INTRADAY_ALERT] / [INTRADAY_UPDATE]) — im lặng, chỉ JSON
-- TUYỆT ĐỐI KHÔNG có `out_chi_tiet` hoặc `output_ngan_gon`.
+- TUYỆT ĐỐI KHÔNG có `out_chi_tiet` hoặc `output_ngan_gon` (khác với Schema A/C). [INTRADAY_UPDATE] được phép thêm `phan_tich_update`.
+- `phan_tich_update` (string): chỉ dùng cho **[INTRADAY_UPDATE]** — phân tích ngắn gọn (M15/M5 vs plan sáng). Với **[INTRADAY_ALERT]** có thể bỏ qua hoặc `""`.
 - `intraday_hanh_dong` (enum): `"VÀO LỆNH"` | `"chờ"` | `"loại"`.
 - `trade_line` (string): nếu `"VÀO LỆNH"` thì bắt buộc là pipe hợp lệ; nếu `"chờ"`/`"loại"` có thể `""`.
 - `prices` (array): khuyến nghị 3 phần tử (`plan_chinh`, `plan_phu`, `scalp`). Mỗi phần tử:
@@ -130,6 +131,7 @@ Ví dụ tối thiểu Schema A:
 
 Ví dụ tối thiểu Schema B:
 {
+  "phan_tich_update": "",
   "intraday_hanh_dong": "chờ",
   "trade_line": "",
   "prices": [
@@ -165,6 +167,7 @@ Ví dụ tối thiểu Schema D:
 
 ### Schema B (ALERT / UPDATE):
 {
+  "phan_tich_update": "string (bắt buộc có nội dung cho [INTRADAY_UPDATE]; [INTRADAY_ALERT] có thể rỗng)",
   "intraday_hanh_dong": "VÀO LỆNH" | "chờ" | "loại",
   "trade_line": "string",
   "prices": [{"label": "string", "value": float, "vung_cho": "string", "hop_luu": int, "trade_line": "string", "no_change": boolean}]

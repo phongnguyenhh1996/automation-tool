@@ -328,6 +328,45 @@ def _zone_status_phrase_vn(z: Zone) -> str:
     return f"trạng thái={s}"
 
 
+def format_intraday_update_time_line(
+    *,
+    timezone_name: str = "Asia/Ho_Chi_Minh",
+) -> str:
+    """One line: current local time for [INTRADAY_UPDATE] user text (no zone snapshot)."""
+    try:
+        tz = ZoneInfo((timezone_name or "UTC").strip() or "UTC")
+    except Exception:
+        tz = ZoneInfo("UTC")
+    now = datetime.now(tz)
+    return (
+        f"Thời gian hiện tại ({timezone_name}): "
+        f"{now.strftime('%Y-%m-%d %H:%M:%S')}\n"
+    )
+
+
+def format_intraday_update_baseline_vung_cho(st: Optional[ZonesState]) -> str:
+    """
+    Baseline lines for [INTRADAY_UPDATE]: ``vùng chờ {label}: {vung_cho}`` for each of
+    plan_chinh, plan_phu, scalp from ``zones_state``. If a label is missing or ``vung_cho``
+    is empty, ``(chưa có)`` — no fallback to morning price triple.
+    """
+    by_label: dict[str, Zone] = {}
+    if st is not None:
+        for z in st.zones:
+            key = (z.label or "").strip().lower()
+            if key:
+                by_label[key] = z
+    lines: list[str] = []
+    for lab in ZONE_LABELS_ORDER:
+        z = by_label.get(lab)
+        vc = (z.vung_cho or "").strip() if z is not None else ""
+        if vc:
+            lines.append(f"vùng chờ {lab}: {vc}")
+        else:
+            lines.append(f"vùng chờ {lab}: (chưa có)")
+    return "\n".join(lines) + "\n"
+
+
 def format_zones_snapshot_for_intraday_update(
     st: Optional[ZonesState],
     *,

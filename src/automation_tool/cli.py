@@ -26,6 +26,7 @@ from automation_tool.config import (
     resolved_openai_model,
     symbol_data_dir,
 )
+from automation_tool.openai_analysis_json import parse_analysis_from_openai_text
 from automation_tool.openai_errors import re_raise_unless_openai
 from automation_tool.openai_prompt_flow import (
     PromptTwoStepResult,
@@ -72,7 +73,6 @@ from automation_tool.zones_state import (
     ZonesState,
     baseline_triple_from_zones_state,
     default_zones_state_path,
-    format_zones_snapshot_for_intraday_update,
     read_zones_state,
     remove_zones_state_file,
     write_zones_state,
@@ -2024,8 +2024,7 @@ def cmd_update(args: argparse.Namespace) -> None:
 
     require_openai(s)
     p1, p2, p3 = baseline.prices
-    zones_snap = format_zones_snapshot_for_intraday_update(read_zones_state())
-    user_msg = build_intraday_update_user_text(p1, p2, p3, zones_snapshot=zones_snap)
+    user_msg = build_intraday_update_user_text(read_zones_state())
 
     try:
         out_text, new_id = run_single_followup_responses(
@@ -2047,6 +2046,24 @@ def cmd_update(args: argparse.Namespace) -> None:
     write_last_response_id(new_id)
     _log.info("update: OpenAI follow-up xong | new_response_id=%s", new_id)
 
+    update_payload = parse_analysis_from_openai_text(out_text)
+
+    def _send_phan_tich_update_if_any() -> None:
+        if args.no_telegram:
+            return
+        if update_payload is None:
+            return
+        text = (update_payload.phan_tich_update or "").strip()
+        if not text:
+            return
+        require_telegram(s)
+        send_message(
+            bot_token=s.telegram_bot_token,
+            chat_id=s.telegram_chat_id,
+            text=text,
+            parse_mode=s.telegram_parse_mode,
+        )
+
     lap = args.last_alert_json or default_last_alert_prices_path()
 
     new_triple, zerr, no_change_json = parse_update_zone_triple(out_text, baseline.prices)
@@ -2059,6 +2076,7 @@ def cmd_update(args: argparse.Namespace) -> None:
                 text="Vùng giá không đổi so với sáng (no_change), giữ nguyên cảnh báo.",
                 parse_mode=s.telegram_parse_mode,
             )
+        _send_phan_tich_update_if_any()
         _log.info("update: no_change (JSON) — không ghi giá mới")
         return
     if new_triple is None:
@@ -2071,8 +2089,10 @@ def cmd_update(args: argparse.Namespace) -> None:
                     text="Vùng giá không đổi so với sáng, giữ nguyên cảnh báo.",
                     parse_mode=s.telegram_parse_mode,
                 )
+            _send_phan_tich_update_if_any()
             _log.info("update: no_change (action line) — không ghi giá mới")
             return
+        _send_phan_tich_update_if_any()
         raise SystemExit(zerr or "Could not parse three zone prices from model output.")
 
     try:
@@ -2089,6 +2109,7 @@ def cmd_update(args: argparse.Namespace) -> None:
                 text="Vùng giá không đổi so với sáng, giữ nguyên cảnh báo.",
                 parse_mode=s.telegram_parse_mode,
             )
+        _send_phan_tich_update_if_any()
         _log.info("update: giá trùng baseline — không ghi giá mới")
         return
 
@@ -2101,9 +2122,7 @@ def cmd_update(args: argparse.Namespace) -> None:
     )
 
     # Write zones_state.json (migration A: keep last_alert_prices.json for legacy flows)
-    from automation_tool.openai_analysis_json import parse_analysis_from_openai_text
-
-    payload = parse_analysis_from_openai_text(out_text)
+    payload = update_payload
     if payload is not None and payload.prices:
         from automation_tool.images import get_active_main_symbol
 
@@ -2148,6 +2167,7 @@ def cmd_update(args: argparse.Namespace) -> None:
             _log.info(
                 "update: không tách được out_chi_tiet/output_ngan_gon — chỉ gửi dòng giá lên main"
             )
+        _send_phan_tich_update_if_any()
 
 
 def cmd_tv_watchlist_daemon(args: argparse.Namespace) -> None:

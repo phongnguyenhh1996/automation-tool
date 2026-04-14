@@ -4,6 +4,7 @@ from automation_tool.tradingview_alerts import (
     format_price_for_tradingview_input,
     parse_tv_alert_price_from_description,
 )
+from automation_tool.openai_analysis_json import parse_analysis_from_openai_text
 from automation_tool.zone_prices import (
     parse_three_zone_prices,
     parse_update_zone_triple,
@@ -85,6 +86,28 @@ def test_parse_update_zone_triple_merges_per_no_change() -> None:
 def test_parse_update_zone_triple_root_no_change() -> None:
     zt, err, nc = parse_update_zone_triple('{"no_change": true}', (1.0, 2.0, 3.0))
     assert zt is None and err is None and nc is True
+
+
+def test_parse_analysis_phan_tich_update_only() -> None:
+    text = '{"phan_tich_update": "M15 xác nhận buy."}'
+    p = parse_analysis_from_openai_text(text)
+    assert p is not None
+    assert p.phan_tich_update == "M15 xác nhận buy."
+
+
+def test_parse_analysis_intraday_json_with_phan_tich_update() -> None:
+    text = """{
+      "phan_tich_update": "Giữ plan.",
+      "intraday_hanh_dong": "chờ",
+      "trade_line": "",
+      "prices": [
+        {"label": "plan_chinh", "value": 10.0, "vung_cho": "9.0–11.0", "hop_luu": 50, "trade_line": "", "no_change": true}
+      ]
+    }"""
+    p = parse_analysis_from_openai_text(text)
+    assert p is not None
+    assert p.phan_tich_update == "Giữ plan."
+    assert p.intraday_hanh_dong == "chờ"
 
 
 def test_format_tv_input() -> None:

@@ -13,7 +13,10 @@ import os
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, NamedTuple, Optional
+from typing import TYPE_CHECKING, Any, NamedTuple, Optional
+
+if TYPE_CHECKING:
+    from automation_tool.zones_state import ZonesState
 
 from openai import OpenAI
 
@@ -31,6 +34,10 @@ from automation_tool.images import (
     normalize_main_chart_symbol,
     ordered_chart_openai_payloads,
     read_main_chart_symbol,
+)
+from automation_tool.zones_state import (
+    format_intraday_update_baseline_vung_cho,
+    format_intraday_update_time_line,
 )
 
 _log = logging.getLogger(__name__)
@@ -430,38 +437,27 @@ def run_prompt_two_step_flow(
 
 DEFAULT_UPDATE_PROMPT_TEMPLATE = (
     "[INTRADAY_UPDATE]\n"
-    "So sánh baseline sáng với footprint XAUUSD M15 + M5 (JSON đính kèm theo thứ tự file).\n"
-    "Baseline giá cảnh báo — plan_chinh: {p1}, plan_phu: {p2}, scalp: {p3}.\n"
+    "Dựa vào footprint mới nhất M15 + M5 (JSON đính kèm theo thứ tự) so với baseline sáng.\n"
 )
 
 
-def build_intraday_update_user_text(
-    p1: float,
-    p2: float,
-    p3: float,
-    *,
-    zones_snapshot: str,
-) -> str:
+def build_intraday_update_user_text(zones_state: Optional["ZonesState"]) -> str:
     """
-    User message for ``coinmap-automation update``: baseline + zone snapshot + tasking.
-    Coinmap JSON files (M15 then M5) are attached separately (Cloudinary raw URLs).
+    User message for ``coinmap-automation update``: thời gian + baseline ``vung_cho`` + nhiệm vụ ngắn.
+    Coinmap JSON (M15 then M5) are attached separately (Cloudinary raw URLs).
+    Baseline chỉ từ ``zones_state``; thiếu ``vung_cho`` thì ``(chưa có)``, không dùng mốc sáng.
     """
-    snap = (zones_snapshot or "").strip()
-    if not snap.endswith("\n"):
-        snap = snap + "\n"
+    time_line = format_intraday_update_time_line()
+    baseline_lines = format_intraday_update_baseline_vung_cho(zones_state)
     return (
         "[INTRADAY_UPDATE]\n"
-        "So sánh **baseline sáng** với tình hình **hiện tại** dựa trên footprint Coinmap.\n"
+        f"{time_line}"
         "Đính kèm **hai** file JSON theo thứ tự: **(1) M15**, **(2) M5**.\n"
-        f"Baseline giá cảnh báo — plan_chinh: {p1}, plan_phu: {p2}, scalp: {p3}.\n"
+        "Baseline sáng):\n"
+        f"{baseline_lines}"
         "\n"
-        "--- Trạng thái các vùng chờ cho tới hiện tại ---\n"
-        f"{snap}"
-        "\n"
-        "Yêu cầu phân tích:\n"
-        "- Với các zone **đang chờ** (vung_cho): còn hợp lý với cấu trúc + order flow hiện tại không? "
-        "Có nên giữ / điều chỉnh dữ liệu vùng chờ không?\n"
-        "- Với zone **đã loại** hoặc **đã vào lệnh / done**: trên M15+M5 có **vùng thay thế** tốt hơn không?"
+        "Dựa vào footprint M15 và M5, đánh giá các plan sáng (plan_chinh / plan_phu / scalp) "
+        "còn hợp lý với order flow hiện tại không, có nên đổi plan / cập nhật vùng trong JSON không. "
     )
 
 # TradingView tab Nhật ký: giá chạm → Coinmap M5 + OpenAI (intraday).

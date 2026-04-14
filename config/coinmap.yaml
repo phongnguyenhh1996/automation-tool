@@ -174,9 +174,9 @@ tradingview_capture:
     n_bars: 1000
     # Giới hạn nến theo nhãn interval (khớp capture_plan). Không có trong map → dùng n_bars ở trên.
     n_bars_by_interval:
-      "1 giờ": 70
-      "15 phút": 90
-      "5 phút": 120
+      "1 giờ": 100
+      "15 phút": 120
+      "5 phút": 150
     # Khi get_hist trả 0 nến: gọi lại thêm tối đa N lần (pause empty_bars_retry_delay_ms giữa các lần).
     empty_bars_max_retries: 3
     empty_bars_retry_delay_ms: 300
