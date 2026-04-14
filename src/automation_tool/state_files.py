@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, Optional
 
 from automation_tool.config import symbol_data_dir
+
+_log = logging.getLogger(__name__)
 
 # Per-plan alert lifecycle for tv-journal-monitor (persisted in last_alert_prices.json).
 VUNG_CHO = "vung_cho"
@@ -72,21 +76,66 @@ def read_journal_monitor_first_run(
     return json.loads(raw)
 
 
+def _is_access_denied_replace(err: BaseException) -> bool:
+    """True for access-denied style errors on ``os.replace`` (incl. WinError 5)."""
+    if isinstance(err, PermissionError):
+        return True
+    if isinstance(err, OSError):
+        if getattr(err, "winerror", None) == 5:
+            return True
+        if err.errno == 13:
+            return True
+    return False
+
+
 def _atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
+    """
+    Write ``text`` to ``path`` atomically via a temp file + ``os.replace``.
+
+    On access denied when replacing (common on Windows if another handle holds
+    ``path``), retry up to 3 attempts with 1s delay. If all fail, log a warning
+    and return without raising so callers (e.g. watchlist daemon) keep running.
+    Other errors during write/replace are re-raised.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(
         dir=str(path.parent), prefix=path.name + ".", suffix=".tmp"
     )
+    replaced_ok = False
     try:
         with os.fdopen(fd, "w", encoding=encoding) as f:
             f.write(text)
-        os.replace(tmp, path)
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+        last_err: Optional[BaseException] = None
+        for attempt in range(3):
+            try:
+                os.replace(tmp, path)
+                replaced_ok = True
+                return
+            except (PermissionError, OSError) as e:
+                last_err = e
+                if not _is_access_denied_replace(e):
+                    raise
+                if attempt < 2:
+                    _log.warning(
+                        "atomic replace access denied (%s/3), retry in 1s: %s",
+                        attempt + 1,
+                        path,
+                    )
+                    time.sleep(1.0)
+                    continue
+                _log.warning(
+                    "atomic replace failed after 3 attempts, not persisted (daemon continues): %s | %s",
+                    path,
+                    last_err,
+                )
+                return
+    finally:
+        if not replaced_ok:
+            try:
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
+            except OSError:
+                pass
 
 
 def _atomic_write_json(path: Path, data: Any) -> None:
