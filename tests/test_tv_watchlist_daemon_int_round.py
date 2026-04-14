@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from automation_tool.openai_analysis_json import ARM_THRESHOLD_TP1_SCALP
 from automation_tool.tv_watchlist_daemon import (
     _ARM_THRESHOLD,
     _EPS_DEFAULT,
@@ -62,7 +63,7 @@ def test_zone_side_ref_buy_max_sell_min() -> None:
 
 
 def test_arm_uses_same_ref_as_touch() -> None:
-    """Arm khi last-ref nằm trong [0, 5] (BUY) hoặc [-5, 0] (SELL)."""
+    """Arm khi last-ref nằm trong [0, 3] (BUY) hoặc [-3, 0] (SELL) cho plan_chinh/plan_phu."""
     z_buy = Zone(id="a", label="plan_chinh", vung_cho="4738.0–4742.0", side="BUY")
     ref = 4742.0
     assert _arm_threshold_met_for_zone(z_buy, ref) is True  # diff 0
@@ -77,3 +78,15 @@ def test_arm_uses_same_ref_as_touch() -> None:
     assert _arm_threshold_met_for_zone(z_sell, ref_s - _ARM_THRESHOLD) is True
     assert _arm_threshold_met_for_zone(z_sell, ref_s - _ARM_THRESHOLD - 0.5) is False
     assert _arm_threshold_met_for_zone(z_sell, ref_s + 0.5) is False
+
+
+def test_arm_scalp_narrower_than_default() -> None:
+    """Scalp: dải ±1 thay vì ±3."""
+    z = Zone(id="s", label="scalp", vung_cho="4738.0–4742.0", side="BUY")
+    ref = 4742.0
+    assert _arm_threshold_met_for_zone(z, ref + ARM_THRESHOLD_TP1_SCALP) is True
+    assert _arm_threshold_met_for_zone(z, ref + ARM_THRESHOLD_TP1_SCALP + 0.25) is False
+    z2 = Zone(id="t", label="scalp", vung_cho="4738.0–4742.0", side="SELL")
+    ref_s = 4738.0
+    assert _arm_threshold_met_for_zone(z2, ref_s - ARM_THRESHOLD_TP1_SCALP) is True
+    assert _arm_threshold_met_for_zone(z2, ref_s - ARM_THRESHOLD_TP1_SCALP - 0.25) is False

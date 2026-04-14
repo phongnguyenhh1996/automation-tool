@@ -25,6 +25,19 @@ def auto_mt5_hop_luu_threshold_for_label(label: str) -> int:
     return AUTO_MT5_HOP_LUU_THRESHOLD
 
 
+# TP1 arm (vao_lenh → cho_tp1): độ rộng dải |last − ref| so với ref vùng (BUY/SELL).
+ARM_THRESHOLD_TP1_DEFAULT = 3.0
+ARM_THRESHOLD_TP1_SCALP = 1.0
+
+
+def arm_threshold_tp1_for_label(label: str) -> float:
+    """Scalp dùng dải hẹp hơn plan_chinh / plan_phu (đồng bộ daemon + tp1_followup)."""
+    key = (label or "").strip().lower()
+    if key == "scalp":
+        return ARM_THRESHOLD_TP1_SCALP
+    return ARM_THRESHOLD_TP1_DEFAULT
+
+
 def _strip_json_code_fence(text: str) -> str:
     t = text.strip()
     if not t.startswith("```"):

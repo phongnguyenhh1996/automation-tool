@@ -1,4 +1,4 @@
-"""Theo dõi sau vào lệnh: last-ref trong [0,5] (BUY) / [-5,0] (SELL) → ``cho_tp1``; chạm TP1 → Coinmap M5 + OpenAI."""
+"""Theo dõi sau vào lệnh: last-ref trong dải arm theo plan (mặc định ±3 giá; scalp ±1) → ``cho_tp1``; chạm TP1 → Coinmap M5 + OpenAI."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from automation_tool.images import coinmap_xauusd_5m_json_path, read_main_chart_
 from automation_tool.mt5_execute import execute_trade, format_mt5_execution_for_telegram
 from automation_tool.mt5_manage import mt5_cancel_pending_or_close_position, mt5_ticket_still_open
 from automation_tool.mt5_openai_parse import ParsedTrade, parse_openai_output_md
+from automation_tool.openai_analysis_json import arm_threshold_tp1_for_label
 from automation_tool.openai_prompt_flow import (
     TP1_POST_TOUCH_USER_TEMPLATE,
     run_single_followup_responses,
@@ -47,8 +48,6 @@ _tp1_lock = threading.Lock()
 
 # Cùng epsilon touch vùng chờ
 _EPS = 0.01
-# Ngưỡng ± so với entry (đơn vị giá chart)
-_ARM_THRESHOLD = 3.0
 
 
 @dataclass
@@ -65,13 +64,14 @@ def _entry_reference_price(parsed: ParsedTrade) -> float:
     return float(parsed.price)
 
 
-def _arm_threshold_met(parsed: ParsedTrade, p_last: float) -> bool:
-    """BUY: 0 <= last - ref <= 5; SELL: -5 <= last - ref <= 0."""
+def _arm_threshold_met(parsed: ParsedTrade, p_last: float, *, label: str) -> bool:
+    """BUY: 0 ≤ last−ref ≤ thr; SELL: −thr ≤ last−ref ≤ 0 (thr theo label, scalp hẹp hơn)."""
+    thr = arm_threshold_tp1_for_label(label)
     ref = _entry_reference_price(parsed)
     diff = float(p_last) - ref
     if parsed.side == "BUY":
-        return 0.0 <= diff <= _ARM_THRESHOLD
-    return -_ARM_THRESHOLD <= diff <= 0.0
+        return 0.0 <= diff <= thr
+    return -thr <= diff <= 0.0
 
 
 def _tp1_touched(parsed: ParsedTrade, p_last: float) -> bool:
@@ -336,7 +336,7 @@ def maybe_post_entry_tp1_tick(
     tick_source: str = "monitor",
 ) -> Optional[str]:
     """
-    Một tick: ``vao_lenh`` → ``cho_tp1`` nếu đạt ±5; ``cho_tp1`` + chạm TP1 → follow-up OpenAI.
+    Một tick: ``vao_lenh`` → ``cho_tp1`` nếu đạt dải arm theo plan; ``cho_tp1`` + chạm TP1 → follow-up OpenAI.
 
     Trả về ``response_id`` mới nếu đã gọi OpenAI (để caller cập nhật thread); ngược lại ``None``.
     """
@@ -392,12 +392,13 @@ def maybe_post_entry_tp1_tick(
                 continue
             ref = _entry_reference_price(parsed)
             diff = float(p_last) - ref
+            thr = arm_threshold_tp1_for_label(lab)
             band = (
-                f"0≤last-ref≤{_ARM_THRESHOLD:g}"
+                f"0≤last-ref≤{thr:g}"
                 if parsed.side == "BUY"
-                else f"-{_ARM_THRESHOLD:g}≤last-ref≤0"
+                else f"-{thr:g}≤last-ref≤0"
             )
-            met = _arm_threshold_met(parsed, p_last)
+            met = _arm_threshold_met(parsed, p_last, label=lab)
             _log_tp1.info(
                 "tp1 arm: %s | side=%s entry_ref=%.5f | last-ref=%.5f (%s) | last=%.5f → %s",
                 lab,
@@ -530,13 +531,14 @@ def tp1_dry_run_report(
             continue
         seen_detail = True
         ref = _entry_reference_price(parsed)
-        arm = _arm_threshold_met(parsed, p_last)
+        thr = arm_threshold_tp1_for_label(lab)
+        arm = _arm_threshold_met(parsed, p_last, label=lab)
         tp_hit = _tp1_touched(parsed, p_last)
         diff = float(p_last) - ref
         band_txt = (
-            f"0≤last-ref≤{_ARM_THRESHOLD:g}"
+            f"0≤last-ref≤{thr:g}"
             if parsed.side == "BUY"
-            else f"-{_ARM_THRESHOLD:g}≤last-ref≤0"
+            else f"-{thr:g}≤last-ref≤0"
         )
         tp1_done = bool(st.tp1_followup_done_by_label.get(lab, False))
         lines.append(f"[{lab}] status={s} | ticket={tk}")

@@ -48,6 +48,8 @@ from automation_tool.telegram_bot import (
     send_openai_output_to_telegram,
 )
 from automation_tool.openai_analysis_json import (
+    ARM_THRESHOLD_TP1_DEFAULT,
+    arm_threshold_tp1_for_label,
     auto_mt5_hop_luu_threshold_for_label,
     parse_analysis_from_openai_text,
     parse_vung_cho_bounds,
@@ -79,7 +81,8 @@ _poll_terminal = _poll_terminal_only_logger()
 # After integer rounding of Last vs zone touch ref (from vung_cho + side): touch if abs(diff) <= this.
 _EPS_DEFAULT = 1.0
 _TP1_EPS = 0.01
-_ARM_THRESHOLD = 3.0
+# Re-export default cho test (plan_chinh / plan_phu).
+_ARM_THRESHOLD = ARM_THRESHOLD_TP1_DEFAULT
 _RETRY_WAIT_MINUTES = 15
 
 
@@ -228,33 +231,20 @@ def _entry_reference_price(parsed) -> float:
     return float(parsed.price)
 
 
-def _arm_threshold_met(parsed, p_last: float) -> bool:
-    """
-    Arm rule (đồng bộ ``_arm_threshold_met_for_zone``):
-    - BUY: 0 <= last - ref <= +3
-    - SELL: -3 <= last - ref <= 0
-    """
-    ref = _entry_reference_price(parsed)
-    diff = float(p_last) - ref
-    if getattr(parsed, "side", "") == "BUY":
-        return 0.0 <= diff <= _ARM_THRESHOLD
-    return -_ARM_THRESHOLD <= diff <= 0.0
-
-
 def _arm_threshold_met_for_zone(zone: Zone, p_last: float) -> bool:
     """
     Arm after entry: same side ref as touch (BUY=max, SELL=min from ``vung_cho``).
-    - BUY: 0 <= last - ref <= +3
-    - SELL: -3 <= last - ref <= 0
+    Dải ±thr theo ``zone.label`` (scalp hẹp hơn plan_chinh / plan_phu).
     """
+    thr = arm_threshold_tp1_for_label(zone.label)
     ref = _zone_side_ref_from_vung_cho(zone)
     if ref is None:
         return False
     diff = float(p_last) - ref
     side = (zone.side or "").strip().upper()
     if side == "SELL":
-        return -_ARM_THRESHOLD <= diff <= 0.0
-    return 0.0 <= diff <= _ARM_THRESHOLD
+        return -thr <= diff <= 0.0
+    return 0.0 <= diff <= thr
 
 
 def _tp1_touched(parsed, p_last: float) -> bool:
