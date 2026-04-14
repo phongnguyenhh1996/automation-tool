@@ -1915,6 +1915,7 @@ def cmd_tv_journal_monitor(args: argparse.Namespace) -> None:
         mt5_symbol=args.mt5_symbol,
         mt5_dry_run=args.mt5_dry_run,
         openai_model=resolved_openai_model(s, getattr(args, "model", None)),
+        openai_model_cli=getattr(args, "model", None),
     )
 
     print(
@@ -2172,6 +2173,7 @@ def cmd_tv_watchlist_daemon(args: argparse.Namespace) -> None:
         mt5_dry_run=args.mt5_dry_run,
         eps=float(args.eps),
         openai_model=resolved_openai_model(s, getattr(args, "model", None)),
+        openai_model_cli=getattr(args, "model", None),
     )
     outcome = run_tv_watchlist_daemon(settings=s, params=params)
     print(outcome, flush=True)
@@ -2203,6 +2205,7 @@ def cmd_zone_touch(args: argparse.Namespace) -> None:
         mt5_symbol=args.mt5_symbol,
         mt5_dry_run=args.mt5_dry_run,
         openai_model=resolved_openai_model(s, getattr(args, "model", None)),
+        openai_model_cli=getattr(args, "model", None),
     )
 
     # Reuse daemon worker by importing and calling it directly.

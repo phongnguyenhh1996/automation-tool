@@ -21,7 +21,7 @@ from automation_tool.coinmap import (
     capture_charts,
     load_coinmap_yaml,
 )
-from automation_tool.config import Settings, resolved_openai_model
+from automation_tool.config import Settings, resolved_model_for_intraday_alert
 from automation_tool.images import (
     DEFAULT_MAIN_CHART_SYMBOL,
     coinmap_xauusd_5m_json_path,
@@ -121,6 +121,7 @@ class JournalMonitorParams:
     mt5_symbol: Optional[str] = None
     mt5_dry_run: bool = False
     openai_model: Optional[str] = None
+    openai_model_cli: Optional[str] = None
     # Đặt khi chạy monitor: mốc dừng động (trước 13:00 → 13:00 cùng ngày; từ 13:00 → 02:00 sáng hôm sau).
     session_cutoff_end: Optional[datetime] = None
 
@@ -536,7 +537,7 @@ def _run_intraday_touch_loop(
                 vector_store_ids=settings.openai_vector_store_ids,
                 store=settings.openai_responses_store,
                 include=settings.openai_responses_include,
-                model=resolved_openai_model(settings, params.openai_model),
+                model=resolved_model_for_intraday_alert(settings, params.openai_model_cli),
             )
         except Exception as e:
             re_raise_unless_openai(e)
@@ -957,6 +958,7 @@ def run_tv_journal_monitor(
                         mt5_dry_run=params.mt5_dry_run,
                         session_cutoff_end=params.session_cutoff_end,
                         openai_model=params.openai_model,
+                        openai_model_cli=params.openai_model_cli,
                     )
 
                     def _poll_sup(touched_label: str, touched_price: float):

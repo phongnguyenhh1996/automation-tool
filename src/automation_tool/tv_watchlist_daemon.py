@@ -30,7 +30,7 @@ from automation_tool.coinmap import (
     load_coinmap_yaml,
 )
 from automation_tool.coinmap import _tradingview_ensure_watchlist_open  # reuse internal helper
-from automation_tool.config import Settings, resolved_openai_model
+from automation_tool.config import Settings, resolved_model_for_intraday_alert, resolved_openai_model
 from automation_tool.images import DEFAULT_MAIN_CHART_SYMBOL, get_active_main_symbol
 from automation_tool.mt5_execute import execute_trade, format_mt5_execution_for_telegram
 from automation_tool.mt5_openai_parse import (
@@ -79,7 +79,7 @@ _poll_terminal = _poll_terminal_only_logger()
 # After integer rounding of Last vs zone touch ref (from vung_cho + side): touch if abs(diff) <= this.
 _EPS_DEFAULT = 1.0
 _TP1_EPS = 0.01
-_ARM_THRESHOLD = 5.0
+_ARM_THRESHOLD = 3.0
 _RETRY_WAIT_MINUTES = 15
 
 
@@ -151,6 +151,7 @@ class WatchlistDaemonParams:
     zones_state_path: Optional[Path] = None
     eps: float = _EPS_DEFAULT  # max |Δ| between integer-rounded Last and touch ref (default 1.0)
     openai_model: Optional[str] = None
+    openai_model_cli: Optional[str] = None
 
 
 def _send_log(settings: Settings, text: str) -> None:
@@ -230,8 +231,8 @@ def _entry_reference_price(parsed) -> float:
 def _arm_threshold_met(parsed, p_last: float) -> bool:
     """
     Arm rule (đồng bộ ``_arm_threshold_met_for_zone``):
-    - BUY: 0 <= last - ref <= +5
-    - SELL: -5 <= last - ref <= 0
+    - BUY: 0 <= last - ref <= +3
+    - SELL: -3 <= last - ref <= 0
     """
     ref = _entry_reference_price(parsed)
     diff = float(p_last) - ref
@@ -243,8 +244,8 @@ def _arm_threshold_met(parsed, p_last: float) -> bool:
 def _arm_threshold_met_for_zone(zone: Zone, p_last: float) -> bool:
     """
     Arm after entry: same side ref as touch (BUY=max, SELL=min from ``vung_cho``).
-    - BUY: 0 <= last - ref <= +5
-    - SELL: -5 <= last - ref <= 0
+    - BUY: 0 <= last - ref <= +3
+    - SELL: -3 <= last - ref <= 0
     """
     ref = _zone_side_ref_from_vung_cho(zone)
     if ref is None:
@@ -604,7 +605,7 @@ def _zone_touch_job(
             vector_store_ids=settings.openai_vector_store_ids,
             store=settings.openai_responses_store,
             include=settings.openai_responses_include,
-            model=resolved_openai_model(settings, params.openai_model),
+            model=resolved_model_for_intraday_alert(settings, params.openai_model_cli),
         )
         if new_id:
             write_last_response_id(new_id)

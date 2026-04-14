@@ -24,7 +24,7 @@ from playwright.sync_api import BrowserContext, Page
 from zoneinfo import ZoneInfo
 
 from automation_tool.coinmap import capture_charts
-from automation_tool.config import Settings, resolved_openai_model
+from automation_tool.config import Settings, resolved_model_for_intraday_alert
 from automation_tool.first_response_trade import apply_first_response_vao_lenh
 from automation_tool.images import coinmap_xauusd_5m_json_path, read_main_chart_symbol
 from automation_tool.mt5_execute import execute_trade, format_mt5_execution_for_telegram
@@ -207,6 +207,8 @@ class TouchFlowParams:
     mt5_dry_run: bool = False
     session_cutoff_end: Optional[datetime] = None
     openai_model: Optional[str] = None
+    # Raw CLI ``--model`` only (not merged with OPENAI_MODEL); used for INTRADAY_ALERT model resolution.
+    openai_model_cli: Optional[str] = None
 
 
 def _sleep_wait_minutes_with_poll(
@@ -438,7 +440,7 @@ def run_intraday_touch_flow(
                     vector_store_ids=settings.openai_vector_store_ids,
                     store=settings.openai_responses_store,
                     include=settings.openai_responses_include,
-                    model=resolved_openai_model(settings, params.openai_model),
+                    model=resolved_model_for_intraday_alert(settings, params.openai_model_cli),
                 ),
                 poll_abort=lambda: _poll_abort_during_long_ops(phase="waiting_openai"),
                 poll_interval_s=0.75,

@@ -51,6 +51,8 @@ class Settings:
     openai_prompt_version: Optional[str]
     # Optional model id for Responses API (overrides model saved on the dashboard prompt).
     openai_model: Optional[str]
+    # Optional override for [INTRADAY_ALERT] flows only; empty → built-in default (gpt-5.4-mini).
+    openai_model_intraday_alert: Optional[str]
     openai_vector_store_ids: list[str]
     openai_responses_store: bool
     openai_responses_include: List[str]
@@ -147,6 +149,7 @@ def load_settings() -> Settings:
         openai_prompt_id=(os.getenv("OPENAI_PROMPT_ID") or "").strip(),
         openai_prompt_version=ver if ver else None,
         openai_model=((os.getenv("OPENAI_MODEL") or "").strip() or None),
+        openai_model_intraday_alert=((os.getenv("OPENAI_MODEL_INTRADAY_ALERT") or "").strip() or None),
         openai_vector_store_ids=_parse_vector_store_ids(),
         openai_responses_store=_env_bool("OPENAI_RESPONSES_STORE", True),
         openai_responses_include=_parse_include(),
@@ -165,6 +168,9 @@ def load_settings() -> Settings:
     )
 
 
+DEFAULT_INTRADAY_ALERT_MODEL = "gpt-5.4-mini"
+
+
 def resolved_openai_model(settings: Settings, override: Optional[str] = None) -> Optional[str]:
     """
     Model id for ``responses.create``: ``override`` (e.g. CLI ``--model``) wins, else ``OPENAI_MODEL``.
@@ -175,6 +181,27 @@ def resolved_openai_model(settings: Settings, override: Optional[str] = None) ->
         return o
     m = (settings.openai_model or "").strip()
     return m or None
+
+
+def resolved_model_for_intraday_alert(
+    settings: Settings,
+    cli_model_only: Optional[str] = None,
+) -> str:
+    """
+    Model for ``[INTRADAY_ALERT]`` follow-ups (journal touch, watchlist touch, zone-touch).
+
+    Priority: CLI ``--model`` (passed as ``cli_model_only``) → ``OPENAI_MODEL_INTRADAY_ALERT``
+    → :data:`DEFAULT_INTRADAY_ALERT_MODEL`.
+
+    Does not use ``OPENAI_MODEL`` so đầu ngày / các luồng khác có thể khác model.
+    """
+    o = (cli_model_only or "").strip()
+    if o:
+        return o
+    ia = (settings.openai_model_intraday_alert or "").strip()
+    if ia:
+        return ia
+    return DEFAULT_INTRADAY_ALERT_MODEL
 
 
 def require_openai(s: Settings) -> None:
