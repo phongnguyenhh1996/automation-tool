@@ -21,7 +21,7 @@ from automation_tool.coinmap import (
     capture_charts,
     load_coinmap_yaml,
 )
-from automation_tool.config import Settings
+from automation_tool.config import Settings, resolved_openai_model
 from automation_tool.images import (
     DEFAULT_MAIN_CHART_SYMBOL,
     coinmap_xauusd_5m_json_path,
@@ -29,6 +29,7 @@ from automation_tool.images import (
     read_main_chart_symbol,
 )
 from automation_tool.openai_errors import re_raise_unless_openai
+from automation_tool.openai_prompt_flow import run_single_followup_responses
 from automation_tool.browser_client import try_attach_playwright_via_service
 from automation_tool.playwright_browser import close_browser_and_context, launch_chrome_context
 from automation_tool.mt5_openai_parse import (
@@ -119,6 +120,7 @@ class JournalMonitorParams:
     mt5_execute: bool = True
     mt5_symbol: Optional[str] = None
     mt5_dry_run: bool = False
+    openai_model: Optional[str] = None
     # Đặt khi chạy monitor: mốc dừng động (trước 13:00 → 13:00 cùng ngày; từ 13:00 → 02:00 sáng hôm sau).
     session_cutoff_end: Optional[datetime] = None
 
@@ -534,6 +536,7 @@ def _run_intraday_touch_loop(
                 vector_store_ids=settings.openai_vector_store_ids,
                 store=settings.openai_responses_store,
                 include=settings.openai_responses_include,
+                model=resolved_openai_model(settings, params.openai_model),
             )
         except Exception as e:
             re_raise_unless_openai(e)
@@ -953,6 +956,7 @@ def run_tv_journal_monitor(
                         mt5_symbol=params.mt5_symbol,
                         mt5_dry_run=params.mt5_dry_run,
                         session_cutoff_end=params.session_cutoff_end,
+                        openai_model=params.openai_model,
                     )
 
                     def _poll_sup(touched_label: str, touched_price: float):

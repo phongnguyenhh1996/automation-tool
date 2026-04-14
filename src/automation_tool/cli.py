@@ -23,6 +23,7 @@ from automation_tool.config import (
     load_settings,
     require_openai,
     require_telegram,
+    resolved_openai_model,
     symbol_data_dir,
 )
 from automation_tool.openai_errors import re_raise_unless_openai
@@ -96,6 +97,11 @@ from playwright.sync_api import sync_playwright
 from automation_tool.playwright_browser import close_browser_and_context, launch_chrome_context
 
 _log = logging.getLogger("automation_tool.cli")
+
+_OPENAI_MODEL_HELP = (
+    "OpenAI Responses API model id (e.g. gpt-5.2). "
+    "Overrides OPENAI_MODEL env and the model configured on the dashboard prompt."
+)
 
 
 def _configure_stdio_utf8() -> None:
@@ -204,7 +210,31 @@ def _parser() -> argparse.ArgumentParser:
             "mặc định TELEGRAM_ANALYSIS_DETAIL_CHAT_ID trong .env"
         ),
     )
+    a.add_argument("--model", default=None, metavar="ID", help=_OPENAI_MODEL_HELP)
     a.set_defaults(func=cmd_analyze)
+
+    tcj = sub.add_parser(
+        "test-cloudinary-json",
+        help="Upload mọi file *.json trong charts-dir lên Cloudinary (raw) — kiểm tra CLOUDINARY_*",
+    )
+    tcj.add_argument(
+        "--charts-dir",
+        type=Path,
+        default=None,
+        help="Thư mục charts (mặc định: data/{{SYM}}/charts theo cặp active)",
+    )
+    tcj.add_argument(
+        "--main-symbol",
+        default=None,
+        metavar="SYM",
+        help="Ghi data/.main_chart_symbol và chọn data/{{SYM}}/charts khi --charts-dir không set",
+    )
+    tcj.add_argument(
+        "--purge-first",
+        action="store_true",
+        help="Trước khi upload: xóa raw trong CLOUDINARY_JSON_FOLDER (giống purge khi analyze)",
+    )
+    tcj.set_defaults(func=cmd_test_cloudinary_json)
 
     cm = sub.add_parser(
         "capture-many",
@@ -341,6 +371,7 @@ def _parser() -> argparse.ArgumentParser:
         metavar="ID",
         help="Chat/channel for detailed execution logs (markers / JSON out_chi_tiet)",
     )
+    am.add_argument("--model", default=None, metavar="ID", help=_OPENAI_MODEL_HELP)
     am.set_defaults(func=cmd_analyze_many)
 
     al = sub.add_parser(
@@ -436,6 +467,7 @@ def _parser() -> argparse.ArgumentParser:
             "(mặc định: xóa để phiên all không kế thừa zone/status cũ)"
         ),
     )
+    al.add_argument("--model", default=None, metavar="ID", help=_OPENAI_MODEL_HELP)
     al.set_defaults(func=cmd_all)
 
     tl = sub.add_parser(
@@ -466,6 +498,7 @@ def _parser() -> argparse.ArgumentParser:
         default="XAUUSD",
         help="Symbol used when /update triggers (default: XAUUSD). On Windows runs run_update.bat.",
     )
+    tl.add_argument("--model", default=None, metavar="ID", help=_OPENAI_MODEL_HELP)
     tl.set_defaults(func=cmd_telegram_listen)
 
     up = sub.add_parser(
@@ -528,6 +561,7 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Chỉ dry-run MT5 cho auto-MT5 sau follow-up",
     )
+    up.add_argument("--model", default=None, metavar="ID", help=_OPENAI_MODEL_HELP)
     up.set_defaults(func=cmd_update)
 
     wd = sub.add_parser(
@@ -567,6 +601,7 @@ def _parser() -> argparse.ArgumentParser:
     wd.add_argument("--no-mt5-execute", action="store_true")
     wd.add_argument("--mt5-symbol", default=None, metavar="SYM")
     wd.add_argument("--mt5-dry-run", action="store_true")
+    wd.add_argument("--model", default=None, metavar="ID", help=_OPENAI_MODEL_HELP)
     wd.set_defaults(func=cmd_tv_watchlist_daemon)
 
     zt = sub.add_parser(
@@ -596,6 +631,7 @@ def _parser() -> argparse.ArgumentParser:
     zt.add_argument("--no-mt5-execute", action="store_true")
     zt.add_argument("--mt5-symbol", default=None, metavar="SYM")
     zt.add_argument("--mt5-dry-run", action="store_true")
+    zt.add_argument("--model", default=None, metavar="ID", help=_OPENAI_MODEL_HELP)
     zt.set_defaults(func=cmd_zone_touch)
 
     tv = sub.add_parser(
@@ -708,6 +744,7 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Chỉ dry-run MT5 (mặc định: gửi lệnh thật)",
     )
+    tj.add_argument("--model", default=None, metavar="ID", help=_OPENAI_MODEL_HELP)
     tj.set_defaults(func=cmd_tv_journal_monitor)
 
     tp1d = sub.add_parser(
@@ -791,6 +828,7 @@ def _parser() -> argparse.ArgumentParser:
         metavar="ID",
         help="Giống analyze: kênh nhận bản chi tiết",
     )
+    g.add_argument("--model", default=None, metavar="ID", help=_OPENAI_MODEL_HELP)
     g.set_defaults(func=cmd_chatgpt_project)
 
     t = sub.add_parser("telegram-send", help="Send a text message to Telegram (uses .env token and chat id)")
@@ -1079,7 +1117,9 @@ def _run_openai_flow(
     chart_payloads: list[ChartOpenAIPayload] | None = None,
     on_first_model_text: Optional[Callable[[str], None]] = None,
     *,
-    purge_openai_user_data_files: bool = False,
+    purge_json_attachment_storage: bool = False,
+    purge_openai_user_data_files: bool | None = None,
+    model: str | None = None,
 ) -> PromptTwoStepResult:
     return run_analysis_responses_flow(
         api_key=s.openai_api_key,
@@ -1094,7 +1134,9 @@ def _run_openai_flow(
         chart_paths=chart_paths,
         chart_payloads=chart_payloads,
         on_first_model_text=on_first_model_text,
+        purge_json_attachment_storage=purge_json_attachment_storage,
         purge_openai_user_data_files=purge_openai_user_data_files,
+        model=model,
     )
 
 
@@ -1330,6 +1372,67 @@ def _warn_if_incomplete_chart_payloads(
         )
 
 
+def cmd_test_cloudinary_json(args: argparse.Namespace) -> None:
+    """Upload every ``*.json`` in charts-dir to Cloudinary raw (same path as OpenAI ``file_url``)."""
+    from automation_tool.cloudinary_json import purge_json_attachment_folder, upload_json_bytes_for_responses
+    from automation_tool.images import set_active_main_symbol_file
+    from automation_tool.openai_prompt_flow import _default_max_coinmap_json_chars, _json_file_header_and_body
+
+    if getattr(args, "main_symbol", None):
+        set_active_main_symbol_file(args.main_symbol)
+    charts_dir = args.charts_dir or default_charts_dir()
+    if not charts_dir.is_dir():
+        raise SystemExit(f"Charts directory not found: {charts_dir}")
+    paths = sorted(charts_dir.glob("*.json"))
+    if not paths:
+        raise SystemExit(f"No .json files under {charts_dir}")
+    if args.purge_first:
+        n = purge_json_attachment_folder()
+        print(f"purge-first: removed {n} raw object(s) under CLOUDINARY_JSON_FOLDER prefix", flush=True)
+    _log.info(
+        "test-cloudinary-json: charts_dir=%s files=%d purge_first=%s",
+        charts_dir,
+        len(paths),
+        args.purge_first,
+    )
+    urls: list[str] = []
+    for p in paths:
+        body = p.read_bytes()
+        try:
+            url = upload_json_bytes_for_responses(body, p.name)
+        except Exception as e:
+            raise SystemExit(f"{p.name}: upload failed: {e}") from e
+        urls.append(url)
+        print(f"{p.name}\t{url}", flush=True)
+    print(f"OK: {len(paths)} file(s)", flush=True)
+
+    mx = _default_max_coinmap_json_chars()
+    preview_prompt = (
+        "[test-cloudinary-json] Preview: chỉ các file *.json trong thư mục (thứ tự sort), "
+        "không gồm ảnh. Lệnh analyze thật dùng prompt đầy đủ + chart theo ordered_chart_openai_payloads.\n"
+    )
+    content: list[dict[str, str]] = [{"type": "input_text", "text": preview_prompt}]
+    for p, u in zip(paths, urls):
+        header, _body_ignored = _json_file_header_and_body(p, max_chars=mx)
+        content.append({"type": "input_text", "text": header})
+        content.append({"type": "input_file", "file_url": u})
+    openai_preview = {
+        "note": (
+            "Mẫu `input` cho Responses API: một user message với `content` như dưới "
+            "(tương đương phần JSON trong _build_mixed_chart_user_content khi chỉ có json payloads)."
+        ),
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": content,
+            }
+        ],
+    }
+    print("--- openai input preview (JSON) ---", flush=True)
+    print(json.dumps(openai_preview, ensure_ascii=False, indent=2), flush=True)
+
+
 def cmd_analyze(args: argparse.Namespace) -> None:
     from automation_tool.images import set_active_main_symbol_file
 
@@ -1372,6 +1475,7 @@ def cmd_analyze(args: argparse.Namespace) -> None:
             args.max_images_per_call,
             chart_payloads=payloads,
             on_first_model_text=_on_first,
+            model=resolved_openai_model(s, getattr(args, "model", None)),
         )
     except Exception as e:
         re_raise_unless_openai(e)
@@ -1470,6 +1574,7 @@ def cmd_analyze_many(args: argparse.Namespace) -> None:
                 args.max_images_per_call,
                 chart_payloads=payloads,
                 on_first_model_text=_on_first,
+                model=resolved_openai_model(s, getattr(args, "model", None)),
             )
             return sym, out, None
         except BaseException as e:
@@ -1609,6 +1714,7 @@ def cmd_telegram_listen(args: argparse.Namespace) -> None:
         long_poll_timeout_seconds=int(args.long_poll_timeout_seconds),
         full_main_symbol=str(args.full_main_symbol or "XAUUSD"),
         update_main_symbol=str(args.update_main_symbol or "XAUUSD"),
+        openai_model=resolved_openai_model(s, getattr(args, "model", None)),
     )
     run_telegram_listener(settings=s, params=params)
 
@@ -1675,7 +1781,8 @@ def cmd_all(args: argparse.Namespace) -> None:
             args.max_images_per_call,
             chart_payloads=payloads,
             on_first_model_text=None,
-            purge_openai_user_data_files=True,
+            purge_json_attachment_storage=True,
+            model=resolved_openai_model(s, getattr(args, "model", None)),
         )
     except Exception as e:
         re_raise_unless_openai(e)
@@ -1807,6 +1914,7 @@ def cmd_tv_journal_monitor(args: argparse.Namespace) -> None:
         mt5_execute=not args.no_mt5_execute,
         mt5_symbol=args.mt5_symbol,
         mt5_dry_run=args.mt5_dry_run,
+        openai_model=resolved_openai_model(s, getattr(args, "model", None)),
     )
 
     print(
@@ -1929,6 +2037,7 @@ def cmd_update(args: argparse.Namespace) -> None:
             vector_store_ids=s.openai_vector_store_ids,
             store=s.openai_responses_store,
             include=s.openai_responses_include,
+            model=resolved_openai_model(s, getattr(args, "model", None)),
         )
     except Exception as e:
         re_raise_unless_openai(e)
@@ -2062,6 +2171,7 @@ def cmd_tv_watchlist_daemon(args: argparse.Namespace) -> None:
         mt5_symbol=args.mt5_symbol,
         mt5_dry_run=args.mt5_dry_run,
         eps=float(args.eps),
+        openai_model=resolved_openai_model(s, getattr(args, "model", None)),
     )
     outcome = run_tv_watchlist_daemon(settings=s, params=params)
     print(outcome, flush=True)
@@ -2092,6 +2202,7 @@ def cmd_zone_touch(args: argparse.Namespace) -> None:
         mt5_execute=not args.no_mt5_execute,
         mt5_symbol=args.mt5_symbol,
         mt5_dry_run=args.mt5_dry_run,
+        openai_model=resolved_openai_model(s, getattr(args, "model", None)),
     )
 
     # Reuse daemon worker by importing and calling it directly.

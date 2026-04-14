@@ -30,7 +30,7 @@ from automation_tool.coinmap import (
     load_coinmap_yaml,
 )
 from automation_tool.coinmap import _tradingview_ensure_watchlist_open  # reuse internal helper
-from automation_tool.config import Settings
+from automation_tool.config import Settings, resolved_openai_model
 from automation_tool.images import DEFAULT_MAIN_CHART_SYMBOL, get_active_main_symbol
 from automation_tool.mt5_execute import execute_trade, format_mt5_execution_for_telegram
 from automation_tool.mt5_openai_parse import (
@@ -150,6 +150,7 @@ class WatchlistDaemonParams:
     mt5_dry_run: bool = False
     zones_state_path: Optional[Path] = None
     eps: float = _EPS_DEFAULT  # max |Δ| between integer-rounded Last and touch ref (default 1.0)
+    openai_model: Optional[str] = None
 
 
 def _send_log(settings: Settings, text: str) -> None:
@@ -335,6 +336,7 @@ def _tp1_followup_job(
             vector_store_ids=settings.openai_vector_store_ids,
             store=settings.openai_responses_store,
             include=settings.openai_responses_include,
+            model=resolved_openai_model(settings, params.openai_model),
         )
         if new_id:
             write_last_response_id(new_id)
@@ -602,6 +604,7 @@ def _zone_touch_job(
             vector_store_ids=settings.openai_vector_store_ids,
             store=settings.openai_responses_store,
             include=settings.openai_responses_include,
+            model=resolved_openai_model(settings, params.openai_model),
         )
         if new_id:
             write_last_response_id(new_id)

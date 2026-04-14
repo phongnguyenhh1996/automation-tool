@@ -13,7 +13,7 @@ from typing import Any, Literal, Optional
 from playwright.sync_api import BrowserContext, Page
 
 from automation_tool.coinmap import capture_charts
-from automation_tool.config import Settings
+from automation_tool.config import Settings, resolved_openai_model
 from automation_tool.images import coinmap_xauusd_5m_json_path, read_main_chart_symbol
 from automation_tool.mt5_execute import execute_trade, format_mt5_execution_for_telegram
 from automation_tool.mt5_manage import mt5_cancel_pending_or_close_position
@@ -207,6 +207,7 @@ def _run_tp1_openai_and_act(
         vector_store_ids=settings.openai_vector_store_ids,
         store=settings.openai_responses_store,
         include=settings.openai_responses_include,
+        model=resolved_openai_model(settings, getattr(params, "openai_model", None)),
     )
     rsp_path = last_alert_path.parent / "last_response_id.txt"
     write_last_response_id(new_id, path=rsp_path)

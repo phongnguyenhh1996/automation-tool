@@ -49,6 +49,8 @@ class Settings:
     openai_api_key: str
     openai_prompt_id: str
     openai_prompt_version: Optional[str]
+    # Optional model id for Responses API (overrides model saved on the dashboard prompt).
+    openai_model: Optional[str]
     openai_vector_store_ids: list[str]
     openai_responses_store: bool
     openai_responses_include: List[str]
@@ -144,6 +146,7 @@ def load_settings() -> Settings:
         openai_api_key=os.getenv("OPENAI_API_KEY", ""),
         openai_prompt_id=(os.getenv("OPENAI_PROMPT_ID") or "").strip(),
         openai_prompt_version=ver if ver else None,
+        openai_model=((os.getenv("OPENAI_MODEL") or "").strip() or None),
         openai_vector_store_ids=_parse_vector_store_ids(),
         openai_responses_store=_env_bool("OPENAI_RESPONSES_STORE", True),
         openai_responses_include=_parse_include(),
@@ -160,6 +163,18 @@ def load_settings() -> Settings:
         telegram_parse_mode=_parse_telegram_parse_mode(),
         coinmap_base_url=os.getenv("COINMAP_BASE_URL", "https://coinmap.tech"),
     )
+
+
+def resolved_openai_model(settings: Settings, override: Optional[str] = None) -> Optional[str]:
+    """
+    Model id for ``responses.create``: ``override`` (e.g. CLI ``--model``) wins, else ``OPENAI_MODEL``.
+    Returns None to let the API use the model configured on the stored prompt.
+    """
+    o = (override or "").strip()
+    if o:
+        return o
+    m = (settings.openai_model or "").strip()
+    return m or None
 
 
 def require_openai(s: Settings) -> None:

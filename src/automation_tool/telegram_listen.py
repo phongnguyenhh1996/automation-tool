@@ -14,7 +14,7 @@ from typing import Any, Optional
 
 import httpx
 
-from automation_tool.config import Settings
+from automation_tool.config import Settings, resolved_openai_model
 from automation_tool.openai_prompt_flow import run_text_followup_responses
 from automation_tool.telegram_bot import send_message, send_openai_output_to_telegram
 
@@ -27,6 +27,7 @@ class TelegramListenParams:
     long_poll_timeout_seconds: int = 45
     full_main_symbol: str = "XAUUSD"
     update_main_symbol: str = "XAUUSD"
+    openai_model: Optional[str] = None
 
 
 @dataclass
@@ -492,6 +493,7 @@ def run_telegram_listener(
                                 vector_store_ids=settings.openai_vector_store_ids,
                                 store=settings.openai_responses_store,
                                 include=settings.openai_responses_include,
+                                model=resolved_openai_model(settings, params.openai_model),
                             )
                             # Best-effort: show the chained response id for traceability.
                             if new_id:

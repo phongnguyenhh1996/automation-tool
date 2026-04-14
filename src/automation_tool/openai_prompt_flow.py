@@ -7,7 +7,6 @@ Full trading/output rules live in the OpenAI Prompt (``OPENAI_PROMPT_ID``) — k
 prompt in sync with ``system-prompt.md`` at the repo root. Do not duplicate schema here.
 """
 
-import io
 import json
 import logging
 import os
@@ -16,7 +15,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, NamedTuple, Optional
 
-from openai import OpenAI, OpenAIError
+from openai import OpenAI
+
+from automation_tool.cloudinary_json import purge_json_attachment_folder, upload_json_bytes_for_responses
 
 from automation_tool.coinmap_openai_slim import (
     should_slim_coinmap_json_path,
@@ -84,43 +85,6 @@ def _default_max_coinmap_json_chars() -> int:
     return 1_500_000
 
 
-# Files API: ``expires_after`` must be 3600–2592000 seconds per OpenAI docs.
-_FILE_EXPIRES_AFTER_SECONDS = 86400  # 1 day
-
-# GET /v1/files: max limit per request (OpenAI docs: 1–10000, default 10000).
-_USER_DATA_LIST_LIMIT = 10_000
-
-
-def delete_all_openai_user_data_files(client: OpenAI) -> int:
-    """
-    Gọi ``GET /v1/files`` với ``purpose=user_data``, phân trang nếu cần, rồi ``DELETE`` từng file.
-
-    Dùng trước khi upload JSON mới (purpose ``user_data``) để tránh tích lũy file orphan trên tài khoản.
-    """
-    deleted = 0
-    page = client.files.list(
-        purpose="user_data",
-        limit=_USER_DATA_LIST_LIMIT,
-        order="desc",
-    )
-    while True:
-        for fo in page.data:
-            try:
-                client.files.delete(fo.id)
-                deleted += 1
-            except OpenAIError as e:
-                _log.warning("[openai files] delete %s failed: %s", fo.id, e)
-        if not page.has_next_page():
-            break
-        page = page.get_next_page()
-    if deleted:
-        _log.info(
-            "[openai files] deleted %d existing file(s) (purpose=user_data) before upload",
-            deleted,
-        )
-    return deleted
-
-
 def _coinmap_openai_slim_enabled() -> bool:
     """
     Extra slim when *reading* JSON for the API. Default off: exports are already slimmed
@@ -160,54 +124,27 @@ def _json_file_header_and_body(path: Path, *, max_chars: int) -> tuple[str, str]
     return header, body
 
 
-def _upload_user_data_json(client: OpenAI, path: Path, body: str) -> str:
+def _upload_user_data_json_cloudinary(path: Path, body: str) -> str:
+    """Upload JSON body to Cloudinary raw; return ``secure_url`` for ``input_file`` ``file_url``."""
     raw = body.encode("utf-8")
-    for attempt in range(2):
-        bio = io.BytesIO(raw)
-        try:
-            fo = client.files.create(
-                file=(path.name, bio),
-                purpose="user_data",
-                expires_after={
-                    "anchor": "created_at",
-                    "seconds": _FILE_EXPIRES_AFTER_SECONDS,
-                },
-            )
-        except OpenAIError as e:
-            if attempt == 0:
-                _log.warning(
-                    "[openai files] upload failed for %s (%s), retrying once: %s",
-                    path.name,
-                    type(e).__name__,
-                    e,
-                )
-                continue
-            raise
-        _log.info(
-            "[openai files] %s → %s (%d B, user_data, expires 1d)",
-            path.name,
-            fo.id,
-            len(raw),
-        )
-        return fo.id
+    return upload_json_bytes_for_responses(raw, path.name)
 
 
-def _json_paths_to_headers_and_file_ids(
-    client: OpenAI,
+def _json_paths_to_headers_and_urls(
     paths: list[Path],
     *,
     max_json_chars: int,
 ) -> list[tuple[str, str]]:
-    """``(header, file_id)`` per path, same order as ``paths``."""
+    """``(header, file_url)`` per path, same order as ``paths``."""
     if not paths:
         return []
     n = len(paths)
     if n > 1:
-        _log.info("[openai files] uploading %d JSON file(s) in parallel → OpenAI Files API", n)
+        _log.info("[cloudinary] uploading %d JSON file(s) in parallel → raw storage", n)
     if n == 1:
         p0 = paths[0]
         h, b = _json_file_header_and_body(p0, max_chars=max_json_chars)
-        return [(h, _upload_user_data_json(client, p0, b))]
+        return [(h, _upload_user_data_json_cloudinary(p0, b))]
     workers = min(n, max(4, (os.cpu_count() or 2) * 2))
     with ThreadPoolExecutor(max_workers=workers) as ex:
         prepared = list(
@@ -217,13 +154,13 @@ def _json_paths_to_headers_and_file_ids(
             )
         )
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        file_ids = list(
+        urls = list(
             ex.map(
-                lambda t: _upload_user_data_json(client, t[0], t[1][1]),
+                lambda t: _upload_user_data_json_cloudinary(t[0], t[1][1]),
                 zip(paths, prepared),
             )
         )
-    return [(h, fid) for (h, _), fid in zip(prepared, file_ids)]
+    return [(h, u) for (h, _), u in zip(prepared, urls)]
 
 
 def _filter_valid_chart_payloads(
@@ -262,14 +199,11 @@ def _build_mixed_chart_user_content(
     prompt: str,
     payloads: list[ChartOpenAIPayload],
     *,
-    client: OpenAI,
     max_json_chars: int,
 ) -> list[dict[str, Any]]:
     json_paths = [p for k, p in payloads if k == "json" and isinstance(p, Path)]
     json_queue = iter(
-        _json_paths_to_headers_and_file_ids(
-            client, json_paths, max_json_chars=max_json_chars
-        )
+        _json_paths_to_headers_and_urls(json_paths, max_json_chars=max_json_chars)
     )
     parts: list[dict[str, Any]] = [{"type": "input_text", "text": prompt}]
     image_paths = [p for k, p in payloads if k == "image" and isinstance(p, Path)]
@@ -277,9 +211,9 @@ def _build_mixed_chart_user_content(
     for kind, p in payloads:
         if kind == "json":
             assert isinstance(p, Path)
-            h, fid = next(json_queue)
+            h, file_url = next(json_queue)
             parts.append({"type": "input_text", "text": h})
-            parts.append({"type": "input_file", "file_id": fid})
+            parts.append({"type": "input_file", "file_url": file_url})
         elif kind == "image_url":
             parts.append(
                 {
@@ -307,6 +241,11 @@ def _prompt_dict(prompt_id: str, prompt_version: str | None) -> dict[str, Any]:
     return d
 
 
+def _merge_model(common: dict[str, Any], model: str | None) -> None:
+    if model and str(model).strip():
+        common["model"] = str(model).strip()
+
+
 def run_analysis_responses_flow(
     *,
     api_key: str,
@@ -323,7 +262,9 @@ def run_analysis_responses_flow(
     chart_payloads: list[ChartOpenAIPayload] | None = None,
     max_coinmap_json_chars: int | None = None,
     on_first_model_text: Optional[Callable[[str], None]] = None,
-    purge_openai_user_data_files: bool = False,
+    purge_json_attachment_storage: bool = False,
+    purge_openai_user_data_files: bool | None = None,
+    model: str | None = None,
 ) -> PromptTwoStepResult:
     """
     Một lần (hoặc nhiều batch nếu quá nhiều ảnh): user message multimodal với ``analysis_prompt``
@@ -334,11 +275,19 @@ def run_analysis_responses_flow(
     ``on_first_model_text`` (tuỳ chọn): gọi với text assistant của **batch đầu tiên**
     (khi có multimodal); dùng cho VÀO LỆNH + MT5 / cập nhật ``last_alert_prices``.
 
-    ``purge_openai_user_data_files``: nếu True và payload có block JSON, gọi
-    ``GET /v1/files?purpose=user_data`` rồi xóa hết trước khi upload JSON mới (Files API).
+    ``purge_json_attachment_storage``: nếu True và payload có block JSON, xóa raw assets
+    Cloudinary dưới ``CLOUDINARY_JSON_FOLDER`` trước khi upload JSON mới.
+
+    ``purge_openai_user_data_files``: tên cũ; nếu khác ``None`` thì ghi đè
+    ``purge_json_attachment_storage`` (tương thích ngược).
     """
     if not (analysis_prompt or "").strip():
         analysis_prompt = default_analysis_prompt(read_main_chart_symbol(charts_dir))
+    purge = (
+        bool(purge_openai_user_data_files)
+        if purge_openai_user_data_files is not None
+        else purge_json_attachment_storage
+    )
     client = OpenAI(api_key=api_key)
     prompt = _prompt_dict(prompt_id, prompt_version)
     tools: list[dict[str, Any]] = []
@@ -360,6 +309,7 @@ def run_analysis_responses_flow(
     }
     if tools:
         common["tools"] = tools
+    _merge_model(common, model)
 
     mx_json = (
         max_coinmap_json_chars
@@ -374,8 +324,8 @@ def run_analysis_responses_flow(
     else:
         payloads = ordered_chart_openai_payloads(charts_dir)
 
-    if purge_openai_user_data_files and any(k == "json" for k, _ in payloads):
-        delete_all_openai_user_data_files(client)
+    if purge and any(k == "json" for k, _ in payloads):
+        purge_json_attachment_folder()
 
     if not payloads:
         r = client.responses.create(**common, input=analysis_prompt.strip())
@@ -400,7 +350,7 @@ def run_analysis_responses_flow(
                 f"(Batch {bi + 1} of {total}: {n_img} image(s), {n_json} Coinmap JSON block(s).)"
             )
         content = _build_mixed_chart_user_content(
-            p_text, batch, client=client, max_json_chars=mx_json
+            p_text, batch, max_json_chars=mx_json
         )
         kwargs: dict[str, Any] = {
             **common,
@@ -444,7 +394,9 @@ def run_prompt_two_step_flow(
     chart_paths: list[Path] | None = None,
     chart_payloads: list[ChartOpenAIPayload] | None = None,
     max_coinmap_json_chars: int | None = None,
-    purge_openai_user_data_files: bool = False,
+    purge_json_attachment_storage: bool = False,
+    purge_openai_user_data_files: bool | None = None,
+    model: str | None = None,
 ) -> PromptTwoStepResult:
     """
     Tương thích ngược: gộp ``first_prompt`` và ``follow_up_prompt`` thành một ``analysis_prompt``.
@@ -470,7 +422,9 @@ def run_prompt_two_step_flow(
         chart_payloads=chart_payloads,
         max_coinmap_json_chars=max_coinmap_json_chars,
         on_first_model_text=None,
+        purge_json_attachment_storage=purge_json_attachment_storage,
         purge_openai_user_data_files=purge_openai_user_data_files,
+        model=model,
     )
 
 
@@ -490,7 +444,7 @@ def build_intraday_update_user_text(
 ) -> str:
     """
     User message for ``coinmap-automation update``: baseline + zone snapshot + tasking.
-    Coinmap JSON files (M15 then M5) are attached separately via Files API.
+    Coinmap JSON files (M15 then M5) are attached separately (Cloudinary raw URLs).
     """
     snap = (zones_snapshot or "").strip()
     if not snap.endswith("\n"):
@@ -545,12 +499,13 @@ def run_single_followup_responses(
     include: list[str],
     reasoning_summary: str = "auto",
     max_coinmap_json_chars: int | None = None,
+    model: str | None = None,
 ) -> tuple[str, str]:
     """
     One multimodal user turn chained to ``previous_response_id`` (intraday update).
 
     ``coinmap_json_paths``: one or more Coinmap export JSON paths, uploaded in order
-    (same Files API + ``input_file`` pattern as multi-json in ``run_analysis_responses_flow``).
+    (same Cloudinary raw + ``input_file`` ``file_url`` pattern as multi-json in ``run_analysis_responses_flow``).
 
     Returns ``(output_text, new_response_id)``.
     """
@@ -582,6 +537,7 @@ def run_single_followup_responses(
     }
     if tools:
         common["tools"] = tools
+    _merge_model(common, model)
 
     mx_json = (
         max_coinmap_json_chars
@@ -593,7 +549,6 @@ def run_single_followup_responses(
     content = _build_mixed_chart_user_content(
         user_text,
         json_payloads,
-        client=client,
         max_json_chars=mx_json,
     )
     r = client.responses.create(
@@ -622,6 +577,7 @@ def run_text_followup_responses(
     store: bool,
     include: list[str],
     reasoning_summary: str = "auto",
+    model: str | None = None,
 ) -> tuple[str, str]:
     """
     One text-only user turn chained to ``previous_response_id``.
@@ -649,6 +605,7 @@ def run_text_followup_responses(
     }
     if tools:
         common["tools"] = tools
+    _merge_model(common, model)
 
     r = client.responses.create(
         **common,

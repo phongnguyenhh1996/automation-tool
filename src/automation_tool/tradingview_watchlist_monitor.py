@@ -87,6 +87,7 @@ class WatchlistMonitorParams:
     mt5_symbol: Optional[str] = None
     mt5_dry_run: bool = False
     session_cutoff_end: Optional[datetime] = None
+    openai_model: Optional[str] = None
 
 
 def _waiting_label_prices(state) -> list[tuple[str, float]]:
@@ -310,6 +311,7 @@ def run_tv_watchlist_monitor(
                     mt5_symbol=params.mt5_symbol,
                     mt5_dry_run=params.mt5_dry_run,
                     session_cutoff_end=params.session_cutoff_end,
+                    openai_model=params.openai_model,
                 )
 
                 def _poll_sup(tlab: str, tprice: float):
