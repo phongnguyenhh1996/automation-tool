@@ -5,13 +5,32 @@ from __future__ import annotations
 from automation_tool.openai_analysis_json import (
     AUTO_MT5_HOP_LUU_THRESHOLD,
     AUTO_MT5_HOP_LUU_THRESHOLD_SCALP,
+    AnalysisPayload,
     PriceZoneEntry,
+    format_plan_lines_for_telegram,
     merge_triple_with_baseline,
     parse_analysis_from_openai_text,
     select_zone_for_auto_mt5,
     select_zone_for_auto_mt5_for_label,
     try_parse_analysis_payload,
 )
+
+
+def test_format_plan_lines_for_telegram_order_and_hop_luu() -> None:
+    p = AnalysisPayload(
+        prices=[
+            PriceZoneEntry("scalp", 3.0, hop_luu=62, trade_line="S"),
+            PriceZoneEntry("plan_chinh", 1.0, hop_luu=80, trade_line="A"),
+            PriceZoneEntry("plan_phu", 2.0, hop_luu=None, trade_line="B"),
+        ]
+    )
+    s = format_plan_lines_for_telegram(p)
+    assert s.splitlines() == [
+        "plan_chinh (hợp lưu: 80) : A",
+        "plan_phu (hợp lưu: —) : B",
+        "scalp (hợp lưu: 62) : S",
+    ]
+    assert format_plan_lines_for_telegram(None) == ""
 
 
 def test_select_zone_highest_hop_luu() -> None:

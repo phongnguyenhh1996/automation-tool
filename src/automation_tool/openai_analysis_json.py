@@ -384,3 +384,25 @@ def parse_analysis_from_openai_text(text: str) -> Optional[AnalysisPayload]:
         return None
     return try_parse_analysis_payload(obj)
 
+
+def format_plan_lines_for_telegram(payload: Optional[AnalysisPayload]) -> str:
+    """
+    Một dòng cho mỗi plan (thứ tự plan_chinh → plan_phu → scalp)::
+
+        {label} (hợp lưu: {hop_luu}) : {trade_line}
+
+    ``hop_luu`` thiếu hiển thị ``—``. Bỏ qua label không có trong ``prices``.
+    """
+    if payload is None or not payload.prices:
+        return ""
+    by_label = {p.label.strip().lower(): p for p in payload.prices}
+    lines: list[str] = []
+    for lab in ZONE_LABELS_ORDER:
+        pe = by_label.get(lab)
+        if pe is None:
+            continue
+        hl = str(pe.hop_luu) if pe.hop_luu is not None else "—"
+        tl = (pe.trade_line or "").strip()
+        lines.append(f"{pe.label} (hợp lưu: {hl}) : {tl}")
+    return "\n".join(lines)
+

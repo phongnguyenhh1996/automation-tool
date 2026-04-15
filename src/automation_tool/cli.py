@@ -26,7 +26,11 @@ from automation_tool.config import (
     resolved_openai_model,
     symbol_data_dir,
 )
-from automation_tool.openai_analysis_json import extract_json_object, parse_analysis_from_openai_text
+from automation_tool.openai_analysis_json import (
+    extract_json_object,
+    format_plan_lines_for_telegram,
+    parse_analysis_from_openai_text,
+)
 from automation_tool.openai_errors import re_raise_unless_openai
 from automation_tool.openai_prompt_flow import (
     PromptTwoStepResult,
@@ -1618,6 +1622,11 @@ def cmd_analyze_many(args: argparse.Namespace) -> None:
                 dual = split_output_chi_tiet_ngan_gon(out.after_charts)
             if dual is not None:
                 chi_tiet, _ngan_gon = dual
+                plan_lines = format_plan_lines_for_telegram(
+                    parse_analysis_from_openai_text(out.after_charts)
+                )
+                if chi_tiet and plan_lines:
+                    chi_tiet = chi_tiet.rstrip() + "\n\n" + plan_lines
                 if chi_tiet:
                     send_message(
                         bot_token=s.telegram_bot_token,
