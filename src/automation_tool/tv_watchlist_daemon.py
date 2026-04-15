@@ -1033,8 +1033,38 @@ def _parse_price_from_tv_title(title: str, *, sym: str) -> Optional[float]:
         return None
 
 
-# If parsed title price is unchanged this many polls in a row, reload the chart tab (stale title).
-_TITLE_PRICE_SAME_STREAK_RELOAD = 4
+# If ``document.title`` parses to the same price for this long, treat as stale and reload the chart tab.
+# A pure "N polls in a row" rule is too aggressive: TV often updates the tab title slower than the
+# poll interval, so identical parses for a few seconds are normal, not a broken feed.
+_TITLE_PRICE_STALE_MIN_SECONDS = 30.0
+
+
+def _title_price_should_reload_stale(
+    st: dict[str, Any],
+    p: Optional[float],
+) -> tuple[bool, float]:
+    """
+    Track whether the parsed title price has been unchanged long enough to reload.
+
+    ``st`` holds ``last_p`` and ``since`` (monotonic time when ``last_p`` was first seen).
+
+    Returns:
+        ``(should_reload, elapsed_seconds)`` — elapsed is meaningful only when ``should_reload``.
+    """
+    if p is None:
+        st.clear()
+        return False, 0.0
+    now = time.monotonic()
+    lp = st.get("last_p")
+    if lp is None or p != lp:
+        st["last_p"] = p
+        st["since"] = now
+        return False, 0.0
+    since = float(st["since"])
+    elapsed = now - since
+    if elapsed >= _TITLE_PRICE_STALE_MIN_SECONDS:
+        return True, elapsed
+    return False, 0.0
 
 
 def _tv_watchlist_init_request_params(tv: dict[str, Any], settings: Settings) -> dict[str, Any]:
@@ -1068,41 +1098,29 @@ def _make_playwright_title_price_getter(
     settings: Settings,
 ) -> Callable[[int], Optional[float]]:
     """
-    Poll ``page.title()`` → parse price. If the same value repeats
-    ``_TITLE_PRICE_SAME_STREAK_RELOAD`` times in a row, run ``_prepare_tv_chart_page`` and re-parse.
+    Poll ``page.title()`` → parse price. If the same value persists for
+    ``_TITLE_PRICE_STALE_MIN_SECONDS``, run ``_prepare_tv_chart_page`` and re-parse.
     """
 
-    streak = 0
-    last_p: Optional[float] = None
+    stale_st: dict[str, Any] = {}
 
     def get_price(_wms: int) -> Optional[float]:
-        nonlocal streak, last_p
         p = _parse_price_from_tv_title(page.title(), sym=sym)
-        if p is None:
-            streak = 0
-            last_p = None
-            return None
-        if last_p is not None and p == last_p:
-            streak += 1
-        else:
-            last_p = p
-            streak = 1
-        if streak >= _TITLE_PRICE_SAME_STREAK_RELOAD:
-            _log.info(
-                "tv-watchlist-daemon | title price unchanged %s x%d — reloading chart",
-                p,
-                streak,
-            )
-            try:
-                _prepare_tv_chart_page(page, tv, settings)
-            except Exception as e:
-                _log.warning("tv-watchlist-daemon | reload chart failed: %s", e)
-            streak = 0
-            last_p = None
-            p = _parse_price_from_tv_title(page.title(), sym=sym)
-            if p is not None:
-                last_p = p
-                streak = 1
+        do_reload, elapsed = _title_price_should_reload_stale(stale_st, p)
+        if not do_reload:
+            return p
+        _log.info(
+            "tv-watchlist-daemon | title price unchanged %s for %.0fs — reloading chart",
+            p,
+            elapsed,
+        )
+        try:
+            _prepare_tv_chart_page(page, tv, settings)
+        except Exception as e:
+            _log.warning("tv-watchlist-daemon | reload chart failed: %s", e)
+        stale_st.clear()
+        p = _parse_price_from_tv_title(page.title(), sym=sym)
+        _title_price_should_reload_stale(stale_st, p)
         return p
 
     return get_price
@@ -1167,50 +1185,38 @@ def _make_rpc_title_price_getter(
     settings: Settings,
 ) -> Callable[[int], Optional[float]]:
     """
-    Same streak logic as ``_make_playwright_title_price_getter`` but reloads by RPC:
+    Same stale-title logic as ``_make_playwright_title_price_getter`` but reloads by RPC:
     new ``tv_watchlist_init`` tab, then close the old tab.
     ``tab_id_holder`` is a single-element list updated when the tab is replaced.
     """
 
-    streak = 0
-    last_p: Optional[float] = None
+    stale_st: dict[str, Any] = {}
 
     def get_price(wms: int) -> Optional[float]:
-        nonlocal streak, last_p
         tid = tab_id_holder[0]
         p = _tv_rpc_poll_title_price(client, tab_id=tid, sym=sym, wms=wms)
-        if p is None:
-            streak = 0
-            last_p = None
-            return None
-        if last_p is not None and p == last_p:
-            streak += 1
-        else:
-            last_p = p
-            streak = 1
-        if streak >= _TITLE_PRICE_SAME_STREAK_RELOAD:
-            _log.info(
-                "tv-watchlist-daemon | title price unchanged %s x%d — RPC reload chart (new tab)",
-                p,
-                streak,
+        do_reload, elapsed = _title_price_should_reload_stale(stale_st, p)
+        if not do_reload:
+            return p
+        _log.info(
+            "tv-watchlist-daemon | title price unchanged %s for %.0fs — RPC reload chart (new tab)",
+            p,
+            elapsed,
+        )
+        try:
+            tab_id_holder[0] = _rpc_replace_chart_tab(
+                client,
+                old_tab_id=tid,
+                tv=tv,
+                settings=settings,
             )
-            try:
-                tab_id_holder[0] = _rpc_replace_chart_tab(
-                    client,
-                    old_tab_id=tid,
-                    tv=tv,
-                    settings=settings,
-                )
-            except Exception as e:
-                _log.warning("tv-watchlist-daemon | RPC reload chart failed: %s", e)
-            streak = 0
-            last_p = None
-            p = _tv_rpc_poll_title_price(
-                client, tab_id=tab_id_holder[0], sym=sym, wms=wms
-            )
-            if p is not None:
-                last_p = p
-                streak = 1
+        except Exception as e:
+            _log.warning("tv-watchlist-daemon | RPC reload chart failed: %s", e)
+        stale_st.clear()
+        p = _tv_rpc_poll_title_price(
+            client, tab_id=tab_id_holder[0], sym=sym, wms=wms
+        )
+        _title_price_should_reload_stale(stale_st, p)
         return p
 
     return get_price
