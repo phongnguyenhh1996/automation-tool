@@ -1033,6 +1033,81 @@ def _parse_price_from_tv_title(title: str, *, sym: str) -> Optional[float]:
         return None
 
 
+# If parsed title price is unchanged this many polls in a row, reload the chart tab (stale title).
+_TITLE_PRICE_SAME_STREAK_RELOAD = 4
+
+
+def _tv_watchlist_init_request_params(tv: dict[str, Any], settings: Settings) -> dict[str, Any]:
+    """Payload for ``METHOD_TV_WATCHLIST_INIT`` (browser service RPC)."""
+    return {
+        "chart_url": str(tv.get("chart_url")),
+        "tv": tv,
+        "email": settings.coinmap_email,
+        "password": settings.tradingview_password,
+        "initial_settle_ms": int(tv.get("initial_settle_ms", 3000)),
+    }
+
+
+def _prepare_tv_chart_page(page: Any, tv: dict[str, Any], settings: Settings) -> None:
+    """Open chart URL, login, settle, dark mode, watchlist — shared by initial load and stale-title reload."""
+    chart_url = str(tv.get("chart_url") or "").strip()
+    if not chart_url:
+        raise SystemExit("tradingview_capture.chart_url missing in coinmap yaml.")
+    page.goto(chart_url, wait_until="domcontentloaded", timeout=120_000)
+    _maybe_tradingview_login(page, tv, settings.coinmap_email, settings.tradingview_password)
+    page.wait_for_timeout(int(tv.get("initial_settle_ms", 3000)))
+    _maybe_tradingview_dark_mode(page, tv)
+    _tradingview_ensure_watchlist_open(page, tv)
+
+
+def _make_playwright_title_price_getter(
+    page: Any,
+    *,
+    sym: str,
+    tv: dict[str, Any],
+    settings: Settings,
+) -> Callable[[int], Optional[float]]:
+    """
+    Poll ``page.title()`` → parse price. If the same value repeats
+    ``_TITLE_PRICE_SAME_STREAK_RELOAD`` times in a row, run ``_prepare_tv_chart_page`` and re-parse.
+    """
+
+    streak = 0
+    last_p: Optional[float] = None
+
+    def get_price(_wms: int) -> Optional[float]:
+        nonlocal streak, last_p
+        p = _parse_price_from_tv_title(page.title(), sym=sym)
+        if p is None:
+            streak = 0
+            last_p = None
+            return None
+        if last_p is not None and p == last_p:
+            streak += 1
+        else:
+            last_p = p
+            streak = 1
+        if streak >= _TITLE_PRICE_SAME_STREAK_RELOAD:
+            _log.info(
+                "tv-watchlist-daemon | title price unchanged %s x%d — reloading chart",
+                p,
+                streak,
+            )
+            try:
+                _prepare_tv_chart_page(page, tv, settings)
+            except Exception as e:
+                _log.warning("tv-watchlist-daemon | reload chart failed: %s", e)
+            streak = 0
+            last_p = None
+            p = _parse_price_from_tv_title(page.title(), sym=sym)
+            if p is not None:
+                last_p = p
+                streak = 1
+        return p
+
+    return get_price
+
+
 def _tv_rpc_poll_title_price(
     client: BrowserClient,
     *,
@@ -1053,6 +1128,92 @@ def _tv_rpc_poll_title_price(
     if not isinstance(title, str):
         return None
     return _parse_price_from_tv_title(title, sym=sym)
+
+
+def _rpc_replace_chart_tab(
+    client: BrowserClient,
+    *,
+    old_tab_id: str,
+    tv: dict[str, Any],
+    settings: Settings,
+) -> str:
+    """
+    Open a fresh chart via ``tv_watchlist_init``, then close ``old_tab_id``.
+    Creates the new tab first so a failed init leaves the previous tab usable.
+    """
+    init = client.request(
+        METHOD_TV_WATCHLIST_INIT,
+        _tv_watchlist_init_request_params(tv, settings),
+        timeout_s=600.0,
+    )
+    if not init.get("ok"):
+        raise RuntimeError(str(init.get("error") or "tv_watchlist_init failed"))
+    new_id = str((init.get("result") or {}).get("tab_id") or "").strip()
+    if not new_id:
+        raise RuntimeError("tv_watchlist_init: missing tab_id")
+    try:
+        client.request(METHOD_CLOSE_TAB, {"tab_id": old_tab_id}, timeout_s=60.0)
+    except OSError:
+        pass
+    return new_id
+
+
+def _make_rpc_title_price_getter(
+    client: BrowserClient,
+    tab_id_holder: list[str],
+    *,
+    sym: str,
+    tv: dict[str, Any],
+    settings: Settings,
+) -> Callable[[int], Optional[float]]:
+    """
+    Same streak logic as ``_make_playwright_title_price_getter`` but reloads by RPC:
+    new ``tv_watchlist_init`` tab, then close the old tab.
+    ``tab_id_holder`` is a single-element list updated when the tab is replaced.
+    """
+
+    streak = 0
+    last_p: Optional[float] = None
+
+    def get_price(wms: int) -> Optional[float]:
+        nonlocal streak, last_p
+        tid = tab_id_holder[0]
+        p = _tv_rpc_poll_title_price(client, tab_id=tid, sym=sym, wms=wms)
+        if p is None:
+            streak = 0
+            last_p = None
+            return None
+        if last_p is not None and p == last_p:
+            streak += 1
+        else:
+            last_p = p
+            streak = 1
+        if streak >= _TITLE_PRICE_SAME_STREAK_RELOAD:
+            _log.info(
+                "tv-watchlist-daemon | title price unchanged %s x%d — RPC reload chart (new tab)",
+                p,
+                streak,
+            )
+            try:
+                tab_id_holder[0] = _rpc_replace_chart_tab(
+                    client,
+                    old_tab_id=tid,
+                    tv=tv,
+                    settings=settings,
+                )
+            except Exception as e:
+                _log.warning("tv-watchlist-daemon | RPC reload chart failed: %s", e)
+            streak = 0
+            last_p = None
+            p = _tv_rpc_poll_title_price(
+                client, tab_id=tab_id_holder[0], sym=sym, wms=wms
+            )
+            if p is not None:
+                last_p = p
+                streak = 1
+        return p
+
+    return get_price
 
 
 def run_tv_watchlist_daemon(
@@ -1091,13 +1252,7 @@ def run_tv_watchlist_daemon(
         _log.info("tv-watchlist-daemon mode=rpc | no local Playwright CDP attach")
         init = c.request(
             METHOD_TV_WATCHLIST_INIT,
-            {
-                "chart_url": str(tv.get("chart_url")),
-                "tv": tv,
-                "email": settings.coinmap_email,
-                "password": settings.tradingview_password,
-                "initial_settle_ms": int(tv.get("initial_settle_ms", 3000)),
-            },
+            _tv_watchlist_init_request_params(tv, settings),
             timeout_s=600.0,
         )
         if not init.get("ok"):
@@ -1105,6 +1260,10 @@ def run_tv_watchlist_daemon(
         tab_id = str((init.get("result") or {}).get("tab_id") or "").strip()
         if not tab_id:
             raise SystemExit("tv_watchlist_init: missing tab_id")
+        tab_holder = [tab_id]
+        get_price = _make_rpc_title_price_getter(
+            c, tab_holder, sym=sym, tv=tv, settings=settings
+        )
         try:
             _tv_watchlist_daemon_main_loop(
                 settings=settings,
@@ -1112,11 +1271,11 @@ def run_tv_watchlist_daemon(
                 sym=sym,
                 poll_s=poll_s,
                 zs_path=zs_path,
-                get_price=lambda wms: _tv_rpc_poll_title_price(c, tab_id=tab_id, sym=sym, wms=wms),
+                get_price=get_price,
             )
         finally:
             try:
-                c.request(METHOD_CLOSE_TAB, {"tab_id": tab_id}, timeout_s=60.0)
+                c.request(METHOD_CLOSE_TAB, {"tab_id": tab_holder[0]}, timeout_s=60.0)
             except OSError:
                 pass
         return "stopped"
@@ -1140,11 +1299,8 @@ def run_tv_watchlist_daemon(
             use_browser_service = False
         page = context.new_page()
         try:
-            page.goto(str(tv.get("chart_url")), wait_until="domcontentloaded", timeout=120_000)
-            _maybe_tradingview_login(page, tv, settings.coinmap_email, settings.tradingview_password)
-            page.wait_for_timeout(int(tv.get("initial_settle_ms", 3000)))
-            _maybe_tradingview_dark_mode(page, tv)
-            _tradingview_ensure_watchlist_open(page, tv)
+            _prepare_tv_chart_page(page, tv, settings)
+            get_price = _make_playwright_title_price_getter(page, sym=sym, tv=tv, settings=settings)
 
             _tv_watchlist_daemon_main_loop(
                 settings=settings,
@@ -1152,7 +1308,7 @@ def run_tv_watchlist_daemon(
                 sym=sym,
                 poll_s=poll_s,
                 zs_path=zs_path,
-                get_price=lambda wms: _parse_price_from_tv_title(page.title(), sym=sym),
+                get_price=get_price,
             )
         finally:
             try:
