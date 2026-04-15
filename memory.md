@@ -190,7 +190,7 @@ Lệnh SELL USDJPY ngày 12/08/2025 – Lý do thắng & cải tiến:
 - Tránh TP ngay HVN/POC hoặc HL/EQL.
 - Nếu gần phiên Mỹ và TP sát vùng mạnh → chốt nhanh.
 
-Lưu chỉnh sửa quy trình phân tích khi nhận đủ 7 data từ user như sau:
+Lưu chỉnh sửa quy trình phân tích khi nhận đủ 10 data từ user như sau:
 
 1. **Phân tích buổi sáng duy nhất**, không phân tích liên tục trong ngày. Mục tiêu: chọn bias chính cho cả ngày và set lệnh trong ngày + limit.
 2. **Khung chủ đạo xác định bias:** H1.

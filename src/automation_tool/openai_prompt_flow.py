@@ -68,9 +68,10 @@ def default_analysis_prompt(main_symbol: str | None = None) -> str:
     return (
         "[FULL_ANALYSIS]\n"
         f"Cặp chính: {sym}.\n"
-        "Đính kèm theo thứ tự (TradingView = JSON; Coinmap = JSON), đủ 7 data: "
-        "TradingView DXY (H1, M15) → "
-        f"TradingView {sym} (H1, M15, M5) → Coinmap {sym} (Footprint M15, M5).\n"
+        "Đính kèm theo thứ tự (TradingView = JSON; Coinmap = JSON), đủ 10 data: "
+        "TradingView DXY (H1, M15, H4) → "
+        f"TradingView {sym} (H1, M15, M5) → Coinmap DXY (Footprint M15, M5) → "
+        f"Coinmap {sym} (Footprint M15, M5).\n"
     )
 
 

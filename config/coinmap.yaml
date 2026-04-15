@@ -25,7 +25,15 @@ chart_download:
   multi_shot_enabled: true
   capture_plan:
     # symbol = watchlist id trên Coinmap; export_symbol = nhãn giống TradingView (file JSON/PNG + trường symbol).
-    # Chỉ cặp chính M15 + M5 (không còn DXY footprint — khớp bộ 7 slot OpenAI).
+    # DXY footprint + cặp chính M15/M5 — khớp bộ 10 slot OpenAI (FULL_ANALYSIS).
+    - symbol: USDINDEX
+      interval: "15m"
+      export_symbol: DXY
+      watchlist_category: "forex 1"
+    - symbol: USDINDEX
+      interval: "5m"
+      export_symbol: DXY
+      watchlist_category: "forex 1"
     - symbol: XAUUSD
       interval: "15m"
       watchlist_category: "forex 1"
@@ -177,6 +185,7 @@ tradingview_capture:
       "1 giờ": 100
       "15 phút": 120
       "5 phút": 150
+      "4 giờ": 90
     # Khi get_hist trả 0 nến: gọi lại thêm tối đa N lần (pause empty_bars_retry_delay_ms giữa các lần).
     empty_bars_max_retries: 3
     empty_bars_retry_delay_ms: 300
@@ -232,11 +241,12 @@ tradingview_capture:
   after_snapshot_escape_ms: 500
   multi_shot_enabled: true
   capture_plan:
-    # Bộ 7 slot: DXY H1/M15 + cặp chính H1/M15/M5 (không H4).
+    # Bộ 10 slot FULL_ANALYSIS: DXY H1/M15/H4 + cặp chính H1/M15/M5 + Coinmap DXY + Coinmap cặp chính.
     - symbol: DXY
       intervals:
         - "1 giờ"
         - "15 phút"
+        - "4 giờ"
     - symbol: XAUUSD
       intervals:
         - "1 giờ"

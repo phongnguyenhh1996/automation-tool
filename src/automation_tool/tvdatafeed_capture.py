@@ -176,7 +176,7 @@ def _default_multi_rows() -> list[dict[str, Any]]:
     return [
         {
             "symbol": "DXY",
-            "intervals": ["1 giờ", "15 phút"],
+            "intervals": ["1 giờ", "15 phút", "4 giờ"],
             "exchange": None,
             "tv_symbol": None,
         },

@@ -2175,7 +2175,7 @@ def _tradingview_parse_capture_plan(tv: dict[str, Any]) -> Optional[list[tuple[s
 
 def _tradingview_default_capture_plan() -> list[tuple[str, list[str]]]:
     return [
-        ("DXY", ["1 giờ", "15 phút"]),
+        ("DXY", ["1 giờ", "15 phút", "4 giờ"]),
         ("XAUUSD", ["1 giờ", "15 phút", "5 phút"]),
     ]
 
