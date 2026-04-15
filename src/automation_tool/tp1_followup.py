@@ -302,6 +302,7 @@ def _run_tp1_openai_and_act(
                 telegram_chat_id=settings.telegram_chat_id,
                 source="tp1-followup-chinh",
                 text=format_mt5_execution_for_telegram(ex),
+                zone_label=label,
             )
         tid = int(ex.order) if ex.order else 0
         if tid > 0:

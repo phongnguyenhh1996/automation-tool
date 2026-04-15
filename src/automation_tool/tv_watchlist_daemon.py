@@ -425,6 +425,7 @@ def _tp1_followup_job(
                     telegram_chat_id=settings.telegram_chat_id,
                     source="tp1-followup",
                     text=format_mt5_execution_for_telegram(ex),
+                    zone_label=z1.label,
                 )
             _send_log(settings, f"[tp1] mt5_execute_trade: {ex.message}".strip())
             tid = int(ex.order) if ex.order else 0
@@ -512,6 +513,7 @@ def _auto_entry_job(
                 telegram_chat_id=settings.telegram_chat_id,
                 source="auto-entry",
                 text=format_mt5_execution_for_telegram(ex),
+                zone_label=z0.label,
             )
         _send_log(settings, f"[auto-entry] mt5_execute_trade: {ex.message}".strip())
 
@@ -760,6 +762,7 @@ def _zone_touch_job(
                     telegram_chat_id=settings.telegram_chat_id,
                     source="zone-touch",
                     text=format_mt5_execution_for_telegram(ex),
+                    zone_label=z1.label,
                 )
             _send_log(settings, f"[zone-touch] mt5_execute_trade: {ex.message}".strip())
             tid = int(ex.order) if ex.order else 0

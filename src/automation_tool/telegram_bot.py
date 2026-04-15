@@ -28,6 +28,27 @@ _MT5_NGAN_GON_MESSAGES = (
     "Vít ga vào lệnh, chốt lãi xuyên màn đêm – Đẳng cấp công nghệ là đây! 🏎️💨💰🔥",
 )
 
+# Canonical zone keys (openai_analysis_json.ZONE_LABELS_ORDER) → hiển thị trong tin MT5.
+_MT5_ZONE_LABEL_DISPLAY_VN: dict[str, str] = {
+    "plan_chinh": "Plan chính",
+    "plan_phu": "Plan phụ",
+    "scalp": "Scalp",
+}
+
+
+def mt5_zone_entry_line_vn(zone_label: Optional[str]) -> Optional[str]:
+    """
+    Một dòng: ``Đã vào lệnh cho "Plan chính".`` (hoặc Plan phụ / Scalp) khi biết nhãn.
+    Đặt **sau** câu emoji ngẫu nhiên trong tin MT5. Trả ``None`` nếu không map được.
+    """
+    if not zone_label or not str(zone_label).strip():
+        return None
+    key = str(zone_label).strip().lower()
+    display = _MT5_ZONE_LABEL_DISPLAY_VN.get(key)
+    if not display:
+        return None
+    return f'Đã vào lệnh cho "{display}".'
+
 
 @dataclass(frozen=True)
 class TelegramChunk:
@@ -461,17 +482,23 @@ def send_mt5_execution_log_to_ngan_gon_chat(
     telegram_chat_id: Optional[str] = None,
     source: str,
     text: str,
+    zone_label: Optional[str] = None,
 ) -> None:
     """
     Gửi thông báo sau thực thi MT5 (sau ``execute_trade``) tới ``TELEGRAM_CHAT_ID``.
 
-    Nội dung là một trong các câu cố định (chọn ngẫu nhiên), không gửi log chi tiết.
+    Nội dung: một câu cố định (chọn ngẫu nhiên); (tuỳ chọn) xuống dòng rồi dòng
+    ``Đã vào lệnh cho "Plan chính"`` / ``Plan phụ`` / ``Scalp`` khi ``zone_label`` khớp.
+    Tham số ``text`` chỉ dùng để kiểm tra có thực thi — không gửi log chi tiết.
     Plain text; không dùng parse_mode để tránh lỗi ký tự đặc biệt từ broker/API.
     """
     body = (text or "").strip()
     if not body:
         return
     out = random.choice(_MT5_NGAN_GON_MESSAGES)
+    zone_line = mt5_zone_entry_line_vn(zone_label)
+    if zone_line:
+        out = f"{out}\n\n{zone_line}"
     main = (telegram_chat_id or "").strip()
     if not main:
         return

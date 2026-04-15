@@ -302,6 +302,7 @@ def apply_first_response_vao_lenh(
                 telegram_chat_id=telegram_chat_id,
                 source=telegram_source_label,
                 text=format_mt5_execution_for_telegram(ex),
+                zone_label=label,
             )
         tid = int(ex.order) if ex.order else 0
         if (not tid or tid <= 0) and not mt5_dry_run and (ex.resolved_symbol or "").strip():

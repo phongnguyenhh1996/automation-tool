@@ -639,6 +639,7 @@ def _run_intraday_touch_loop(
                         telegram_chat_id=settings.telegram_chat_id,
                         source="tv-journal-monitor",
                         text=format_mt5_execution_for_telegram(ex),
+                        zone_label=touched_label,
                     )
             if not params.no_telegram:
                 _journal_log(tz, "Gửi Telegram (VÀO LỆNH) — chat chính + OUTPUT_NGAN_GON nếu cấu hình.")
