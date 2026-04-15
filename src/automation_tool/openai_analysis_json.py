@@ -180,6 +180,8 @@ class AnalysisPayload:
     output_ngan_gon: str = ""
     #: [INTRADAY_UPDATE] only: short analysis for Telegram (Schema B).
     phan_tich_update: str = ""
+    #: [INTRADAY_ALERT] only: short analysis → ``TELEGRAM_CHAT_ID`` (Schema B).
+    phan_tich_alert: str = ""
     prices: list[PriceZoneEntry] = field(default_factory=list)
     intraday_hanh_dong: Optional[IntradayHanhDong] = None
     trade_line: str = ""
@@ -231,6 +233,8 @@ def try_parse_analysis_payload(data: dict[str, Any]) -> Optional[AnalysisPayload
     out_ngan = ogn.strip() if isinstance(ogn, str) else ""
     ptu_raw = data.get("phan_tich_update")
     phan_tich_update = ptu_raw.strip() if isinstance(ptu_raw, str) else ""
+    pta_raw = data.get("phan_tich_alert")
+    phan_tich_alert = pta_raw.strip() if isinstance(pta_raw, str) else ""
 
     prices_raw = data.get("prices")
     prices: list[PriceZoneEntry] = []
@@ -259,6 +263,7 @@ def try_parse_analysis_payload(data: dict[str, Any]) -> Optional[AnalysisPayload
         not out_chi
         and not out_ngan
         and not phan_tich_update
+        and not phan_tich_alert
         and not prices
         and intra is None
         and not trade_line
@@ -270,6 +275,7 @@ def try_parse_analysis_payload(data: dict[str, Any]) -> Optional[AnalysisPayload
         out_chi_tiet=out_chi,
         output_ngan_gon=out_ngan,
         phan_tich_update=phan_tich_update,
+        phan_tich_alert=phan_tich_alert,
         prices=prices,
         intraday_hanh_dong=intra,
         trade_line=trade_line,

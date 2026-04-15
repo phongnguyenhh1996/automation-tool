@@ -95,6 +95,13 @@ def test_parse_analysis_phan_tich_update_only() -> None:
     assert p.phan_tich_update == "M15 xác nhận buy."
 
 
+def test_parse_analysis_phan_tich_alert_only() -> None:
+    text = '{"phan_tich_alert": "M5: POC hỗ trợ."}'
+    p = parse_analysis_from_openai_text(text)
+    assert p is not None
+    assert p.phan_tich_alert == "M5: POC hỗ trợ."
+
+
 def test_parse_analysis_intraday_json_with_phan_tich_update() -> None:
     text = """{
       "phan_tich_update": "Giữ plan.",

@@ -12,7 +12,7 @@ Tự động nhận diện luồng xử lý dựa trên đầu vào:
 
 1. [FULL_ANALYSIS]: Phân tích tổng thể đầu ngày khi nhận đủ 10 data (multimodal) theo đúng thứ tự đính kèm. Trả về Schema A.
 
-2. [INTRADAY_ALERT]: Khi giá chạm vùng chờ (Cảnh báo TradingView). Tập trung Footprint M5. Trả về Schema B (Im lặng, chỉ JSON).
+2. [INTRADAY_ALERT]: Khi giá chạm vùng chờ (Cảnh báo TradingView). Tập trung Footprint M5. Trả về Schema B (Im lặng, chỉ JSON). **Bắt buộc** điền `phan_tich_alert`.
 
 3. [INTRADAY_UPDATE]: Cập nhật định kỳ (vd. 1h chiều / 7h tối). Đính kèm **ba** file JSON theo thứ tự: **(1)** `morning_full_analysis.json` (object Schema A đã lưu sau [FULL_ANALYSIS]), **(2) M15**, **(3) M5** (Footprint cặp chính). So sánh snapshot sáng với footprint M15/M5; nếu plan còn hiệu lực thì **chấm lại `hop_luu`**; với scalp nếu `hop_luu` dưới 60, với plan_chinh/plan_phu nếu dưới 70 — có thể đề xuất plan thay thế điểm cao hơn khi hợp lý. Trả về Schema B và **bắt buộc** điền `phan_tich_update`. Với mỗi plan trong `prices`, đặt `no_change`: `false` nếu cập nhật giá/vùng từ footprint cho vùng đó; `true` nếu giữ nguyên so với baseline.
 
@@ -122,8 +122,9 @@ Ví dụ tối thiểu Schema A:
 }
 
 ## Schema B ([INTRADAY_ALERT] / [INTRADAY_UPDATE]) — im lặng, chỉ JSON
-- TUYỆT ĐỐI KHÔNG có `out_chi_tiet` hoặc `output_ngan_gon` (khác với Schema A/C). [INTRADAY_UPDATE] được phép thêm `phan_tich_update`.
-- `phan_tich_update` (string): chỉ dùng cho **[INTRADAY_UPDATE]** — phân tích ngắn gọn (M15/M5 vs plan sáng). Với **[INTRADAY_ALERT]** có thể bỏ qua hoặc `""`.
+- TUYỆT ĐỐI KHÔNG có `out_chi_tiet` hoặc `output_ngan_gon` (khác với Schema A/C).
+- `phan_tich_alert` (string): chỉ dùng cho **[INTRADAY_ALERT]** — nhận định ngắn sau khi phân tích từ Footprint M5. Với **[INTRADAY_UPDATE]** để `""`.
+- `phan_tich_update` (string): chỉ dùng cho **[INTRADAY_UPDATE]** — phân tích ngắn gọn (M15/M5 vs plan sáng). Với **[INTRADAY_ALERT]** để `""`.
 - `intraday_hanh_dong` (enum): `"VÀO LỆNH"` | `"chờ"` | `"loại"`.
 - `trade_line` (string): nếu `"VÀO LỆNH"` thì bắt buộc là pipe hợp lệ; nếu `"chờ"`/`"loại"` có thể `""`.
 - `prices` (array): khuyến nghị 3 phần tử (`plan_chinh`, `plan_phu`, `scalp`). Mỗi phần tử:
@@ -132,6 +133,7 @@ Ví dụ tối thiểu Schema A:
 
 Ví dụ tối thiểu Schema B:
 {
+  "phan_tich_alert": "Delta M5 yếu, chờ xác nhận.",
   "phan_tich_update": "",
   "intraday_hanh_dong": "chờ",
   "trade_line": "",
@@ -168,7 +170,8 @@ Ví dụ tối thiểu Schema D:
 
 ### Schema B (ALERT / UPDATE):
 {
-  "phan_tich_update": "string (bắt buộc có nội dung cho [INTRADAY_UPDATE]; [INTRADAY_ALERT] có thể rỗng)",
+  "phan_tich_alert": "string (bắt buộc có nội dung cho [INTRADAY_ALERT]; [INTRADAY_UPDATE] để rỗng)",
+  "phan_tich_update": "string (bắt buộc có nội dung cho [INTRADAY_UPDATE]; [INTRADAY_ALERT] để rỗng)",
   "intraday_hanh_dong": "VÀO LỆNH" | "chờ" | "loại",
   "trade_line": "string",
   "prices": [{"label": "string", "value": float, "vung_cho": "string", "hop_luu": int, "trade_line": "string", "no_change": boolean}]

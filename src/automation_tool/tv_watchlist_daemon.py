@@ -46,6 +46,7 @@ from automation_tool.telegram_bot import (
     send_message,
     send_mt5_execution_log_to_ngan_gon_chat,
     send_openai_output_to_telegram,
+    send_phan_tich_alert_to_main_chat_if_any,
 )
 from automation_tool.openai_analysis_json import (
     ARM_THRESHOLD_TP1_DEFAULT,
@@ -630,6 +631,14 @@ def _zone_touch_job(
         )
         if new_id:
             _send_log(settings, f"[zone-touch] openai_response_id={new_id}")
+
+        send_phan_tich_alert_to_main_chat_if_any(
+            bot_token=settings.telegram_bot_token,
+            chat_id=settings.telegram_chat_id,
+            raw_openai_text=out_text,
+            default_parse_mode=settings.telegram_parse_mode,
+            no_telegram=params.no_telegram,
+        )
 
         act = parse_journal_intraday_action_from_openai_text(out_text)
         # Default to "chờ" on parse failure

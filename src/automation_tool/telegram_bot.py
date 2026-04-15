@@ -549,6 +549,34 @@ def send_first_response_log_to_analysis_detail_chat(
     )
 
 
+def send_phan_tich_alert_to_main_chat_if_any(
+    *,
+    bot_token: str,
+    chat_id: str,
+    raw_openai_text: str,
+    default_parse_mode: Optional[str],
+    no_telegram: bool,
+) -> None:
+    """
+    [INTRADAY_ALERT] / Schema B: nếu JSON có ``phan_tich_alert``, gửi nội dung đó tới
+    ``TELEGRAM_CHAT_ID`` (chat chính).
+    """
+    if no_telegram or not (chat_id or "").strip():
+        return
+    payload = parse_analysis_from_openai_text(raw_openai_text)
+    if payload is None:
+        return
+    body = (payload.phan_tich_alert or "").strip()
+    if not body:
+        return
+    send_message(
+        bot_token=bot_token,
+        chat_id=chat_id.strip(),
+        text=body,
+        parse_mode=default_parse_mode,
+    )
+
+
 def send_openai_output_to_telegram(
     *,
     bot_token: str,

@@ -11,7 +11,7 @@ from datetime import datetime, time as dt_time, timedelta
 from pathlib import Path
 from typing import Any, Literal, Optional, Set
 
-from playwright.sync_api import Page, sync_playwright
+from playwright.sync_api import BrowserContext, Page, sync_playwright
 from zoneinfo import ZoneInfo
 
 from automation_tool.coinmap import (
@@ -28,18 +28,27 @@ from automation_tool.images import (
     get_active_main_symbol,
     read_main_chart_symbol,
 )
+from automation_tool.first_response_trade import apply_first_response_vao_lenh
+from automation_tool.mt5_execute import execute_trade, format_mt5_execution_for_telegram
 from automation_tool.openai_errors import re_raise_unless_openai
-from automation_tool.openai_prompt_flow import run_single_followup_responses
+from automation_tool.openai_prompt_flow import (
+    JOURNAL_INTRADAY_FIRST_USER_TEMPLATE,
+    JOURNAL_INTRADAY_RETRY_USER_TEMPLATE,
+    run_single_followup_responses,
+)
 from automation_tool.browser_client import try_attach_playwright_via_service
 from automation_tool.playwright_browser import close_browser_and_context, launch_chrome_context
 from automation_tool.mt5_openai_parse import (
     is_last_price_hit_stop_loss,
     normalize_broker_xau_symbol,
+    parse_journal_intraday_action_from_openai_text,
+    parse_openai_output_md,
     parse_trade_line,
 )
 from automation_tool.state_files import (
     LOAI,
     LastAlertState,
+    VAO_LENH,
     VUNG_CHO,
     default_last_alert_prices_path,
     read_last_alert_state,
@@ -49,7 +58,9 @@ from automation_tool.state_files import (
     write_journal_monitor_first_run,
 )
 from automation_tool.telegram_bot import (
+    send_mt5_execution_log_to_ngan_gon_chat,
     send_openai_output_to_telegram,
+    send_phan_tich_alert_to_main_chat_if_any,
 )
 from automation_tool.tradingview_alerts import (
     _open_alerts_list_panel,
@@ -547,6 +558,14 @@ def _run_intraday_touch_loop(
         print(out_text, flush=True)
         _journal_log(tz, "--- Hết output OpenAI ---")
         prev_id = new_id
+
+        send_phan_tich_alert_to_main_chat_if_any(
+            bot_token=settings.telegram_bot_token,
+            chat_id=settings.telegram_chat_id,
+            raw_openai_text=out_text,
+            default_parse_mode=settings.telegram_parse_mode,
+            no_telegram=params.no_telegram,
+        )
 
         hop_done = apply_first_response_vao_lenh(
             out_text,
