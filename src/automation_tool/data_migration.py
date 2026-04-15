@@ -27,6 +27,7 @@ def migrate_legacy_flat_data_layout() -> None:
     names = (
         "last_alert_prices.json",
         "morning_baseline_prices.json",
+        "morning_full_analysis.json",
         "last_response_id.txt",
         "storage_state.json",
     )

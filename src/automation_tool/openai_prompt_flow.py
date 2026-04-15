@@ -13,10 +13,7 @@ import os
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple, Optional
-
-if TYPE_CHECKING:
-    from automation_tool.zones_state import ZonesState
+from typing import Any, NamedTuple, Optional
 
 from openai import OpenAI
 
@@ -35,10 +32,8 @@ from automation_tool.images import (
     ordered_chart_openai_payloads,
     read_main_chart_symbol,
 )
-from automation_tool.zones_state import (
-    format_intraday_update_baseline_vung_cho,
-    format_intraday_update_time_line,
-)
+from automation_tool.state_files import MORNING_FULL_ANALYSIS_FILENAME
+from automation_tool.zones_state import format_intraday_update_time_line
 
 _log = logging.getLogger(__name__)
 
@@ -92,6 +87,16 @@ def _default_max_coinmap_json_chars() -> int:
     return 1_500_000
 
 
+def _max_json_chars_for_path(path: Path, *, default_max: int) -> int:
+    """Optional cap for ``morning_full_analysis.json``; Coinmap/TV use ``default_max``."""
+    if path.name == MORNING_FULL_ANALYSIS_FILENAME:
+        raw = os.getenv("MORNING_FULL_ANALYSIS_MAX_CHARS", "").strip()
+        if raw.isdigit():
+            return max(0, int(raw))
+        return default_max
+    return default_max
+
+
 def _coinmap_openai_slim_enabled() -> bool:
     """
     Extra slim when *reading* JSON for the API. Default off: exports are already slimmed
@@ -121,7 +126,9 @@ def _json_file_header_and_body(path: Path, *, max_chars: int) -> tuple[str, str]
         compact = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     except json.JSONDecodeError:
         compact = raw
-    if "_tradingview_" in path.name:
+    if path.name == MORNING_FULL_ANALYSIS_FILENAME:
+        header = f"[FULL_ANALYSIS snapshot — file: {path.name}]\n"
+    elif "_tradingview_" in path.name:
         header = f"[TradingView OHLC (tvdatafeed) — file: {path.name}]\n"
     else:
         header = f"[Coinmap API export — file: {path.name}]\n"
@@ -150,13 +157,17 @@ def _json_paths_to_headers_and_urls(
         _log.info("[cloudinary] uploading %d JSON file(s) in parallel → raw storage", n)
     if n == 1:
         p0 = paths[0]
-        h, b = _json_file_header_and_body(p0, max_chars=max_json_chars)
+        mx0 = _max_json_chars_for_path(p0, default_max=max_json_chars)
+        h, b = _json_file_header_and_body(p0, max_chars=mx0)
         return [(h, _upload_user_data_json_cloudinary(p0, b))]
     workers = min(n, max(4, (os.cpu_count() or 2) * 2))
     with ThreadPoolExecutor(max_workers=workers) as ex:
         prepared = list(
             ex.map(
-                lambda pp: _json_file_header_and_body(pp, max_chars=max_json_chars),
+                lambda pp: _json_file_header_and_body(
+                    pp,
+                    max_chars=_max_json_chars_for_path(pp, default_max=max_json_chars),
+                ),
                 paths,
             )
         )
@@ -437,27 +448,25 @@ def run_prompt_two_step_flow(
 
 DEFAULT_UPDATE_PROMPT_TEMPLATE = (
     "[INTRADAY_UPDATE]\n"
-    "Dựa vào footprint mới nhất M15 + M5 (JSON đính kèm theo thứ tự) so với baseline sáng.\n"
+    "Dựa vào snapshot phân tích sáng + footprint M15 + M5 (JSON đính kèm theo thứ tự).\n"
 )
 
 
-def build_intraday_update_user_text(zones_state: Optional["ZonesState"]) -> str:
+def build_intraday_update_user_text() -> str:
     """
-    User message for ``coinmap-automation update``: thời gian + baseline ``vung_cho`` + nhiệm vụ ngắn.
-    Coinmap JSON (M15 then M5) are attached separately (Cloudinary raw URLs).
-    Baseline chỉ từ ``zones_state``; thiếu ``vung_cho`` thì ``(chưa có)``, không dùng mốc sáng.
+    User message for ``coinmap-automation update``: thời gian + nhiệm vụ ngắn (không nhúng baseline vùng chờ).
     """
     time_line = format_intraday_update_time_line()
-    baseline_lines = format_intraday_update_baseline_vung_cho(zones_state)
     return (
         "[INTRADAY_UPDATE]\n"
         f"{time_line}"
-        "Đính kèm **hai** file JSON theo thứ tự: **(1) M15**, **(2) M5**.\n"
-        "Baseline sáng):\n"
-        f"{baseline_lines}"
-        "\n"
-        "Dựa vào footprint M15 và M5, đánh giá các plan sáng (plan_chinh / plan_phu / scalp) "
-        "còn hợp lý với order flow hiện tại không, có nên đổi plan / cập nhật vùng trong JSON không. "
+        f"Đính kèm **ba** file JSON theo thứ tự: **(1)** `{MORNING_FULL_ANALYSIS_FILENAME}` (snapshot FULL_ANALYSIS sáng), "
+        "**(2) M15**, **(3) M5**.\n"
+        "So sánh snapshot sáng với footprint M15/M5 hiện tại: các plan sáng (plan_chinh / plan_phu / scalp) "
+        "còn hiệu lực không; nếu còn hiệu lực thì **chấm lại `hop_luu`** theo order flow hiện tại. "
+        "Với **scalp** nếu `hop_luu` dưới 60, với **plan_chinh / plan_phu** nếu `hop_luu` dưới 65 — "
+        "tìm plan thay thế có điểm cao hơn (khi hợp lý). "
+        "Trả về Schema B; **bắt buộc** điền `phan_tich_update`.\n"
     )
 
 # TradingView tab Nhật ký: giá chạm → Coinmap M5 + OpenAI (intraday).
@@ -489,7 +498,8 @@ def run_single_followup_responses(
     prompt_version: str | None,
     user_text: str,
     coinmap_json_paths: Sequence[Path],
-    previous_response_id: str,
+    previous_response_id: str | None,
+    morning_snapshot_path: Path | None = None,
     vector_store_ids: list[str],
     store: bool,
     include: list[str],
@@ -498,19 +508,24 @@ def run_single_followup_responses(
     model: str | None = None,
 ) -> tuple[str, str]:
     """
-    One multimodal user turn chained to ``previous_response_id`` (intraday update).
+    One multimodal user turn: optional ``morning_snapshot_path`` + Coinmap JSON paths, uploaded in order
+    (Cloudinary raw + ``input_file`` ``file_url``).
 
-    ``coinmap_json_paths``: one or more Coinmap export JSON paths, uploaded in order
-    (same Cloudinary raw + ``input_file`` ``file_url`` pattern as multi-json in ``run_analysis_responses_flow``).
-
-    Returns ``(output_text, new_response_id)``.
+    If ``previous_response_id`` is ``None``, starts a **new** Responses thread (no chain).
+    Otherwise chains to that id (intraday alert, TP1, etc.).
     """
-    paths = [p for p in coinmap_json_paths if isinstance(p, Path)]
+    paths: list[Path] = []
+    if morning_snapshot_path is not None:
+        mp = morning_snapshot_path
+        if not isinstance(mp, Path) or not mp.is_file():
+            raise FileNotFoundError(f"Morning analysis JSON not found: {morning_snapshot_path}")
+        paths.append(mp)
+    paths.extend([p for p in coinmap_json_paths if isinstance(p, Path)])
     if not paths:
-        raise ValueError("coinmap_json_paths must contain at least one Path")
+        raise ValueError("Need at least one JSON path (morning_snapshot_path and/or coinmap_json_paths)")
     for p in paths:
         if not p.is_file():
-            raise FileNotFoundError(f"Coinmap JSON not found: {p}")
+            raise FileNotFoundError(f"JSON attachment not found: {p}")
 
     client = OpenAI(api_key=api_key)
     prompt = _prompt_dict(prompt_id, prompt_version)
@@ -547,17 +562,19 @@ def run_single_followup_responses(
         json_payloads,
         max_json_chars=mx_json,
     )
-    r = client.responses.create(
+    create_kw: dict[str, Any] = {
         **common,
-        previous_response_id=previous_response_id,
-        input=[
+        "input": [
             {
                 "type": "message",
                 "role": "user",
                 "content": content,
             }
         ],
-    )
+    }
+    if previous_response_id is not None and str(previous_response_id).strip():
+        create_kw["previous_response_id"] = str(previous_response_id).strip()
+    r = client.responses.create(**create_kw)
     out = (r.output_text or "").strip()
     return out, r.id
 

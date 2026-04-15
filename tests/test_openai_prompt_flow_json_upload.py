@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
+from automation_tool.state_files import MORNING_FULL_ANALYSIS_FILENAME
+
 from automation_tool.openai_prompt_flow import (
     _build_mixed_chart_user_content,
     _json_paths_to_headers_and_urls,
@@ -32,6 +34,38 @@ def test_build_mixed_content_json_uses_input_file_url(tmp_path: Path) -> None:
     assert "TradingView" in parts[1]["text"]
     assert j.name in parts[1]["text"]
     assert parts[2] == {"type": "input_file", "file_url": url}
+
+
+def test_three_json_morning_m15_m5_order(tmp_path: Path) -> None:
+    morning = tmp_path / MORNING_FULL_ANALYSIS_FILENAME
+    j15 = tmp_path / "stamp_coinmap_XAUUSD_15m.json"
+    j5 = tmp_path / "stamp_coinmap_XAUUSD_5m.json"
+    morning.write_text('{"prices":[]}', encoding="utf-8")
+    j15.write_text('{"m15":1}', encoding="utf-8")
+    j5.write_text('{"m5":1}', encoding="utf-8")
+
+    with patch(
+        "automation_tool.openai_prompt_flow.upload_json_bytes_for_responses",
+        side_effect=[
+            "https://example.com/morning.json",
+            "https://example.com/15.json",
+            "https://example.com/5.json",
+        ],
+    ) as up:
+        parts = _build_mixed_chart_user_content(
+            "p",
+            [("json", morning), ("json", j15), ("json", j5)],
+            max_json_chars=100_000,
+        )
+    assert up.call_count == 3
+    assert parts[0] == {"type": "input_text", "text": "p"}
+    assert parts[1]["type"] == "input_text" and "FULL_ANALYSIS snapshot" in parts[1]["text"]
+    assert parts[1]["text"] and morning.name in parts[1]["text"]
+    assert parts[2] == {"type": "input_file", "file_url": "https://example.com/morning.json"}
+    assert "Coinmap" in parts[3]["text"] and j15.name in parts[3]["text"]
+    assert parts[4] == {"type": "input_file", "file_url": "https://example.com/15.json"}
+    assert "Coinmap" in parts[5]["text"]
+    assert parts[6] == {"type": "input_file", "file_url": "https://example.com/5.json"}
 
 
 def test_two_json_files_upload_order_and_count(tmp_path: Path) -> None:

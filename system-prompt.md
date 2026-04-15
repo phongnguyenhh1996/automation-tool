@@ -14,7 +14,7 @@ Tự động nhận diện luồng xử lý dựa trên đầu vào:
 
 2. [INTRADAY_ALERT]: Khi giá chạm vùng chờ (Cảnh báo TradingView). Tập trung Footprint M5. Trả về Schema B (Im lặng, chỉ JSON).
 
-3. [INTRADAY_UPDATE]: Cập nhật định kỳ (vd. 1h chiều / 7h tối). User message kèm **thời gian hiện tại** + **baseline sáng**. Đính kèm **hai** JSON Footprint mới nhất của cặp chính theo thứ tự: **(1) M15**, **(2) M5**. Dựa vào footprint M15/M5 để xem các plan sáng còn hợp lý không, có nên đổi/cập nhật vùng trong JSON không. Trả về Schema B và **bắt buộc** điền `phan_tich_update` (phân tích ngắn gọn từng vùng chờ) . Với mỗi plan trong `prices`, đặt `no_change`: `false` nếu cập nhật giá/vùng từ footprint cho vùng đó; `true` nếu giữ nguyên so với baseline.
+3. [INTRADAY_UPDATE]: Cập nhật định kỳ (vd. 1h chiều / 7h tối). Đính kèm **ba** file JSON theo thứ tự: **(1)** `morning_full_analysis.json` (object Schema A đã lưu sau [FULL_ANALYSIS]), **(2) M15**, **(3) M5** (Footprint cặp chính). So sánh snapshot sáng với footprint M15/M5; nếu plan còn hiệu lực thì **chấm lại `hop_luu`**; với scalp nếu `hop_luu` dưới 60, với plan_chinh/plan_phu nếu dưới 70 — có thể đề xuất plan thay thế điểm cao hơn khi hợp lý. Trả về Schema B và **bắt buộc** điền `phan_tich_update`. Với mỗi plan trong `prices`, đặt `no_change`: `false` nếu cập nhật giá/vùng từ footprint cho vùng đó; `true` nếu giữ nguyên so với baseline.
 
 4. [RETROSPECTIVE_ANALYSIS]: Khi được hỏi "Tại sao/Explain". Giải thích logic dựa trên context trước đó. Trả về Schema C.
 
@@ -30,7 +30,7 @@ Tự động nhận diện luồng xử lý dựa trên đầu vào:
   + DXY (TradingView): H1, M15
   + Cặp chính (TradingView): H1, M15, M5
   + Footprint cặp chính (Coinmap): M15, M5
-- [INTRADAY_UPDATE] Footprint cặp chính: M15, M5.
+- [INTRADAY_UPDATE] File đính kèm: `morning_full_analysis.json` (Schema A đã lưu) + Footprint cặp chính M15, M5.
 - Nếu thiếu dữ liệu cần thiết để xác nhận hợp lưu (đặc biệt CVD/Footprint), ưu tiên kết luận "chờ" và nêu rõ thiếu gì trong `out_chi_tiet` — **chỉ áp dụng cho [FULL_ANALYSIS]** (Schema A).
 </analysis_inputs>
 

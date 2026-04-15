@@ -39,6 +39,20 @@ def default_morning_baseline_prices_path() -> Path:
     return symbol_data_dir() / "morning_baseline_prices.json"
 
 
+MORNING_FULL_ANALYSIS_FILENAME = "morning_full_analysis.json"
+
+
+def default_morning_full_analysis_path() -> Path:
+    """Parsed Schema A object from the last successful ``coinmap-automation all`` (JSON on disk)."""
+    return symbol_data_dir() / MORNING_FULL_ANALYSIS_FILENAME
+
+
+def write_morning_full_analysis(obj: dict[str, Any], path: Optional[Path] = None) -> None:
+    """Persist the exact JSON object returned by the model (no wrapper schema)."""
+    p = path or default_morning_full_analysis_path()
+    _atomic_write_json(p, obj)
+
+
 def default_last_alert_prices_path() -> Path:
     return symbol_data_dir() / "last_alert_prices.json"
 

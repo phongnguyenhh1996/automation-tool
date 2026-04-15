@@ -9,7 +9,7 @@ echo CWD    : %cd%
 echo Args   : %*
 echo ============================================================
 
-REM Intraday update: Coinmap XAUUSD M5 + OpenAI follow-up + TradingView (if zones changed)
+REM Intraday update: morning_full_analysis.json + M15/M5 Coinmap JSON, new OpenAI thread, then TV sync if zones changed
 cd /d "%~dp0"
 
 if not exist "logs" mkdir "logs"

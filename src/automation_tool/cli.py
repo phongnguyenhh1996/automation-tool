@@ -26,7 +26,7 @@ from automation_tool.config import (
     resolved_openai_model,
     symbol_data_dir,
 )
-from automation_tool.openai_analysis_json import parse_analysis_from_openai_text
+from automation_tool.openai_analysis_json import extract_json_object, parse_analysis_from_openai_text
 from automation_tool.openai_errors import re_raise_unless_openai
 from automation_tool.openai_prompt_flow import (
     PromptTwoStepResult,
@@ -49,12 +49,14 @@ from automation_tool.state_files import (
     default_last_alert_prices_path,
     default_last_response_id_path,
     default_morning_baseline_prices_path,
+    default_morning_full_analysis_path,
     merge_trade_lines_from_openai_analysis_text,
     read_last_alert_prices,
     read_last_response_id,
     read_morning_baseline_prices,
     write_last_alert_prices,
     write_last_response_id,
+    write_morning_full_analysis,
 )
 from automation_tool.zone_prices import (
     is_no_change_action_line,
@@ -1801,7 +1803,18 @@ def cmd_all(args: argparse.Namespace) -> None:
         )
 
     if out.after_charts:
-        from automation_tool.openai_analysis_json import parse_analysis_from_openai_text
+        morning_obj = extract_json_object(out.after_charts)
+        if morning_obj is not None:
+            write_morning_full_analysis(morning_obj)
+            _log.info(
+                "all: đã ghi %s",
+                default_morning_full_analysis_path().name,
+            )
+        else:
+            _log.warning(
+                "all: không extract được JSON object từ after_charts — không ghi %s",
+                default_morning_full_analysis_path().name,
+            )
 
         payload = parse_analysis_from_openai_text(out.after_charts)
         if payload is not None and payload.prices:
@@ -1980,11 +1993,16 @@ def cmd_update(args: argparse.Namespace) -> None:
             )
         baseline = MorningBaselinePrices(prices=triple)
 
-    prev = read_last_response_id()
-    if not prev:
+    morning_path = default_morning_full_analysis_path()
+    if not morning_path.is_file():
         raise SystemExit(
-            f"Missing {default_last_response_id_path()} — run `coinmap-automation all` successfully first."
+            f"Missing {morning_path} — run `coinmap-automation all` successfully first "
+            "(FULL_ANALYSIS JSON snapshot)."
         )
+    try:
+        json.loads(morning_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"Invalid JSON in {morning_path}: {e}") from e
 
     paths = capture_charts(
         coinmap_yaml=cfg_cap,
@@ -2023,8 +2041,7 @@ def cmd_update(args: argparse.Namespace) -> None:
         )
 
     require_openai(s)
-    p1, p2, p3 = baseline.prices
-    user_msg = build_intraday_update_user_text(read_zones_state())
+    user_msg = build_intraday_update_user_text()
 
     try:
         out_text, new_id = run_single_followup_responses(
@@ -2032,8 +2049,9 @@ def cmd_update(args: argparse.Namespace) -> None:
             prompt_id=s.openai_prompt_id,
             prompt_version=s.openai_prompt_version,
             user_text=user_msg,
+            morning_snapshot_path=morning_path,
             coinmap_json_paths=[m15, m5],
-            previous_response_id=prev,
+            previous_response_id=None,
             vector_store_ids=s.openai_vector_store_ids,
             store=s.openai_responses_store,
             include=s.openai_responses_include,
