@@ -48,7 +48,6 @@ from automation_tool.state_files import (
     read_last_alert_state,
     update_plan_mt5_entry,
     update_single_plan_status,
-    write_last_response_id,
 )
 from automation_tool.telegram_bot import (
     send_mt5_execution_log_to_ngan_gon_chat,
@@ -292,11 +291,14 @@ def run_intraday_touch_flow(
     settle_ms: int,
     poll_seconds: float,
     poll_supersede_touch: PollSupersedeTouch,
-) -> str:
+) -> tuple[str, str]:
     """
     Inner loop once a touch is detected.
 
-    Returns: "entered" | "rejected" | "cutoff"
+    Returns (outcome, last_response_id) for in-process OpenAI threading (disk last_response_id
+    is only written by ``coinmap-automation all`` / ``update``).
+
+    outcome: "entered" | "rejected" | "cutoff"
     """
     tz = params.timezone_name
     prev_id = initial_response_id
@@ -339,7 +341,7 @@ def run_intraday_touch_flow(
                             f"Last={p_chk} chạm SL trước Coinmap (lặp) — loại {touched_label}.",
                         )
                         update_single_plan_status(touched_label, LOAI, path=last_alert_path)
-                        return "rejected"
+                        return ("rejected", prev_id)
 
         _ts_log(tz, "tv-touch", f"Vòng trong #{inner_i}: chụp Coinmap M5 + hỏi OpenAI…")
 
@@ -391,7 +393,7 @@ def run_intraday_touch_flow(
             if a.reason == "sl_hit":
                 _ts_log(tz, "tv-touch", "Chạm SL trong lúc capture Coinmap — loại ngay.")
                 update_single_plan_status(touched_label, LOAI, path=last_alert_path)
-                return "rejected"
+                return ("rejected", prev_id)
             if a.reason == "supersede" and a.supersede is not None:
                 _ts_log(
                     tz,
@@ -403,7 +405,7 @@ def run_intraday_touch_flow(
                 first = True
                 loai_streak = 0
                 continue
-            return "cutoff"
+            return ("cutoff", prev_id)
         json_path = coinmap_xauusd_5m_json_path(params.charts_dir)
         if json_path is None or not json_path.is_file():
             raise SystemExit(
@@ -449,7 +451,7 @@ def run_intraday_touch_flow(
             if a.reason == "sl_hit":
                 _ts_log(tz, "tv-touch", "Chạm SL trong lúc chờ OpenAI — loại ngay (ignore output).")
                 update_single_plan_status(touched_label, LOAI, path=last_alert_path)
-                return "rejected"
+                return ("rejected", prev_id)
             if a.reason == "supersede" and a.supersede is not None:
                 _ts_log(
                     tz,
@@ -461,12 +463,11 @@ def run_intraday_touch_flow(
                 first = True
                 loai_streak = 0
                 continue
-            return "cutoff"
+            return ("cutoff", prev_id)
         except Exception as e:
             re_raise_unless_openai(e)
             raise
 
-        write_last_response_id(new_id)
         prev_id = new_id
 
         # Apply first response JSON side effects (may auto-MT5, but we also handle intraday below)
@@ -508,8 +509,8 @@ def run_intraday_touch_flow(
                 )
                 if ok_sleep != "ok":
                     if ok_sleep == "rejected":
-                        return "rejected"
-                    return "cutoff"
+                        return ("rejected", prev_id)
+                    return ("cutoff", prev_id)
                 if sup is not None:
                     update_single_plan_status(touched_label, LOAI, path=last_alert_path)
                     touched_price, touch_line, touched_label = sup[0], sup[1], sup[2]
@@ -534,7 +535,7 @@ def run_intraday_touch_flow(
                         default_parse_mode=settings.telegram_parse_mode,
                         summary_chat_id=settings.telegram_output_ngan_gon_chat_id,
                     )
-                return "entered"
+                return ("entered", prev_id)
 
             update_single_plan_status(
                 touched_label,
@@ -579,7 +580,7 @@ def run_intraday_touch_flow(
                     default_parse_mode=settings.telegram_parse_mode,
                     summary_chat_id=settings.telegram_output_ngan_gon_chat_id,
                 )
-            return "entered"
+            return ("entered", prev_id)
 
         if act == "loại":
             loai_streak += 1
@@ -596,8 +597,8 @@ def run_intraday_touch_flow(
                 )
                 if ok_sleep != "ok":
                     if ok_sleep == "rejected":
-                        return "rejected"
-                    return "cutoff"
+                        return ("rejected", prev_id)
+                    return ("cutoff", prev_id)
                 if sup is not None:
                     update_single_plan_status(touched_label, LOAI, path=last_alert_path)
                     touched_price, touch_line, touched_label = sup[0], sup[1], sup[2]
@@ -607,7 +608,7 @@ def run_intraday_touch_flow(
                 first = False
                 continue
             update_single_plan_status(touched_label, LOAI, path=last_alert_path)
-            return "rejected"
+            return ("rejected", prev_id)
 
         # default: "chờ" or parse failure
         loai_streak = 0
@@ -623,8 +624,8 @@ def run_intraday_touch_flow(
         )
         if ok_sleep != "ok":
             if ok_sleep == "rejected":
-                return "rejected"
-            return "cutoff"
+                return ("rejected", prev_id)
+            return ("cutoff", prev_id)
         if sup is not None:
             update_single_plan_status(touched_label, LOAI, path=last_alert_path)
             touched_price, touch_line, touched_label = sup[0], sup[1], sup[2]
@@ -632,7 +633,7 @@ def run_intraday_touch_flow(
             continue
         first = False
 
-    return "cutoff"
+    return ("cutoff", prev_id)
 
 
 _FLOAT_RE = re.compile(r"-?\d+(?:\.\d+)?")

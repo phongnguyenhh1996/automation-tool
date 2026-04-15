@@ -41,7 +41,7 @@ from automation_tool.mt5_manage import mt5_cancel_pending_or_close_position, mt5
 from automation_tool.openai_errors import re_raise_unless_openai
 from automation_tool.openai_prompt_flow import TP1_POST_TOUCH_USER_TEMPLATE, run_single_followup_responses
 from automation_tool.playwright_browser import close_browser_and_context, launch_chrome_context
-from automation_tool.state_files import read_last_response_id, write_last_response_id
+from automation_tool.state_files import read_last_response_id
 from automation_tool.telegram_bot import (
     send_message,
     send_mt5_execution_log_to_ngan_gon_chat,
@@ -350,9 +350,6 @@ def _tp1_followup_job(
             include=settings.openai_responses_include,
             model=resolved_openai_model(settings, params.openai_model),
         )
-        if new_id:
-            write_last_response_id(new_id)
-
         if not params.no_telegram:
             send_openai_output_to_telegram(
                 bot_token=settings.telegram_bot_token,
@@ -630,7 +627,6 @@ def _zone_touch_job(
             model=resolved_model_for_intraday_alert(settings, params.openai_model_cli),
         )
         if new_id:
-            write_last_response_id(new_id)
             _send_log(settings, f"[zone-touch] openai_response_id={new_id}")
 
         act = parse_journal_intraday_action_from_openai_text(out_text)

@@ -29,11 +29,9 @@ from automation_tool.state_files import (
     VAO_LENH,
     clear_plan_mt5_fields,
     read_last_alert_state,
-    read_last_response_id,
     update_plan_mt5_entry,
     update_plan_tp1_followup_done,
     update_single_plan_status,
-    write_last_response_id,
 )
 from automation_tool.telegram_bot import (
     send_mt5_execution_log_to_ngan_gon_chat,
@@ -224,8 +222,6 @@ def _run_tp1_openai_and_act(
         include=settings.openai_responses_include,
         model=resolved_openai_model(settings, getattr(params, "openai_model", None)),
     )
-    rsp_path = last_alert_path.parent / "last_response_id.txt"
-    write_last_response_id(new_id, path=rsp_path)
     update_plan_tp1_followup_done(label, True, path=last_alert_path)
     _log_tp1.info(
         "tp1-followup OpenAI xong | response_id=%s | độ dài output=%d | gửi Telegram phân tích=%s",
@@ -419,8 +415,7 @@ def maybe_post_entry_tp1_tick(
         if st is None:
             return None
 
-        rsp_path = last_alert_path.parent / "last_response_id.txt"
-        rid = read_last_response_id(rsp_path) or initial_response_id
+        rid = initial_response_id
         rid_show = rid if len(rid) <= 32 else rid[:28] + "…"
         _log_tp1.info("tp1 tick: thread OpenAI (cho_tp1) | last_response_id=%s", rid_show)
 

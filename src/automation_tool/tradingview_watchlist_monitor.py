@@ -40,7 +40,6 @@ from automation_tool.state_files import (
     VUNG_CHO,
     default_last_alert_prices_path,
     read_last_alert_state,
-    read_last_response_id,
     watchlist_journal_active_work,
     write_journal_monitor_first_run,
 )
@@ -326,7 +325,7 @@ def run_tv_watchlist_monitor(
                         touched_price=tprice,
                     )
 
-                outcome = run_intraday_touch_flow(
+                outcome, flow_rid = run_intraday_touch_flow(
                     settings=settings,
                     params=tfp,
                     touched_price=p_last,
@@ -342,7 +341,7 @@ def run_tv_watchlist_monitor(
                     poll_supersede_touch=_poll_sup,
                 )
                 _tvw_log(tz, f"Vòng trong kết thúc: {outcome}")
-                initial_response_id = read_last_response_id() or initial_response_id
+                initial_response_id = flow_rid
 
                 # If superseded happened, the touch flow already marked LOAI for previous label.
                 # Continue outer loop.

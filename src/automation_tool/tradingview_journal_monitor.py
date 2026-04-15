@@ -546,7 +546,6 @@ def _run_intraday_touch_loop(
         _journal_log(tz, f"--- Toàn bộ output OpenAI ({len(out_text)} ký tự) ---")
         print(out_text, flush=True)
         _journal_log(tz, "--- Hết output OpenAI ---")
-        write_last_response_id(new_id)
         prev_id = new_id
 
         hop_done = apply_first_response_vao_lenh(
@@ -983,7 +982,7 @@ def run_tv_journal_monitor(
                         except Exception:
                             return None
 
-                    inner_outcome = run_intraday_touch_flow(
+                    inner_outcome, inner_rid = run_intraday_touch_flow(
                         settings=settings,
                         params=tfp,
                         touched_price=touched,
@@ -998,7 +997,7 @@ def run_tv_journal_monitor(
                         poll_seconds=params.poll_seconds,
                         poll_supersede_touch=_poll_sup,
                     )
-                    current_response_id = read_last_response_id() or current_response_id
+                    current_response_id = inner_rid
 
                     st2 = read_last_alert_state(lap)
                     if st2 is not None and not watchlist_journal_active_work(st2):
