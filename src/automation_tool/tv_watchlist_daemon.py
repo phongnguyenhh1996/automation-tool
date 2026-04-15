@@ -47,6 +47,7 @@ from automation_tool.telegram_bot import (
     send_mt5_execution_log_to_ngan_gon_chat,
     send_openai_output_to_telegram,
     send_phan_tich_alert_to_main_chat_if_any,
+    send_user_friendly_notice,
 )
 from automation_tool.openai_analysis_json import (
     ARM_THRESHOLD_TP1_DEFAULT,
@@ -178,6 +179,16 @@ def _send_log(settings: Settings, text: str) -> None:
     except Exception:
         # Never let logging break the daemon.
         return
+
+
+def _send_user_notice(settings: Settings, title: str, body: str = "") -> None:
+    """Tin ngắn tới TELEGRAM_PYTHON_BOT_CHAT_ID (non-tech)."""
+    send_user_friendly_notice(
+        bot_token=settings.telegram_bot_token,
+        chat_id=settings.telegram_python_bot_chat_id,
+        title=title,
+        body=body,
+    )
 
 
 def _touch_prompt(
@@ -316,6 +327,12 @@ def _tp1_followup_job(
         from automation_tool.images import coinmap_xauusd_5m_json_path, read_main_chart_symbol
         from automation_tool.tp1_followup import parse_tp1_followup_decision
 
+        _send_user_notice(
+            settings,
+            "Giá đã tới vùng theo dõi sau TP1.",
+            "Đang lấy biểu đồ M5 và hỏi AI bước tiếp theo.",
+        )
+
         capture_charts(
             coinmap_yaml=params.capture_coinmap_yaml,
             charts_dir=params.charts_dir,
@@ -377,6 +394,11 @@ def _tp1_followup_job(
             z1.tp1_followup_done = False
             z1.status = "cho_tp1"
             write_zones_state(st1, path=zs_path)
+            _send_user_notice(
+                settings,
+                "Sau TP1: không đọc được quyết định từ AI.",
+                "Hệ thống sẽ thử lại — xem log kỹ thuật nếu cần chi tiết.",
+            )
             return
 
         tk = int(z1.mt5_ticket or 0)
@@ -389,6 +411,11 @@ def _tp1_followup_job(
                 _send_log(settings, f"[tp1] mt5_cancel_close: {r.message}".strip())
             z1.status = "loai"
             write_zones_state(st1, path=zs_path)
+            _send_user_notice(
+                settings,
+                "Sau TP1: AI chọn «loại» — đóng / bỏ theo dõi vùng.",
+                "Đã gửi lệnh đóng trên MT5 nếu bật thực thi.",
+            )
             return
 
         # chinh_trade_line
@@ -432,6 +459,16 @@ def _tp1_followup_job(
             tid = int(ex.order) if ex.order else 0
             if ex.ok and tid > 0:
                 z1.mt5_ticket = tid
+            _tp1_lines = [ex.message]
+            if ex.order:
+                _tp1_lines.append(f"Mã lệnh: {ex.order}")
+            if dry:
+                _tp1_lines.append("(Chế độ thử.)")
+            _send_user_notice(
+                settings,
+                "Sau TP1: đã đặt lệnh mới theo trade line cập nhật.",
+                "\n".join(_tp1_lines),
+            )
         z1.trade_line = dec.trade_line_moi.strip()
         z1.status = "vao_lenh"
         z1.tp1_followup_done = False
@@ -439,6 +476,7 @@ def _tp1_followup_job(
         return
     except Exception as e:
         _send_log(settings, f"[tp1] ERROR | zone_id={zone_id} | {e!s}")
+        _send_user_notice(settings, "Lỗi khi xử lý bước sau TP1.", str(e))
         re_raise_unless_openai(e)
 
 
@@ -485,6 +523,11 @@ def _auto_entry_job(
             return
         if not params.mt5_execute:
             _send_log(settings, f"[auto-entry] mt5_execute=off | zone_id={zone_id} skip")
+            _send_user_notice(
+                settings,
+                "Tự động vào lệnh đang tắt.",
+                "Vùng được giữ ở trạng thái chờ — bật thực thi MT5 nếu cần.",
+            )
             z0.status = "cham"
             z0.auto_entry_retry_after = ""
             write_zones_state(st0, path=zs_path)
@@ -501,6 +544,11 @@ def _auto_entry_job(
                         break
                 write_zones_state(st1, path=zs_path)
             _send_log(settings, f"[auto-entry] parse_trade_line_failed | zone_id={zone_id} err={err}")
+            _send_user_notice(
+                settings,
+                "Tự động vào lệnh: không hiểu được dòng lệnh.",
+                "Kiểm tra trade_line trong trạng thái vùng.",
+            )
             return
 
         ex = execute_trade(
@@ -517,6 +565,16 @@ def _auto_entry_job(
                 zone_label=z0.label,
             )
         _send_log(settings, f"[auto-entry] mt5_execute_trade: {ex.message}".strip())
+        _lines = [ex.message]
+        if ex.order:
+            _lines.append(f"Mã lệnh: {ex.order}")
+        if params.mt5_dry_run:
+            _lines.append("(Chế độ thử.)")
+        _send_user_notice(
+            settings,
+            "Tự động vào lệnh — kết quả MT5",
+            "\n".join(_lines),
+        )
 
         tid = int(ex.order) if ex.order else 0
         st2 = read_zones_state(zs_path)
@@ -542,6 +600,7 @@ def _auto_entry_job(
         return
     except Exception as e:
         _send_log(settings, f"[auto-entry] ERROR | zone_id={zone_id} | {e!s}")
+        _send_user_notice(settings, "Lỗi khi tự động vào lệnh.", str(e))
         re_raise_unless_openai(e)
 
 
@@ -572,6 +631,12 @@ def _zone_touch_job(
             settings,
             f"[zone-touch] start | zone_id={zone_id} label={zone.label} "
             f"vung_cho={zone.vung_cho} ref={ref} last={last_price}",
+        )
+        side_vn = "mua" if (zone.side or "").strip().upper() == "BUY" else "bán"
+        _send_user_notice(
+            settings,
+            f"Giá đã chạm vùng chờ ({zone.label}, {side_vn}).",
+            "Đang lấy dữ liệu biểu đồ M5 và phân tích lại với AI.",
         )
 
         loai_confirm_rounds = 4
@@ -676,6 +741,11 @@ def _zone_touch_job(
                     f"[zone-touch] act=loai confirm {z1.loai_streak}/{loai_confirm_rounds} "
                     f"| zone_id={zone_id} -> status=loai",
                 )
+                _send_user_notice(
+                    settings,
+                    "Vùng được đánh dấu «loại» sau nhiều lần xác nhận.",
+                    "Hệ thống không còn theo dõi vùng này theo kịch bản chạm giá.",
+                )
                 return
             # keep touched state; daemon will re-dispatch after retry_at
             z1.status = "cham"
@@ -685,6 +755,11 @@ def _zone_touch_job(
                 settings,
                 f"[zone-touch] act=loai confirm {z1.loai_streak}/{loai_confirm_rounds} "
                 f"| zone_id={zone_id} -> status=cham retry_at={z1.retry_at}",
+            )
+            _send_user_notice(
+                settings,
+                "AI gợi ý «loại» — chưa đủ lần xác nhận.",
+                "Vùng vẫn được theo dõi; sẽ thử lại sau.",
             )
             return
 
@@ -700,6 +775,11 @@ def _zone_touch_job(
             _send_log(
                 settings,
                 f"[zone-touch] act={act} | zone_id={zone_id} -> status=cham retry_at={z1.retry_at}",
+            )
+            _send_user_notice(
+                settings,
+                "Sau khi chạm vùng: chưa vào lệnh lần này.",
+                f"AI trả về hành động «{act}». Hệ thống sẽ thử lại sau.",
             )
             return
 
@@ -800,6 +880,11 @@ def _zone_touch_job(
         except Exception:
             pass
         _send_log(settings, f"[zone-touch] ERROR | zone_id={zone_id} | {e!s}")
+        _send_user_notice(
+            settings,
+            "Lỗi khi xử lý chạm vùng chờ.",
+            "Xem kênh log kỹ thuật để biết chi tiết.",
+        )
         re_raise_unless_openai(e)
 
 

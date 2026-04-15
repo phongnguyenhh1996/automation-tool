@@ -30,6 +30,7 @@ from automation_tool.state_files import (
 from automation_tool.telegram_bot import (
     send_first_response_log_to_log_chat,
     send_mt5_execution_log_to_ngan_gon_chat,
+    send_user_friendly_notice,
 )
 from automation_tool.zone_prices import parse_three_zone_prices
 
@@ -77,6 +78,35 @@ def _tg(
     )
 
 
+def _nf(
+    *,
+    telegram_bot_token: Optional[str],
+    telegram_python_bot_chat_id: Optional[str],
+    title: str,
+    body: str = "",
+) -> None:
+    if not telegram_bot_token:
+        return
+    send_user_friendly_notice(
+        bot_token=telegram_bot_token,
+        chat_id=telegram_python_bot_chat_id,
+        title=title,
+        body=body,
+    )
+
+
+_ZONE_LABEL_VN = {
+    "plan_chinh": "Plan chính",
+    "plan_phu": "Plan phụ",
+    "scalp": "Scalp",
+}
+
+
+def _zone_display(label: str) -> str:
+    k = (label or "").strip().lower()
+    return _ZONE_LABEL_VN.get(k, label)
+
+
 def _minimal_json_for_trade_parse(trade_line: str) -> str:
     """JSON tối thiểu để ``parse_openai_output_md`` lấy đúng một dòng lệnh."""
     return json.dumps(
@@ -95,6 +125,7 @@ def apply_first_response_vao_lenh(
     telegram_bot_token: Optional[str] = None,
     telegram_chat_id: Optional[str] = None,
     telegram_log_chat_id: Optional[str] = None,
+    telegram_python_bot_chat_id: Optional[str] = None,
     telegram_output_ngan_gon_chat_id: Optional[str] = None,
     telegram_source_label: str = "phân tích chart (phản hồi đầu)",
     auto_mt5_zone_label: Optional[str] = None,
@@ -108,7 +139,8 @@ def apply_first_response_vao_lenh(
     Nếu ``auto_mt5_zone_label`` được set (vd. ``plan_chinh``), chỉ xét đúng vùng đó (Nhật ký TV).
 
     Telegram: log phản hồi đầu (hop_luu, vùng, lỗi…) → ``telegram_log_chat_id``
-    (``TELEGRAM_LOG_CHAT_ID``).     Kết quả ``execute_trade`` → ``telegram_chat_id`` (``TELEGRAM_CHAT_ID``).
+    (``TELEGRAM_LOG_CHAT_ID``). Tin ngắn non-tech → ``telegram_python_bot_chat_id``
+    (``TELEGRAM_PYTHON_BOT_CHAT_ID``). Kết quả ``execute_trade`` → ``telegram_chat_id`` (``TELEGRAM_CHAT_ID``).
 
     Returns:
         ``True`` nếu đã hoàn tất nhánh auto-MT5 (đã ghi ``vao_lenh`` cho vùng chọn; MT5 chạy thành công
@@ -127,9 +159,21 @@ def apply_first_response_vao_lenh(
     zt, zerr, nc = parse_three_zone_prices(text)
     if nc is True:
         _log.info("first_response: no_change — không ghi last_alert.")
+        _nf(
+            telegram_bot_token=telegram_bot_token,
+            telegram_python_bot_chat_id=telegram_python_bot_chat_id,
+            title="Không có cập nhật giá mới từ phân tích lần này.",
+            body="Hệ thống giữ nguyên bản ghi giá trước đó.",
+        )
         return False
     if zt is None:
         _log.warning("first_response: không parse được triple giá: %s", zerr)
+        _nf(
+            telegram_bot_token=telegram_bot_token,
+            telegram_python_bot_chat_id=telegram_python_bot_chat_id,
+            title="Không đọc được 3 mức giá từ phân tích.",
+            body="Vui lòng xem log kỹ thuật hoặc chạy lại phân tích.",
+        )
         return False
 
     p1, p2, p3 = zt
@@ -145,11 +189,23 @@ def apply_first_response_vao_lenh(
         write_last_alert_prices(zt, path=last_alert_path)
     except SystemExit as e:
         _log.warning("first_response: không ghi last_alert — %s", e)
+        _nf(
+            telegram_bot_token=telegram_bot_token,
+            telegram_python_bot_chat_id=telegram_python_bot_chat_id,
+            title="Không lưu được bản ghi giá.",
+            body=str(e),
+        )
         return False
 
     _log.info(
         "first_response: đã merge last_alert_prices (3 giá) → %s",
         last_alert_path,
+    )
+    _nf(
+        telegram_bot_token=telegram_bot_token,
+        telegram_python_bot_chat_id=telegram_python_bot_chat_id,
+        title="Đã lưu xong 3 mức giá (plan chính, phụ, scalp).",
+        body="",
     )
 
     payload = parse_analysis_from_openai_text(text)
@@ -164,6 +220,12 @@ def apply_first_response_vao_lenh(
             telegram_log_chat_id=telegram_log_chat_id,
             telegram_source_label=telegram_source_label,
             body=msg,
+        )
+        _nf(
+            telegram_bot_token=telegram_bot_token,
+            telegram_python_bot_chat_id=telegram_python_bot_chat_id,
+            title="Đã lưu giá nhưng chưa đọc được thông tin vùng.",
+            body="Không tự đặt lệnh. Cần phản hồi đủ JSON vùng (hop_luu, trade_line).",
         )
         return False
 
@@ -194,6 +256,12 @@ def apply_first_response_vao_lenh(
             telegram_source_label=telegram_source_label,
             body=msg,
         )
+        _nf(
+            telegram_bot_token=telegram_bot_token,
+            telegram_python_bot_chat_id=telegram_python_bot_chat_id,
+            title="Chưa đủ độ tin cậy để tự đặt lệnh.",
+            body="Chờ cơ hội tiếp theo — xem log kỹ thuật nếu cần chi tiết các vùng.",
+        )
         return False
 
     label, hop, zone_trade_line = picked
@@ -211,6 +279,12 @@ def apply_first_response_vao_lenh(
             telegram_log_chat_id=telegram_log_chat_id,
             telegram_source_label=telegram_source_label,
             body=msg,
+        )
+        _nf(
+            telegram_bot_token=telegram_bot_token,
+            telegram_python_bot_chat_id=telegram_python_bot_chat_id,
+            title="Đã chọn vùng nhưng không hiểu được dòng lệnh.",
+            body="Không tự đặt lệnh. Kiểm tra trade_line trong phản hồi AI.",
         )
         return False
 
@@ -237,6 +311,12 @@ def apply_first_response_vao_lenh(
             telegram_source_label=telegram_source_label,
             body=msg,
         )
+        _nf(
+            telegram_bot_token=telegram_bot_token,
+            telegram_python_bot_chat_id=telegram_python_bot_chat_id,
+            title=f"Vùng «{_zone_display(label)}» đã có lệnh trước đó.",
+            body="Hệ thống không gửi trùng lệnh tự động.",
+        )
         return False
 
     try:
@@ -253,6 +333,12 @@ def apply_first_response_vao_lenh(
             telegram_log_chat_id=telegram_log_chat_id,
             telegram_source_label=telegram_source_label,
             body=f"Lỗi ghi status: {e}",
+        )
+        _nf(
+            telegram_bot_token=telegram_bot_token,
+            telegram_python_bot_chat_id=telegram_python_bot_chat_id,
+            title="Lỗi khi cập nhật trạng thái vùng.",
+            body=str(e),
         )
         return False
 
@@ -279,6 +365,21 @@ def apply_first_response_vao_lenh(
         telegram_source_label=telegram_source_label,
         body=summary,
     )
+    zd = _zone_display(label)
+    if mt5_execute:
+        _nf(
+            telegram_bot_token=telegram_bot_token,
+            telegram_python_bot_chat_id=telegram_python_bot_chat_id,
+            title=f"Đã chọn «{zd}» (độ tin cậy đủ). Chuẩn bị gửi lệnh lên MT5.",
+            body="Đang xử lý…" if not mt5_dry_run else "Chế độ thử (dry-run) — không gửi lệnh thật.",
+        )
+    else:
+        _nf(
+            telegram_bot_token=telegram_bot_token,
+            telegram_python_bot_chat_id=telegram_python_bot_chat_id,
+            title=f"Đã ghi trạng thái «{zd}» — vào lệnh (chưa gửi MT5).",
+            body="Thực thi MT5 đang tắt (--no-mt5-execute).",
+        )
 
     if not mt5_execute:
         _log.info("first_response: bỏ qua MT5 (--no-mt5-execute).")
@@ -304,6 +405,17 @@ def apply_first_response_vao_lenh(
                 text=format_mt5_execution_for_telegram(ex),
                 zone_label=label,
             )
+        _mt5_lines = [ex.message]
+        if ex.order:
+            _mt5_lines.append(f"Mã lệnh: {ex.order}")
+        if mt5_dry_run:
+            _mt5_lines.append("(Chế độ thử — kiểm tra trước khi gửi lệnh thật.)")
+        _nf(
+            telegram_bot_token=telegram_bot_token,
+            telegram_python_bot_chat_id=telegram_python_bot_chat_id,
+            title=f"Kết quả lệnh MT5 — «{_zone_display(label)}»",
+            body="\n".join(_mt5_lines),
+        )
         tid = int(ex.order) if ex.order else 0
         if (not tid or tid <= 0) and not mt5_dry_run and (ex.resolved_symbol or "").strip():
             alt = mt5_latest_position_ticket(str(ex.resolved_symbol).strip())
@@ -328,6 +440,12 @@ def apply_first_response_vao_lenh(
             telegram_source_label=telegram_source_label,
             body=f"MT5 SystemExit: {e}",
         )
+        _nf(
+            telegram_bot_token=telegram_bot_token,
+            telegram_python_bot_chat_id=telegram_python_bot_chat_id,
+            title="Không gửi được lệnh lên MT5.",
+            body=str(e),
+        )
         return False
     except Exception as e:
         _log.exception("first_response: lỗi execute_trade: %s", e)
@@ -336,5 +454,11 @@ def apply_first_response_vao_lenh(
             telegram_log_chat_id=telegram_log_chat_id,
             telegram_source_label=telegram_source_label,
             body=f"Lỗi execute_trade: {e!s}",
+        )
+        _nf(
+            telegram_bot_token=telegram_bot_token,
+            telegram_python_bot_chat_id=telegram_python_bot_chat_id,
+            title="Lỗi khi gửi lệnh MT5.",
+            body=str(e),
         )
         return False

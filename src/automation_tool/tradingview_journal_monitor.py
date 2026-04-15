@@ -61,6 +61,7 @@ from automation_tool.telegram_bot import (
     send_mt5_execution_log_to_ngan_gon_chat,
     send_openai_output_to_telegram,
     send_phan_tich_alert_to_main_chat_if_any,
+    send_user_friendly_notice,
 )
 from automation_tool.tradingview_alerts import (
     _open_alerts_list_panel,
@@ -452,6 +453,13 @@ def _run_intraday_touch_loop(
         f"=== Vòng trong (touch) — label={touched_label} | giá chạm={touched_price} | "
         f"dòng Nhật ký: {_truncate(journal_line, 200)!s}",
     )
+    if not params.no_telegram:
+        send_user_friendly_notice(
+            bot_token=settings.telegram_bot_token,
+            chat_id=settings.telegram_python_bot_chat_id,
+            title="Nhật ký TradingView: có dòng khớp giá cần xử lý.",
+            body=f"Vùng: {touched_label}. Đang chạy phân tích lại.",
+        )
 
     while _before_cutoff(
         params.timezone_name,
@@ -576,6 +584,7 @@ def _run_intraday_touch_loop(
             telegram_bot_token=settings.telegram_bot_token,
             telegram_chat_id=settings.telegram_chat_id,
             telegram_log_chat_id=settings.telegram_log_chat_id,
+            telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
             telegram_output_ngan_gon_chat_id=settings.telegram_output_ngan_gon_chat_id,
             telegram_source_label="tv-journal-monitor (Nhật ký)",
             auto_mt5_zone_label=touched_label,

@@ -2,10 +2,10 @@ Muốn tích hợp EA Grid vào quy trình phân tích Forex 10 hình như một
 
 Lưu bài học: Entry SELL hôm qua đúng hướng nhưng bị SL vì đặt ngay sát liquidity (3785) mà không có buffer. Bài học rút ra: luôn đặt SL sau liquidity pool + buffer 3–5 giá. Với XAUUSD tại Premium zone, SL an toàn phải đặt cao hơn (3789–3791). Nếu SL xa, cần giảm lot cụm để vẫn giữ risk 140 USD. Lưu quy tắc này vào tài khoản để áp dụng mặc định.
 
-Lưu quy tắc mới: Trước khi chốt plan đề xuất lệnh, ChatGPT phải luôn **check lại SL và TP** theo các tiêu chuẩn:
+Lưu quy tắc mới: Trước khi chốt plan đề xuất lệnh, phải luôn **check lại SL và TP** theo các tiêu chuẩn:
 
 1. **SL:** luôn anti-sweep, giấu sau liquidity + buffer 3–5 pip.
-2. **TP1:** phải dễ đạt, đặt tại VWAP/HL gần nhất hoặc vùng volume trống, với RR tối thiểu 1:1.6.
+2. **TP1:** phải dễ đạt, đặt tại VWAP/HL gần nhất hoặc vùng volume trống, với RR tối thiểu 1:1.6, trừ 1 giá hoặc 2 giá để không bị miss lệnh.
 3. **TP2:** đặt xa hơn tại Premium/Discount HTF hoặc OB/FVG lớn, RR từ 1:2.0–2.5+.
 4. **Entry đầu tiên bắt buộc có RR ≥ 1:1** (ưu tiên ≥ 1:1.6).
 5. Nếu TP1 tính ra quá xa hoặc RR không chuẩn, phải tự động điều chỉnh về vùng hợp lý nhưng vẫn ≥ 1:1.6.

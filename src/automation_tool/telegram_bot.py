@@ -461,6 +461,36 @@ def _send_plain_text_to_chat_id(
         _log.warning("Không gửi Telegram (%s): %s", log_context, e)
 
 
+def send_user_friendly_notice(
+    *,
+    bot_token: str,
+    chat_id: Optional[str],
+    title: str,
+    body: str = "",
+) -> None:
+    """
+    Tin ngắn tiếng Việt tới ``TELEGRAM_PYTHON_BOT_CHAT_ID`` (plain text, đã chunk qua ``send_message``).
+    Để trống ``chat_id`` → không gửi.
+    """
+    t = (title or "").strip()
+    b = (body or "").strip()
+    if not t and not b:
+        return
+    lines: list[str] = ["🔔 Bước quan trọng"]
+    if t:
+        lines.append(t)
+    if b:
+        lines.append("")
+        lines.append(b)
+    full = "\n".join(lines)
+    _send_plain_text_to_chat_id(
+        bot_token=bot_token,
+        chat_id=chat_id,
+        text=full,
+        log_context="TELEGRAM_PYTHON_BOT_CHAT_ID",
+    )
+
+
 def _send_plain_text_to_ngan_gon_chat(
     *,
     bot_token: str,

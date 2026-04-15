@@ -67,6 +67,8 @@ class Settings:
     telegram_analysis_detail_chat_id: Optional[str]
     # Optional: nhận bản sao log bước chạy (INFO) — cùng bot, chat/channel khác (vd. supergroup -100…).
     telegram_log_chat_id: Optional[str]
+    # Optional: tin ngắn tiếng Việt cho người không đọc log kỹ thuật (milestone quan trọng).
+    telegram_python_bot_chat_id: Optional[str]
     # Telegram sendMessage parse_mode: None = plain text. Use Markdown, MarkdownV2, or HTML for formatting.
     telegram_parse_mode: Optional[str]
     coinmap_base_url: str
@@ -163,6 +165,9 @@ def load_settings() -> Settings:
             (os.getenv("TELEGRAM_ANALYSIS_DETAIL_CHAT_ID") or "").strip() or None
         ),
         telegram_log_chat_id=((os.getenv("TELEGRAM_LOG_CHAT_ID") or "").strip() or None),
+        telegram_python_bot_chat_id=(
+            (os.getenv("TELEGRAM_PYTHON_BOT_CHAT_ID") or "").strip() or None
+        ),
         telegram_parse_mode=_parse_telegram_parse_mode(),
         coinmap_base_url=os.getenv("COINMAP_BASE_URL", "https://coinmap.tech"),
     )

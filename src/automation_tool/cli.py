@@ -1468,6 +1468,7 @@ def cmd_analyze(args: argparse.Namespace) -> None:
             telegram_bot_token=s.telegram_bot_token,
             telegram_chat_id=s.telegram_chat_id,
             telegram_log_chat_id=s.telegram_log_chat_id,
+            telegram_python_bot_chat_id=s.telegram_python_bot_chat_id,
             telegram_output_ngan_gon_chat_id=s.telegram_output_ngan_gon_chat_id,
             telegram_source_label="analyze (phản hồi đầu)",
         )
@@ -1549,6 +1550,7 @@ def cmd_analyze_many(args: argparse.Namespace) -> None:
                         telegram_bot_token=s.telegram_bot_token,
                         telegram_chat_id=s.telegram_chat_id,
                         telegram_log_chat_id=s.telegram_log_chat_id,
+                        telegram_python_bot_chat_id=s.telegram_python_bot_chat_id,
                         telegram_output_ngan_gon_chat_id=s.telegram_output_ngan_gon_chat_id,
                         telegram_source_label=f"analyze-many ({sym}) (phản hồi đầu)",
                     )
@@ -1562,6 +1564,7 @@ def cmd_analyze_many(args: argparse.Namespace) -> None:
                 telegram_bot_token=s.telegram_bot_token,
                 telegram_chat_id=s.telegram_chat_id,
                 telegram_log_chat_id=s.telegram_log_chat_id,
+                telegram_python_bot_chat_id=s.telegram_python_bot_chat_id,
                 telegram_output_ngan_gon_chat_id=s.telegram_output_ngan_gon_chat_id,
                 telegram_source_label=f"analyze-many ({sym}) (phản hồi đầu)",
             )

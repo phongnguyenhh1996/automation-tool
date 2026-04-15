@@ -53,6 +53,7 @@ from automation_tool.telegram_bot import (
     send_mt5_execution_log_to_ngan_gon_chat,
     send_openai_output_to_telegram,
     send_phan_tich_alert_to_main_chat_if_any,
+    send_user_friendly_notice,
 )
 from automation_tool.tradingview_last_price import read_watchlist_last_price_wait_stable
 
@@ -312,6 +313,13 @@ def run_intraday_touch_flow(
         "tv-touch",
         f"=== Touch bắt đầu — label={touched_label} | giá={touched_price} | ctx={_truncate(touch_line, 220)}",
     )
+    if not params.no_telegram:
+        send_user_friendly_notice(
+            bot_token=settings.telegram_bot_token,
+            chat_id=settings.telegram_python_bot_chat_id,
+            title=f"Watchlist: giá đã chạm vùng chờ ({touched_label}).",
+            body="Đang chụp biểu đồ M5 và phân tích lại với AI.",
+        )
 
     while before_cutoff(
         params.timezone_name, params.until_hour, session_cutoff_end=params.session_cutoff_end
@@ -489,6 +497,7 @@ def run_intraday_touch_flow(
             telegram_bot_token=settings.telegram_bot_token,
             telegram_chat_id=settings.telegram_chat_id,
             telegram_log_chat_id=settings.telegram_log_chat_id,
+            telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
             telegram_output_ngan_gon_chat_id=settings.telegram_output_ngan_gon_chat_id,
             telegram_source_label="tv-touch (watch)",
             auto_mt5_zone_label=touched_label,
