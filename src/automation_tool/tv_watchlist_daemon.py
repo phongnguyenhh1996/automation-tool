@@ -924,6 +924,10 @@ def _zone_touch_job(
             settings,
             f"[zone-touch] act=VAO_LENH | zone_id={zone_id} -> status=vao_lenh | trade_line={z1.trade_line!r}",
         )
+        _send_user_notice(
+            settings,
+            f"Sau khi chạm vùng: AI xác nhận «VÀO LỆNH» ({z1.label}).",
+        )
 
         if not params.mt5_execute:
             _send_log(settings, f"[zone-touch] mt5_execute=off | done | zone_id={zone_id}")
@@ -951,6 +955,17 @@ def _zone_touch_job(
                 trade_line=z1.trade_line,
             )
         _send_log(settings, f"[zone-touch] mt5_execute_trade: {ex.message}".strip())
+        _lines = [ex.message]
+        if ex.order:
+            _lines.append(f"Mã lệnh: {ex.order}")
+        if params.mt5_dry_run:
+            _lines.append("(Chế độ thử.)")
+        _send_user_notice(
+            settings,
+            "Tự động vào lệnh — kết quả MT5",
+            "\n".join(_lines),
+        )
+
         tid = int(ex.order) if ex.order else 0
         if ex.ok and tid > 0:
             st2 = _state_read(params)
@@ -1122,12 +1137,6 @@ def _daemon_plan_main_loop(
             now_mono = time.monotonic()
             if (now_mono - last_heartbeat_at) >= heartbeat_s:
                 last_heartbeat_at = now_mono
-                _log.info(
-                    "daemon-plan alive | shard=%s last=%s status=%s",
-                    shard_tag,
-                    p_last,
-                    z0.status,
-                )
         except Exception:
             pass
 
