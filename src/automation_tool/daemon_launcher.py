@@ -17,17 +17,6 @@ from automation_tool.zones_state import read_zone_shard_file
 
 _log = logging.getLogger("automation_tool.daemon_launcher")
 
-# Windows: set AUTOMATION_DAEMON_PLAN_VISIBLE=1 to spawn each daemon-plan in its own CMD
-# (CREATE_NEW_CONSOLE) instead of a hidden process — useful to see it running.
-def _daemon_plan_visible_console() -> bool:
-    return os.environ.get("AUTOMATION_DAEMON_PLAN_VISIBLE", "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
-
-
 # --- stop on process exit (tv-watchlist-daemon + Windows console close) ---
 _cleanup_zones_dir_exit: Optional[Path] = None
 _cleanup_exit_done = False
@@ -225,15 +214,9 @@ def spawn_daemon_plan_if_needed(
     except OSError:
         cwd = None
 
+    # Hide console without creationflags: STARTUPINFO (works when CREATE_NO_WINDOW does not).
     startupinfo: Optional[subprocess.STARTUPINFO] = None
-    creationflags = 0
-    out_err = (subprocess.DEVNULL, subprocess.DEVNULL)
-    if sys.platform == "win32" and _daemon_plan_visible_console():
-        # Own console per child so you can see daemon-plan output; optional debug only.
-        creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 16)
-        out_err = (None, None)
-    elif sys.platform == "win32":
-        # Hide console without creationflags: STARTUPINFO (works when CREATE_NO_WINDOW does not).
+    if sys.platform == "win32":
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         startupinfo.wShowWindow = subprocess.SW_HIDE
@@ -243,9 +226,9 @@ def spawn_daemon_plan_if_needed(
             cmd,
             cwd=cwd,
             stdin=subprocess.DEVNULL,
-            stdout=out_err[0],
-            stderr=out_err[1],
-            creationflags=creationflags,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=0,
             startupinfo=startupinfo,
         )
     except OSError as e:

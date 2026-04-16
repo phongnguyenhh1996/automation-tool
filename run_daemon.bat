@@ -22,9 +22,6 @@ cd /d "%~dp0"
 REM Bắt buộc cặp active = XAUUSD (data/.main_chart_symbol bị ghi đè bởi env — xem images.get_active_main_symbol)
 set "AUTOMATION_MAIN_SYMBOL=XAUUSD"
 
-REM Mỗi daemon-plan (spawn sau Last đầu tiên) mở một cửa sổ CMD riêng để thấy đang chạy — bỏ REM dòng sau:
-REM set "AUTOMATION_DAEMON_PLAN_VISIBLE=1"
-
 REM Create logs directory if missing
 if not exist "logs" mkdir "logs"
 
