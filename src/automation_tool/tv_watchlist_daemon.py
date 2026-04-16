@@ -959,12 +959,20 @@ def _tv_watchlist_price_only_loop(
     last_path = params.last_price_path or default_last_price_path()
     heartbeat_s = 300.0
     last_heartbeat_at = 0.0
+    telegram_log_interval_s = 60.0
+    last_telegram_log_at = 0.0
     while True:
         wms = min(15_000, max(2_000, int(poll_s * 1000)))
         p_last = get_price(wms)
         if p_last is not None:
             write_last_price_file(float(p_last), last_path)
-            _send_log(settings, f"[daemon-gia] last.txt <- {p_last} | symbol={sym} path={last_path}")
+            now_mono_tg = time.monotonic()
+            if (now_mono_tg - last_telegram_log_at) >= telegram_log_interval_s:
+                last_telegram_log_at = now_mono_tg
+                _send_log(
+                    settings,
+                    f"[daemon-gia] last.txt <- {p_last} | symbol={sym} path={last_path}",
+                )
             _poll_terminal.info("tv-watchlist-daemon (gia) | symbol=%s | last=%s", sym, p_last)
         else:
             _poll_terminal.info("tv-watchlist-daemon (gia) | symbol=%s | last=(none)", sym)

@@ -2183,13 +2183,20 @@ def cmd_update(args: argparse.Namespace) -> None:
         if update_payload is None:
             return
         text = (update_payload.phan_tich_update or "").strip()
-        if not text:
+        plan_lines = format_plan_lines_for_telegram(update_payload)
+        if not text and not plan_lines:
             return
         require_telegram(s)
+        parts: list[str] = []
+        if text:
+            parts.append(text)
+        if plan_lines:
+            parts.append(plan_lines)
+        message = "\n\n".join(parts)
         send_message(
             bot_token=s.telegram_bot_token,
             chat_id=s.telegram_chat_id,
-            text=text,
+            text=message,
             parse_mode=s.telegram_parse_mode,
         )
 
