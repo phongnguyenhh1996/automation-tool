@@ -10,7 +10,7 @@ import signal
 import subprocess
 import sys
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Optional
 
 from automation_tool.zones_paths import default_zones_dir, resolve_zones_directory
 from automation_tool.zones_state import read_zone_shard_file
@@ -32,7 +32,7 @@ def _cleanup_daemon_plans_on_exit_once() -> None:
         return
     _cleanup_exit_done = True
     try:
-        n = stop_daemon_plans_in_zones(zd, log_chat=None)
+        n = stop_daemon_plans_in_zones(zd)
         _log.info("stop-daemon-plans on exit | dir=%s signalled=%s", zd, n)
     except Exception as e:
         _log.warning("stop-daemon-plans on exit failed: %s", e)
@@ -135,10 +135,12 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
-def stop_daemon_plans_in_zones(zones_dir: Path, *, log_chat: Optional[Callable[[str], None]] = None) -> int:
+def stop_daemon_plans_in_zones(zones_dir: Path) -> int:
     """
     Stop every ``daemon-plan`` tracked under ``zones_dir`` (``.daemon-plan-*.pid``).
     Returns number of processes signalled.
+
+    Log lines use ``_log.info`` → propagate to ``automation_tool`` (stderr + Telegram khi đã setup).
     """
     n = 0
     if not zones_dir.is_dir():
@@ -161,8 +163,6 @@ def stop_daemon_plans_in_zones(zones_dir: Path, *, log_chat: Optional[Callable[[
                 n += 1
                 msg = f"[launcher] stop daemon-plan pid={pid} file={child.name}"
                 _log.info(msg)
-                if log_chat:
-                    log_chat(msg)
             except ProcessLookupError:
                 pass
             except OSError as e:
@@ -178,11 +178,12 @@ def spawn_daemon_plan_if_needed(
     *,
     shard_path: Path,
     zones_dir: Path,
-    log_chat: Optional[Callable[[str], None]] = None,
 ) -> str:
     """
     If no live PID for this shard, spawn ``coinmap-automation daemon-plan --shard ...``.
     Returns ``spawned`` | ``skipped``.
+
+    Spawn/skip lines: ``_log.info`` → ``automation_tool`` (Telegram khi CLI/daemon đã gọi ``setup_automation_logging``).
     """
     shard_path = shard_path.resolve()
     zones_dir = zones_dir.resolve()
@@ -192,8 +193,6 @@ def spawn_daemon_plan_if_needed(
         if old is not None and _pid_alive(old):
             msg = f"[launcher] skip daemon-plan (already running) pid={old} shard={shard_path}"
             _log.info(msg)
-            if log_chat:
-                log_chat(msg)
             return "skipped"
         try:
             pid_file.unlink()
@@ -246,8 +245,6 @@ def spawn_daemon_plan_if_needed(
         _log.warning("could not write pid file %s: %s", pid_file, e)
     msg = f"[launcher] spawn daemon-plan pid={proc.pid} shard={shard_path}"
     _log.info(msg)
-    if log_chat:
-        log_chat(msg)
     return "spawned"
 
 
@@ -255,16 +252,13 @@ def launch_daemon_plans_for_written_shards(
     *,
     zones_dir: Path,
     shard_paths: list[Path],
-    log_chat: Optional[Callable[[str], None]] = None,
 ) -> None:
     for sp in shard_paths:
-        spawn_daemon_plan_if_needed(shard_path=sp, zones_dir=zones_dir, log_chat=log_chat)
+        spawn_daemon_plan_if_needed(shard_path=sp, zones_dir=zones_dir)
 
 
 def reconcile_daemon_plans_at_boot(
     zones_dir: Optional[Path] = None,
-    *,
-    log_chat: Optional[Callable[[str], None]] = None,
 ) -> int:
     """
     For each ``vung_*.json`` with a non-terminal zone and no live PID, spawn ``daemon-plan``.
@@ -283,7 +277,7 @@ def reconcile_daemon_plans_at_boot(
             continue
         if z.status in ("done", "loai"):
             continue
-        if spawn_daemon_plan_if_needed(shard_path=child_abs, zones_dir=root, log_chat=log_chat) == "spawned":
+        if spawn_daemon_plan_if_needed(shard_path=child_abs, zones_dir=root) == "spawned":
             n += 1
     return n
 

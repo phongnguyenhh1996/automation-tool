@@ -1854,10 +1854,7 @@ def cmd_all(args: argparse.Namespace) -> None:
     migrate_legacy_zones_state_if_needed(args.zones_json)
     zones_dir = zones_dir_from_cli_path(args.zones_json)
     if not args.no_clear_zones_state:
-        stop_daemon_plans_in_zones(
-            zones_dir,
-            log_chat=lambda m: _telegram_log_technical(s, m),
-        )
+        stop_daemon_plans_in_zones(zones_dir)
         n_rm = clear_zones_directory(zones_dir)
         _log.info("all: cleared zones | removed=%s dir=%s", n_rm, zones_dir)
         print(f"Đã dừng daemon-plan (nếu có) và xóa zones/: {zones_dir} ({n_rm} file)", flush=True)
@@ -1956,7 +1953,6 @@ def cmd_all(args: argparse.Namespace) -> None:
                 launch_daemon_plans_for_written_shards(
                     zones_dir=zones_dir,
                     shard_paths=written,
-                    log_chat=lambda m: _telegram_log_technical(s, m),
                 )
                 _log.info(
                     "all: đã ghi shard zones | slot=%s zones=%d | symbol=%s",
@@ -2301,7 +2297,6 @@ def cmd_update(args: argparse.Namespace) -> None:
             launch_daemon_plans_for_written_shards(
                 zones_dir=zones_dir,
                 shard_paths=written,
-                log_chat=lambda m: _telegram_log_technical(s, m),
             )
             _log.info("update: đã ghi shard zones | slot=%s zones=%d | symbol=%s", slot, len(zones), sym)
 
@@ -2403,22 +2398,16 @@ def cmd_daemon_plan(args: argparse.Namespace) -> None:
 
 
 def cmd_reconcile_daemon_plans(args: argparse.Namespace) -> None:
-    s = load_settings()
+    load_settings()
     zd = zones_dir_from_cli_path(getattr(args, "zones_json", None))
-    n = reconcile_daemon_plans_at_boot(
-        zd,
-        log_chat=lambda m: _telegram_log_technical(s, m),
-    )
+    n = reconcile_daemon_plans_at_boot(zd)
     print(f"reconcile-daemon-plans: spawned {n} process(es) | dir={zd}", flush=True)
 
 
 def cmd_stop_daemon_plans(args: argparse.Namespace) -> None:
-    s = load_settings()
+    load_settings()
     zd = zones_dir_from_cli_path(getattr(args, "zones_json", None))
-    n = stop_daemon_plans_in_zones(
-        zd,
-        log_chat=lambda m: _telegram_log_technical(s, m),
-    )
+    n = stop_daemon_plans_in_zones(zd)
     print(f"stop-daemon-plans: signalled {n} process(es) | dir={zd}", flush=True)
 
 

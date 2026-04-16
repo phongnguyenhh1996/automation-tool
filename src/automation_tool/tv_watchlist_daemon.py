@@ -1031,10 +1031,7 @@ def _tv_watchlist_price_only_loop(
                 if not reconciled_boot:
                     reconciled_boot = True
                     try:
-                        n = reconcile_daemon_plans_at_boot(
-                            None,
-                            log_chat=lambda m: _send_log(settings, m),
-                        )
+                        n = reconcile_daemon_plans_at_boot(None)
                         _log.info(
                             "tv-watchlist-daemon (gia) | reconcile-daemon-plans spawned %s process(es)",
                             n,
