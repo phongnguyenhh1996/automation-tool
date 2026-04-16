@@ -30,6 +30,7 @@ from automation_tool.openai_analysis_json import (
     extract_json_object,
     format_plan_lines_for_telegram,
     parse_analysis_from_openai_text,
+    triple_from_zone_prices,
 )
 from automation_tool.openai_errors import re_raise_unless_openai
 from automation_tool.openai_prompt_flow import (
@@ -59,6 +60,7 @@ from automation_tool.state_files import (
     read_morning_baseline_prices,
     write_last_alert_prices,
     write_last_response_id,
+    write_morning_baseline_prices,
     write_morning_full_analysis,
 )
 from automation_tool.zone_prices import (
@@ -1940,6 +1942,13 @@ def cmd_all(args: argparse.Namespace) -> None:
 
         payload = parse_analysis_from_openai_text(out.after_charts)
         if payload is not None and payload.prices:
+            trip = triple_from_zone_prices(payload.prices)
+            if trip is not None:
+                write_morning_baseline_prices(trip)
+                _log.info(
+                    "all: đã ghi %s",
+                    default_morning_baseline_prices_path().name,
+                )
             from automation_tool.images import get_active_main_symbol
 
             sym = get_active_main_symbol().strip().upper()
@@ -2118,12 +2127,6 @@ def cmd_update(args: argparse.Namespace) -> None:
     storage = args.storage_state or default_storage_state_path()
     cfg_tv = args.tv_config or default_coinmap_config_path()
 
-    baseline = read_morning_baseline_prices()
-    if baseline is None:
-        raise SystemExit(
-            f"Missing {default_morning_baseline_prices_path()} — run `coinmap-automation all` successfully first."
-        )
-
     morning_path = default_morning_full_analysis_path()
     if not morning_path.is_file():
         raise SystemExit(
@@ -2131,9 +2134,25 @@ def cmd_update(args: argparse.Namespace) -> None:
             "(FULL_ANALYSIS JSON snapshot)."
         )
     try:
-        json.loads(morning_path.read_text(encoding="utf-8"))
+        morning_raw = morning_path.read_text(encoding="utf-8")
+        json.loads(morning_raw)
     except json.JSONDecodeError as e:
         raise SystemExit(f"Invalid JSON in {morning_path}: {e}") from e
+
+    baseline = read_morning_baseline_prices()
+    if baseline is None:
+        payload0 = parse_analysis_from_openai_text(morning_raw)
+        if payload0 is not None and payload0.prices:
+            trip0 = triple_from_zone_prices(payload0.prices)
+            if trip0 is not None:
+                write_morning_baseline_prices(trip0)
+                baseline = read_morning_baseline_prices()
+    if baseline is None:
+        raise SystemExit(
+            f"Missing morning zone baseline — need {default_morning_baseline_prices_path()} "
+            f"or parseable \"prices\" (plan_chinh, plan_phu, scalp) in {morning_path.name}. "
+            "Run `coinmap-automation all` successfully first."
+        )
 
     paths = capture_charts(
         coinmap_yaml=cfg_cap,
