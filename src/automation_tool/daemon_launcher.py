@@ -41,6 +41,9 @@ def _pid_alive(pid: int) -> bool:
         return False
     except PermissionError:
         return True
+    except OSError:
+        # Windows: e.g. WinError 87 (ERROR_INVALID_PARAMETER) for stale/garbage PIDs — not alive.
+        return False
 
 
 def stop_daemon_plans_in_zones(zones_dir: Path, *, log_chat: Optional[Callable[[str], None]] = None) -> int:
@@ -116,26 +119,38 @@ def spawn_daemon_plan_if_needed(
         "--shard",
         str(shard_path),
     ]
-    # Windows: inherited console handles are often invalid under Task Scheduler / non-CRT parents
-    # → CreateProcess can fail with WinError 87 unless stdio is redirected.
-    # CREATE_NEW_PROCESS_GROUP also triggers WinError 87 in some of those contexts; use CREATE_NO_WINDOW.
-    creationflags = 0
-    if sys.platform == "win32":
-        creationflags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000))
-
+    # Windows: redirect stdio so CreateProcess does not inherit invalid console handles (Task Scheduler).
+    # Keep creationflags=0 — CREATE_NO_WINDOW / CREATE_NEW_PROCESS_GROUP have caused WinError 87 on some hosts.
     try:
         cwd = str(Path.cwd().resolve())
     except OSError:
         cwd = None
 
-    proc = subprocess.Popen(
-        cmd,
-        cwd=cwd,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        creationflags=creationflags,
-    )
+    # Hide console without creationflags: STARTUPINFO (works when CREATE_NO_WINDOW does not).
+    startupinfo: Optional[subprocess.STARTUPINFO] = None
+    if sys.platform == "win32":
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = subprocess.SW_HIDE
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=0,
+            startupinfo=startupinfo,
+        )
+    except OSError as e:
+        _log.warning(
+            "spawn daemon-plan Popen failed | cmd=%s cwd=%s | %s",
+            cmd,
+            cwd,
+            e,
+        )
+        raise
     try:
         pid_file.write_text(str(proc.pid), encoding="utf-8")
     except OSError as e:
