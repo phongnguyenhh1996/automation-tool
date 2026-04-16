@@ -54,13 +54,13 @@ from automation_tool.openai_analysis_json import (
     auto_mt5_hop_luu_threshold_for_label,
     parse_vung_cho_bounds,
 )
-from automation_tool.daemon_launcher import reconcile_daemon_plans_at_boot
+from automation_tool.daemon_launcher import reconcile_daemon_plans_at_boot, register_stop_daemon_plans_on_exit
 from automation_tool.last_price_ipc import (
     open_writer_shared_memory,
     read_last_price_for_daemon_plan,
     write_last_price_shared,
 )
-from automation_tool.zones_paths import default_last_price_path, read_last_price_file, write_last_price_file
+from automation_tool.zones_paths import default_last_price_path, default_zones_dir, read_last_price_file, write_last_price_file
 from automation_tool.zones_state import (
     Zone,
     ZonesState,
@@ -172,6 +172,8 @@ class WatchlistDaemonParams:
     last_price_path: Optional[Path] = None
     mirror_last_price_file: bool = False
     """Also write atomic ``last.txt`` (legacy/debug); primary Last is ``multiprocessing.shared_memory``."""
+    stop_daemon_plans_on_exit: bool = False
+    """On process exit (Ctrl+C, atexit, Windows console close): SIGTERM tracked ``daemon-plan`` PIDs."""
     eps: float = _EPS_DEFAULT  # max |Δ| between integer-rounded Last and touch ref (default 1.0)
     openai_model: Optional[str] = None
     openai_model_cli: Optional[str] = None
@@ -297,6 +299,34 @@ def _maybe_loai_zone_if_last_hit_sl(
         f"Last {p_last} — vùng chờ không còn hiệu lực.",
     )
     return True
+
+
+def _daemon_plan_watch_telegram_text(
+    z: Zone,
+    *,
+    sym: str,
+    shard_tag: str,
+    p_last: Optional[float],
+) -> str:
+    """Một dòng cho kênh log kỹ thuật: plan/shard đang theo dõi."""
+    shard_name = Path(shard_tag).name
+    last_s = f"{p_last}" if p_last is not None else "(none)"
+    extra: list[str] = []
+    if z.mt5_ticket is not None and int(z.mt5_ticket) > 0:
+        extra.append(f"mt5={z.mt5_ticket}")
+    if z.hop_luu is not None:
+        extra.append(f"hop_luu={z.hop_luu}")
+    vc = (z.vung_cho or "").replace("\n", " ").strip()
+    if len(vc) > 100:
+        vc = vc[:97] + "..."
+    ref = _zone_side_ref_from_vung_cho(z)
+    ref_s = f"{ref}" if ref is not None else "—"
+    tail = " | ".join(extra) if extra else ""
+    base = (
+        f"[daemon-plan] watch | shard={shard_name} | sym={sym} | zone_id={z.id} | label={z.label} "
+        f"| status={z.status} | side={z.side} | ref={ref_s} | last={last_s} | vung={vc}"
+    )
+    return f"{base} | {tail}" if tail else base
 
 
 def _entry_reference_price(parsed) -> float:
@@ -1039,6 +1069,8 @@ def _daemon_plan_main_loop(
     heartbeat_s = 300.0
     last_heartbeat_at = 0.0
     shard_tag = str(params.shard_path)
+    telegram_plan_interval_s = 60.0
+    last_plan_tg_at = 0.0
     _send_log(
         settings,
         f"[daemon-plan] start | shard={shard_tag} last_ipc+file={last_path} symbol={sym}",
@@ -1062,6 +1094,15 @@ def _daemon_plan_main_loop(
             return
 
         p_last = read_last_price_for_daemon_plan(sym, last_path)
+        now_plan_tg = time.monotonic()
+        if (now_plan_tg - last_plan_tg_at) >= telegram_plan_interval_s:
+            last_plan_tg_at = now_plan_tg
+            _send_log(
+                settings,
+                _daemon_plan_watch_telegram_text(
+                    z0, sym=sym, shard_tag=shard_tag, p_last=p_last
+                ),
+            )
         if p_last is None:
             _poll_terminal.info(
                 "daemon-plan | shard=%s | tick | last=(none) ipc|file=%s",
@@ -1467,12 +1508,15 @@ def run_tv_watchlist_daemon(
 
     last_p = params.last_price_path or default_last_price_path()
     _log.info(
-        "tv-watchlist-daemon (gia) start | symbol=%s poll=%.1fs mirror_last_file=%s path=%s",
+        "tv-watchlist-daemon (gia) start | symbol=%s poll=%.1fs mirror_last_file=%s path=%s stop_plans_on_exit=%s",
         sym,
         poll_s,
         params.mirror_last_price_file,
         last_p,
+        params.stop_daemon_plans_on_exit,
     )
+    if params.stop_daemon_plans_on_exit:
+        register_stop_daemon_plans_on_exit(default_zones_dir(sym))
 
     # Browser service up: drive TradingView entirely via RPC (no second CDP client in this process).
     if is_service_responding():

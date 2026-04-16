@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import hashlib
 import logging
 import os
@@ -15,6 +16,64 @@ from automation_tool.zones_paths import default_zones_dir, resolve_zones_directo
 from automation_tool.zones_state import read_zone_shard_file
 
 _log = logging.getLogger("automation_tool.daemon_launcher")
+
+# --- stop on process exit (tv-watchlist-daemon + Windows console close) ---
+_cleanup_zones_dir_exit: Optional[Path] = None
+_cleanup_exit_done = False
+_win_console_ctrl_handler = None  # keep ctypes callback alive
+
+
+def _cleanup_daemon_plans_on_exit_once() -> None:
+    global _cleanup_exit_done
+    if _cleanup_exit_done:
+        return
+    zd = _cleanup_zones_dir_exit
+    if zd is None:
+        return
+    _cleanup_exit_done = True
+    try:
+        n = stop_daemon_plans_in_zones(zd, log_chat=None)
+        _log.info("stop-daemon-plans on exit | dir=%s signalled=%s", zd, n)
+    except Exception as e:
+        _log.warning("stop-daemon-plans on exit failed: %s", e)
+
+
+def register_stop_daemon_plans_on_exit(zones_dir: Path) -> None:
+    """
+    Register cleanup: :func:`stop_daemon_plans_in_zones` on normal exit, signals, and (Windows)
+    console close / logoff / shutdown control events.
+    """
+    global _cleanup_zones_dir_exit, _win_console_ctrl_handler
+    _cleanup_zones_dir_exit = zones_dir.resolve()
+    atexit.register(_cleanup_daemon_plans_on_exit_once)
+
+    def _on_signal(_signum: int, _frame: object) -> None:
+        _cleanup_daemon_plans_on_exit_once()
+        raise SystemExit(0)
+
+    for name in ("SIGINT", "SIGTERM"):
+        sig = getattr(signal, name, None)
+        if sig is None:
+            continue
+        try:
+            signal.signal(sig, _on_signal)
+        except (OSError, ValueError):
+            pass
+
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_uint32)
+            def _win_ctrl_handler(_ctrl_type: int) -> bool:
+                _cleanup_daemon_plans_on_exit_once()
+                return False
+
+            _win_console_ctrl_handler = _win_ctrl_handler
+            if not ctypes.windll.kernel32.SetConsoleCtrlHandler(_win_console_ctrl_handler, True):
+                _log.warning("SetConsoleCtrlHandler(stop-daemon-plans) failed")
+        except Exception as e:
+            _log.warning("register_stop_daemon_plans_on_exit: %s", e)
 
 
 def _pid_path(zones_dir: Path, shard_path: Path) -> Path:

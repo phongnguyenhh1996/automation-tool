@@ -645,6 +645,11 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Ngoài shared memory, ghi thêm atomic last.txt (tùy chọn debug / tương thích cũ)",
     )
+    wd.add_argument(
+        "--stop-daemon-plans-on-exit",
+        action="store_true",
+        help="Khi thoát tiến trình (Ctrl+C, đóng cửa sổ CMD trên Windows, …): dừng các daemon-plan trong zones/",
+    )
     wd.add_argument("--no-mt5-execute", action="store_true")
     wd.add_argument("--mt5-symbol", default=None, metavar="SYM")
     wd.add_argument("--mt5-dry-run", action="store_true")
@@ -731,6 +736,19 @@ def _parser() -> argparse.ArgumentParser:
         help="Thư mục zones (mặc định data/<SYM>/zones/)",
     )
     rec.set_defaults(func=cmd_reconcile_daemon_plans)
+
+    sdp = sub.add_parser(
+        "stop-daemon-plans",
+        help="Gửi SIGTERM tới mọi daemon-plan đang track (file .daemon-plan-*.pid) trong thư mục zones.",
+    )
+    sdp.add_argument(
+        "--zones-json",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Thư mục zones (mặc định data/<SYM>/zones/)",
+    )
+    sdp.set_defaults(func=cmd_stop_daemon_plans)
 
     tv = sub.add_parser(
         "tv-alerts",
@@ -2341,6 +2359,7 @@ def cmd_tv_watchlist_daemon(args: argparse.Namespace) -> None:
         zones_state_path=None,
         last_price_path=getattr(args, "last_price_file", None),
         mirror_last_price_file=bool(getattr(args, "mirror_last_price_file", False)),
+        stop_daemon_plans_on_exit=bool(getattr(args, "stop_daemon_plans_on_exit", False)),
         mt5_execute=not args.no_mt5_execute,
         mt5_symbol=args.mt5_symbol,
         mt5_dry_run=args.mt5_dry_run,
@@ -2391,6 +2410,16 @@ def cmd_reconcile_daemon_plans(args: argparse.Namespace) -> None:
         log_chat=lambda m: _telegram_log_technical(s, m),
     )
     print(f"reconcile-daemon-plans: spawned {n} process(es) | dir={zd}", flush=True)
+
+
+def cmd_stop_daemon_plans(args: argparse.Namespace) -> None:
+    s = load_settings()
+    zd = zones_dir_from_cli_path(getattr(args, "zones_json", None))
+    n = stop_daemon_plans_in_zones(
+        zd,
+        log_chat=lambda m: _telegram_log_technical(s, m),
+    )
+    print(f"stop-daemon-plans: signalled {n} process(es) | dir={zd}", flush=True)
 
 
 def cmd_zone_touch(args: argparse.Namespace) -> None:
