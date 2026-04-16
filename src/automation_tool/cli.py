@@ -603,8 +603,9 @@ def _parser() -> argparse.ArgumentParser:
     wd = sub.add_parser(
         "tv-watchlist-daemon",
         help=(
-            "Daemon giá: đọc Last từ title tab TradingView mỗi poll (mặc định 1s) và ghi atomic vào last.txt. "
-            "Logic vùng chạy trong lệnh ``daemon-plan`` (một process mỗi file shard)."
+            "Daemon giá: đọc Last từ title tab TradingView mỗi poll (mặc định 1s), ghi vào shared memory "
+            "(tùy chọn mirror ``last.txt``). Logic vùng: ``daemon-plan`` (một process mỗi shard); "
+            "sau Last đầu tiên gọi reconcile-daemon-plans nếu chưa chạy."
         ),
     )
     wd.add_argument(
@@ -637,7 +638,12 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         metavar="FILE",
-        help="Ghi giá Last (atomic) vào file này — mặc định data/<SYM>/last.txt",
+        help="Khi dùng với --mirror-last-price-file: đường dẫn mirror (mặc định data/<SYM>/last.txt)",
+    )
+    wd.add_argument(
+        "--mirror-last-price-file",
+        action="store_true",
+        help="Ngoài shared memory, ghi thêm atomic last.txt (tùy chọn debug / tương thích cũ)",
     )
     wd.add_argument("--no-mt5-execute", action="store_true")
     wd.add_argument("--mt5-symbol", default=None, metavar="SYM")
@@ -690,7 +696,7 @@ def _parser() -> argparse.ArgumentParser:
         "--config",
         type=Path,
         default=None,
-        help="Yaml tradingview (ký hiệu; daemon-plan không mở TV — chỉ đọc last.txt)",
+        help="Yaml tradingview (ký hiệu; daemon-plan không mở TV — đọc Last qua IPC / last.txt)",
     )
     dp.add_argument("--capture-config", type=Path, default=None)
     dp.add_argument("--charts-dir", type=Path, default=None)
@@ -705,7 +711,7 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         metavar="FILE",
-        help="Đọc Last từ file (mặc định data/<SYM>/last.txt)",
+        help="Fallback đọc Last từ file nếu IPC chưa có (mặc định data/<SYM>/last.txt)",
     )
     dp.add_argument("--no-mt5-execute", action="store_true")
     dp.add_argument("--mt5-symbol", default=None, metavar="SYM")
@@ -2334,6 +2340,7 @@ def cmd_tv_watchlist_daemon(args: argparse.Namespace) -> None:
         no_telegram=args.no_telegram,
         zones_state_path=None,
         last_price_path=getattr(args, "last_price_file", None),
+        mirror_last_price_file=bool(getattr(args, "mirror_last_price_file", False)),
         mt5_execute=not args.no_mt5_execute,
         mt5_symbol=args.mt5_symbol,
         mt5_dry_run=args.mt5_dry_run,

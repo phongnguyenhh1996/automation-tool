@@ -9,7 +9,9 @@ echo CWD    : %cd%
 echo Args   : %*
 echo ============================================================
 
-REM 24/24 daemon giá: TradingView watchlist Last -> data\<SYM>\last.txt (daemon-plan đọc file này)
+REM 24/24 daemon giá: TradingView Last -> shared memory (daemon-plan đọc IPC; fallback last.txt nếu mirror)
+REM Sau Last hop le dau tien: tu dong reconcile-daemon-plans (spawn daemon-plan neu chua chay).
+REM De ghi them last.txt: them --mirror-last-price-file [--last-price-file data\XAUUSD\last.txt]
 REM Intended for Windows Task Scheduler ("At startup" / "On log on")
 REM Browser: chạy browser_up.bat trước (hoặc lịch Task Scheduler riêng).
 
@@ -31,8 +33,7 @@ if errorlevel 1 (
 
 echo [%date% %time%] INFO: Starting coinmap-automation tv-watchlist-daemon (gia) symbol=%AUTOMATION_MAIN_SYMBOL%>> "logs\daemon.log"
 REM Headless by default; do NOT pass --headed.
-set "LAST_PRICE=data\XAUUSD\last.txt"
-coinmap-automation tv-watchlist-daemon --last-price-file "%LAST_PRICE%" >> "logs\daemon.log" 2>&1
+coinmap-automation tv-watchlist-daemon >> "logs\daemon.log" 2>&1
 set "EXIT_CODE=%ERRORLEVEL%"
 echo [%date% %time%] INFO: Finished with exit code %EXIT_CODE%>> "logs\daemon.log"
 

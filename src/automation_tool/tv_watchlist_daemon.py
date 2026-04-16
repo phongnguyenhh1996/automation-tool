@@ -54,6 +54,12 @@ from automation_tool.openai_analysis_json import (
     auto_mt5_hop_luu_threshold_for_label,
     parse_vung_cho_bounds,
 )
+from automation_tool.daemon_launcher import reconcile_daemon_plans_at_boot
+from automation_tool.last_price_ipc import (
+    open_writer_shared_memory,
+    read_last_price_for_daemon_plan,
+    write_last_price_shared,
+)
 from automation_tool.zones_paths import default_last_price_path, read_last_price_file, write_last_price_file
 from automation_tool.zones_state import (
     Zone,
@@ -162,8 +168,10 @@ class WatchlistDaemonParams:
     zones_state_path: Optional[Path] = None
     """One shard JSON (``daemon-plan``); when set, read/write only this file."""
     shard_path: Optional[Path] = None
-    """Shared ``last.txt`` written by daemon giá; ``daemon-plan`` reads this path."""
+    """Optional ``last.txt`` when :attr:`mirror_last_price_file` is True; else IPC only."""
     last_price_path: Optional[Path] = None
+    mirror_last_price_file: bool = False
+    """Also write atomic ``last.txt`` (legacy/debug); primary Last is ``multiprocessing.shared_memory``."""
     eps: float = _EPS_DEFAULT  # max |Δ| between integer-rounded Last and touch ref (default 1.0)
     openai_model: Optional[str] = None
     openai_model_cli: Optional[str] = None
@@ -955,39 +963,63 @@ def _tv_watchlist_price_only_loop(
     poll_s: float,
     get_price: Callable[[int], Optional[float]],
 ) -> None:
-    """Daemon giá: poll TradingView title price → atomic ``last.txt`` only."""
+    """Daemon giá: poll TradingView title price → shared memory (optional mirror ``last.txt``)."""
     last_path = params.last_price_path or default_last_price_path()
+    shm = open_writer_shared_memory(sym)
+    reconciled_boot = False
     heartbeat_s = 300.0
     last_heartbeat_at = 0.0
     telegram_log_interval_s = 60.0
     last_telegram_log_at = 0.0
-    while True:
-        wms = min(15_000, max(2_000, int(poll_s * 1000)))
-        p_last = get_price(wms)
-        if p_last is not None:
-            write_last_price_file(float(p_last), last_path)
-            now_mono_tg = time.monotonic()
-            if (now_mono_tg - last_telegram_log_at) >= telegram_log_interval_s:
-                last_telegram_log_at = now_mono_tg
-                _send_log(
-                    settings,
-                    f"[daemon-gia] last.txt <- {p_last} | symbol={sym} path={last_path}",
-                )
-            _poll_terminal.info("tv-watchlist-daemon (gia) | symbol=%s | last=%s", sym, p_last)
-        else:
-            _poll_terminal.info("tv-watchlist-daemon (gia) | symbol=%s | last=(none)", sym)
+    try:
+        while True:
+            wms = min(15_000, max(2_000, int(poll_s * 1000)))
+            p_last = get_price(wms)
+            if p_last is not None:
+                write_last_price_shared(shm, float(p_last))
+                if params.mirror_last_price_file:
+                    write_last_price_file(float(p_last), last_path)
+                if not reconciled_boot:
+                    reconciled_boot = True
+                    try:
+                        n = reconcile_daemon_plans_at_boot(
+                            None,
+                            log_chat=lambda m: _send_log(settings, m),
+                        )
+                        _log.info(
+                            "tv-watchlist-daemon (gia) | reconcile-daemon-plans spawned %s process(es)",
+                            n,
+                        )
+                    except Exception as e:
+                        _log.warning("tv-watchlist-daemon | reconcile-daemon-plans at boot failed: %s", e)
+                now_mono_tg = time.monotonic()
+                if (now_mono_tg - last_telegram_log_at) >= telegram_log_interval_s:
+                    last_telegram_log_at = now_mono_tg
+                    mirror = f" mirror={last_path}" if params.mirror_last_price_file else ""
+                    _send_log(
+                        settings,
+                        f"[daemon-gia] last (shared memory) <- {p_last} | symbol={sym}{mirror}",
+                    )
+                _poll_terminal.info("tv-watchlist-daemon (gia) | symbol=%s | last=%s", sym, p_last)
+            else:
+                _poll_terminal.info("tv-watchlist-daemon (gia) | symbol=%s | last=(none)", sym)
+            try:
+                now_mono = time.monotonic()
+                if p_last is not None and (now_mono - last_heartbeat_at) >= heartbeat_s:
+                    last_heartbeat_at = now_mono
+                    _log.info(
+                        "tv-watchlist-daemon (gia) alive | symbol=%s last=%s",
+                        sym,
+                        p_last,
+                    )
+            except Exception:
+                pass
+            time.sleep(poll_s)
+    finally:
         try:
-            now_mono = time.monotonic()
-            if p_last is not None and (now_mono - last_heartbeat_at) >= heartbeat_s:
-                last_heartbeat_at = now_mono
-                _log.info(
-                    "tv-watchlist-daemon (gia) alive | symbol=%s last=%s",
-                    sym,
-                    p_last,
-                )
+            shm.close()
         except Exception:
             pass
-        time.sleep(poll_s)
 
 
 def _daemon_plan_main_loop(
@@ -998,7 +1030,7 @@ def _daemon_plan_main_loop(
     poll_s: float,
 ) -> None:
     """
-    One shard, one thread: read ``last.txt`` (~poll_s), run zone pipeline **sequentially** (no worker threads).
+    One shard, one thread: read Last from shared memory (fallback ``last.txt``), run zone pipeline **sequentially**.
     Exit when the zone reaches ``done`` or ``loai``.
     """
     if params.shard_path is None:
@@ -1007,7 +1039,10 @@ def _daemon_plan_main_loop(
     heartbeat_s = 300.0
     last_heartbeat_at = 0.0
     shard_tag = str(params.shard_path)
-    _send_log(settings, f"[daemon-plan] start | shard={shard_tag} last_file={last_path} symbol={sym}")
+    _send_log(
+        settings,
+        f"[daemon-plan] start | shard={shard_tag} last_ipc+file={last_path} symbol={sym}",
+    )
     while True:
         st = _state_read(params)
         if st is None or not st.zones:
@@ -1026,10 +1061,10 @@ def _daemon_plan_main_loop(
             )
             return
 
-        p_last = read_last_price_file(last_path)
+        p_last = read_last_price_for_daemon_plan(sym, last_path)
         if p_last is None:
             _poll_terminal.info(
-                "daemon-plan | shard=%s | tick | last=(none) file=%s",
+                "daemon-plan | shard=%s | tick | last=(none) ipc|file=%s",
                 shard_tag,
                 last_path,
             )
@@ -1432,9 +1467,10 @@ def run_tv_watchlist_daemon(
 
     last_p = params.last_price_path or default_last_price_path()
     _log.info(
-        "tv-watchlist-daemon (gia) start | symbol=%s poll=%.1fs last_price=%s",
+        "tv-watchlist-daemon (gia) start | symbol=%s poll=%.1fs mirror_last_file=%s path=%s",
         sym,
         poll_s,
+        params.mirror_last_price_file,
         last_p,
     )
 
@@ -1523,7 +1559,7 @@ def run_daemon_plan(
     params: WatchlistDaemonParams,
 ) -> str:
     """
-    One process per shard JSON: reads shared ``last.txt`` from daemon giá; sequential zone pipeline.
+    One process per shard JSON: reads Last from daemon giá (shared memory, fallback ``last.txt``).
     """
     if params.shard_path is None:
         raise SystemExit("daemon-plan requires --shard PATH (vung_*.json)")
