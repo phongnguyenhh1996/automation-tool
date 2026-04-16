@@ -320,6 +320,31 @@ def _tp1_followup_job(
                 )
                 return
 
+        # Scalp: chạm TP1 → huỷ ticket ngay, không gọi OpenAI / Coinmap.
+        if (z0.label or "").strip().lower() == "scalp":
+            tk = tk_check
+            if exe and tk > 0:
+                r = mt5_cancel_pending_or_close_position(tk, dry_run=dry)
+                _send_log(settings, f"[tp1] scalp chạm TP1 — mt5_cancel_close: {r.message}".strip())
+                if not params.no_telegram and settings.telegram_bot_token and settings.telegram_chat_id:
+                    send_mt5_execution_log_to_ngan_gon_chat(
+                        bot_token=settings.telegram_bot_token,
+                        telegram_chat_id=settings.telegram_chat_id,
+                        source="tp1-scalp-tp1",
+                        text=f"scalp: chạm TP1 — huỷ ticket\n{r.message}",
+                        zone_label="scalp",
+                    )
+            z0.status = "loai"
+            z0.mt5_ticket = None
+            z0.tp1_followup_done = True
+            write_zones_state(st0, path=zs_path)
+            _send_user_notice(
+                settings,
+                "Scalp chạm TP1 — đã huỷ lệnh (không gọi AI).",
+                "Vùng scalp chuyển trạng thái loại.",
+            )
+            return
+
         from automation_tool.coinmap import capture_charts
         from automation_tool.images import coinmap_xauusd_5m_json_path, read_main_chart_symbol
         from automation_tool.tp1_followup import parse_tp1_followup_decision

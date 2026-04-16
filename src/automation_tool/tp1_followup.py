@@ -458,6 +458,38 @@ def maybe_post_entry_tp1_tick(
             )
             if not touched:
                 continue
+            # Scalp: chạm TP1 → huỷ ticket ngay, không gọi OpenAI follow-up.
+            if lab == "scalp":
+                dry = bool(getattr(params, "mt5_dry_run", False))
+                exe = getattr(params, "mt5_execute", True)
+                tk_sc = int(tk or 0)
+                if exe and tk_sc > 0:
+                    r = mt5_cancel_pending_or_close_position(tk_sc, dry_run=dry)
+                    _log.info("tp1: scalp cho_tp1 chạm TP1 — huỷ ticket | %s", r.message)
+                    if settings.telegram_bot_token and settings.telegram_chat_id and not getattr(
+                        params, "no_telegram", False
+                    ):
+                        send_mt5_execution_log_to_ngan_gon_chat(
+                            bot_token=settings.telegram_bot_token,
+                            telegram_chat_id=settings.telegram_chat_id,
+                            source="tp1-scalp-tp1",
+                            text=f"{lab}: scalp chạm TP1 — huỷ ticket\n{r.message}",
+                            zone_label=lab,
+                        )
+                else:
+                    _log.info(
+                        "tp1: scalp cho_tp1 chạm TP1 — bỏ qua MT5 (exe=%s tk=%s)",
+                        exe,
+                        tk_sc,
+                    )
+                update_single_plan_status(lab, LOAI, path=last_alert_path)
+                clear_plan_mt5_fields(lab, path=last_alert_path)
+                update_plan_tp1_followup_done(lab, False, path=last_alert_path)
+                _log_tp1.info(
+                    "tp1: %s cho_tp1 chạm TP1 (scalp) — huỷ ticket / loại, không gọi OpenAI",
+                    lab,
+                )
+                return None
             _log.info("tp1: %s cho_tp1 chạm TP1 last=%s — follow-up OpenAI", lab, p_last)
             try:
                 new_r = _run_tp1_openai_and_act(
