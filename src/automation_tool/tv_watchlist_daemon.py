@@ -431,6 +431,7 @@ def _tp1_followup_job(
                         text=f"scalp: chạm TP1 — huỷ ticket\n{r.message}",
                         zone_label="scalp",
                         trade_line=z0.trade_line,
+                        execution_ok=r.ok,
                     )
             z0.status = "loai"
             z0.mt5_ticket = None
@@ -575,6 +576,7 @@ def _tp1_followup_job(
                     text=format_mt5_execution_for_telegram(ex),
                     zone_label=z1.label,
                     trade_line=dec.trade_line_moi.strip(),
+                    execution_ok=ex.ok,
                 )
             _send_log(settings, f"[tp1] mt5_execute_trade: {ex.message}".strip())
             tid = int(ex.order) if ex.order else 0
@@ -684,6 +686,7 @@ def _auto_entry_job(
                 text=format_mt5_execution_for_telegram(ex),
                 zone_label=z0.label,
                 trade_line=z0.trade_line,
+                execution_ok=ex.ok,
             )
         _send_log(settings, f"[auto-entry] mt5_execute_trade: {ex.message}".strip())
         _lines = [ex.message]
@@ -956,6 +959,7 @@ def _zone_touch_job(
                 text=format_mt5_execution_for_telegram(ex),
                 zone_label=z1.label,
                 trade_line=z1.trade_line,
+                execution_ok=ex.ok,
             )
         _send_log(settings, f"[zone-touch] mt5_execute_trade: {ex.message}".strip())
         _lines = [ex.message]

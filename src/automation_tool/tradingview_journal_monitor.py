@@ -679,6 +679,7 @@ def _run_intraday_touch_loop(
                         text=format_mt5_execution_for_telegram(ex),
                         zone_label=touched_label,
                         trade_line=(parsed.raw_line or "").strip() or None,
+                        execution_ok=ex.ok,
                     )
             if not params.no_telegram:
                 _journal_log(tz, "Gửi Telegram (VÀO LỆNH) — chat chính + OUTPUT_NGAN_GON nếu cấu hình.")

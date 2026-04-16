@@ -36,6 +36,17 @@ _MT5_ZONE_LABEL_DISPLAY_VN: dict[str, str] = {
 }
 
 
+def mt5_zone_label_display_vn(zone_label: Optional[str]) -> Optional[str]:
+    """
+    Chỉ tên hiển thị: ``plan_chinh`` → ``Plan chính`` (không thêm câu «Đã vào lệnh»).
+    Dùng trong tin lỗi MT5 để nêu kế hoạch mà không gợi ý đã khớp lệnh.
+    """
+    if not zone_label or not str(zone_label).strip():
+        return None
+    key = str(zone_label).strip().lower()
+    return _MT5_ZONE_LABEL_DISPLAY_VN.get(key)
+
+
 def mt5_zone_entry_line_vn(zone_label: Optional[str]) -> Optional[str]:
     """
     Một dòng: ``Đã vào lệnh cho "Plan chính".`` (hoặc Plan phụ / Scalp) khi biết nhãn.
@@ -512,31 +523,60 @@ def send_mt5_execution_log_to_ngan_gon_chat(
     telegram_chat_id: Optional[str] = None,
     source: str,
     text: str,
+    execution_ok: bool,
     zone_label: Optional[str] = None,
     trade_line: Optional[str] = None,
 ) -> None:
     """
-    Gửi thông báo sau thực thi MT5 (sau ``execute_trade``) tới ``TELEGRAM_CHAT_ID``.
+    Gửi thông báo sau thực thi MT5 (sau ``execute_trade`` / huỷ ticket) tới ``TELEGRAM_CHAT_ID``.
 
-    Nội dung: một câu cố định (chọn ngẫu nhiên); (tuỳ chọn) xuống dòng rồi dòng
-    ``Đã vào lệnh cho "Plan chính"`` / ``Plan phụ`` / ``Scalp`` khi ``zone_label`` khớp;
-    (tuỳ chọn) thêm dòng ``trade_line`` (dòng lệnh pipe) khi có.
-    Tham số ``text`` chỉ dùng để kiểm tra có thực thi — không gửi log chi tiết.
+    Khi ``execution_ok`` là True: một câu cố định (chọn ngẫu nhiên); (tuỳ chọn) dòng
+    ``Đã vào lệnh cho "Plan chính"`` / … khi ``zone_label`` khớp; (tuỳ chọn) ``trade_line``.
+    Tham số ``text`` chỉ dùng để kiểm tra có nội dung — **không** đính kèm log chi tiết
+    (tránh tin quá dài khi đã vào lệnh thành công).
+
+    Khi ``execution_ok`` là False: **không** dùng câu chúc mừng / «Đã vào lệnh»; gửi cảnh báo
+    và toàn bộ ``text`` (log chi tiết từ ``format_mt5_execution_for_telegram`` hoặc ``MT5ManageResult``).
+
     Plain text; không dùng parse_mode để tránh lỗi ký tự đặc biệt từ broker/API.
     """
     body = (text or "").strip()
     if not body:
         return
+    main = (telegram_chat_id or "").strip()
+    if not main:
+        return
+
+    if not execution_ok:
+        lines: list[str] = [
+            "⚠️ MT5: lệnh không thành công hoặc bị từ chối — chi tiết bên dưới.",
+        ]
+        src = (source or "").strip()
+        if src:
+            lines.append(f"Nguồn: {src}")
+        zd = mt5_zone_label_display_vn(zone_label)
+        if zd:
+            lines.append(f'Vùng / kế hoạch: "{zd}".')
+        tl = (trade_line or "").strip()
+        if tl:
+            lines.append(tl)
+        lines.append("")
+        lines.append(body)
+        _send_plain_text_to_chat_id(
+            bot_token=bot_token,
+            chat_id=main,
+            text="\n".join(lines),
+            log_context="TELEGRAM_CHAT_ID",
+        )
+        return
+
     out = random.choice(_MT5_NGAN_GON_MESSAGES)
     zone_line = mt5_zone_entry_line_vn(zone_label)
     if zone_line:
         out = f"{out}\n\n{zone_line}"
-    tl = (trade_line or "").strip()
-    if tl:
-        out = f"{out}\n\n{tl}"
-    main = (telegram_chat_id or "").strip()
-    if not main:
-        return
+    tl_ok = (trade_line or "").strip()
+    if tl_ok:
+        out = f"{out}\n\n{tl_ok}"
     _send_plain_text_to_chat_id(
         bot_token=bot_token,
         chat_id=main,

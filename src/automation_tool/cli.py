@@ -1794,6 +1794,7 @@ def cmd_mt5_trade(args: argparse.Namespace) -> None:
         source="mt5-trade",
         text=format_mt5_execution_for_telegram(out),
         trade_line=(trade.raw_line or "").strip() or None,
+        execution_ok=out.ok,
     )
     if out.resolved_symbol:
         print("Symbol MT5 (đã resolve):", out.resolved_symbol)

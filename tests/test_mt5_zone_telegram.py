@@ -1,6 +1,6 @@
 """MT5 Telegram: zone label → 'Đã vào lệnh cho …' line (suffix after random emoji line)."""
 
-from automation_tool.telegram_bot import mt5_zone_entry_line_vn
+from automation_tool.telegram_bot import mt5_zone_entry_line_vn, mt5_zone_label_display_vn
 
 
 def test_mt5_zone_entry_line_vn_known_labels():
@@ -13,3 +13,15 @@ def test_mt5_zone_entry_line_vn_absent_or_unknown():
     assert mt5_zone_entry_line_vn(None) is None
     assert mt5_zone_entry_line_vn("") is None
     assert mt5_zone_entry_line_vn("other") is None
+
+
+def test_mt5_zone_label_display_vn_known_labels():
+    assert mt5_zone_label_display_vn("plan_chinh") == "Plan chính"
+    assert mt5_zone_label_display_vn("PLAN_PHU") == "Plan phụ"
+    assert mt5_zone_label_display_vn("scalp") == "Scalp"
+
+
+def test_mt5_zone_label_display_vn_absent_or_unknown():
+    assert mt5_zone_label_display_vn(None) is None
+    assert mt5_zone_label_display_vn("") is None
+    assert mt5_zone_label_display_vn("other") is None
