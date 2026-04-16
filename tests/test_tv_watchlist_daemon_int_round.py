@@ -62,16 +62,30 @@ def test_zone_side_ref_buy_max_sell_min() -> None:
     assert _zone_side_ref_from_vung_cho(z2) == 4738.0
 
 
-def test_arm_uses_same_ref_as_touch() -> None:
-    """Arm khi last-ref nằm trong [0, 3] (BUY) hoặc [-3, 0] (SELL) cho plan_chinh/plan_phu."""
-    z_buy = Zone(id="a", label="plan_chinh", vung_cho="4738.0–4742.0", side="BUY")
+def test_arm_uses_trade_line_ref() -> None:
+    """Arm khi last−ref (ref từ parse trade_line) trong [0, 3] (BUY) hoặc [-3, 0] (SELL) cho plan_chinh/plan_phu."""
+    tl_buy = "BUY LIMIT 4742.0 | SL 4735.0 | TP1 4750.0 | Lot 0.01"
+    z_buy = Zone(
+        id="a",
+        label="plan_chinh",
+        vung_cho="4738.0–4742.0",
+        side="BUY",
+        trade_line=tl_buy,
+    )
     ref = 4742.0
     assert _arm_threshold_met_for_zone(z_buy, ref) is True  # diff 0
     assert _arm_threshold_met_for_zone(z_buy, ref + 2.5) is True
     assert _arm_threshold_met_for_zone(z_buy, ref + _ARM_THRESHOLD) is True
     assert _arm_threshold_met_for_zone(z_buy, ref + _ARM_THRESHOLD + 0.5) is False
     assert _arm_threshold_met_for_zone(z_buy, ref - 0.5) is False
-    z_sell = Zone(id="b", label="plan_phu", vung_cho="4738.0–4742.0", side="SELL")
+    tl_sell = "SELL LIMIT 4738.0 | SL 4745.0 | TP1 4730.0 | Lot 0.01"
+    z_sell = Zone(
+        id="b",
+        label="plan_phu",
+        vung_cho="4738.0–4742.0",
+        side="SELL",
+        trade_line=tl_sell,
+    )
     ref_s = 4738.0
     assert _arm_threshold_met_for_zone(z_sell, ref_s) is True  # diff 0
     assert _arm_threshold_met_for_zone(z_sell, ref_s - 2.5) is True
@@ -81,12 +95,24 @@ def test_arm_uses_same_ref_as_touch() -> None:
 
 
 def test_arm_scalp_narrower_than_default() -> None:
-    """Scalp: dải ±1 thay vì ±3."""
-    z = Zone(id="s", label="scalp", vung_cho="4738.0–4742.0", side="BUY")
+    """Scalp: dải ±1 thay vì ±3 (ref từ trade_line)."""
+    z = Zone(
+        id="s",
+        label="scalp",
+        vung_cho="4738.0–4742.0",
+        side="BUY",
+        trade_line="BUY LIMIT 4742.0 | SL 4735.0 | TP1 4750.0 | Lot 0.01",
+    )
     ref = 4742.0
     assert _arm_threshold_met_for_zone(z, ref + ARM_THRESHOLD_TP1_SCALP) is True
     assert _arm_threshold_met_for_zone(z, ref + ARM_THRESHOLD_TP1_SCALP + 0.25) is False
-    z2 = Zone(id="t", label="scalp", vung_cho="4738.0–4742.0", side="SELL")
+    z2 = Zone(
+        id="t",
+        label="scalp",
+        vung_cho="4738.0–4742.0",
+        side="SELL",
+        trade_line="SELL LIMIT 4738.0 | SL 4745.0 | TP1 4730.0 | Lot 0.01",
+    )
     ref_s = 4738.0
     assert _arm_threshold_met_for_zone(z2, ref_s - ARM_THRESHOLD_TP1_SCALP) is True
     assert _arm_threshold_met_for_zone(z2, ref_s - ARM_THRESHOLD_TP1_SCALP - 0.25) is False

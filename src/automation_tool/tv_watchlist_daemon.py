@@ -338,20 +338,29 @@ def _entry_reference_price(parsed) -> float:
     return float(parsed.price)
 
 
-def _arm_threshold_met_for_zone(zone: Zone, p_last: float) -> bool:
+def _arm_threshold_met_for_zone(
+    zone: Zone,
+    p_last: float,
+    *,
+    symbol_override: Optional[str] = None,
+) -> bool:
     """
-    Arm after entry: same side ref as touch (BUY=max, SELL=min from ``vung_cho``).
-    Dải ±thr theo ``zone.label`` (scalp hẹp hơn plan_chinh / plan_phu).
+    Arm sau vào lệnh: ``ref`` = :func:`_entry_reference_price` từ parse ``zone.trade_line``
+    (đồng bộ ``tp1_followup`` / ``last_alert``). BUY: ``0 ≤ last−ref ≤ thr``; SELL: ``−thr ≤ last−ref ≤ 0``.
+    ``thr`` theo ``zone.label`` (scalp hẹp hơn plan_chinh / plan_phu).
     """
-    thr = arm_threshold_tp1_for_label(zone.label)
-    ref = _zone_side_ref_from_vung_cho(zone)
-    if ref is None:
+    tl = (zone.trade_line or "").strip()
+    if not tl:
         return False
+    parsed, err = _parse_trade_from_zone_trade_line(tl, symbol_override=symbol_override)
+    if err or parsed is None:
+        return False
+    thr = arm_threshold_tp1_for_label(zone.label)
+    ref = _entry_reference_price(parsed)
     diff = float(p_last) - ref
-    side = (zone.side or "").strip().upper()
-    if side == "SELL":
-        return -thr <= diff <= 0.0
-    return 0.0 <= diff <= thr
+    if getattr(parsed, "side", "") == "BUY":
+        return 0.0 <= diff <= thr
+    return -thr <= diff <= 0.0
 
 
 def _tp1_touched(parsed, p_last: float) -> bool:
@@ -1249,7 +1258,7 @@ def _daemon_plan_main_loop(
                     continue
                 if not z.trade_line or not z.mt5_ticket or int(z.mt5_ticket) <= 0:
                     continue
-                if _arm_threshold_met_for_zone(z, float(p_last)):
+                if _arm_threshold_met_for_zone(z, float(p_last), symbol_override=params.mt5_symbol):
                     z.status = "cho_tp1"
                     z.tp1_followup_done = False
                     changed = True
