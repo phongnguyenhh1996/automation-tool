@@ -63,7 +63,7 @@ _log = logging.getLogger("automation_tool.tv_watchlist_daemon")
 def _poll_terminal_only_logger() -> logging.Logger:
     """
     Chỉ stderr — không propagate lên ``automation_tool`` → không qua TelegramLogHandler.
-    Dùng cho tick mỗi vòng poll; heartbeat Telegram vẫn dùng ``_log.info`` (mỗi ~30s).
+    Dùng cho tick mỗi vòng poll; heartbeat Telegram vẫn dùng ``_log.info`` (mỗi ~5 phút).
     """
     name = "automation_tool.tv_watchlist_daemon.poll_tick"
     lg = logging.getLogger(name)
@@ -898,7 +898,7 @@ def _tv_watchlist_daemon_main_loop(
     zs_path: Optional[Path],
     get_price: Callable[[int], Optional[float]],
 ) -> None:
-    heartbeat_s = 30.0
+    heartbeat_s = 300.0
     last_heartbeat_at = 0.0
     while True:
         st = read_zones_state(zs_path)
@@ -927,7 +927,7 @@ def _tv_watchlist_daemon_main_loop(
             len(st.zones),
         )
 
-        # Heartbeat: Telegram + stderr every ~30s (``_log`` propagates); tick mỗi poll chỉ stderr (``_poll_terminal``).
+        # Heartbeat: Telegram + stderr every ~5m (``_log`` propagates); tick mỗi poll chỉ stderr (``_poll_terminal``).
         try:
             now_mono = time.monotonic()
             if (now_mono - last_heartbeat_at) >= heartbeat_s:
