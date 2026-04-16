@@ -15,7 +15,11 @@ from automation_tool.openai_analysis_json import (
     ZONE_LABELS_ORDER,
     parse_vung_cho_bounds,
 )
-from automation_tool.state_files import _atomic_write_json  # type: ignore[attr-defined]
+from automation_tool.state_files import (
+    _atomic_write_json,  # type: ignore[attr-defined]
+    default_last_alert_prices_path,
+    read_last_alert_state,
+)
 from automation_tool.zones_paths import (
     SLOTS_ORDER,
     SessionSlot,
@@ -647,6 +651,40 @@ def format_intraday_update_baseline_vung_cho(st: Optional[ZonesState]) -> str:
         else:
             lines.append(f"vùng chờ {lab}: (chưa có)")
     return "\n".join(lines) + "\n"
+
+
+def resolve_vung_cho_for_plan_label(
+    label: str,
+    *,
+    zones_state_path: Optional[Path] = None,
+    last_alert_path: Optional[Path] = None,
+) -> str:
+    """
+    Chuỗi ``vung_cho`` hiển thị cho Telegram (prefix [INTRADAY_ALERT]): ưu tiên zone trên disk,
+    không có thì một giá neo từ ``last_alert_prices.json`` theo cùng ``label``.
+    """
+    key = (label or "").strip().lower()
+    if not key:
+        return ""
+    st_z = read_zones_state(zones_state_path)
+    if st_z is not None:
+        for z in st_z.zones:
+            if (z.label or "").strip().lower() == key:
+                vc = (z.vung_cho or "").strip()
+                if vc:
+                    return vc
+    lap = last_alert_path or default_last_alert_prices_path()
+    st_a = read_last_alert_state(lap)
+    if st_a is None:
+        return ""
+    for i, lab in enumerate(st_a.labels):
+        if lab.strip().lower() != key or i >= len(st_a.prices):
+            continue
+        p = st_a.prices[i]
+        if isinstance(p, float) and p.is_integer():
+            return str(int(p))
+        return str(p)
+    return ""
 
 
 def format_zones_snapshot_for_intraday_update(

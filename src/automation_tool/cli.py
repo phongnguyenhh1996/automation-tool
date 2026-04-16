@@ -2229,7 +2229,7 @@ def cmd_update(args: argparse.Namespace) -> None:
         require_telegram(s)
         parts: list[str] = []
         if text:
-            parts.append(text)
+            parts.append("Phản hồi sau khi cập nhật: " + text)
         if plan_lines:
             parts.append(plan_lines)
         message = "\n\n".join(parts)

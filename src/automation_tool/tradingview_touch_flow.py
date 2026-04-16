@@ -56,6 +56,7 @@ from automation_tool.telegram_bot import (
     send_user_friendly_notice,
 )
 from automation_tool.tradingview_last_price import read_watchlist_last_price_wait_stable
+from automation_tool.zones_state import resolve_vung_cho_for_plan_label
 
 _log = logging.getLogger("automation_tool.tv_touch")
 
@@ -485,6 +486,11 @@ def run_intraday_touch_flow(
             raw_openai_text=out_text,
             default_parse_mode=settings.telegram_parse_mode,
             no_telegram=params.no_telegram,
+            alert_label=touched_label,
+            alert_vung_cho=resolve_vung_cho_for_plan_label(
+                touched_label,
+                last_alert_path=last_alert_path,
+            ),
         )
 
         # Apply first response JSON side effects (may auto-MT5, but we also handle intraday below)

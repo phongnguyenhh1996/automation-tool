@@ -734,12 +734,16 @@ def _zone_touch_job(
     params: WatchlistDaemonParams,
     zone_id: str,
     last_price: float,
+    after_retry_wait: bool = False,
 ) -> None:
     """
     Fire-and-forget worker:
     - capture Coinmap M5
     - call OpenAI follow-up
     - update zone status + trade_line + mt5 ticket (optional)
+
+    ``after_retry_wait``: True khi dispatch từ vòng ``cham`` sau khi hết ``retry_at`` (~15 phút),
+    khác với lần chạm đầu từ ``vung_cho``.
     """
     st0 = _state_read(params)
     if st0 is None:
@@ -756,9 +760,14 @@ def _zone_touch_job(
             f"vung_cho={zone.vung_cho} ref={ref} last={last_price}",
         )
         side_vn = "mua" if (zone.side or "").strip().upper() == "BUY" else "bán"
+        _touch_title = (
+            f"Sau {_RETRY_WAIT_MINUTES}p giá chạm vùng chờ ({zone.label})."
+            if after_retry_wait
+            else f"Giá đã chạm vùng chờ ({zone.label})."
+        )
         _send_user_notice(
             settings,
-            f"Giá đã chạm vùng chờ ({zone.label}, {side_vn}).",
+            _touch_title,
             "Đang lấy dữ liệu biểu đồ M5 và phân tích lại với AI.",
         )
 
@@ -826,6 +835,8 @@ def _zone_touch_job(
             raw_openai_text=out_text,
             default_parse_mode=settings.telegram_parse_mode,
             no_telegram=params.no_telegram,
+            alert_label=zone.label,
+            alert_vung_cho=(zone.vung_cho or "").strip(),
         )
 
         act = parse_journal_intraday_action_from_openai_text(out_text)
@@ -1196,6 +1207,7 @@ def _daemon_plan_main_loop(
                     params=params,
                     zone_id=z.id,
                     last_price=float(p_last),
+                    after_retry_wait=True,
                 )
 
         st = _state_read(params)

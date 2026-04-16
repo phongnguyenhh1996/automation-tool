@@ -63,6 +63,7 @@ from automation_tool.telegram_bot import (
     send_phan_tich_alert_to_main_chat_if_any,
     send_user_friendly_notice,
 )
+from automation_tool.zones_state import resolve_vung_cho_for_plan_label
 from automation_tool.tradingview_alerts import (
     _open_alerts_list_panel,
     parse_tv_alert_price_from_description,
@@ -573,6 +574,11 @@ def _run_intraday_touch_loop(
             raw_openai_text=out_text,
             default_parse_mode=settings.telegram_parse_mode,
             no_telegram=params.no_telegram,
+            alert_label=touched_label,
+            alert_vung_cho=resolve_vung_cho_for_plan_label(
+                touched_label,
+                last_alert_path=params.last_alert_path or default_last_alert_prices_path(),
+            ),
         )
 
         hop_done = apply_first_response_vao_lenh(

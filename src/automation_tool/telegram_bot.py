@@ -624,6 +624,15 @@ def send_first_response_log_to_analysis_detail_chat(
     )
 
 
+def _intraday_alert_telegram_prefix(*, label: str, vung_cho: str) -> str:
+    lab = (label or "").strip()
+    vc = (vung_cho or "").strip()
+    rest = " ".join(x for x in (lab, vc) if x)
+    if rest:
+        return f"Phản hồi khi chạm giá {rest}: "
+    return "Phản hồi khi chạm giá: "
+
+
 def send_phan_tich_alert_to_main_chat_if_any(
     *,
     bot_token: str,
@@ -631,10 +640,12 @@ def send_phan_tich_alert_to_main_chat_if_any(
     raw_openai_text: str,
     default_parse_mode: Optional[str],
     no_telegram: bool,
+    alert_label: str = "",
+    alert_vung_cho: str = "",
 ) -> None:
     """
     [INTRADAY_ALERT] / Schema E: nếu JSON có ``phan_tich_alert``, gửi nội dung đó tới
-    ``TELEGRAM_CHAT_ID`` (chat chính).
+    ``TELEGRAM_CHAT_ID`` (chat chính), kèm tiền tố ``Phản hồi khi chạm giá {label} {vung_cho}: ``.
     """
     if no_telegram or not (chat_id or "").strip():
         return
@@ -644,10 +655,11 @@ def send_phan_tich_alert_to_main_chat_if_any(
     body = (payload.phan_tich_alert or "").strip()
     if not body:
         return
+    prefix = _intraday_alert_telegram_prefix(label=alert_label, vung_cho=alert_vung_cho)
     send_message(
         bot_token=bot_token,
         chat_id=chat_id.strip(),
-        text=body,
+        text=prefix + body,
         parse_mode=default_parse_mode,
     )
 
