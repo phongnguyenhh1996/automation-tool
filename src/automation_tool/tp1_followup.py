@@ -260,6 +260,7 @@ def _run_tp1_openai_and_act(
                     telegram_chat_id=settings.telegram_chat_id,
                     source="tp1-followup",
                     text=f"{label}: loại sau TP1\n{r.message}",
+                    trade_line=(st.trade_line_by_label.get(label) or "") if st else None,
                 )
         update_single_plan_status(label, LOAI, path=last_alert_path)
         clear_plan_mt5_fields(label, path=last_alert_path)
@@ -303,6 +304,7 @@ def _run_tp1_openai_and_act(
                 source="tp1-followup-chinh",
                 text=format_mt5_execution_for_telegram(ex),
                 zone_label=label,
+                trade_line=dec.trade_line_moi.strip(),
             )
         tid = int(ex.order) if ex.order else 0
         if tid > 0:
@@ -475,6 +477,7 @@ def maybe_post_entry_tp1_tick(
                             source="tp1-scalp-tp1",
                             text=f"{lab}: scalp chạm TP1 — huỷ ticket\n{r.message}",
                             zone_label=lab,
+                            trade_line=tl,
                         )
                 else:
                     _log.info(

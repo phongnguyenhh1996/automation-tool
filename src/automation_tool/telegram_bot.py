@@ -513,12 +513,14 @@ def send_mt5_execution_log_to_ngan_gon_chat(
     source: str,
     text: str,
     zone_label: Optional[str] = None,
+    trade_line: Optional[str] = None,
 ) -> None:
     """
     Gửi thông báo sau thực thi MT5 (sau ``execute_trade``) tới ``TELEGRAM_CHAT_ID``.
 
     Nội dung: một câu cố định (chọn ngẫu nhiên); (tuỳ chọn) xuống dòng rồi dòng
-    ``Đã vào lệnh cho "Plan chính"`` / ``Plan phụ`` / ``Scalp`` khi ``zone_label`` khớp.
+    ``Đã vào lệnh cho "Plan chính"`` / ``Plan phụ`` / ``Scalp`` khi ``zone_label`` khớp;
+    (tuỳ chọn) thêm dòng ``trade_line`` (dòng lệnh pipe) khi có.
     Tham số ``text`` chỉ dùng để kiểm tra có thực thi — không gửi log chi tiết.
     Plain text; không dùng parse_mode để tránh lỗi ký tự đặc biệt từ broker/API.
     """
@@ -529,6 +531,9 @@ def send_mt5_execution_log_to_ngan_gon_chat(
     zone_line = mt5_zone_entry_line_vn(zone_label)
     if zone_line:
         out = f"{out}\n\n{zone_line}"
+    tl = (trade_line or "").strip()
+    if tl:
+        out = f"{out}\n\n{tl}"
     main = (telegram_chat_id or "").strip()
     if not main:
         return

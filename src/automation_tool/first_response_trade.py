@@ -423,6 +423,7 @@ def apply_first_response_vao_lenh(
                 source=telegram_source_label,
                 text=format_mt5_execution_for_telegram(ex),
                 zone_label=label,
+                trade_line=zone_trade_line,
             )
         _mt5_lines = [ex.message]
         if ex.order:

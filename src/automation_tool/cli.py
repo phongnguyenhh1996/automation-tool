@@ -49,7 +49,6 @@ from automation_tool.images import (
 )
 from automation_tool.first_response_trade import apply_first_response_vao_lenh
 from automation_tool.state_files import (
-    MorningBaselinePrices,
     default_last_alert_prices_path,
     default_last_response_id_path,
     default_morning_baseline_prices_path,
@@ -74,14 +73,19 @@ from automation_tool.tradingview_watchlist_monitor import (
     WatchlistMonitorParams,
     run_tv_watchlist_monitor,
 )
-from automation_tool.tv_watchlist_daemon import WatchlistDaemonParams, run_tv_watchlist_daemon
+from automation_tool.daemon_launcher import (
+    launch_daemon_plans_for_written_shards,
+    reconcile_daemon_plans_at_boot,
+    stop_daemon_plans_in_zones,
+    zones_dir_from_cli_path,
+)
+from automation_tool.tv_watchlist_daemon import WatchlistDaemonParams, run_daemon_plan, run_tv_watchlist_daemon
+from automation_tool.zones_paths import SessionSlot, session_slot_now_hcm, shard_path
 from automation_tool.zones_state import (
-    ZonesState,
-    baseline_triple_from_zones_state,
-    default_zones_state_path,
+    clear_zones_directory,
+    migrate_legacy_zones_state_if_needed,
     read_zones_state,
-    remove_zones_state_file,
-    write_zones_state,
+    write_zones_for_slot,
     zones_from_analysis_payload,
     zones_from_analysis_payload_merged,
 )
@@ -103,6 +107,25 @@ from playwright.sync_api import sync_playwright
 from automation_tool.playwright_browser import close_browser_and_context, launch_chrome_context
 
 _log = logging.getLogger("automation_tool.cli")
+
+
+def _telegram_log_technical(settings, text: str) -> None:
+    """Best-effort technical log to ``TELEGRAM_LOG_CHAT_ID``."""
+    cid = (settings.telegram_log_chat_id or "").strip()
+    if not cid:
+        return
+    body = (text or "").strip()
+    if not body:
+        return
+    try:
+        send_message(
+            bot_token=settings.telegram_bot_token,
+            chat_id=cid,
+            text=body,
+            parse_mode=None,
+        )
+    except Exception:
+        pass
 
 _OPENAI_MODEL_HELP = (
     "OpenAI Responses API model id (e.g. gpt-5.2). "
@@ -568,14 +591,20 @@ def _parser() -> argparse.ArgumentParser:
         help="Chỉ dry-run MT5 cho auto-MT5 sau follow-up",
     )
     up.add_argument("--model", default=None, metavar="ID", help=_OPENAI_MODEL_HELP)
+    up.add_argument(
+        "--zones-json",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Thư mục zones (shard) hoặc legacy zones_state.json — mặc định data/<SYM>/zones/",
+    )
     up.set_defaults(func=cmd_update)
 
     wd = sub.add_parser(
         "tv-watchlist-daemon",
         help=(
-            "Daemon 24/24: đọc giá từ title tab TradingView (vd: 'XAUUSD 4,755.145 ...') mỗi 1s (mặc định), "
-            "so Last với mức ref suy từ vung_cho trong zones_state.json (BUY=max hai giá, SELL=min; làm tròn số nguyên; chạm nếu |chênh|≤eps, mặc định 1); "
-            "chạm → dispatch job (Coinmap M5 + OpenAI + MT5/Telegram) và không chờ."
+            "Daemon giá: đọc Last từ title tab TradingView mỗi poll (mặc định 1s) và ghi atomic vào last.txt. "
+            "Logic vùng chạy trong lệnh ``daemon-plan`` (một process mỗi file shard)."
         ),
     )
     wd.add_argument(
@@ -603,7 +632,13 @@ def _parser() -> argparse.ArgumentParser:
         metavar="X",
         help="Sau làm tròn nguyên: chạm nếu |Last−alert|≤X (mặc định 1.0 → lệch 1 giá vẫn chạm)",
     )
-    wd.add_argument("--zones-json", type=Path, default=None, metavar="FILE", help="zones_state.json path override")
+    wd.add_argument(
+        "--last-price-file",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help="Ghi giá Last (atomic) vào file này — mặc định data/<SYM>/last.txt",
+    )
     wd.add_argument("--no-mt5-execute", action="store_true")
     wd.add_argument("--mt5-symbol", default=None, metavar="SYM")
     wd.add_argument("--mt5-dry-run", action="store_true")
@@ -639,6 +674,57 @@ def _parser() -> argparse.ArgumentParser:
     zt.add_argument("--mt5-dry-run", action="store_true")
     zt.add_argument("--model", default=None, metavar="ID", help=_OPENAI_MODEL_HELP)
     zt.set_defaults(func=cmd_zone_touch)
+
+    dp = sub.add_parser(
+        "daemon-plan",
+        help="Một process cho một file shard: đọc last.txt, cập nhật zone (tuần tự); thoát khi done/loại.",
+    )
+    dp.add_argument(
+        "--shard",
+        type=Path,
+        required=True,
+        metavar="PATH",
+        help="File JSON vung_{label}_{slot}.json",
+    )
+    dp.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Yaml tradingview (ký hiệu; daemon-plan không mở TV — chỉ đọc last.txt)",
+    )
+    dp.add_argument("--capture-config", type=Path, default=None)
+    dp.add_argument("--charts-dir", type=Path, default=None)
+    dp.add_argument("--storage-state", type=Path, default=None)
+    dp.add_argument("--no-save-storage", action="store_true")
+    dp.add_argument("--headed", action="store_true")
+    dp.add_argument("--no-telegram", action="store_true")
+    dp.add_argument("--poll-seconds", type=float, default=1.0)
+    dp.add_argument("--eps", type=float, default=1.0, metavar="X")
+    dp.add_argument(
+        "--last-price-file",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help="Đọc Last từ file (mặc định data/<SYM>/last.txt)",
+    )
+    dp.add_argument("--no-mt5-execute", action="store_true")
+    dp.add_argument("--mt5-symbol", default=None, metavar="SYM")
+    dp.add_argument("--mt5-dry-run", action="store_true")
+    dp.add_argument("--model", default=None, metavar="ID", help=_OPENAI_MODEL_HELP)
+    dp.set_defaults(func=cmd_daemon_plan)
+
+    rec = sub.add_parser(
+        "reconcile-daemon-plans",
+        help="Quét thư mục zones và spawn daemon-plan cho shard chưa terminal / chưa có PID.",
+    )
+    rec.add_argument(
+        "--zones-json",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Thư mục zones (mặc định data/<SYM>/zones/)",
+    )
+    rec.set_defaults(func=cmd_reconcile_daemon_plans)
 
     tv = sub.add_parser(
         "tv-alerts",
@@ -1681,6 +1767,7 @@ def cmd_mt5_trade(args: argparse.Namespace) -> None:
         telegram_chat_id=s_mt5.telegram_chat_id,
         source="mt5-trade",
         text=format_mt5_execution_for_telegram(out),
+        trade_line=(trade.raw_line or "").strip() or None,
     )
     if out.resolved_symbol:
         print("Symbol MT5 (đã resolve):", out.resolved_symbol)
@@ -1740,14 +1827,16 @@ def cmd_all(args: argparse.Namespace) -> None:
     if getattr(args, "main_symbol", None):
         set_active_main_symbol_file(args.main_symbol)
 
-    zs_path = args.zones_json  # None → default data/<SYM>/zones_state.json cho clear + write
-    zs_clear = zs_path or default_zones_state_path()
+    migrate_legacy_zones_state_if_needed(args.zones_json)
+    zones_dir = zones_dir_from_cli_path(args.zones_json)
     if not args.no_clear_zones_state:
-        if remove_zones_state_file(zs_path):
-            _log.info("all: đã xóa zones_state trước phiên | %s", zs_clear)
-            print(f"Đã xóa zones_state trước phiên all: {zs_clear}", flush=True)
-        else:
-            _log.info("all: không có zones_state để xóa | %s", zs_clear)
+        stop_daemon_plans_in_zones(
+            zones_dir,
+            log_chat=lambda m: _telegram_log_technical(s, m),
+        )
+        n_rm = clear_zones_directory(zones_dir)
+        _log.info("all: cleared zones | removed=%s dir=%s", n_rm, zones_dir)
+        print(f"Đã dừng daemon-plan (nếu có) và xóa zones/: {zones_dir} ({n_rm} file)", flush=True)
 
     cfg = args.config or default_coinmap_config_path()
     storage = args.storage_state or default_storage_state_path()
@@ -1833,15 +1922,29 @@ def cmd_all(args: argparse.Namespace) -> None:
             from automation_tool.images import get_active_main_symbol
 
             sym = get_active_main_symbol().strip().upper()
-            zones = zones_from_analysis_payload(symbol=sym, payload=payload, source="all")
+            slot: SessionSlot = session_slot_now_hcm()
+            zones = zones_from_analysis_payload(
+                symbol=sym, payload=payload, source="all", session_slot=slot
+            )
             if zones:
-                write_zones_state(ZonesState(symbol=sym, zones=zones), path=zs_path)
-                _log.info("all: đã ghi zones_state.json | zones=%d | symbol=%s", len(zones), sym)
+                write_zones_for_slot(symbol=sym, zones=zones, slot=slot, zones_dir=zones_dir)
+                written = [shard_path(zones_dir, z.label, slot) for z in zones]
+                launch_daemon_plans_for_written_shards(
+                    zones_dir=zones_dir,
+                    shard_paths=written,
+                    log_chat=lambda m: _telegram_log_technical(s, m),
+                )
+                _log.info(
+                    "all: đã ghi shard zones | slot=%s zones=%d | symbol=%s",
+                    slot,
+                    len(zones),
+                    sym,
+                )
             else:
-                _log.warning("all: parse JSON có prices nhưng không tạo được zones — không ghi zones_state")
+                _log.warning("all: parse JSON có prices nhưng không tạo được zones — không ghi shard")
         elif out.after_charts.strip():
             print(
-                "Warning: could not parse analysis JSON for zones_state.json (no `prices` or empty).",
+                "Warning: could not parse analysis JSON for zones (no `prices` or empty).",
                 file=sys.stderr,
             )
 
@@ -1997,13 +2100,9 @@ def cmd_update(args: argparse.Namespace) -> None:
 
     baseline = read_morning_baseline_prices()
     if baseline is None:
-        triple = baseline_triple_from_zones_state(read_zones_state())
-        if triple is None:
-            raise SystemExit(
-                f"Missing {default_morning_baseline_prices_path()} and could not derive baseline from "
-                f"{default_zones_state_path()} — run `coinmap-automation all` successfully first."
-            )
-        baseline = MorningBaselinePrices(prices=triple)
+        raise SystemExit(
+            f"Missing {default_morning_baseline_prices_path()} — run `coinmap-automation all` successfully first."
+        )
 
     morning_path = default_morning_full_analysis_path()
     if not morning_path.is_file():
@@ -2151,20 +2250,29 @@ def cmd_update(args: argparse.Namespace) -> None:
         new_triple[2],
     )
 
-    # Write zones_state.json (migration A: keep last_alert_prices.json for legacy flows)
+    migrate_legacy_zones_state_if_needed(getattr(args, "zones_json", None))
     payload = update_payload
     if payload is not None and payload.prices:
         from automation_tool.images import get_active_main_symbol
 
         sym = get_active_main_symbol().strip().upper()
+        zones_dir = zones_dir_from_cli_path(getattr(args, "zones_json", None))
+        slot: SessionSlot = session_slot_now_hcm()
         zones = zones_from_analysis_payload_merged(
-            existing=read_zones_state(),
+            existing=read_zones_state(getattr(args, "zones_json", None)),
             payload=payload,
             source="update",
+            merge_slot=slot,
         )
         if zones:
-            write_zones_state(ZonesState(symbol=sym, zones=zones), path=None)
-            _log.info("update: đã ghi zones_state.json | zones=%d | symbol=%s", len(zones), sym)
+            write_zones_for_slot(symbol=sym, zones=zones, slot=slot, zones_dir=zones_dir)
+            written = [shard_path(zones_dir, z.label, slot) for z in zones]
+            launch_daemon_plans_for_written_shards(
+                zones_dir=zones_dir,
+                shard_paths=written,
+                log_chat=lambda m: _telegram_log_technical(s, m),
+            )
+            _log.info("update: đã ghi shard zones | slot=%s zones=%d | symbol=%s", slot, len(zones), sym)
 
     # Không cần tạo TradingView alerts nữa; monitor đọc trực tiếp giá realtime từ Watchlist.
 
@@ -2217,7 +2325,8 @@ def cmd_tv_watchlist_daemon(args: argparse.Namespace) -> None:
         no_save_storage=args.no_save_storage,
         poll_seconds=float(args.poll_seconds),
         no_telegram=args.no_telegram,
-        zones_state_path=args.zones_json,
+        zones_state_path=None,
+        last_price_path=getattr(args, "last_price_file", None),
         mt5_execute=not args.no_mt5_execute,
         mt5_symbol=args.mt5_symbol,
         mt5_dry_run=args.mt5_dry_run,
@@ -2227,6 +2336,47 @@ def cmd_tv_watchlist_daemon(args: argparse.Namespace) -> None:
     )
     outcome = run_tv_watchlist_daemon(settings=s, params=params)
     print(outcome, flush=True)
+
+
+def cmd_daemon_plan(args: argparse.Namespace) -> None:
+    s = load_settings()
+    require_openai(s)
+    cfg_tv = args.config or default_coinmap_config_path()
+    cfg_cap = args.capture_config or default_coinmap_update_config_path()
+    charts_dir = args.charts_dir or default_charts_dir()
+    storage = args.storage_state or default_storage_state_path()
+    shard = args.shard.expanduser().resolve()
+    params = WatchlistDaemonParams(
+        coinmap_tv_yaml=cfg_tv,
+        capture_coinmap_yaml=cfg_cap,
+        charts_dir=charts_dir,
+        storage_state_path=storage,
+        headless=not args.headed,
+        no_save_storage=args.no_save_storage,
+        poll_seconds=float(args.poll_seconds),
+        no_telegram=args.no_telegram,
+        zones_state_path=None,
+        shard_path=shard,
+        last_price_path=getattr(args, "last_price_file", None),
+        mt5_execute=not args.no_mt5_execute,
+        mt5_symbol=args.mt5_symbol,
+        mt5_dry_run=args.mt5_dry_run,
+        eps=float(args.eps),
+        openai_model=resolved_openai_model(s, getattr(args, "model", None)),
+        openai_model_cli=getattr(args, "model", None),
+    )
+    outcome = run_daemon_plan(settings=s, params=params)
+    print(outcome, flush=True)
+
+
+def cmd_reconcile_daemon_plans(args: argparse.Namespace) -> None:
+    s = load_settings()
+    zd = zones_dir_from_cli_path(getattr(args, "zones_json", None))
+    n = reconcile_daemon_plans_at_boot(
+        zd,
+        log_chat=lambda m: _telegram_log_technical(s, m),
+    )
+    print(f"reconcile-daemon-plans: spawned {n} process(es) | dir={zd}", flush=True)
 
 
 def cmd_zone_touch(args: argparse.Namespace) -> None:

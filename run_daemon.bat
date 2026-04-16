@@ -9,7 +9,7 @@ echo CWD    : %cd%
 echo Args   : %*
 echo ============================================================
 
-REM 24/24 daemon: TradingView watchlist + zones_state orchestration
+REM 24/24 daemon giá: TradingView watchlist Last -> data\<SYM>\last.txt (daemon-plan đọc file này)
 REM Intended for Windows Task Scheduler ("At startup" / "On log on")
 REM Browser: chạy browser_up.bat trước (hoặc lịch Task Scheduler riêng).
 
@@ -29,13 +29,10 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo [%date% %time%] INFO: Starting coinmap-automation tv-watchlist-daemon symbol=%AUTOMATION_MAIN_SYMBOL%>> "logs\daemon.log"
+echo [%date% %time%] INFO: Starting coinmap-automation tv-watchlist-daemon (gia) symbol=%AUTOMATION_MAIN_SYMBOL%>> "logs\daemon.log"
 REM Headless by default; do NOT pass --headed.
-set "ZONES_JSON=data\XAUUSD\zones_state.json"
-if not exist "%ZONES_JSON%" (
-  echo [%date% %time%] INFO: zones_state.json not found at %ZONES_JSON% — starting daemon idle until all/update creates it.>> "logs\daemon.log"
-)
-coinmap-automation tv-watchlist-daemon --zones-json "%ZONES_JSON%" >> "logs\daemon.log" 2>&1
+set "LAST_PRICE=data\XAUUSD\last.txt"
+coinmap-automation tv-watchlist-daemon --last-price-file "%LAST_PRICE%" >> "logs\daemon.log" 2>&1
 set "EXIT_CODE=%ERRORLEVEL%"
 echo [%date% %time%] INFO: Finished with exit code %EXIT_CODE%>> "logs\daemon.log"
 

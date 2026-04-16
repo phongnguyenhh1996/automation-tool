@@ -585,6 +585,7 @@ def run_intraday_touch_flow(
                         source="tv-touch",
                         text=format_mt5_execution_for_telegram(ex),
                         zone_label=touched_label,
+                        trade_line=(parsed.raw_line or "").strip() or None,
                     )
                 tid = int(ex.order) if ex.order else 0
                 if (not tid or tid <= 0) and not params.mt5_dry_run and (ex.resolved_symbol or "").strip():

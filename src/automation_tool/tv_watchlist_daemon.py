@@ -5,9 +5,7 @@ import logging
 import math
 import re
 import sys
-import threading
 import time
-import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -34,6 +32,7 @@ from automation_tool.config import Settings, resolved_model_for_intraday_alert, 
 from automation_tool.images import DEFAULT_MAIN_CHART_SYMBOL, get_active_main_symbol
 from automation_tool.mt5_execute import execute_trade, format_mt5_execution_for_telegram
 from automation_tool.mt5_openai_parse import (
+    is_last_price_hit_stop_loss,
     parse_journal_intraday_action_from_openai_text,
     parse_openai_output_md,
 )
@@ -55,7 +54,15 @@ from automation_tool.openai_analysis_json import (
     auto_mt5_hop_luu_threshold_for_label,
     parse_vung_cho_bounds,
 )
-from automation_tool.zones_state import Zone, ZonesState, read_zones_state, write_zones_state
+from automation_tool.zones_paths import default_last_price_path, read_last_price_file, write_last_price_file
+from automation_tool.zones_state import (
+    Zone,
+    ZonesState,
+    read_zones_state,
+    read_zones_state_from_shard,
+    write_zones_state,
+    write_zones_state_to_shard,
+)
 
 _log = logging.getLogger("automation_tool.tv_watchlist_daemon")
 
@@ -153,9 +160,26 @@ class WatchlistDaemonParams:
     mt5_symbol: Optional[str] = None
     mt5_dry_run: bool = False
     zones_state_path: Optional[Path] = None
+    """One shard JSON (``daemon-plan``); when set, read/write only this file."""
+    shard_path: Optional[Path] = None
+    """Shared ``last.txt`` written by daemon giá; ``daemon-plan`` reads this path."""
+    last_price_path: Optional[Path] = None
     eps: float = _EPS_DEFAULT  # max |Δ| between integer-rounded Last and touch ref (default 1.0)
     openai_model: Optional[str] = None
     openai_model_cli: Optional[str] = None
+
+
+def _state_read(params: WatchlistDaemonParams) -> Optional[ZonesState]:
+    if params.shard_path is not None:
+        return read_zones_state_from_shard(params.shard_path)
+    return read_zones_state(params.zones_state_path)
+
+
+def _state_write(params: WatchlistDaemonParams, st: ZonesState) -> None:
+    if params.shard_path is not None:
+        write_zones_state_to_shard(params.shard_path, st)
+    else:
+        write_zones_state(st, path=params.zones_state_path)
 
 
 def _send_log(settings: Settings, text: str) -> None:
@@ -234,6 +258,39 @@ def _parse_trade_from_zone_trade_line(trade_line: str, *, symbol_override: Optio
     return parse_openai_output_md(minimal, symbol_override=symbol_override)
 
 
+def _maybe_loai_zone_if_last_hit_sl(
+    zone: Zone,
+    p_last: float,
+    *,
+    settings: Settings,
+    params: WatchlistDaemonParams,
+) -> bool:
+    """
+    ``vung_cho`` / ``cham``: nếu Last đã chạm/vượt mức SL trên ``trade_line``, loại vùng ngay.
+    """
+    tl = (zone.trade_line or "").strip()
+    if not tl:
+        return False
+    parsed, err = _parse_trade_from_zone_trade_line(tl, symbol_override=params.mt5_symbol)
+    if err or parsed is None:
+        return False
+    if not is_last_price_hit_stop_loss(float(p_last), parsed, eps=_TP1_EPS):
+        return False
+    zone.status = "loai"
+    zone.loai_streak = 0
+    _send_log(
+        settings,
+        f"[sl-hit] last={p_last} touched SL -> loai | zone_id={zone.id} label={zone.label} "
+        f"sl={parsed.sl} side={parsed.side}",
+    )
+    _send_user_notice(
+        settings,
+        f"Loại plan {zone.label}: giá chạm SL ({parsed.sl}).",
+        f"Last {p_last} — vùng chờ không còn hiệu lực.",
+    )
+    return True
+
+
 def _entry_reference_price(parsed) -> float:
     if getattr(parsed, "kind", "") == "MARKET" or getattr(parsed, "price", None) is None:
         return (float(parsed.sl) + float(parsed.tp1)) / 2.0
@@ -277,9 +334,8 @@ def _tp1_followup_job(
     - parse decision: loai | chinh_trade_line
     - act on MT5 and update zones_state
     """
-    zs_path = params.zones_state_path
     try:
-        st0 = read_zones_state(zs_path)
+        st0 = _state_read(params)
         if st0 is None:
             return
         z0 = next((z for z in st0.zones if z.id == zone_id), None)
@@ -290,13 +346,13 @@ def _tp1_followup_job(
         if not z0.trade_line or not z0.mt5_ticket:
             z0.status = "cho_tp1"
             z0.tp1_followup_done = False
-            write_zones_state(st0, path=zs_path)
+            _state_write(params, st0)
             return
 
         parsed, err = _parse_trade_from_zone_trade_line(z0.trade_line, symbol_override=params.mt5_symbol)
         if err or parsed is None:
             z0.tp1_followup_done = False
-            write_zones_state(st0, path=zs_path)
+            _state_write(params, st0)
             return
 
         tk_check = int(z0.mt5_ticket or 0)
@@ -306,14 +362,14 @@ def _tp1_followup_job(
             still_open, ticket_msg = mt5_ticket_still_open(tk_check, dry_run=dry)
             _send_log(settings, f"[tp1] kiểm tra ticket | {ticket_msg}")
             if not still_open:
-                st_done = read_zones_state(zs_path)
+                st_done = _state_read(params)
                 if st_done is not None:
                     z_done = next((z for z in st_done.zones if z.id == zone_id), None)
                     if z_done is not None:
                         z_done.status = "done"
                         z_done.mt5_ticket = None
                         z_done.tp1_followup_done = True
-                        write_zones_state(st_done, path=zs_path)
+                        _state_write(params, st_done)
                 _send_log(
                     settings,
                     f"[tp1] bỏ qua follow-up TP1 (ticket đã đóng trên MT5) | zone_id={zone_id} | {ticket_msg}",
@@ -333,11 +389,12 @@ def _tp1_followup_job(
                         source="tp1-scalp-tp1",
                         text=f"scalp: chạm TP1 — huỷ ticket\n{r.message}",
                         zone_label="scalp",
+                        trade_line=z0.trade_line,
                     )
             z0.status = "loai"
             z0.mt5_ticket = None
             z0.tp1_followup_done = True
-            write_zones_state(st0, path=zs_path)
+            _state_write(params, st0)
             _send_user_notice(
                 settings,
                 "Scalp chạm TP1 — đã huỷ lệnh (không gọi AI).",
@@ -401,7 +458,7 @@ def _tp1_followup_job(
         _send_log(settings, f"[tp1] openai_output_raw:\n{out_text}".strip())
 
         dec = parse_tp1_followup_decision(out_text)
-        st1 = read_zones_state(zs_path)
+        st1 = _state_read(params)
         if st1 is None:
             return
         z1 = next((z for z in st1.zones if z.id == zone_id), None)
@@ -415,7 +472,7 @@ def _tp1_followup_job(
             # cannot parse -> allow retry later
             z1.tp1_followup_done = False
             z1.status = "cho_tp1"
-            write_zones_state(st1, path=zs_path)
+            _state_write(params, st1)
             _send_user_notice(
                 settings,
                 "Sau TP1: không đọc được quyết định từ AI.",
@@ -432,7 +489,7 @@ def _tp1_followup_job(
                 r = mt5_cancel_pending_or_close_position(tk, dry_run=dry)
                 _send_log(settings, f"[tp1] mt5_cancel_close: {r.message}".strip())
             z1.status = "loai"
-            write_zones_state(st1, path=zs_path)
+            _state_write(params, st1)
             _send_user_notice(
                 settings,
                 "Sau TP1: AI chọn «loại» — đóng / bỏ theo dõi vùng.",
@@ -444,7 +501,7 @@ def _tp1_followup_job(
         if not dec.trade_line_moi.strip():
             z1.tp1_followup_done = False
             z1.status = "cho_tp1"
-            write_zones_state(st1, path=zs_path)
+            _state_write(params, st1)
             return
 
         # close old ticket then execute new trade line
@@ -460,7 +517,7 @@ def _tp1_followup_job(
         if err2 or new_parsed is None:
             z1.tp1_followup_done = False
             z1.status = "cho_tp1"
-            write_zones_state(st1, path=zs_path)
+            _state_write(params, st1)
             return
 
         if exe:
@@ -476,6 +533,7 @@ def _tp1_followup_job(
                     source="tp1-followup",
                     text=format_mt5_execution_for_telegram(ex),
                     zone_label=z1.label,
+                    trade_line=dec.trade_line_moi.strip(),
                 )
             _send_log(settings, f"[tp1] mt5_execute_trade: {ex.message}".strip())
             tid = int(ex.order) if ex.order else 0
@@ -494,7 +552,7 @@ def _tp1_followup_job(
         z1.trade_line = dec.trade_line_moi.strip()
         z1.status = "vao_lenh"
         z1.tp1_followup_done = False
-        write_zones_state(st1, path=zs_path)
+        _state_write(params, st1)
         return
     except Exception as e:
         _send_log(settings, f"[tp1] ERROR | zone_id={zone_id} | {e!s}")
@@ -515,9 +573,8 @@ def _auto_entry_job(
 
     Does not use ``dang_thuc_thi``; that status remains for zone-touch / TP1 / other flows.
     """
-    zs_path = params.zones_state_path
     try:
-        st0 = read_zones_state(zs_path)
+        st0 = _state_read(params)
         if st0 is None:
             return
         z0 = next((z for z in st0.zones if z.id == zone_id), None)
@@ -530,18 +587,18 @@ def _auto_entry_job(
         if not z0.trade_line:
             z0.status = "cham"
             z0.auto_entry_retry_after = ""
-            write_zones_state(st0, path=zs_path)
+            _state_write(params, st0)
             return
         if z0.hop_luu is None:
             z0.status = "cham"
             z0.auto_entry_retry_after = ""
-            write_zones_state(st0, path=zs_path)
+            _state_write(params, st0)
             return
         thr = int(auto_mt5_hop_luu_threshold_for_label(z0.label))
         if int(z0.hop_luu) <= thr:
             z0.status = "cham"
             z0.auto_entry_retry_after = ""
-            write_zones_state(st0, path=zs_path)
+            _state_write(params, st0)
             return
         if not params.mt5_execute:
             _send_log(settings, f"[auto-entry] mt5_execute=off | zone_id={zone_id} skip")
@@ -552,19 +609,19 @@ def _auto_entry_job(
             )
             z0.status = "cham"
             z0.auto_entry_retry_after = ""
-            write_zones_state(st0, path=zs_path)
+            _state_write(params, st0)
             return
 
         parsed, err = _parse_trade_from_zone_trade_line(z0.trade_line, symbol_override=params.mt5_symbol)
         if err or parsed is None:
-            st1 = read_zones_state(zs_path)
+            st1 = _state_read(params)
             if st1 is not None:
                 for z in st1.zones:
                     if z.id == zone_id:
                         z.status = "cham"
                         z.auto_entry_retry_after = ""
                         break
-                write_zones_state(st1, path=zs_path)
+                _state_write(params, st1)
             _send_log(settings, f"[auto-entry] parse_trade_line_failed | zone_id={zone_id} err={err}")
             _send_user_notice(
                 settings,
@@ -585,6 +642,7 @@ def _auto_entry_job(
                 source="auto-entry",
                 text=format_mt5_execution_for_telegram(ex),
                 zone_label=z0.label,
+                trade_line=z0.trade_line,
             )
         _send_log(settings, f"[auto-entry] mt5_execute_trade: {ex.message}".strip())
         _lines = [ex.message]
@@ -599,7 +657,7 @@ def _auto_entry_job(
         )
 
         tid = int(ex.order) if ex.order else 0
-        st2 = read_zones_state(zs_path)
+        st2 = _state_read(params)
         if st2 is None:
             return
         for z in st2.zones:
@@ -618,7 +676,7 @@ def _auto_entry_job(
                     f"[auto-entry] mt5_failed -> cham cooldown_until={z.auto_entry_retry_after} | zone_id={zone_id}",
                 )
             break
-        write_zones_state(st2, path=zs_path)
+        _state_write(params, st2)
         return
     except Exception as e:
         _send_log(settings, f"[auto-entry] ERROR | zone_id={zone_id} | {e!s}")
@@ -639,8 +697,7 @@ def _zone_touch_job(
     - call OpenAI follow-up
     - update zone status + trade_line + mt5 ticket (optional)
     """
-    zs_path = params.zones_state_path
-    st0 = read_zones_state(zs_path)
+    st0 = _state_read(params)
     if st0 is None:
         return
     zone = next((z for z in st0.zones if z.id == zone_id), None)
@@ -661,9 +718,9 @@ def _zone_touch_job(
             "Đang lấy dữ liệu biểu đồ M5 và phân tích lại với AI.",
         )
 
-        loai_confirm_rounds = 4
+        loai_confirm_rounds = 6
 
-        st_check = read_zones_state(zs_path)
+        st_check = _state_read(params)
         if st_check is None:
             return
         zc = next((z for z in st_check.zones if z.id == zone_id), None)
@@ -678,7 +735,7 @@ def _zone_touch_job(
         # Mark running (anti-spam + visibility). Daemon will handle retries using retry_at.
         zone.status = "dang_thuc_thi"
         zone.retry_at = ""
-        write_zones_state(st_check, path=zs_path)
+        _state_write(params, st_check)
 
         # Capture Coinmap (reuse capture pipeline)
         from automation_tool.coinmap import capture_charts
@@ -745,7 +802,7 @@ def _zone_touch_job(
                 )
             _send_log(settings, f"[zone-touch] openai_output_raw:\n{out_text}".strip())
 
-        st1 = read_zones_state(zs_path)
+        st1 = _state_read(params)
         if st1 is None:
             return
         z1 = next((z for z in st1.zones if z.id == zone_id), None)
@@ -757,7 +814,7 @@ def _zone_touch_job(
             if z1.loai_streak >= loai_confirm_rounds:
                 z1.status = "loai"
                 z1.retry_at = ""
-                write_zones_state(st1, path=zs_path)
+                _state_write(params, st1)
                 _send_log(
                     settings,
                     f"[zone-touch] act=loai confirm {z1.loai_streak}/{loai_confirm_rounds} "
@@ -772,7 +829,7 @@ def _zone_touch_job(
             # keep touched state; daemon will re-dispatch after retry_at
             z1.status = "cham"
             z1.retry_at = _retry_at_iso()
-            write_zones_state(st1, path=zs_path)
+            _state_write(params, st1)
             _send_log(
                 settings,
                 f"[zone-touch] act=loai confirm {z1.loai_streak}/{loai_confirm_rounds} "
@@ -793,7 +850,7 @@ def _zone_touch_job(
             # keep touched state (no revert to vung_cho); daemon can retry later
             z1.status = "cham"
             z1.retry_at = _retry_at_iso()
-            write_zones_state(st1, path=zs_path)
+            _state_write(params, st1)
             _send_log(
                 settings,
                 f"[zone-touch] act={act} | zone_id={zone_id} -> status=cham retry_at={z1.retry_at}",
@@ -815,7 +872,7 @@ def _zone_touch_job(
         if err or parsed is None:
             z1.status = "cham"
             z1.retry_at = _retry_at_iso()
-            write_zones_state(st1, path=zs_path)
+            _state_write(params, st1)
             _send_log(
                 settings,
                 f"[zone-touch] parse_trade_line_failed | err={err} | zone_id={zone_id} -> status=cham",
@@ -824,7 +881,7 @@ def _zone_touch_job(
 
         z1.trade_line = (parsed.raw_line or "").strip()
         z1.status = "vao_lenh"
-        write_zones_state(st1, path=zs_path)
+        _state_write(params, st1)
         _send_log(
             settings,
             f"[zone-touch] act=VAO_LENH | zone_id={zone_id} -> status=vao_lenh | trade_line={z1.trade_line!r}",
@@ -853,31 +910,32 @@ def _zone_touch_job(
                 source="zone-touch",
                 text=format_mt5_execution_for_telegram(ex),
                 zone_label=z1.label,
+                trade_line=z1.trade_line,
             )
         _send_log(settings, f"[zone-touch] mt5_execute_trade: {ex.message}".strip())
         tid = int(ex.order) if ex.order else 0
         if ex.ok and tid > 0:
-            st2 = read_zones_state(zs_path)
+            st2 = _state_read(params)
             if st2 is None:
                 return
             for z in st2.zones:
                 if z.id == zone_id:
                     z.mt5_ticket = tid
                     break
-            write_zones_state(st2, path=zs_path)
+            _state_write(params, st2)
             _send_log(settings, f"[zone-touch] mt5_ticket_saved | zone_id={zone_id} ticket={tid}")
         return
     except Exception as e:
         # On any error: keep touched state (no revert to vung_cho); daemon will retry using retry_at
         try:
-            stx = read_zones_state(zs_path)
+            stx = _state_read(params)
             if stx is not None:
                 for z in stx.zones:
                     if z.id == zone_id:
                         z.status = "cham"
                         z.retry_at = _retry_at_iso()
                         break
-                write_zones_state(stx, path=zs_path)
+                _state_write(params, stx)
         except Exception:
             pass
         _send_log(settings, f"[zone-touch] ERROR | zone_id={zone_id} | {e!s}")
@@ -889,64 +947,119 @@ def _zone_touch_job(
         re_raise_unless_openai(e)
 
 
-def _tv_watchlist_daemon_main_loop(
+def _tv_watchlist_price_only_loop(
     *,
     settings: Settings,
     params: WatchlistDaemonParams,
     sym: str,
     poll_s: float,
-    zs_path: Optional[Path],
     get_price: Callable[[int], Optional[float]],
 ) -> None:
+    """Daemon giá: poll TradingView title price → atomic ``last.txt`` only."""
+    last_path = params.last_price_path or default_last_price_path()
     heartbeat_s = 300.0
     last_heartbeat_at = 0.0
     while True:
-        st = read_zones_state(zs_path)
+        wms = min(15_000, max(2_000, int(poll_s * 1000)))
+        p_last = get_price(wms)
+        if p_last is not None:
+            write_last_price_file(float(p_last), last_path)
+            _send_log(settings, f"[daemon-gia] last.txt <- {p_last} | symbol={sym} path={last_path}")
+            _poll_terminal.info("tv-watchlist-daemon (gia) | symbol=%s | last=%s", sym, p_last)
+        else:
+            _poll_terminal.info("tv-watchlist-daemon (gia) | symbol=%s | last=(none)", sym)
+        try:
+            now_mono = time.monotonic()
+            if p_last is not None and (now_mono - last_heartbeat_at) >= heartbeat_s:
+                last_heartbeat_at = now_mono
+                _log.info(
+                    "tv-watchlist-daemon (gia) alive | symbol=%s last=%s",
+                    sym,
+                    p_last,
+                )
+        except Exception:
+            pass
+        time.sleep(poll_s)
+
+
+def _daemon_plan_main_loop(
+    *,
+    settings: Settings,
+    params: WatchlistDaemonParams,
+    sym: str,
+    poll_s: float,
+) -> None:
+    """
+    One shard, one thread: read ``last.txt`` (~poll_s), run zone pipeline **sequentially** (no worker threads).
+    Exit when the zone reaches ``done`` or ``loai``.
+    """
+    if params.shard_path is None:
+        raise ValueError("daemon-plan requires params.shard_path")
+    last_path = params.last_price_path or default_last_price_path()
+    heartbeat_s = 300.0
+    last_heartbeat_at = 0.0
+    shard_tag = str(params.shard_path)
+    _send_log(settings, f"[daemon-plan] start | shard={shard_tag} last_file={last_path} symbol={sym}")
+    while True:
+        st = _state_read(params)
         if st is None or not st.zones:
             _poll_terminal.info(
-                "tv-watchlist-daemon | symbol=%s | tick | zones=0 (no state)",
-                sym,
+                "daemon-plan | shard=%s | tick | zones=0 (no state)",
+                shard_tag,
             )
             time.sleep(poll_s)
             continue
 
-        wms = min(15_000, max(2_000, int(poll_s * 1000)))
-        p_last = get_price(wms)
+        z0 = st.zones[0]
+        if z0.status in ("done", "loai"):
+            _send_log(
+                settings,
+                f"[daemon-plan] exit | status={z0.status} shard={shard_tag} zone_id={z0.id}",
+            )
+            return
+
+        p_last = read_last_price_file(last_path)
         if p_last is None:
             _poll_terminal.info(
-                "tv-watchlist-daemon | symbol=%s | tick | last=(none)",
-                sym,
+                "daemon-plan | shard=%s | tick | last=(none) file=%s",
+                shard_tag,
+                last_path,
             )
             time.sleep(poll_s)
             continue
 
         _poll_terminal.info(
-            "tv-watchlist-daemon | symbol=%s | tick | last=%s zones=%d",
-            sym,
+            "daemon-plan | shard=%s | tick | last=%s",
+            shard_tag,
             p_last,
-            len(st.zones),
         )
 
-        # Heartbeat: Telegram + stderr every ~5m (``_log`` propagates); tick mỗi poll chỉ stderr (``_poll_terminal``).
         try:
             now_mono = time.monotonic()
             if (now_mono - last_heartbeat_at) >= heartbeat_s:
                 last_heartbeat_at = now_mono
                 _log.info(
-                    "tv-watchlist-daemon alive | symbol=%s last=%s zones=%d",
-                    sym,
+                    "daemon-plan alive | shard=%s last=%s status=%s",
+                    shard_tag,
                     p_last,
-                    len(st.zones),
+                    z0.status,
                 )
         except Exception:
-            # Never let logging break the daemon.
             pass
 
-        # Auto-entry: every tick, if zone has hop_luu above threshold and no mt5_ticket, enter immediately.
-        st_auto = read_zones_state(zs_path)
+        # vung_cho / cham: SL hit → loại
+        sl_invalidated = False
+        for z in st.zones:
+            if z.status not in ("vung_cho", "cham"):
+                continue
+            if _maybe_loai_zone_if_last_hit_sl(z, float(p_last), settings=settings, params=params):
+                sl_invalidated = True
+        if sl_invalidated:
+            _state_write(params, st)
+
+        st_auto = _state_read(params)
         if st_auto is not None:
             for z in st_auto.zones:
-                # Only auto-entry from vung_cho or cham.
                 if z.status not in ("vung_cho", "cham"):
                     continue
                 if z.mt5_ticket is not None and int(z.mt5_ticket or 0) > 0:
@@ -961,24 +1074,16 @@ def _tv_watchlist_daemon_main_loop(
                 aer = (getattr(z, "auto_entry_retry_after", "") or "").strip()
                 if aer and not _is_retry_due(aer):
                     continue
-                # Step 1: mark đang vào lệnh (auto-entry) so the next poll does not duplicate dispatch.
                 z.status = "dang_vao_lenh"
                 z.auto_entry_retry_after = ""
-                write_zones_state(st_auto, path=zs_path)
+                _state_write(params, st_auto)
                 _send_log(
                     settings,
                     f"[auto-entry] dispatch | zone_id={z.id} label={z.label} hop_luu={z.hop_luu} thr(>)={thr}",
                 )
-                th0 = threading.Thread(
-                    target=_auto_entry_job,
-                    name=f"auto-entry-{z.id}-{uuid.uuid4().hex[:6]}",
-                    daemon=True,
-                    kwargs={"settings": settings, "params": params, "zone_id": z.id},
-                )
-                th0.start()
+                _auto_entry_job(settings=settings, params=params, zone_id=z.id)
 
-        # Retry touched zones: daemon re-dispatches zone-touch when retry_at is due.
-        st_retry = read_zones_state(zs_path)
+        st_retry = _state_read(params)
         if st_retry is not None:
             for z in st_retry.zones:
                 if z.status != "cham":
@@ -987,22 +1092,20 @@ def _tv_watchlist_daemon_main_loop(
                     continue
                 z.status = "dang_thuc_thi"
                 z.retry_at = ""
-                write_zones_state(st_retry, path=zs_path)
+                _state_write(params, st_retry)
                 _send_log(settings, f"[zone-touch] retry_dispatch | zone_id={z.id} last={p_last}")
-                th_retry = threading.Thread(
-                    target=_zone_touch_job,
-                    name=f"zone-touch-retry-{z.id}-{uuid.uuid4().hex[:6]}",
-                    daemon=True,
-                    kwargs={
-                        "settings": settings,
-                        "params": params,
-                        "zone_id": z.id,
-                        "last_price": float(p_last),
-                    },
+                _zone_touch_job(
+                    settings=settings,
+                    params=params,
+                    zone_id=z.id,
+                    last_price=float(p_last),
                 )
-                th_retry.start()
 
-        # match zones by vung_cho-derived touch ref (BUY max / SELL min) vs Last
+        st = _state_read(params)
+        if st is None or not st.zones:
+            time.sleep(poll_s)
+            continue
+
         matched: list[Zone] = []
         for z in st.zones:
             if z.status != "vung_cho":
@@ -1020,26 +1123,17 @@ def _tv_watchlist_daemon_main_loop(
                 matched.append(z)
 
         for z in matched:
-            # mark touched and persist before dispatch
             z.status = "cham"
-            write_zones_state(st, path=zs_path)
-            th = threading.Thread(
-                target=_zone_touch_job,
-                name=f"zone-touch-{z.id}-{uuid.uuid4().hex[:6]}",
-                daemon=True,
-                kwargs={
-                    "settings": settings,
-                    "params": params,
-                    "zone_id": z.id,
-                    "last_price": float(p_last),
-                },
+            _state_write(params, st)
+            _zone_touch_job(
+                settings=settings,
+                params=params,
+                zone_id=z.id,
+                last_price=float(p_last),
             )
-            th.start()
 
-        # TP1 tick/dispatch for post-entry zones
-        st_tp1 = read_zones_state(zs_path)
+        st_tp1 = _state_read(params)
         if st_tp1 is not None:
-            # 1) arm: vao_lenh -> cho_tp1
             changed = False
             for z in st_tp1.zones:
                 if z.status != "vao_lenh":
@@ -1052,10 +1146,9 @@ def _tv_watchlist_daemon_main_loop(
                     changed = True
                     _send_log(settings, f"[tp1] arm | zone_id={z.id} vao_lenh->cho_tp1 last={p_last}")
             if changed:
-                write_zones_state(st_tp1, path=zs_path)
+                _state_write(params, st_tp1)
 
-            # 2) follow-up when touched TP1
-            st_tp1b = read_zones_state(zs_path)
+            st_tp1b = _state_read(params)
             if st_tp1b is not None:
                 for z in st_tp1b.zones:
                     if z.status != "cho_tp1":
@@ -1071,23 +1164,16 @@ def _tv_watchlist_daemon_main_loop(
                         continue
                     if not _tp1_touched(parsed, float(p_last)):
                         continue
-                    # mark in-progress to prevent duplicate dispatch
                     z.status = "dang_thuc_thi"
                     z.tp1_followup_done = True
-                    write_zones_state(st_tp1b, path=zs_path)
-                    _send_log(settings, f"[tp1] touched | zone_id={z.id} -> dispatch followup last={p_last}")
-                    th2 = threading.Thread(
-                        target=_tp1_followup_job,
-                        name=f"tp1-{z.id}-{uuid.uuid4().hex[:6]}",
-                        daemon=True,
-                        kwargs={
-                            "settings": settings,
-                            "params": params,
-                            "zone_id": z.id,
-                            "p_last": float(p_last),
-                        },
+                    _state_write(params, st_tp1b)
+                    _send_log(settings, f"[tp1] touched | zone_id={z.id} -> followup last={p_last}")
+                    _tp1_followup_job(
+                        settings=settings,
+                        params=params,
+                        zone_id=z.id,
+                        p_last=float(p_last),
                     )
-                    th2.start()
 
         time.sleep(poll_s)
 
@@ -1336,13 +1422,12 @@ def run_tv_watchlist_daemon(
     if not sym or sym == DEFAULT_MAIN_CHART_SYMBOL:
         sym = get_active_main_symbol().strip().upper()
 
-    zs_path = params.zones_state_path
-
+    last_p = params.last_price_path or default_last_price_path()
     _log.info(
-        "tv-watchlist-daemon start | symbol=%s poll=%.1fs zones_state=%s",
+        "tv-watchlist-daemon (gia) start | symbol=%s poll=%.1fs last_price=%s",
         sym,
         poll_s,
-        zs_path or "(default)",
+        last_p,
     )
 
     # Browser service up: drive TradingView entirely via RPC (no second CDP client in this process).
@@ -1366,12 +1451,11 @@ def run_tv_watchlist_daemon(
             c, tab_holder, sym=sym, tv=tv, settings=settings
         )
         try:
-            _tv_watchlist_daemon_main_loop(
+            _tv_watchlist_price_only_loop(
                 settings=settings,
                 params=params,
                 sym=sym,
                 poll_s=poll_s,
-                zs_path=zs_path,
                 get_price=get_price,
             )
         finally:
@@ -1403,12 +1487,11 @@ def run_tv_watchlist_daemon(
             _prepare_tv_chart_page(page, tv, settings)
             get_price = _make_playwright_title_price_getter(page, sym=sym, tv=tv, settings=settings)
 
-            _tv_watchlist_daemon_main_loop(
+            _tv_watchlist_price_only_loop(
                 settings=settings,
                 params=params,
                 sym=sym,
                 poll_s=poll_s,
-                zs_path=zs_path,
                 get_price=get_price,
             )
         finally:
@@ -1423,5 +1506,31 @@ def run_tv_watchlist_daemon(
                     pass
             else:
                 close_browser_and_context(browser, context)
+    return "stopped"
+
+
+def run_daemon_plan(
+    *,
+    settings: Settings,
+    params: WatchlistDaemonParams,
+) -> str:
+    """
+    One process per shard JSON: reads shared ``last.txt`` from daemon giá; sequential zone pipeline.
+    """
+    if params.shard_path is None:
+        raise SystemExit("daemon-plan requires --shard PATH (vung_*.json)")
+    poll_s = float(params.poll_seconds or 1.0)
+    if poll_s <= 0:
+        poll_s = 1.0
+    sym = get_active_main_symbol().strip().upper()
+    last_p = params.last_price_path or default_last_price_path()
+    _log.info(
+        "daemon-plan start | shard=%s poll=%.1fs symbol=%s last_price=%s",
+        params.shard_path,
+        poll_s,
+        sym,
+        last_p,
+    )
+    _daemon_plan_main_loop(settings=settings, params=params, sym=sym, poll_s=poll_s)
     return "stopped"
 
