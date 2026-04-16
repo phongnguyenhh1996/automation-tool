@@ -327,8 +327,7 @@ def _daemon_plan_watch_telegram_text(
     ref_s = f"{ref}" if ref is not None else "—"
     tail = " | ".join(extra) if extra else ""
     base = (
-        f"[daemon-plan] watch | shard={shard_name} | sym={sym} | zone_id={z.id} | label={z.label} "
-        f"| status={z.status} | side={z.side} | ref={ref_s} | last={last_s} | vung={vc}"
+        f"[daemon-plan] watch | zone_id={z.id} | status={z.status} | last={last_s}"
     )
     return f"{base} | {tail}" if tail else base
 
