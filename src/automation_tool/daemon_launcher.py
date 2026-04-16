@@ -116,13 +116,24 @@ def spawn_daemon_plan_if_needed(
         "--shard",
         str(shard_path),
     ]
+    # Windows: inherited console handles are often invalid under Task Scheduler / non-CRT parents
+    # → CreateProcess can fail with WinError 87 unless stdio is redirected.
+    # CREATE_NEW_PROCESS_GROUP also triggers WinError 87 in some of those contexts; use CREATE_NO_WINDOW.
     creationflags = 0
     if sys.platform == "win32":
-        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
+        creationflags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000))
+
+    try:
+        cwd = str(Path.cwd().resolve())
+    except OSError:
+        cwd = None
 
     proc = subprocess.Popen(
         cmd,
-        cwd=str(Path.cwd()),
+        cwd=cwd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
         creationflags=creationflags,
     )
     try:
