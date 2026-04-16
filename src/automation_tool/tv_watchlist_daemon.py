@@ -54,7 +54,11 @@ from automation_tool.openai_analysis_json import (
     auto_mt5_hop_luu_threshold_for_label,
     parse_vung_cho_bounds,
 )
-from automation_tool.daemon_launcher import reconcile_daemon_plans_at_boot, register_stop_daemon_plans_on_exit
+from automation_tool.daemon_launcher import (
+    reconcile_daemon_plans_at_boot,
+    register_daemon_plan_pidfile_for_current_process,
+    register_stop_daemon_plans_on_exit,
+)
 from automation_tool.last_price_ipc import (
     open_writer_shared_memory,
     read_last_price_for_daemon_plan,
@@ -1616,6 +1620,7 @@ def run_daemon_plan(
     """
     if params.shard_path is None:
         raise SystemExit("daemon-plan requires --shard PATH (vung_*.json)")
+    register_daemon_plan_pidfile_for_current_process(params.shard_path)
     poll_s = float(params.poll_seconds or 1.0)
     if poll_s <= 0:
         poll_s = 1.0

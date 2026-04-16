@@ -82,6 +82,36 @@ def _pid_path(zones_dir: Path, shard_path: Path) -> Path:
     return zones_dir / f".daemon-plan-{h}.pid"
 
 
+def register_daemon_plan_pidfile_for_current_process(shard_path: Path) -> Optional[Path]:
+    """
+    Ghi ``.daemon-plan-<hash>.pid`` = PID tiến trình hiện tại (cùng quy tắc với :func:`spawn_daemon_plan_if_needed`).
+
+    Dùng trong tiến trình ``daemon-plan`` để ``stop-daemon-plans`` và
+    ``register_stop_daemon_plans_on_exit`` tìm được PID dù process chạy tay (không qua launcher)
+    hoặc file PID do launcher ghi lỗi / mất.
+    """
+    shard_path = shard_path.resolve()
+    zones_dir = shard_path.parent.resolve()
+    pid_path = _pid_path(zones_dir, shard_path)
+    try:
+        pid_path.write_text(str(os.getpid()), encoding="utf-8")
+    except OSError as e:
+        _log.warning("daemon-plan pid file write failed | path=%s | %s", pid_path, e)
+        return None
+
+    def _unlink_if_mine() -> None:
+        try:
+            if not pid_path.is_file():
+                return
+            if _read_pid(pid_path) == os.getpid():
+                pid_path.unlink()
+        except OSError:
+            pass
+
+    atexit.register(_unlink_if_mine)
+    return pid_path
+
+
 def _read_pid(path: Path) -> Optional[int]:
     try:
         raw = path.read_text(encoding="utf-8").strip()
@@ -240,19 +270,20 @@ def reconcile_daemon_plans_at_boot(
     For each ``vung_*.json`` with a non-terminal zone and no live PID, spawn ``daemon-plan``.
     Returns number of spawns.
     """
-    root = zones_dir or default_zones_dir()
+    root = (zones_dir or default_zones_dir()).resolve()
     if not root.is_dir():
         return 0
     n = 0
     for child in sorted(root.iterdir()):
         if not child.is_file() or not child.name.startswith("vung_") or not child.name.endswith(".json"):
             continue
-        z = read_zone_shard_file(child)
+        child_abs = child.resolve()
+        z = read_zone_shard_file(child_abs)
         if z is None:
             continue
         if z.status in ("done", "loai"):
             continue
-        if spawn_daemon_plan_if_needed(shard_path=child, zones_dir=root, log_chat=log_chat) == "spawned":
+        if spawn_daemon_plan_if_needed(shard_path=child_abs, zones_dir=root, log_chat=log_chat) == "spawned":
             n += 1
     return n
 
