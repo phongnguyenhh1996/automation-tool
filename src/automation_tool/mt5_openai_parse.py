@@ -221,10 +221,14 @@ def parse_openai_output_md(
     text: str,
     default_symbol: str = "XAUUSD",
     symbol_override: Optional[str] = None,
+    fallback_trade_line: Optional[str] = None,
 ) -> tuple[Optional[ParsedTrade], Optional[str]]:
     """
     Đọc output OpenAI: ưu tiên JSON (``intraday_hanh_dong``, ``trade_line``);
     không có thì markdown ``[OUTPUT_NGAN_GON]`` + dòng pipe.
+
+    ``fallback_trade_line``: dùng khi ``intraday_hanh_dong`` là ``VÀO LỆNH`` nhưng JSON/markdown
+    không có dòng pipe (Schema E [INTRADAY_ALERT] — dòng lệnh lấy từ baseline vùng đang chạm).
 
     Returns:
         (ParsedTrade or None, error message or None)
@@ -244,6 +248,10 @@ def parse_openai_output_md(
             blk = (payload.output_ngan_gon or "").strip()
             if blk:
                 trade_line = find_trade_line(blk) or ""
+        if not trade_line:
+            fb = (fallback_trade_line or "").strip()
+            if fb:
+                trade_line = fb
         if not trade_line:
             return None, "Thiếu trade_line hoặc dòng lệnh pipe khi intraday_hanh_dong là VÀO LỆNH."
         parsed = parse_trade_line(trade_line, symbol=sym)

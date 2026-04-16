@@ -18,6 +18,8 @@ from automation_tool.openai_analysis_json import (
     parse_analysis_from_openai_text,
     select_zone_for_auto_mt5,
     select_zone_for_auto_mt5_for_label,
+    select_zone_for_vao_lenh_ignore_hop,
+    select_zone_for_vao_lenh_ignore_hop_for_label,
 )
 from automation_tool.state_files import (
     VAO_LENH,
@@ -133,9 +135,10 @@ def apply_first_response_vao_lenh(
     """
     Ghi ``last_alert_prices`` khi đủ triple giá.
 
-    Auto-MT5 (không dry-run mặc định): chỉ khi có vùng với ``hop_luu`` vượt ngưỡng
-    (plan_chinh/plan_phu > 75; scalp > 60) và ``trade_line`` không rỗng trong JSON;
-    dùng đúng ``trade_line`` của vùng đó. Ghi ``vao_lenh`` + ``entry_manual`` false.
+    Auto-MT5 (không dry-run mặc định): ưu tiên vùng với ``hop_luu`` vượt ngưỡng
+    (plan_chinh/plan_phu > 75; scalp > 60) và ``trade_line`` không rỗng.
+    Nếu không đủ ngưỡng nhưng JSON có ``intraday_hanh_dong: VÀO LỆNH`` và có ``trade_line``
+    khả dụng cho vùng — vẫn vào lệnh (bỏ gate hợp lưu). Ghi ``vao_lenh`` + ``entry_manual`` false.
     Nếu ``auto_mt5_zone_label`` được set (vd. ``plan_chinh``), chỉ xét đúng vùng đó (Nhật ký TV).
 
     Telegram: log phản hồi đầu (hop_luu, vùng, lỗi…) → ``telegram_log_chat_id``
@@ -241,6 +244,22 @@ def apply_first_response_vao_lenh(
         picked = select_zone_for_auto_mt5_for_label(payload.prices, zone_filter)
     else:
         picked = select_zone_for_auto_mt5(payload.prices)
+    if picked is None and payload.intraday_hanh_dong == "VÀO LỆNH":
+        root_tl = (payload.trade_line or "").strip()
+        if zone_filter:
+            picked = select_zone_for_vao_lenh_ignore_hop_for_label(
+                payload.prices,
+                zone_filter,
+                root_trade_line=root_tl,
+            )
+        else:
+            picked = select_zone_for_vao_lenh_ignore_hop(payload.prices)
+        if picked is not None:
+            _log.info(
+                "first_response: VÀO LỆNH — bỏ gate hop_luu, chọn vùng %s (hop_luu=%s)",
+                picked[0],
+                picked[1],
+            )
     if picked is None:
         zhint = f" (chỉ vùng `{zone_filter}`)" if zone_filter else ""
         msg = (

@@ -53,7 +53,6 @@ from automation_tool.openai_analysis_json import (
     ARM_THRESHOLD_TP1_DEFAULT,
     arm_threshold_tp1_for_label,
     auto_mt5_hop_luu_threshold_for_label,
-    parse_analysis_from_openai_text,
     parse_vung_cho_bounds,
 )
 from automation_tool.zones_state import Zone, ZonesState, read_zones_state, write_zones_state
@@ -197,11 +196,9 @@ def _touch_prompt(
     last_price: float,
 ) -> str:
     """
-    User turn for zone-touch OpenAI follow-up: ``[INTRADAY_ALERT]`` / Schema B per system prompt.
+    User turn for zone-touch OpenAI follow-up: ``[INTRADAY_ALERT]`` / **Schema E** (system prompt).
 
-    Daemon still needs ``intraday_hanh_dong``, optional top-level ``trade_line`` when VÀO LỆNH,
-    and ``prices`` with ``hop_luu`` for the touched zone label (MT5 gating). Parsed via
-    ``parse_analysis_from_openai_text`` / ``parse_journal_intraday_action_from_openai_text``.
+    Model chỉ cần ``phan_tich_alert`` + ``intraday_hanh_dong``. Khi ``VÀO LỆNH``.
     """
     ref = _zone_side_ref_from_vung_cho(zone)
     ref_bit = f" (mức so Last: {ref})" if ref is not None else ""
@@ -783,89 +780,68 @@ def _zone_touch_job(
             )
             return
 
-            # Parse hop_luu from the OpenAI JSON so daemon can gate MT5 entry.
-            hop_luu: Optional[int] = None
-            try:
-                payload = parse_analysis_from_openai_text(out_text)
-                if payload is not None and payload.prices:
-                    for pe in payload.prices:
-                        if pe.label.strip().lower() == z1.label.strip().lower():
-                            hop_luu = pe.hop_luu
-                            break
-            except Exception:
-                hop_luu = None
-
-            thr = int(auto_mt5_hop_luu_threshold_for_label(z1.label))
-            hop_ok = hop_luu is not None and int(hop_luu) > thr
-            if not hop_ok:
-                z1.status = "cham"
-                z1.retry_at = _retry_at_iso()
-                write_zones_state(st1, path=zs_path)
-                _send_log(
-                    settings,
-                    f"[zone-touch] hop_luu_gate_failed | zone_id={zone_id} label={z1.label} "
-                    f"hop_luu={hop_luu} thr(>)={thr} -> status=cham retry_at={z1.retry_at} (skip MT5)",
-                )
-                return
-
-            parsed, err = parse_openai_output_md(out_text, symbol_override=params.mt5_symbol)
-            if err or parsed is None:
-                # couldn't parse trade_line -> keep touched state
-                z1.status = "cham"
-                z1.retry_at = _retry_at_iso()
-                write_zones_state(st1, path=zs_path)
-                _send_log(
-                    settings,
-                    f"[zone-touch] parse_trade_line_failed | err={err} | zone_id={zone_id} -> status=cham",
-                )
-                return
-
-            z1.trade_line = (parsed.raw_line or "").strip()
-            z1.status = "vao_lenh"
+        # Schema E: ``VÀO LỆNH`` → vào lệnh ngay (không gate hop_luu); trade_line từ baseline vùng.
+        zone_tl = (z1.trade_line or "").strip()
+        parsed, err = parse_openai_output_md(
+            out_text,
+            symbol_override=params.mt5_symbol,
+            fallback_trade_line=zone_tl or None,
+        )
+        if err or parsed is None:
+            z1.status = "cham"
+            z1.retry_at = _retry_at_iso()
             write_zones_state(st1, path=zs_path)
             _send_log(
                 settings,
-                f"[zone-touch] act=VAO_LENH | zone_id={zone_id} -> status=vao_lenh | trade_line={z1.trade_line!r}",
+                f"[zone-touch] parse_trade_line_failed | err={err} | zone_id={zone_id} -> status=cham",
             )
-
-            if not params.mt5_execute:
-                _send_log(settings, f"[zone-touch] mt5_execute=off | done | zone_id={zone_id}")
-                return
-
-            # Policy: only execute MT5 if we don't have a ticket yet.
-            if z1.mt5_ticket is not None and int(z1.mt5_ticket or 0) > 0:
-                _send_log(
-                    settings,
-                    f"[zone-touch] skip_mt5_execute | already_has_ticket | zone_id={zone_id} ticket={z1.mt5_ticket}",
-                )
-                return
-
-            ex = execute_trade(
-                parsed,
-                dry_run=params.mt5_dry_run,
-                symbol_override=params.mt5_symbol,
-            )
-            if not params.no_telegram:
-                send_mt5_execution_log_to_ngan_gon_chat(
-                    bot_token=settings.telegram_bot_token,
-                    telegram_chat_id=settings.telegram_chat_id,
-                    source="zone-touch",
-                    text=format_mt5_execution_for_telegram(ex),
-                    zone_label=z1.label,
-                )
-            _send_log(settings, f"[zone-touch] mt5_execute_trade: {ex.message}".strip())
-            tid = int(ex.order) if ex.order else 0
-            if ex.ok and tid > 0:
-                st2 = read_zones_state(zs_path)
-                if st2 is None:
-                    return
-                for z in st2.zones:
-                    if z.id == zone_id:
-                        z.mt5_ticket = tid
-                        break
-                write_zones_state(st2, path=zs_path)
-                _send_log(settings, f"[zone-touch] mt5_ticket_saved | zone_id={zone_id} ticket={tid}")
             return
+
+        z1.trade_line = (parsed.raw_line or "").strip()
+        z1.status = "vao_lenh"
+        write_zones_state(st1, path=zs_path)
+        _send_log(
+            settings,
+            f"[zone-touch] act=VAO_LENH | zone_id={zone_id} -> status=vao_lenh | trade_line={z1.trade_line!r}",
+        )
+
+        if not params.mt5_execute:
+            _send_log(settings, f"[zone-touch] mt5_execute=off | done | zone_id={zone_id}")
+            return
+
+        if z1.mt5_ticket is not None and int(z1.mt5_ticket or 0) > 0:
+            _send_log(
+                settings,
+                f"[zone-touch] skip_mt5_execute | already_has_ticket | zone_id={zone_id} ticket={z1.mt5_ticket}",
+            )
+            return
+
+        ex = execute_trade(
+            parsed,
+            dry_run=params.mt5_dry_run,
+            symbol_override=params.mt5_symbol,
+        )
+        if not params.no_telegram:
+            send_mt5_execution_log_to_ngan_gon_chat(
+                bot_token=settings.telegram_bot_token,
+                telegram_chat_id=settings.telegram_chat_id,
+                source="zone-touch",
+                text=format_mt5_execution_for_telegram(ex),
+                zone_label=z1.label,
+            )
+        _send_log(settings, f"[zone-touch] mt5_execute_trade: {ex.message}".strip())
+        tid = int(ex.order) if ex.order else 0
+        if ex.ok and tid > 0:
+            st2 = read_zones_state(zs_path)
+            if st2 is None:
+                return
+            for z in st2.zones:
+                if z.id == zone_id:
+                    z.mt5_ticket = tid
+                    break
+            write_zones_state(st2, path=zs_path)
+            _send_log(settings, f"[zone-touch] mt5_ticket_saved | zone_id={zone_id} ticket={tid}")
+        return
     except Exception as e:
         # On any error: keep touched state (no revert to vung_cho); daemon will retry using retry_at
         try:

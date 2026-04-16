@@ -508,7 +508,17 @@ def run_intraday_touch_flow(
 
         if act == "VÀO LỆNH":
             loai_streak = 0
-            parsed, tl_err = parse_openai_output_md(out_text, symbol_override=params.mt5_symbol)
+            st_tl = read_last_alert_state(last_alert_path)
+            zone_tl = (
+                (st_tl.trade_line_by_label.get(touched_label) or "").strip()
+                if st_tl is not None
+                else ""
+            )
+            parsed, tl_err = parse_openai_output_md(
+                out_text,
+                symbol_override=params.mt5_symbol,
+                fallback_trade_line=zone_tl or None,
+            )
             if tl_err or parsed is None:
                 _ts_log(
                     tz,

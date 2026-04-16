@@ -588,7 +588,7 @@ def send_phan_tich_alert_to_main_chat_if_any(
     no_telegram: bool,
 ) -> None:
     """
-    [INTRADAY_ALERT] / Schema B: nếu JSON có ``phan_tich_alert``, gửi nội dung đó tới
+    [INTRADAY_ALERT] / Schema E: nếu JSON có ``phan_tich_alert``, gửi nội dung đó tới
     ``TELEGRAM_CHAT_ID`` (chat chính).
     """
     if no_telegram or not (chat_id or "").strip():

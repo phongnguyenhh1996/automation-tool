@@ -180,7 +180,7 @@ class AnalysisPayload:
     output_ngan_gon: str = ""
     #: [INTRADAY_UPDATE] only: short analysis for Telegram (Schema B).
     phan_tich_update: str = ""
-    #: [INTRADAY_ALERT] only: short analysis → ``TELEGRAM_CHAT_ID`` (Schema B).
+    #: [INTRADAY_ALERT] only: short analysis → ``TELEGRAM_CHAT_ID`` (Schema E).
     phan_tich_alert: str = ""
     prices: list[PriceZoneEntry] = field(default_factory=list)
     intraday_hanh_dong: Optional[IntradayHanhDong] = None
@@ -380,6 +380,58 @@ def select_zone_for_auto_mt5_for_label(
         if not tl:
             return None
         return (key, int(p.hop_luu), tl)
+    return None
+
+
+def select_zone_for_vao_lenh_ignore_hop(
+    prices: list[PriceZoneEntry],
+) -> Optional[tuple[str, int, str]]:
+    """
+    Giống :func:`select_zone_for_auto_mt5` nhưng **không** lọc theo ngưỡng ``hop_luu`` —
+    dùng khi model trả ``intraday_hanh_dong: VÀO LỆNH`` (vào lệnh theo quyết định, không gate hợp lưu).
+
+    Chỉ cần ``trade_line`` không rỗng. Nhiều vùng: điểm ``hop_luu`` cao nhất (hòa: thứ tự plan).
+    """
+    scored: list[tuple[str, int, str, int]] = []
+    for p in prices:
+        key = p.label.strip().lower()
+        if key not in ZONE_LABELS_ORDER:
+            continue
+        tl = (p.trade_line or "").strip()
+        if not tl:
+            continue
+        hop = int(p.hop_luu) if p.hop_luu is not None else 0
+        tie = ZONE_LABELS_ORDER.index(key)
+        scored.append((key, hop, tl, tie))
+    if not scored:
+        return None
+    scored.sort(key=lambda x: (-x[1], x[3]))
+    best = scored[0]
+    return (best[0], best[1], best[2])
+
+
+def select_zone_for_vao_lenh_ignore_hop_for_label(
+    prices: list[PriceZoneEntry],
+    zone_label: str,
+    *,
+    root_trade_line: str = "",
+) -> Optional[tuple[str, int, str]]:
+    """
+    Một vùng ``zone_label``: bỏ gate ``hop_luu``; ``trade_line`` lấy từ entry hoặc ``root_trade_line``.
+    """
+    want = zone_label.strip().lower()
+    if want not in ZONE_LABELS_ORDER:
+        return None
+    root = (root_trade_line or "").strip()
+    for p in prices:
+        key = p.label.strip().lower()
+        if key != want:
+            continue
+        tl = (p.trade_line or "").strip() or root
+        if not tl:
+            return None
+        hop = int(p.hop_luu) if p.hop_luu is not None else 0
+        return (key, hop, tl)
     return None
 
 

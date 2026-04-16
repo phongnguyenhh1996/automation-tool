@@ -471,6 +471,7 @@ def build_intraday_update_user_text() -> str:
     )
 
 # TradingView tab Nhật ký: giá chạm → Coinmap M5 + OpenAI (intraday).
+# Trả về Schema E: chỉ ``phan_tich_alert`` + ``intraday_hanh_dong``; nếu VÀO LỆNH, tool lấy trade_line từ baseline vùng.
 JOURNAL_INTRADAY_FIRST_USER_TEMPLATE = (
     "[INTRADAY_ALERT]\n"
     "Cảnh báo TradingView đã kích hoạt tại mức giá {touched_price}.\n"

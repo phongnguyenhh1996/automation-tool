@@ -22,6 +22,21 @@ def test_parse_openai_output_json_intraday() -> None:
     assert trade.price == 3360.0
 
 
+def test_schema_e_vao_lenh_uses_fallback_trade_line() -> None:
+    """Schema E: không có trade_line trong JSON — dùng baseline vùng."""
+    text = '{"phan_tich_alert": "OK", "intraday_hanh_dong": "VÀO LỆNH"}'
+    fb = "SELL LIMIT 3360.0 | SL 3363.5 | TP1 3354.5 | Lot 0.02"
+    trade, err = parse_openai_output_md(
+        text,
+        default_symbol="XAUUSD",
+        fallback_trade_line=fb,
+    )
+    assert err is None
+    assert trade is not None
+    assert trade.side == "SELL"
+    assert trade.price == 3360.0
+
+
 def test_parse_sample_output_md() -> None:
     text = """
 [OUTPUT_NGAN_GON]
