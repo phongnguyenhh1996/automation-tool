@@ -28,7 +28,7 @@ from automation_tool.coinmap import (
     load_coinmap_yaml,
 )
 from automation_tool.coinmap import _tradingview_ensure_watchlist_open  # reuse internal helper
-from automation_tool.config import Settings, resolved_model_for_intraday_alert, resolved_openai_model
+from automation_tool.config import Settings, resolved_model_for_intraday_alert
 from automation_tool.images import DEFAULT_MAIN_CHART_SYMBOL, get_active_main_symbol
 from automation_tool.mt5_execute import execute_trade, format_mt5_execution_for_telegram
 from automation_tool.mt5_openai_parse import (
@@ -487,7 +487,7 @@ def _tp1_followup_job(
             vector_store_ids=settings.openai_vector_store_ids,
             store=settings.openai_responses_store,
             include=settings.openai_responses_include,
-            model=resolved_openai_model(settings, params.openai_model),
+            model=resolved_model_for_intraday_alert(settings, params.openai_model_cli),
         )
         if not params.no_telegram:
             send_openai_output_to_telegram(

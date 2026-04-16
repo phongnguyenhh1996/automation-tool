@@ -193,7 +193,8 @@ def resolved_model_for_intraday_alert(
     cli_model_only: Optional[str] = None,
 ) -> str:
     """
-    Model for ``[INTRADAY_ALERT]`` follow-ups (journal touch, watchlist touch, zone-touch).
+    Model for ``[INTRADAY_ALERT]`` (journal touch, watchlist touch, zone-touch) và
+    ``[TRADE_MANAGEMENT]`` / TP1 follow-up (``tp1_followup``, daemon ``_tp1_followup_job``).
 
     Priority: CLI ``--model`` (passed as ``cli_model_only``) → ``OPENAI_MODEL_INTRADAY_ALERT``
     → :data:`DEFAULT_INTRADAY_ALERT_MODEL`.
