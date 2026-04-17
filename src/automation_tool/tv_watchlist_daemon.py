@@ -535,6 +535,16 @@ def _tp1_followup_job(
         dry = bool(params.mt5_dry_run)
         exe = bool(params.mt5_execute)
 
+        if dec.sau_tp1 == "giu_nguyen":
+            z1.status = "vao_lenh"
+            _state_write(params, st1)
+            _send_user_notice(
+                settings,
+                "Sau TP1: AI chọn «giữ nguyên» — không đổi lệnh.",
+                "Tiếp tục theo dõi theo plan.",
+            )
+            return
+
         if dec.sau_tp1 == "loại":
             if exe and tk > 0:
                 r = mt5_cancel_pending_or_close_position(tk, dry_run=dry)

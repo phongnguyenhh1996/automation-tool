@@ -50,7 +50,7 @@ _EPS = 0.01
 
 @dataclass
 class TP1FollowupDecision:
-    sau_tp1: Literal["loại", "chinh_trade_line"]
+    sau_tp1: Literal["loại", "chinh_trade_line", "giu_nguyen"]
     trade_line_moi: str
     out_chi_tiet: str
     output_ngan_gon: str
@@ -88,7 +88,9 @@ def _extract_tp1_json(text: str) -> Optional[dict[str, Any]]:
             d = json.loads(m.group(0))
         except json.JSONDecodeError:
             continue
-        if isinstance(d, dict) and "sau_tp1_hanh_dong" in d:
+        if isinstance(d, dict) and (
+            "hanh_dong_quan_ly_lenh" in d or "sau_tp1_hanh_dong" in d
+        ):
             return d
     return None
 
@@ -97,11 +99,16 @@ def parse_tp1_followup_decision(text: str) -> Optional[TP1FollowupDecision]:
     raw = _extract_tp1_json(text)
     if raw is None:
         return None
-    sp = str(raw.get("sau_tp1_hanh_dong") or "").strip().lower()
+    raw_action = raw.get("hanh_dong_quan_ly_lenh")
+    if raw_action is None or (isinstance(raw_action, str) and not str(raw_action).strip()):
+        raw_action = raw.get("sau_tp1_hanh_dong")
+    sp = str(raw_action or "").strip().lower()
     if sp in ("loại", "loai"):
         sau = "loại"
     elif sp in ("chinh_trade_line", "chỉnh_trade_line", "chinh_sua", "chỉnh"):
         sau = "chinh_trade_line"
+    elif sp in ("giu_nguyen", "giữ_nguyên", "giu nguyen"):
+        sau = "giu_nguyen"
     else:
         return None
     tlm = str(raw.get("trade_line_moi") or "").strip()
@@ -235,8 +242,12 @@ def _run_tp1_openai_and_act(
 
     dec = parse_tp1_followup_decision(out_text)
     if dec is None:
-        _log.warning("tp1-followup: không parse được sau_tp1_hanh_dong — bỏ qua hành động MT5.")
-        _log_tp1.warning("tp1-followup: không parse JSON sau_tp1_hanh_dong từ output model")
+        _log.warning(
+            "tp1-followup: không parse được hanh_dong_quan_ly_lenh — bỏ qua hành động MT5."
+        )
+        _log_tp1.warning(
+            "tp1-followup: không parse JSON hanh_dong_quan_ly_lenh từ output model"
+        )
         update_plan_tp1_followup_done(label, False, path=last_alert_path)
         return new_id
 
@@ -269,6 +280,11 @@ def _run_tp1_openai_and_act(
         clear_plan_mt5_fields(label, path=last_alert_path)
         update_plan_tp1_followup_done(label, False, path=last_alert_path)
         _log_tp1.info("tp1-followup kết thúc nhánh loại | label=%s → status=loai", label)
+        return new_id
+
+    if dec.sau_tp1 == "giu_nguyen":
+        update_plan_tp1_followup_done(label, False, path=last_alert_path)
+        _log_tp1.info("tp1-followup kết thúc nhánh giữ nguyên | label=%s", label)
         return new_id
 
     # chinh_trade_line

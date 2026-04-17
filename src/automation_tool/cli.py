@@ -86,10 +86,8 @@ from automation_tool.zones_paths import SessionSlot, session_slot_now_hcm, shard
 from automation_tool.zones_state import (
     clear_zones_directory,
     migrate_legacy_zones_state_if_needed,
-    read_zones_state,
     write_zones_for_slot,
     zones_from_analysis_payload,
-    zones_from_analysis_payload_merged,
 )
 from automation_tool.telegram_bot import (
     send_message,
@@ -2140,11 +2138,11 @@ def cmd_update(args: argparse.Namespace) -> None:
     except json.JSONDecodeError as e:
         raise SystemExit(f"Invalid JSON in {morning_path}: {e}") from e
 
+    morning_payload = parse_analysis_from_openai_text(morning_raw)
     baseline = read_morning_baseline_prices()
     if baseline is None:
-        payload0 = parse_analysis_from_openai_text(morning_raw)
-        if payload0 is not None and payload0.prices:
-            trip0 = triple_from_zone_prices(payload0.prices)
+        if morning_payload is not None and morning_payload.prices:
+            trip0 = triple_from_zone_prices(morning_payload.prices)
             if trip0 is not None:
                 write_morning_baseline_prices(trip0)
                 baseline = read_morning_baseline_prices()
@@ -2242,7 +2240,7 @@ def cmd_update(args: argparse.Namespace) -> None:
 
     lap = args.last_alert_json or default_last_alert_prices_path()
 
-    new_triple, zerr, no_change_json = parse_update_zone_triple(out_text, baseline.prices)
+    new_triple, zerr, no_change_json = parse_update_zone_triple(out_text)
     if no_change_json is True:
         if not args.no_telegram:
             require_telegram(s)
@@ -2305,11 +2303,11 @@ def cmd_update(args: argparse.Namespace) -> None:
         sym = get_active_main_symbol().strip().upper()
         zones_dir = zones_dir_from_cli_path(getattr(args, "zones_json", None))
         slot: SessionSlot = session_slot_now_hcm()
-        zones = zones_from_analysis_payload_merged(
-            existing=read_zones_state(getattr(args, "zones_json", None)),
+        zones = zones_from_analysis_payload(
+            symbol=sym,
             payload=payload,
             source="update",
-            merge_slot=slot,
+            session_slot=slot,
         )
         if zones:
             write_zones_for_slot(symbol=sym, zones=zones, slot=slot, zones_dir=zones_dir)

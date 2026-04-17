@@ -6,7 +6,6 @@ import re
 from typing import Optional
 
 from automation_tool.openai_analysis_json import (
-    merge_triple_with_baseline,
     parse_analysis_from_openai_text,
     triple_from_zone_prices,
 )
@@ -97,11 +96,11 @@ def _split_three_sections(text: str) -> tuple[Optional[str], Optional[str], Opti
 
 def parse_update_zone_triple(
     text: str,
-    baseline: tuple[float, float, float],
 ) -> tuple[Optional[tuple[float, float, float]], Optional[str], Optional[bool]]:
     """
-    Intraday update (Schema B): merge model ``prices`` with morning ``baseline`` using per-label
-    ``no_change``. Root ``no_change: true`` (legacy Schema A) still means entire payload unchanged.
+    Intraday update (Schema B): lấy ``(plan_chinh, plan_phu, scalp)`` trực tiếp từ ``prices``
+    trong JSON (không merge baseline, không đọc ``no_change`` từng vùng).
+    Root ``no_change: true`` vẫn có nghĩa bỏ qua toàn bộ cập nhật (legacy).
     """
     payload = parse_analysis_from_openai_text(text)
     if payload is None:
@@ -110,8 +109,14 @@ def parse_update_zone_triple(
         return None, None, True
     if not payload.prices:
         return None, "JSON không có prices.", None
-    merged = merge_triple_with_baseline(baseline, payload.prices)
-    return merged, None, False
+    trip = triple_from_zone_prices(payload.prices)
+    if trip is None:
+        return (
+            None,
+            "JSON 'prices' thiếu đủ plan_chinh, plan_phu, scalp hoặc value không hợp lệ.",
+            None,
+        )
+    return trip, None, False
 
 
 def parse_three_zone_prices(

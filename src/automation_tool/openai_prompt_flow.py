@@ -467,7 +467,8 @@ def build_intraday_update_user_text() -> str:
         "còn hiệu lực không; nếu còn hiệu lực thì **chấm lại `hop_luu`** theo order flow hiện tại. "
         "Với **scalp** nếu `hop_luu` dưới 60, với **plan_chinh / plan_phu** nếu `hop_luu` dưới 65 — "
         "tìm plan thay thế có điểm cao hơn (khi hợp lý). "
-        "Trả về Schema B; **bắt buộc** điền `phan_tich_update`.\n"
+        "Trả về Schema B; **bắt buộc** điền `phan_tich_update`. "
+        "Trong `prices` đủ ba vùng (plan_chinh / plan_phu / scalp) — tool parse và ghi đè shard theo label.\n"
     )
 
 # TradingView tab Nhật ký: giá chạm → Coinmap M5 + OpenAI (intraday).

@@ -71,25 +71,24 @@ def test_parse_no_change_json() -> None:
     assert nc is True
 
 
-def test_parse_update_zone_triple_merges_per_no_change() -> None:
+def test_parse_update_zone_triple_from_prices_values() -> None:
     text = """{
       "intraday_hanh_dong": "chờ",
       "trade_line": "",
       "prices": [
-        {"label": "plan_chinh", "value": 10.0, "vung_cho": "9.0–11.0", "hop_luu": 50, "trade_line": "", "no_change": false},
-        {"label": "plan_phu", "value": 99.0, "vung_cho": "98.0–100.0", "hop_luu": 50, "trade_line": "", "no_change": true},
-        {"label": "scalp", "value": 30.0, "vung_cho": "29.0–31.0", "hop_luu": 50, "trade_line": "", "no_change": false}
+        {"label": "plan_chinh", "value": 10.0, "vung_cho": "9.0–11.0", "hop_luu": 50, "trade_line": ""},
+        {"label": "plan_phu", "value": 99.0, "vung_cho": "98.0–100.0", "hop_luu": 50, "trade_line": ""},
+        {"label": "scalp", "value": 30.0, "vung_cho": "29.0–31.0", "hop_luu": 50, "trade_line": ""}
       ]
     }"""
-    baseline = (1.0, 2.0, 3.0)
-    zt, err, nc = parse_update_zone_triple(text, baseline)
+    zt, err, nc = parse_update_zone_triple(text)
     assert err is None
     assert nc is False
-    assert zt == (10.0, 2.0, 30.0)
+    assert zt == (10.0, 99.0, 30.0)
 
 
 def test_parse_update_zone_triple_root_no_change() -> None:
-    zt, err, nc = parse_update_zone_triple('{"no_change": true}', (1.0, 2.0, 3.0))
+    zt, err, nc = parse_update_zone_triple('{"no_change": true}')
     assert zt is None and err is None and nc is True
 
 

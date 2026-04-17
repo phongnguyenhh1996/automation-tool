@@ -8,7 +8,6 @@ from automation_tool.openai_analysis_json import (
     AnalysisPayload,
     PriceZoneEntry,
     format_plan_lines_for_telegram,
-    merge_triple_with_baseline,
     parse_analysis_from_openai_text,
     select_zone_for_auto_mt5,
     select_zone_for_auto_mt5_for_label,
@@ -70,22 +69,6 @@ def test_select_zone_scalp_uses_lower_threshold() -> None:
     tl = "BUY LIMIT 1 | SL 0 | TP1 2 | Lot 0.01"
     assert select_zone_for_auto_mt5([PriceZoneEntry("scalp", 1.0, hop_luu=60, trade_line=tl)]) is None
     assert select_zone_for_auto_mt5([PriceZoneEntry("scalp", 1.0, hop_luu=61, trade_line=tl)]) is not None
-
-
-def test_merge_triple_with_baseline_only_false_updates() -> None:
-    baseline = (1.0, 2.0, 3.0)
-    prices = [
-        PriceZoneEntry("plan_chinh", 10.0, no_change=False),
-        PriceZoneEntry("plan_phu", 99.0, no_change=True),
-        PriceZoneEntry("scalp", 30.0, no_change=False),
-    ]
-    assert merge_triple_with_baseline(baseline, prices) == (10.0, 2.0, 30.0)
-
-
-def test_merge_triple_missing_label_keeps_baseline_slot() -> None:
-    baseline = (1.0, 2.0, 3.0)
-    prices = [PriceZoneEntry("plan_chinh", 10.0, no_change=False)]
-    assert merge_triple_with_baseline(baseline, prices) == (10.0, 2.0, 3.0)
 
 
 def test_select_zone_for_label_scalp_threshold() -> None:

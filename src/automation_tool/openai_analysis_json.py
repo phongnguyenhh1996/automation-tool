@@ -168,7 +168,7 @@ class PriceZoneEntry:
     vung_cho: Optional[str] = None
     hop_luu: Optional[int] = None
     trade_line: str = ""
-    #: Schema B per-label: only ``False`` means apply new ``value``; ``True``/missing keeps baseline on merge.
+    #: Optional; ignored by intraday update persistence (values are taken from JSON as-is).
     no_change: Optional[bool] = None
 
 
@@ -294,33 +294,6 @@ def triple_from_zone_prices(prices: list[PriceZoneEntry]) -> Optional[tuple[floa
         if lab not in by_label:
             return None
         out.append(by_label[lab])
-    return (out[0], out[1], out[2])
-
-
-def merge_triple_with_baseline(
-    baseline: tuple[float, float, float],
-    prices: list[PriceZoneEntry],
-) -> tuple[float, float, float]:
-    """
-    Build (plan_chinh, plan_phu, scalp) for intraday update: for each label, use ``value`` from
-    JSON only when ``no_change is False``; otherwise keep the corresponding baseline slot.
-    Missing label in ``prices`` keeps baseline.
-    """
-    by_label: dict[str, PriceZoneEntry] = {}
-    for p in prices:
-        key = p.label.strip().lower()
-        by_label[key] = p
-    out: list[float] = []
-    for i, lab in enumerate(ZONE_LABELS_ORDER):
-        base_v = baseline[i]
-        pe = by_label.get(lab)
-        if pe is None:
-            out.append(base_v)
-            continue
-        if pe.no_change is False:
-            out.append(float(pe.value))
-        else:
-            out.append(base_v)
     return (out[0], out[1], out[2])
 
 
