@@ -2,15 +2,73 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from automation_tool.openai_analysis_json import ARM_THRESHOLD_TP1_SCALP
+from automation_tool.state_files import read_last_response_id, write_last_response_id
 from automation_tool.tv_watchlist_daemon import (
     _ARM_THRESHOLD,
     _EPS_DEFAULT,
     _arm_threshold_met_for_zone,
+    WatchlistDaemonParams,
+    _daemon_plan_response_id_path,
+    _openai_followup_persist_new_id,
+    _openai_followup_prev_response_id,
     _price_round_nearest_int,
     _zone_side_ref_from_vung_cho,
 )
 from automation_tool.zones_state import Zone
+
+
+def test_daemon_plan_sidecar_filename_matches_json_stem() -> None:
+    """``vung_plan_chinh_sang.json`` → ``vung_plan_chinh_sang.last_response_id.txt`` (cùng thư mục)."""
+    shard = Path("/tmp/zones/vung_plan_chinh_sang.json")
+    assert _daemon_plan_response_id_path(shard) == Path("/tmp/zones/vung_plan_chinh_sang.last_response_id.txt")
+
+
+def test_daemon_plan_openai_sidecar_next_to_shard(tmp_path) -> None:
+    """daemon-plan ghi chain id vào sidecar; không ghi last_response_id.txt chính."""
+    shard = tmp_path / "vung_sang.json"
+    sidecar = _daemon_plan_response_id_path(shard)
+    assert sidecar == tmp_path / "vung_sang.last_response_id.txt"
+    write_last_response_id("thread-a", path=sidecar)
+    params = WatchlistDaemonParams(
+        coinmap_tv_yaml=tmp_path / "coinmap_tv.yaml",
+        capture_coinmap_yaml=tmp_path / "cap.yaml",
+        charts_dir=tmp_path / "charts",
+        storage_state_path=None,
+        headless=True,
+        no_save_storage=True,
+        shard_path=shard,
+    )
+    assert _openai_followup_prev_response_id(params) == "thread-a"
+    _openai_followup_persist_new_id(params, "thread-b")
+    assert read_last_response_id(sidecar) == "thread-b"
+
+
+def test_daemon_plan_prev_seeds_from_main_when_sidecar_empty(monkeypatch, tmp_path) -> None:
+    calls: list[object] = []
+
+    def fake_read(path=None):
+        calls.append(path)
+        if path is not None:
+            return None
+        return "seed-from-main"
+
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon.read_last_response_id", fake_read)
+    shard = tmp_path / "vung_sang.json"
+    params = WatchlistDaemonParams(
+        coinmap_tv_yaml=tmp_path / "coinmap_tv.yaml",
+        capture_coinmap_yaml=tmp_path / "cap.yaml",
+        charts_dir=tmp_path / "charts",
+        storage_state_path=None,
+        headless=True,
+        no_save_storage=True,
+        shard_path=shard,
+    )
+    assert _openai_followup_prev_response_id(params) == "seed-from-main"
+    assert calls[0] == _daemon_plan_response_id_path(shard)
+    assert calls[1] is None
 
 
 def test_price_round_nearest_int_half_up() -> None:

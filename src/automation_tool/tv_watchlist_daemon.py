@@ -40,7 +40,7 @@ from automation_tool.mt5_manage import mt5_cancel_pending_or_close_position, mt5
 from automation_tool.openai_errors import re_raise_unless_openai
 from automation_tool.openai_prompt_flow import TP1_POST_TOUCH_USER_TEMPLATE, run_single_followup_responses
 from automation_tool.playwright_browser import close_browser_and_context, launch_chrome_context
-from automation_tool.state_files import read_last_response_id
+from automation_tool.state_files import read_last_response_id, write_last_response_id
 from automation_tool.telegram_bot import (
     mt5_zone_label_display_vn,
     send_message,
@@ -195,6 +195,43 @@ def _state_write(params: WatchlistDaemonParams, st: ZonesState) -> None:
         write_zones_state_to_shard(params.shard_path, st)
     else:
         write_zones_state(st, path=params.zones_state_path)
+
+
+def _daemon_plan_response_id_path(shard_path: Path) -> Path:
+    """
+    File cạnh shard: luồng OpenAI riêng cho ``daemon-plan`` (ghi id mới ở đây, không ghi ``last_response_id.txt`` chính).
+
+    Ví dụ: ``zones/vung_plan_chinh_sang.json`` → ``zones/vung_plan_chinh_sang.last_response_id.txt``
+    (cùng thư mục; stem khớp tên file shard).
+    """
+    return shard_path.parent / f"{shard_path.stem}.last_response_id.txt"
+
+
+def _openai_followup_prev_response_id(params: WatchlistDaemonParams) -> str:
+    """
+    ``daemon-plan``: ưu tiên id đã lưu trong sidecar shard; nếu chưa có thì **seed** từ ``last_response_id.txt`` chính (lần đầu nối bản phân tích sáng).
+    Tv-watchlist không shard: chỉ đọc file chính.
+    """
+    if params.shard_path is not None:
+        p = _daemon_plan_response_id_path(params.shard_path)
+        s = (read_last_response_id(p) or "").strip()
+        if s:
+            return s
+        return (read_last_response_id() or "").strip()
+    return (read_last_response_id() or "").strip()
+
+
+def _openai_followup_persist_new_id(params: WatchlistDaemonParams, new_id: str) -> None:
+    """
+    ``daemon-plan``: ghi id mới vào sidecar shard để lần sau chain trong cùng thread.
+    Tiến trình tv-watchlist chính (không ``--shard``): không ghi ``last_response_id.txt`` (giữ hành vi cũ).
+    """
+    s = (new_id or "").strip()
+    if not s:
+        return
+    if params.shard_path is None:
+        return
+    write_last_response_id(s, path=_daemon_plan_response_id_path(params.shard_path))
 
 
 def _send_log(settings: Settings, text: str) -> None:
@@ -480,7 +517,7 @@ def _tp1_followup_job(
         if json_path is None or not json_path.is_file():
             raise SystemExit(f"tp1-followup: no main 5m Coinmap JSON under {params.charts_dir}")
 
-        prev = read_last_response_id() or ""
+        prev = _openai_followup_prev_response_id(params)
         user_text = TP1_POST_TOUCH_USER_TEMPLATE.format(
             plan_label=z0.label,
             trade_line=z0.trade_line,
@@ -499,6 +536,7 @@ def _tp1_followup_job(
             include=settings.openai_responses_include,
             model=resolved_model_for_intraday_alert(settings, params.openai_model_cli),
         )
+        _openai_followup_persist_new_id(params, new_id)
         if not params.no_telegram:
             send_openai_output_to_telegram(
                 bot_token=settings.telegram_bot_token,
@@ -832,7 +870,7 @@ def _zone_touch_job(
 
         _send_log(settings, f"[zone-touch] coinmap_m5_json={json_path}")
 
-        prev = read_last_response_id() or ""
+        prev = _openai_followup_prev_response_id(params)
         user_text = _touch_prompt(zone=zone, last_price=last_price)
         out_text, new_id = run_single_followup_responses(
             api_key=settings.openai_api_key,
@@ -846,6 +884,7 @@ def _zone_touch_job(
             include=settings.openai_responses_include,
             model=resolved_model_for_intraday_alert(settings, params.openai_model_cli),
         )
+        _openai_followup_persist_new_id(params, new_id)
         if new_id:
             _send_log(settings, f"[zone-touch] openai_response_id={new_id}")
 
