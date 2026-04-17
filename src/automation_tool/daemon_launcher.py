@@ -136,6 +136,36 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
+def _terminate_process_windows(pid: int) -> None:
+    """
+    Stop *pid* with ``TerminateProcess`` (kernel), not console control events.
+
+    ``os.kill(pid, SIGTERM)`` on Windows often delivers console semantics to attached
+    programs. That produces CMD's interactive **Terminate batch job (Y/N)?** for
+    batch-launched trees and :exc:`KeyboardInterrupt` in Python during ``time.sleep``.
+    """
+    import ctypes
+
+    PROCESS_TERMINATE = 0x0001
+    kernel32 = ctypes.windll.kernel32
+    h = kernel32.OpenProcess(PROCESS_TERMINATE, False, ctypes.c_uint32(pid))
+    if not h:
+        raise ctypes.WinError()
+    try:
+        if not kernel32.TerminateProcess(h, 1):
+            raise ctypes.WinError()
+    finally:
+        kernel32.CloseHandle(h)
+
+
+def _signal_daemon_plan_stop(pid: int) -> None:
+    """Graceful stop on Unix; on Windows, kernel terminate (see :func:`_terminate_process_windows`)."""
+    if sys.platform == "win32":
+        _terminate_process_windows(pid)
+    else:
+        os.kill(pid, signal.SIGTERM)
+
+
 def stop_daemon_plans_in_zones(
     zones_dir: Path,
     *,
@@ -177,7 +207,7 @@ def stop_daemon_plans_in_zones(
     signalled_pids: list[int] = []
     for pid, child in to_signal:
         try:
-            os.kill(pid, signal.SIGTERM)
+            _signal_daemon_plan_stop(pid)
             n += 1
             signalled_pids.append(pid)
             msg = f"[launcher] stop daemon-plan pid={pid} file={child.name}"
