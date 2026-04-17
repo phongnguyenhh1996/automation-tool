@@ -15,6 +15,7 @@ import threading
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import parse_qs, unquote, urlparse
@@ -566,6 +567,18 @@ def _fetch_one_barset(
     return slug, rec, iv_name
 
 
+def _expected_tvdatafeed_out_path(
+    *,
+    charts_dir: Path,
+    stamp: str,
+    tv: dict[str, Any],
+    meta: dict[str, Any],
+) -> Path:
+    """Output path for a task meta (same stem as ``_run_task``)."""
+    slug = _tradingview_interval_slug(meta["label"], tv)
+    return charts_dir / f"{stamp}_tradingview_{meta['file_sym_key']}_{slug}.json"
+
+
 def run_tvdatafeed_export(
     *,
     tv: dict[str, Any],
@@ -573,12 +586,16 @@ def run_tvdatafeed_export(
     stamp: str,
     tradingview_username: Optional[str],
     tradingview_password: Optional[str],
+    only_target_paths: Optional[Sequence[Path]] = None,
 ) -> list[Path]:
     """
     Download OHLC via tvdatafeed and write one JSON per (symbol row × interval).
 
     Credentials: ``tradingview_username`` / ``tradingview_password`` (typically from env).
     If both missing, uses nologin ``TvDatafeed()`` (data may be limited).
+
+    If ``only_target_paths`` is set, only jobs whose output path is in that set are run
+    (used to re-fetch empty JSON without re-running the full export).
     """
     _load_tvdatafeed()
     if not isinstance(tv, dict):
@@ -627,6 +644,22 @@ def run_tvdatafeed_export(
                     "label": label,
                     "n_bars": nb,
                 }
+            )
+
+    if only_target_paths:
+        want = {p.resolve() for p in only_target_paths}
+        tasks = [
+            m
+            for m in tasks
+            if _expected_tvdatafeed_out_path(
+                charts_dir=charts_dir, stamp=stamp, tv=tv, meta=m
+            ).resolve()
+            in want
+        ]
+        if not tasks:
+            raise SystemExit(
+                "tvdatafeed: only_target_paths did not match any export task "
+                f"(stamp={stamp!r}, charts_dir={charts_dir})."
             )
 
     u, p = resolve_tvdatafeed_credentials(

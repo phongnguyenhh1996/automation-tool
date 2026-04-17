@@ -45,9 +45,12 @@ from automation_tool.images import (
     ChartOpenAIPayload,
     coinmap_main_pair_interval_json_path,
     effective_chart_image_order,
+    latest_chart_stamp,
     ordered_chart_openai_payloads,
     stamp_from_capture_paths,
 )
+from automation_tool.chart_payload_validate import list_invalid_chart_slots_for_stamp
+from automation_tool.chart_recapture import recapture_failed_chart_slots
 from automation_tool.first_response_trade import apply_first_response_vao_lenh
 from automation_tool.state_files import (
     default_last_alert_prices_path,
@@ -1889,6 +1892,47 @@ def cmd_all(args: argparse.Namespace) -> None:
     _log.info("all: capture xong | %s artifact(s)", n_art)
     if not paths:
         raise SystemExit("No chart artifacts captured; aborting analyze step.")
+
+    stamp = stamp_from_capture_paths(paths) or latest_chart_stamp(charts_dir)
+    if not stamp:
+        raise SystemExit("Could not determine capture stamp from chart artifacts; aborting.")
+    _CHART_JSON_VALIDATE_MAX_ROUNDS = 3
+    for attempt in range(_CHART_JSON_VALIDATE_MAX_ROUNDS + 1):
+        bad = list_invalid_chart_slots_for_stamp(charts_dir, stamp)
+        if not bad:
+            break
+        if attempt >= _CHART_JSON_VALIDATE_MAX_ROUNDS:
+            detail = "; ".join(f"{x.expected_path.name}: {x.reason}" for x in bad)
+            raise SystemExit(
+                f"Chart JSON validation failed after {_CHART_JSON_VALIDATE_MAX_ROUNDS} recapture attempt(s): {detail}"
+            )
+        print(
+            f"Chart JSON validation: {len(bad)} slot(s) invalid — recapturing (attempt {attempt + 1}/{_CHART_JSON_VALIDATE_MAX_ROUNDS})...",
+            flush=True,
+        )
+        _log.warning(
+            "all: chart JSON validation failed | attempt=%s | issues=%s",
+            attempt + 1,
+            [(x.expected_path.name, x.reason) for x in bad],
+        )
+        try:
+            recapture_failed_chart_slots(
+                coinmap_yaml=cfg,
+                charts_dir=charts_dir,
+                stamp=stamp,
+                issues=bad,
+                storage_state_path=storage,
+                email=s.coinmap_email,
+                password=s.coinmap_password,
+                tradingview_password=s.tradingview_password,
+                save_storage_state=not args.no_save_storage,
+                headless=not args.headed,
+                main_chart_symbol=getattr(args, "main_symbol", None),
+            )
+        except SystemExit:
+            raise
+        except Exception as e:
+            raise SystemExit(f"Recapture after validation failed: {e}") from e
 
     require_openai(s)
     payloads = ordered_chart_openai_payloads(charts_dir)

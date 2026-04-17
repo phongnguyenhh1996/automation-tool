@@ -1675,6 +1675,7 @@ def _run_bearer_request_api_only_flow(
     cd: dict[str, Any],
     api_cd: dict[str, Any],
     bearer_capture: CoinmapBearerCapture,
+    only_retry_paths: Optional[list[Path]] = None,
 ) -> list[Path]:
     """
     Login already completed; capture Bearer from network, optional one-shot navigation,
@@ -1708,6 +1709,20 @@ def _run_bearer_request_api_only_flow(
 
     written: list[Path] = []
     plan = _coinmap_resolve_capture_plan(cd)
+    if only_retry_paths:
+        if not plan:
+            raise SystemExit(
+                "coinmap bearer retry requires multi_shot capture_plan "
+                "(cannot target paths for single-shot fullscreen export)."
+            )
+        from automation_tool.chart_payload_validate import filter_coinmap_plan_for_retry_paths
+
+        plan = filter_coinmap_plan_for_retry_paths(plan, stamp, list(only_retry_paths))
+        if not plan:
+            raise SystemExit(
+                "coinmap bearer retry: no capture_plan steps match the target files "
+                f"(stamp={stamp!r})."
+            )
     if plan:
         n = len(plan)
         if _bearer_http_parallel_enabled(api_cd):
@@ -1811,6 +1826,7 @@ def _run_chart_screenshot_flow(
     coinmap_password: Optional[str] = None,
     coinmap_login_cfg: Optional[dict[str, Any]] = None,
     bearer_capture: Optional[CoinmapBearerCapture] = None,
+    coinmap_bearer_only_retry_paths: Optional[list[Path]] = None,
 ) -> list[Path]:
     """Open chart: multi-shot watchlist sidebar flow, or single fullscreen on current symbol (no modal search)."""
     api_cd = _api_export_config(cd)
@@ -1837,6 +1853,7 @@ def _run_chart_screenshot_flow(
             cd=cd,
             api_cd=api_cd,
             bearer_capture=bearer_capture,
+            only_retry_paths=coinmap_bearer_only_retry_paths,
         )
 
     net_capture: Optional[CoinmapNetworkCapture] = None
@@ -2488,6 +2505,7 @@ def _capture_charts_in_context(
     save_storage_state: bool,
     stamp: str,
     progress_hook: Optional[Callable[[], None]] = None,
+    coinmap_only_retry_paths: Optional[list[Path]] = None,
 ) -> list[Path]:
     """
     Run Coinmap (+ optional TradingView) capture using an existing browser context.
@@ -2561,6 +2579,7 @@ def _capture_charts_in_context(
                     coinmap_password=password,
                     coinmap_login_cfg=cfg,
                     bearer_capture=bearer_capture,
+                    coinmap_bearer_only_retry_paths=coinmap_only_retry_paths,
                 )
                 written.extend(dl_paths)
                 if progress_hook is not None:
@@ -2574,6 +2593,12 @@ def _capture_charts_in_context(
                     "chart_download flow failed. Check selectors in config/coinmap.yaml "
                     f"(multi_shot sidebar/watchlist/interval or single fullscreen). Error: {e}.{hint}"
                 ) from e
+
+        if coinmap_only_retry_paths:
+            if save_storage_state and storage_state_path:
+                _ensure_dir(storage_state_path.parent)
+                context.storage_state(path=str(storage_state_path))
+            return written
 
         tv = cfg.get("tradingview_capture") or {}
         if isinstance(tv, dict) and tv.get("enabled", False):
@@ -2694,6 +2719,7 @@ def capture_charts(
     stamp_override: Optional[str] = None,
     progress_hook: Optional[Callable[[], None]] = None,
     require_browser_service: bool = False,
+    coinmap_only_retry_paths: Optional[list[Path]] = None,
 ) -> list[Path]:
     """
     Optionally clear prior images in charts_dir, then log in (if credentials given),
@@ -2721,6 +2747,25 @@ def capture_charts(
 
     if clear_charts_before_capture is not None:
         cfg["clear_charts_before_capture"] = bool(clear_charts_before_capture)
+    if coinmap_only_retry_paths:
+        cfg["clear_charts_before_capture"] = False
+        st_ro = (stamp_override or "").strip()
+        if not st_ro:
+            raise SystemExit(
+                "coinmap_only_retry_paths requires stamp_override to match the batch being fixed."
+            )
+        cd_retry = cfg.get("chart_download") or {}
+        if not isinstance(cd_retry, dict) or not cd_retry.get("enabled", False):
+            raise SystemExit("coinmap_only_retry_paths requires chart_download.enabled in YAML.")
+        api_retry = _api_export_config(cd_retry)
+        if api_retry is None or _api_export_mode(api_retry) != "bearer_request":
+            raise SystemExit(
+                "coinmap_only_retry_paths requires api_data_export.mode bearer_request (API-only flow)."
+            )
+        if api_retry.get("bearer_skip_chart_ui") is False:
+            raise SystemExit(
+                "coinmap_only_retry_paths is not supported when bearer_skip_chart_ui is false."
+            )
 
     # For multi-symbol runs: allow disabling one side (Coinmap vs TradingView) per phase.
     # Also disable legacy canvas screenshots (stamp_chart_XXX.png) which are noisy for this workflow.
@@ -2777,6 +2822,7 @@ def capture_charts(
             save_storage_state=save_storage_state,
             stamp=stamp,
             progress_hook=progress_hook,
+            coinmap_only_retry_paths=coinmap_only_retry_paths,
         )
 
     vw = int(cfg.get("viewport_width", 1920))
@@ -2814,6 +2860,7 @@ def capture_charts(
                 save_storage_state=save_storage_state,
                 stamp=stamp,
                 progress_hook=progress_hook,
+                coinmap_only_retry_paths=coinmap_only_retry_paths,
             )
         finally:
             if use_browser_service:
