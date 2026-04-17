@@ -115,6 +115,9 @@ _TP1_EPS = 0.01
 _ARM_THRESHOLD = ARM_THRESHOLD_TP1_DEFAULT
 _RETRY_WAIT_MINUTES = 15
 
+# Daemon-plan: Last chạm SL theo trade_line → loại (vùng chờ/chạm hoặc đã vào lệnh / chờ TP1).
+_DAEMON_PLAN_SL_LOAI_STATUSES = frozenset({"vung_cho", "cham", "vao_lenh", "cho_tp1"})
+
 
 _TV_TITLE_PRICE_RE = re.compile(r"^\s*(?P<sym>[A-Z0-9:_-]+)\s+(?P<price>\d[\d,]*(?:\.\d+)?)\b")
 
@@ -373,7 +376,10 @@ def _maybe_loai_zone_if_last_hit_sl(
     params: WatchlistDaemonParams,
 ) -> bool:
     """
-    ``vung_cho`` / ``cham``: nếu Last đã chạm/vượt mức SL trên ``trade_line``, loại vùng ngay.
+    Nếu Last đã chạm/vượt mức SL trên ``trade_line``, loại vùng ngay.
+
+    Caller chỉ gọi khi ``zone.status`` thuộc
+    :data:`_DAEMON_PLAN_SL_LOAI_STATUSES` (chờ/chạm hoặc ``vao_lenh`` / ``cho_tp1``).
     """
     tl = (zone.trade_line or "").strip()
     if not tl:
@@ -383,6 +389,7 @@ def _maybe_loai_zone_if_last_hit_sl(
         return False
     if not is_last_price_hit_stop_loss(float(p_last), parsed, eps=_TP1_EPS):
         return False
+    prev_status = zone.status
     zone.status = "loai"
     zone.loai_streak = 0
     _send_log(
@@ -390,10 +397,17 @@ def _maybe_loai_zone_if_last_hit_sl(
         f"[sl-hit] last={p_last} touched SL -> loai | zone_id={zone.id} label={zone.label} "
         f"sl={parsed.sl} side={parsed.side}",
     )
+    if prev_status in ("vao_lenh", "cho_tp1"):
+        detail = (
+            f"Last {p_last} — plan đang theo dõi (đã vào lệnh / chờ TP1) chạm SL trên trade_line, "
+            "đánh dấu loại."
+        )
+    else:
+        detail = f"Last {p_last} — vùng chờ không còn hiệu lực."
     _send_user_notice(
         settings,
         f"Loại vùng: giá chạm SL ({parsed.sl}).",
-        f"Last {p_last} — vùng chờ không còn hiệu lực.",
+        detail,
         zone=zone,
         params=params,
     )
@@ -1359,10 +1373,10 @@ def _daemon_plan_main_loop(
         except Exception:
             pass
 
-        # vung_cho / cham: SL hit → loại
+        # vung_cho / cham / vao_lenh / cho_tp1: SL hit (theo trade_line) → loại
         sl_invalidated = False
         for z in st.zones:
-            if z.status not in ("vung_cho", "cham"):
+            if z.status not in _DAEMON_PLAN_SL_LOAI_STATUSES:
                 continue
             if _maybe_loai_zone_if_last_hit_sl(z, float(p_last), settings=settings, params=params):
                 sl_invalidated = True

@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
 from automation_tool.openai_analysis_json import ARM_THRESHOLD_TP1_SCALP
 from automation_tool.state_files import read_last_response_id, write_last_response_id
 from automation_tool.tv_watchlist_daemon import (
     _ARM_THRESHOLD,
+    _DAEMON_PLAN_SL_LOAI_STATUSES,
     _EPS_DEFAULT,
     _arm_threshold_met_for_zone,
+    _maybe_loai_zone_if_last_hit_sl,
     WatchlistDaemonParams,
     _daemon_plan_response_id_path,
     _openai_followup_persist_new_id,
@@ -174,3 +177,47 @@ def test_arm_scalp_narrower_than_default() -> None:
     ref_s = 4738.0
     assert _arm_threshold_met_for_zone(z2, ref_s - ARM_THRESHOLD_TP1_SCALP) is True
     assert _arm_threshold_met_for_zone(z2, ref_s - ARM_THRESHOLD_TP1_SCALP - 0.25) is False
+
+
+def test_daemon_plan_sl_loai_includes_post_entry_statuses() -> None:
+    assert _DAEMON_PLAN_SL_LOAI_STATUSES == frozenset(
+        {"vung_cho", "cham", "vao_lenh", "cho_tp1"}
+    )
+
+
+def test_maybe_loai_zone_if_sl_hit_applies_to_vao_lenh_cho_tp1(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon._send_log", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "automation_tool.tv_watchlist_daemon._send_user_notice", lambda *a, **k: None
+    )
+    settings = MagicMock()
+    params = WatchlistDaemonParams(
+        coinmap_tv_yaml=tmp_path / "coinmap_tv.yaml",
+        capture_coinmap_yaml=tmp_path / "cap.yaml",
+        charts_dir=tmp_path / "charts",
+        storage_state_path=None,
+        headless=True,
+        no_save_storage=True,
+        mt5_symbol="XAUUSD",
+    )
+    tl = "BUY LIMIT 100 | SL 99 | TP1 101 | Lot 0.01"
+    z_in = Zone(
+        id="z1",
+        label="plan_chinh",
+        vung_cho="98–100",
+        side="BUY",
+        status="vao_lenh",
+        trade_line=tl,
+    )
+    assert _maybe_loai_zone_if_last_hit_sl(z_in, 98.9, settings=settings, params=params) is True
+    assert z_in.status == "loai"
+    z_tp = Zone(
+        id="z2",
+        label="plan_chinh",
+        vung_cho="98–100",
+        side="BUY",
+        status="cho_tp1",
+        trade_line=tl,
+    )
+    assert _maybe_loai_zone_if_last_hit_sl(z_tp, 98.9, settings=settings, params=params) is True
+    assert z_tp.status == "loai"
