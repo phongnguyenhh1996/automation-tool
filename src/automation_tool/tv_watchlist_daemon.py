@@ -97,8 +97,8 @@ def _poll_terminal_only_logger() -> logging.Logger:
 
 _poll_terminal = _poll_terminal_only_logger()
 
-# After integer rounding of Last vs zone touch ref (from vung_cho + side): touch if abs(diff) <= this.
-_EPS_DEFAULT = 1.0
+# After integer rounding of Last vs zone touch ref (from vung_cho + side): touch if abs(diff) <= this (0 = exact match).
+_EPS_DEFAULT = 0.0
 _TP1_EPS = 0.01
 # Re-export default cho test (plan_chinh / plan_phu).
 _ARM_THRESHOLD = ARM_THRESHOLD_TP1_DEFAULT
@@ -112,7 +112,7 @@ def _price_round_nearest_int(v: object) -> float:
     """
     Normalize price by rounding to the nearest whole number (integer), returned as float.
     Used for zone touch: compare Last vs side ref (BUY=max, SELL=min from ``vung_cho``) after this
-    rounding; touch if ``abs(last_int - ref_int) <= eps`` (default eps=1 allows adjacent integers).
+    rounding; touch if ``abs(last_int - ref_int) <= eps`` (default eps=0: exact integer match only).
     """
     d = Decimal(str(v)).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
     return float(d)
@@ -179,7 +179,7 @@ class WatchlistDaemonParams:
     """Also write atomic ``last.txt`` (legacy/debug); primary Last is ``multiprocessing.shared_memory``."""
     stop_daemon_plans_on_exit: bool = False
     """On process exit (Ctrl+C, atexit, Windows console close): SIGTERM tracked ``daemon-plan`` PIDs."""
-    eps: float = _EPS_DEFAULT  # max |Δ| between integer-rounded Last and touch ref (default 1.0)
+    eps: float = _EPS_DEFAULT  # max |Δ| between integer-rounded Last and touch ref (default 0.0)
     openai_model: Optional[str] = None
     openai_model_cli: Optional[str] = None
 

@@ -27,14 +27,14 @@ def test_touch_match_same_integer_after_round() -> None:
     assert abs(p_n - a_n) <= _EPS_DEFAULT
 
 
-def test_touch_adjacent_integers_still_match() -> None:
-    """4755 vs 4756 after round → |Δ|=1 ≤ default eps."""
+def test_touch_adjacent_integers_no_match_when_default_eps_zero() -> None:
+    """4755 vs 4756 after round → |Δ|=1 > default eps (0): không chạm."""
     p_last = 4755.2
     alert = 4756.4
     p_n = _price_round_nearest_int(p_last)
     a_n = _price_round_nearest_int(alert)
     assert p_n == 4755.0 and a_n == 4756.0
-    assert abs(p_n - a_n) <= _EPS_DEFAULT
+    assert abs(p_n - a_n) > _EPS_DEFAULT
 
 
 def test_touch_no_match_when_gap_exceeds_eps() -> None:

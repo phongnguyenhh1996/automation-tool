@@ -628,9 +628,9 @@ def _parser() -> argparse.ArgumentParser:
     wd.add_argument(
         "--eps",
         type=float,
-        default=1.0,
+        default=0.0,
         metavar="X",
-        help="Sau làm tròn nguyên: chạm nếu |Last−alert|≤X (mặc định 1.0 → lệch 1 giá vẫn chạm)",
+        help="Sau làm tròn nguyên: chạm nếu |Last−ref|≤X (mặc định 0.0 → trùng số nguyên sau làm tròn)",
     )
     wd.add_argument(
         "--last-price-file",
@@ -709,7 +709,13 @@ def _parser() -> argparse.ArgumentParser:
     dp.add_argument("--headed", action="store_true")
     dp.add_argument("--no-telegram", action="store_true")
     dp.add_argument("--poll-seconds", type=float, default=1.0)
-    dp.add_argument("--eps", type=float, default=1.0, metavar="X")
+    dp.add_argument(
+        "--eps",
+        type=float,
+        default=0.0,
+        metavar="X",
+        help="Sau làm tròn nguyên: chạm nếu |Last−ref|≤X (mặc định 0.0 → trùng số nguyên sau làm tròn)",
+    )
     dp.add_argument(
         "--last-price-file",
         type=Path,
