@@ -76,13 +76,12 @@ from automation_tool.tradingview_watchlist_monitor import (
     run_tv_watchlist_monitor,
 )
 from automation_tool.daemon_launcher import (
-    launch_daemon_plans_for_written_shards,
     reconcile_daemon_plans_at_boot,
     stop_daemon_plans_in_zones,
     zones_dir_from_cli_path,
 )
 from automation_tool.tv_watchlist_daemon import WatchlistDaemonParams, run_daemon_plan, run_tv_watchlist_daemon
-from automation_tool.zones_paths import SessionSlot, session_slot_now_hcm, shard_path
+from automation_tool.zones_paths import SessionSlot, session_slot_now_hcm
 from automation_tool.zones_state import (
     clear_zones_directory,
     migrate_legacy_zones_state_if_needed,
@@ -1957,11 +1956,6 @@ def cmd_all(args: argparse.Namespace) -> None:
             )
             if zones:
                 write_zones_for_slot(symbol=sym, zones=zones, slot=slot, zones_dir=zones_dir)
-                written = [shard_path(zones_dir, z.label, slot) for z in zones]
-                launch_daemon_plans_for_written_shards(
-                    zones_dir=zones_dir,
-                    shard_paths=written,
-                )
                 _log.info(
                     "all: đã ghi shard zones | slot=%s zones=%d | symbol=%s",
                     slot,
@@ -2311,11 +2305,6 @@ def cmd_update(args: argparse.Namespace) -> None:
         )
         if zones:
             write_zones_for_slot(symbol=sym, zones=zones, slot=slot, zones_dir=zones_dir)
-            written = [shard_path(zones_dir, z.label, slot) for z in zones]
-            launch_daemon_plans_for_written_shards(
-                zones_dir=zones_dir,
-                shard_paths=written,
-            )
             _log.info("update: đã ghi shard zones | slot=%s zones=%d | symbol=%s", slot, len(zones), sym)
 
     # Không cần tạo TradingView alerts nữa; monitor đọc trực tiếp giá realtime từ Watchlist.
