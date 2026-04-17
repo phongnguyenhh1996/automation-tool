@@ -57,7 +57,6 @@ from automation_tool.state_files import (
     merge_trade_lines_from_openai_analysis_text,
     read_last_alert_prices,
     read_last_response_id,
-    read_morning_baseline_prices,
     write_last_alert_prices,
     write_last_response_id,
     write_morning_baseline_prices,
@@ -66,7 +65,6 @@ from automation_tool.state_files import (
 from automation_tool.zone_prices import (
     is_no_change_action_line,
     parse_update_zone_triple,
-    prices_equal_triple,
 )
 from automation_tool.tradingview_alerts import sync_tradingview_alerts
 from automation_tool.tp1_followup import tp1_dry_run_report
@@ -2138,21 +2136,6 @@ def cmd_update(args: argparse.Namespace) -> None:
     except json.JSONDecodeError as e:
         raise SystemExit(f"Invalid JSON in {morning_path}: {e}") from e
 
-    morning_payload = parse_analysis_from_openai_text(morning_raw)
-    baseline = read_morning_baseline_prices()
-    if baseline is None:
-        if morning_payload is not None and morning_payload.prices:
-            trip0 = triple_from_zone_prices(morning_payload.prices)
-            if trip0 is not None:
-                write_morning_baseline_prices(trip0)
-                baseline = read_morning_baseline_prices()
-    if baseline is None:
-        raise SystemExit(
-            f"Missing morning zone baseline — need {default_morning_baseline_prices_path()} "
-            f"or parseable \"prices\" (plan_chinh, plan_phu, scalp) in {morning_path.name}. "
-            "Run `coinmap-automation all` successfully first."
-        )
-
     paths = capture_charts(
         coinmap_yaml=cfg_cap,
         charts_dir=args.charts_dir,
@@ -2238,31 +2221,37 @@ def cmd_update(args: argparse.Namespace) -> None:
             parse_mode=s.telegram_parse_mode,
         )
 
+    migrate_legacy_zones_state_if_needed(getattr(args, "zones_json", None))
+    if update_payload is not None and update_payload.prices:
+        from automation_tool.images import get_active_main_symbol
+
+        sym = get_active_main_symbol().strip().upper()
+        zones_dir = zones_dir_from_cli_path(getattr(args, "zones_json", None))
+        slot: SessionSlot = session_slot_now_hcm()
+        zones = zones_from_analysis_payload(
+            symbol=sym,
+            payload=update_payload,
+            source="update",
+            session_slot=slot,
+        )
+        if zones:
+            write_zones_for_slot(symbol=sym, zones=zones, slot=slot, zones_dir=zones_dir)
+            _log.info(
+                "update: đã ghi shard zones | slot=%s zones=%d | symbol=%s",
+                slot,
+                len(zones),
+                sym,
+            )
+
     lap = args.last_alert_json or default_last_alert_prices_path()
 
     new_triple, zerr, no_change_json = parse_update_zone_triple(out_text)
     if no_change_json is True:
-        if not args.no_telegram:
-            require_telegram(s)
-            send_message(
-                bot_token=s.telegram_bot_token,
-                chat_id=s.telegram_chat_id,
-                text="Vùng giá không đổi so với sáng (no_change), giữ nguyên cảnh báo.",
-                parse_mode=s.telegram_parse_mode,
-            )
         _send_phan_tich_update_if_any()
         _log.info("update: no_change (JSON) — không ghi giá mới")
         return
     if new_triple is None:
         if is_no_change_action_line(out_text):
-            if not args.no_telegram:
-                require_telegram(s)
-                send_message(
-                    bot_token=s.telegram_bot_token,
-                    chat_id=s.telegram_chat_id,
-                    text="Vùng giá không đổi so với sáng, giữ nguyên cảnh báo.",
-                    parse_mode=s.telegram_parse_mode,
-                )
             _send_phan_tich_update_if_any()
             _log.info("update: no_change (action line) — không ghi giá mới")
             return
@@ -2274,19 +2263,6 @@ def cmd_update(args: argparse.Namespace) -> None:
     except Exception as e:
         _log.warning("update: merge trade_line từ JSON — %s", e)
 
-    if prices_equal_triple(new_triple, baseline.prices):
-        if not args.no_telegram:
-            require_telegram(s)
-            send_message(
-                bot_token=s.telegram_bot_token,
-                chat_id=s.telegram_chat_id,
-                text="Vùng giá không đổi so với sáng, giữ nguyên cảnh báo.",
-                parse_mode=s.telegram_parse_mode,
-            )
-        _send_phan_tich_update_if_any()
-        _log.info("update: giá trùng baseline — không ghi giá mới")
-        return
-
     write_last_alert_prices(new_triple)
     _log.info(
         "update: đã ghi last_alert_prices | %s | %s | %s",
@@ -2295,56 +2271,9 @@ def cmd_update(args: argparse.Namespace) -> None:
         new_triple[2],
     )
 
-    migrate_legacy_zones_state_if_needed(getattr(args, "zones_json", None))
-    payload = update_payload
-    if payload is not None and payload.prices:
-        from automation_tool.images import get_active_main_symbol
-
-        sym = get_active_main_symbol().strip().upper()
-        zones_dir = zones_dir_from_cli_path(getattr(args, "zones_json", None))
-        slot: SessionSlot = session_slot_now_hcm()
-        zones = zones_from_analysis_payload(
-            symbol=sym,
-            payload=payload,
-            source="update",
-            session_slot=slot,
-        )
-        if zones:
-            write_zones_for_slot(symbol=sym, zones=zones, slot=slot, zones_dir=zones_dir)
-            _log.info("update: đã ghi shard zones | slot=%s zones=%d | symbol=%s", slot, len(zones), sym)
-
     # Không cần tạo TradingView alerts nữa; monitor đọc trực tiếp giá realtime từ Watchlist.
 
-    if not args.no_telegram:
-        require_telegram(s)
-        a, b, c = new_triple
-        send_message(
-            bot_token=s.telegram_bot_token,
-            chat_id=s.telegram_chat_id,
-            text=f"Đã cập nhật vùng giá mới: {a} | {b} | {c}",
-            parse_mode=s.telegram_parse_mode,
-        )
-        dual = split_analysis_json_chi_tiet_ngan_gon(out_text)
-        if dual is None:
-            dual = split_output_chi_tiet_ngan_gon(out_text)
-        if dual is not None:
-            # out_chi_tiet → TELEGRAM_CHAT_ID; output_ngan_gon → TELEGRAM_OUTPUT_NGAN_GON_CHAT_ID (hoặc main nếu không cấu hình).
-            send_openai_output_to_telegram(
-                bot_token=s.telegram_bot_token,
-                chat_id=s.telegram_chat_id,
-                raw=out_text,
-                default_parse_mode=s.telegram_parse_mode,
-                summary_chat_id=(s.telegram_output_ngan_gon_chat_id or "").strip() or None,
-                detail_chat_id=None,
-            )
-            _log.info(
-                "update: đã gửi out_chi_tiet lên TELEGRAM_CHAT_ID, output_ngan_gon lên kênh ngắn gọn (nếu có)"
-            )
-        else:
-            _log.info(
-                "update: không tách được out_chi_tiet/output_ngan_gon — chỉ gửi dòng giá lên main"
-            )
-        _send_phan_tich_update_if_any()
+    _send_phan_tich_update_if_any()
 
 
 def cmd_tv_watchlist_daemon(args: argparse.Namespace) -> None:
