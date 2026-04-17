@@ -9,6 +9,17 @@ def test_mt5_zone_entry_line_vn_known_labels():
     assert mt5_zone_entry_line_vn("scalp") == 'Đã vào lệnh cho "Scalp".'
 
 
+def test_mt5_zone_entry_line_vn_with_session_slot():
+    assert (
+        mt5_zone_entry_line_vn("scalp", session_slot="chieu")
+        == 'Đã vào lệnh cho "Scalp - Chiều".'
+    )
+    assert (
+        mt5_zone_entry_line_vn("plan_chinh", session_slot="sang")
+        == 'Đã vào lệnh cho "Plan chính - Sáng".'
+    )
+
+
 def test_mt5_zone_entry_line_vn_absent_or_unknown():
     assert mt5_zone_entry_line_vn(None) is None
     assert mt5_zone_entry_line_vn("") is None

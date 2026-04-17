@@ -59,6 +59,7 @@ from automation_tool.daemon_launcher import (
     reconcile_daemon_plans_at_boot,
     register_daemon_plan_pidfile_for_current_process,
     register_stop_daemon_plans_on_exit,
+    stop_daemon_plans_in_zones,
 )
 from automation_tool.last_price_ipc import (
     open_writer_shared_memory,
@@ -66,17 +67,19 @@ from automation_tool.last_price_ipc import (
     write_last_price_shared,
 )
 from automation_tool.zones_paths import (
+    SessionSlot,
     default_last_price_path,
     default_zones_dir,
     label_from_shard_stem,
     read_last_price_file,
+    resolve_session_slot_raw,
     session_slot_display_vn,
-    session_slot_from_shard_path,
     write_last_price_file,
 )
 from automation_tool.zones_state import (
     Zone,
     ZonesState,
+    read_manifest_last_write_slot,
     read_zones_state,
     read_zones_state_from_shard,
     write_zones_state,
@@ -274,11 +277,10 @@ def _user_notice_plan_slot_tag(
     Tiền tố hiển thị plan + khung giờ, ví dụ ``(Plan chính - Sáng)`` / ``(Scalp - Chiều)``.
     Slot: ``zone.session_slot`` hoặc parse từ ``params.shard_path`` (``vung_*_{sang|chieu|toi}.json``).
     """
-    slot_raw: Optional[str] = None
-    if zone is not None and getattr(zone, "session_slot", None) in ("sang", "chieu", "toi"):
-        slot_raw = zone.session_slot
-    elif params is not None and params.shard_path is not None:
-        slot_raw = session_slot_from_shard_path(params.shard_path)
+    slot_raw = resolve_session_slot_raw(
+        zone_session_slot=getattr(zone, "session_slot", None) if zone is not None else None,
+        shard_path=params.shard_path if params is not None else None,
+    )
 
     lab_disp: Optional[str] = None
     if zone is not None and (zone.label or "").strip():
@@ -534,6 +536,10 @@ def _tp1_followup_job(
                         zone_label="scalp",
                         trade_line=z0.trade_line,
                         execution_ok=r.ok,
+                        session_slot=resolve_session_slot_raw(
+                            zone_session_slot=getattr(z0, "session_slot", None),
+                            shard_path=params.shard_path,
+                        ),
                     )
             z0.status = "loai"
             z0.mt5_ticket = None
@@ -700,6 +706,10 @@ def _tp1_followup_job(
                     zone_label=z1.label,
                     trade_line=dec.trade_line_moi.strip(),
                     execution_ok=ex.ok,
+                    session_slot=resolve_session_slot_raw(
+                        zone_session_slot=getattr(z1, "session_slot", None),
+                        shard_path=params.shard_path,
+                    ),
                 )
             _send_log(settings, f"[tp1] mt5_execute_trade: {ex.message}".strip())
             tid = int(ex.order) if ex.order else 0
@@ -816,6 +826,10 @@ def _auto_entry_job(
                 zone_label=z0.label,
                 trade_line=z0.trade_line,
                 execution_ok=ex.ok,
+                session_slot=resolve_session_slot_raw(
+                    zone_session_slot=getattr(z0, "session_slot", None),
+                    shard_path=params.shard_path,
+                ),
             )
         _send_log(settings, f"[auto-entry] mt5_execute_trade: {ex.message}".strip())
         _lines = [ex.message]
@@ -1113,6 +1127,10 @@ def _zone_touch_job(
                 zone_label=z1.label,
                 trade_line=z1.trade_line,
                 execution_ok=ex.ok,
+                session_slot=resolve_session_slot_raw(
+                    zone_session_slot=getattr(z1, "session_slot", None),
+                    shard_path=params.shard_path,
+                ),
             )
         _send_log(settings, f"[zone-touch] mt5_execute_trade: {ex.message}".strip())
         _lines = [ex.message]
@@ -1175,29 +1193,69 @@ def _tv_watchlist_price_only_loop(
     """Daemon giá: poll TradingView title price → shared memory (optional mirror ``last.txt``)."""
     last_path = params.last_price_path or default_last_price_path()
     shm = open_writer_shared_memory(sym)
-    reconciled_boot = False
+    zones_dir = default_zones_dir(sym)
+    prev_manifest_slot: Optional[SessionSlot] = None
+    reconciled_after_first_last = False
     heartbeat_s = 300.0
     last_heartbeat_at = 0.0
     telegram_log_interval_s = 60.0
     last_telegram_log_at = 0.0
     try:
         while True:
+            try:
+                cur_manifest_slot = read_manifest_last_write_slot(zones_dir)
+                if cur_manifest_slot is not None:
+                    if prev_manifest_slot is None:
+                        prev_manifest_slot = cur_manifest_slot
+                    elif cur_manifest_slot != prev_manifest_slot:
+                        _log.info(
+                            "tv-watchlist-daemon (gia) | zones_manifest last_write_slot %s -> %s | "
+                            "stop-daemon-plans then reconcile",
+                            prev_manifest_slot,
+                            cur_manifest_slot,
+                        )
+                        n_stop = stop_daemon_plans_in_zones(
+                            zones_dir,
+                            wait_for_exit_s=30.0,
+                        )
+                        _log.info(
+                            "tv-watchlist-daemon (gia) | stop-daemon-plans signalled %s process(es)",
+                            n_stop,
+                        )
+                        n_rec = reconcile_daemon_plans_at_boot(zones_dir)
+                        _log.info(
+                            "tv-watchlist-daemon (gia) | reconcile-daemon-plans spawned %s process(es)",
+                            n_rec,
+                        )
+                        prev_manifest_slot = cur_manifest_slot
+            except Exception as e:
+                _log.warning(
+                    "tv-watchlist-daemon (gia) | last_write_slot watch / daemon-plan restart: %s",
+                    e,
+                )
+
             wms = min(15_000, max(2_000, int(poll_s * 1000)))
             p_last = get_price(wms)
             if p_last is not None:
                 write_last_price_shared(shm, float(p_last))
                 if params.mirror_last_price_file:
                     write_last_price_file(float(p_last), last_path)
-                if not reconciled_boot:
-                    reconciled_boot = True
+                if not reconciled_after_first_last:
                     try:
-                        n = reconcile_daemon_plans_at_boot(None)
+                        n = reconcile_daemon_plans_at_boot(zones_dir)
                         _log.info(
-                            "tv-watchlist-daemon (gia) | reconcile-daemon-plans spawned %s process(es)",
+                            "tv-watchlist-daemon (gia) | reconcile-daemon-plans after first last "
+                            "spawned %s process(es)",
                             n,
                         )
+                        reconciled_after_first_last = True
+                        if prev_manifest_slot is None:
+                            prev_manifest_slot = read_manifest_last_write_slot(zones_dir)
                     except Exception as e:
-                        _log.warning("tv-watchlist-daemon | reconcile-daemon-plans at boot failed: %s", e)
+                        _log.warning(
+                            "tv-watchlist-daemon (gia) | reconcile-daemon-plans after first last failed: %s",
+                            e,
+                        )
                 now_mono_tg = time.monotonic()
                 if (now_mono_tg - last_telegram_log_at) >= telegram_log_interval_s:
                     last_telegram_log_at = now_mono_tg

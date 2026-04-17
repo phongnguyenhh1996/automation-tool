@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime
-from pathlib import Path
 from zoneinfo import ZoneInfo
+
+from pathlib import Path
 
 from automation_tool.zones_paths import (
     label_from_shard_stem,
+    resolve_session_slot_raw,
     session_slot_display_vn,
     session_slot_from_shard_path,
     session_slot_now_hcm,
@@ -47,3 +49,11 @@ def test_session_slot_display_vn() -> None:
     assert session_slot_display_vn("toi") == "Tối"
     assert session_slot_display_vn(None) is None
     assert session_slot_display_vn("other") is None
+
+
+def test_resolve_session_slot_raw() -> None:
+    assert resolve_session_slot_raw(zone_session_slot="sang") == "sang"
+    assert resolve_session_slot_raw(zone_session_slot="CHIEU") == "chieu"
+    p = Path("zones/vung_scalp_toi.json")
+    assert resolve_session_slot_raw(shard_path=p) == "toi"
+    assert resolve_session_slot_raw(zone_session_slot="chieu", shard_path=p) == "chieu"

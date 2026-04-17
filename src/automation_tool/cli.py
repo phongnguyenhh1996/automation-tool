@@ -1855,7 +1855,6 @@ def cmd_all(args: argparse.Namespace) -> None:
     if getattr(args, "main_symbol", None):
         set_active_main_symbol_file(args.main_symbol)
 
-    migrate_legacy_zones_state_if_needed(args.zones_json)
     zones_dir = zones_dir_from_cli_path(args.zones_json)
     if not args.no_clear_zones_state:
         stop_daemon_plans_in_zones(zones_dir)
@@ -2221,7 +2220,6 @@ def cmd_update(args: argparse.Namespace) -> None:
             parse_mode=s.telegram_parse_mode,
         )
 
-    migrate_legacy_zones_state_if_needed(getattr(args, "zones_json", None))
     if update_payload is not None and update_payload.prices:
         from automation_tool.images import get_active_main_symbol
 

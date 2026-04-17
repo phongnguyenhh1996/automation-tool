@@ -9,6 +9,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -135,16 +136,24 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
-def stop_daemon_plans_in_zones(zones_dir: Path) -> int:
+def stop_daemon_plans_in_zones(
+    zones_dir: Path,
+    *,
+    wait_for_exit_s: Optional[float] = None,
+) -> int:
     """
     Stop every ``daemon-plan`` tracked under ``zones_dir`` (``.daemon-plan-*.pid``).
     Returns number of processes signalled.
+
+    If ``wait_for_exit_s`` is set (seconds), wait until those PIDs exit or timeout, then unlink
+    all pid files — dùng khi cần chắc process đã dừng trước khi spawn lại.
 
     Log lines use ``_log.info`` → propagate to ``automation_tool`` (stderr + Telegram khi đã setup).
     """
     n = 0
     if not zones_dir.is_dir():
         return 0
+    to_signal: list[tuple[int, Path]] = []
     for child in zones_dir.iterdir():
         if not child.is_file() or not child.name.startswith(".daemon-plan-") or not child.name.endswith(
             ".pid"
@@ -157,20 +166,52 @@ def stop_daemon_plans_in_zones(zones_dir: Path) -> int:
             except OSError:
                 pass
             continue
-        if _pid_alive(pid):
+        if not _pid_alive(pid):
             try:
-                os.kill(pid, signal.SIGTERM)
-                n += 1
-                msg = f"[launcher] stop daemon-plan pid={pid} file={child.name}"
-                _log.info(msg)
-            except ProcessLookupError:
+                child.unlink()
+            except OSError:
                 pass
-            except OSError as e:
-                _log.warning("stop pid %s: %s", pid, e)
+            continue
+        to_signal.append((pid, child))
+
+    signalled_pids: list[int] = []
+    for pid, child in to_signal:
         try:
-            child.unlink()
-        except OSError:
-            pass
+            os.kill(pid, signal.SIGTERM)
+            n += 1
+            signalled_pids.append(pid)
+            msg = f"[launcher] stop daemon-plan pid={pid} file={child.name}"
+            _log.info(msg)
+        except ProcessLookupError:
+            try:
+                child.unlink()
+            except OSError:
+                pass
+        except OSError as e:
+            _log.warning("stop pid %s: %s", pid, e)
+
+    if wait_for_exit_s is not None and wait_for_exit_s > 0 and signalled_pids:
+        deadline = time.monotonic() + wait_for_exit_s
+        remaining = list(signalled_pids)
+        while remaining and time.monotonic() < deadline:
+            remaining = [p for p in remaining if _pid_alive(p)]
+            if not remaining:
+                break
+            time.sleep(0.05)
+        if remaining:
+            _log.warning(
+                "stop-daemon-plans: %s PID(s) still alive after %.1fs wait: %s",
+                len(remaining),
+                wait_for_exit_s,
+                remaining,
+            )
+
+    for child in zones_dir.iterdir():
+        if child.is_file() and child.name.startswith(".daemon-plan-") and child.name.endswith(".pid"):
+            try:
+                child.unlink()
+            except OSError:
+                pass
     return n
 
 

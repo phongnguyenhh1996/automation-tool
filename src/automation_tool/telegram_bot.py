@@ -14,6 +14,7 @@ import httpx
 _log = logging.getLogger(__name__)
 
 from automation_tool.openai_analysis_json import parse_analysis_from_openai_text
+from automation_tool.zones_paths import session_slot_display_vn
 
 TELEGRAM_MAX_MESSAGE = 4096
 
@@ -47,10 +48,14 @@ def mt5_zone_label_display_vn(zone_label: Optional[str]) -> Optional[str]:
     return _MT5_ZONE_LABEL_DISPLAY_VN.get(key)
 
 
-def mt5_zone_entry_line_vn(zone_label: Optional[str]) -> Optional[str]:
+def mt5_zone_entry_line_vn(
+    zone_label: Optional[str],
+    session_slot: Optional[str] = None,
+) -> Optional[str]:
     """
-    Một dòng: ``Đã vào lệnh cho "Plan chính".`` (hoặc Plan phụ / Scalp) khi biết nhãn.
-    Đặt **sau** câu emoji ngẫu nhiên trong tin MT5. Trả ``None`` nếu không map được.
+    Một dòng: ``Đã vào lệnh cho "Plan chính".`` hoặc ``Đã vào lệnh cho "Scalp - Chiều".``
+    khi có ``session_slot`` (``sang`` / ``chieu`` / ``toi``).
+    Đặt **sau** câu emoji ngẫu nhiên trong tin MT5. Trả ``None`` nếu không map được nhãn.
     """
     if not zone_label or not str(zone_label).strip():
         return None
@@ -58,7 +63,9 @@ def mt5_zone_entry_line_vn(zone_label: Optional[str]) -> Optional[str]:
     display = _MT5_ZONE_LABEL_DISPLAY_VN.get(key)
     if not display:
         return None
-    return f'Đã vào lệnh cho "{display}".'
+    slot_vn = session_slot_display_vn(session_slot) if session_slot else None
+    quoted = f"{display} - {slot_vn}" if slot_vn else display
+    return f'Đã vào lệnh cho "{quoted}".'
 
 
 @dataclass(frozen=True)
@@ -526,12 +533,14 @@ def send_mt5_execution_log_to_ngan_gon_chat(
     execution_ok: bool,
     zone_label: Optional[str] = None,
     trade_line: Optional[str] = None,
+    session_slot: Optional[str] = None,
 ) -> None:
     """
     Gửi thông báo sau thực thi MT5 (sau ``execute_trade`` / huỷ ticket) tới ``TELEGRAM_CHAT_ID``.
 
     Khi ``execution_ok`` là True: một câu cố định (chọn ngẫu nhiên); (tuỳ chọn) dòng
-    ``Đã vào lệnh cho "Plan chính"`` / … khi ``zone_label`` khớp; (tuỳ chọn) ``trade_line``.
+    ``Đã vào lệnh cho "Plan chính"`` / ``Đã vào lệnh cho "Scalp - Sáng"`` khi ``zone_label``
+    (và tuỳ chọn ``session_slot``) khớp; (tuỳ chọn) ``trade_line``.
     Tham số ``text`` chỉ dùng để kiểm tra có nội dung — **không** đính kèm log chi tiết
     (tránh tin quá dài khi đã vào lệnh thành công).
 
@@ -555,8 +564,12 @@ def send_mt5_execution_log_to_ngan_gon_chat(
         if src:
             lines.append(f"Nguồn: {src}")
         zd = mt5_zone_label_display_vn(zone_label)
+        slot_vn = session_slot_display_vn(session_slot) if session_slot else None
         if zd:
-            lines.append(f'Vùng / kế hoạch: "{zd}".')
+            if slot_vn:
+                lines.append(f'Vùng / kế hoạch: "{zd} - {slot_vn}".')
+            else:
+                lines.append(f'Vùng / kế hoạch: "{zd}".')
         tl = (trade_line or "").strip()
         if tl:
             lines.append(tl)
@@ -571,7 +584,7 @@ def send_mt5_execution_log_to_ngan_gon_chat(
         return
 
     out = random.choice(_MT5_NGAN_GON_MESSAGES)
-    zone_line = mt5_zone_entry_line_vn(zone_label)
+    zone_line = mt5_zone_entry_line_vn(zone_label, session_slot=session_slot)
     if zone_line:
         out = f"{out}\n\n{zone_line}"
     tl_ok = (trade_line or "").strip()

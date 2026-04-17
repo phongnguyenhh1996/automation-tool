@@ -166,3 +166,20 @@ def session_slot_display_vn(slot: Optional[str]) -> Optional[str]:
     if key == "toi":
         return "Tối"
     return None
+
+
+def resolve_session_slot_raw(
+    *,
+    zone_session_slot: Optional[str] = None,
+    shard_path: Optional[Path] = None,
+) -> Optional[SessionSlot]:
+    """
+    Khung giờ cho tin Telegram: ưu tiên ``zone.session_slot``;
+    không có thì suy ra từ ``vung_*_{sang|chieu|toi}.json``.
+    """
+    ss = (zone_session_slot or "").strip().lower()
+    if ss in ("sang", "chieu", "toi"):
+        return ss  # type: ignore[return-value]
+    if shard_path is not None:
+        return session_slot_from_shard_path(shard_path)
+    return None

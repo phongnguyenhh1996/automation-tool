@@ -362,6 +362,26 @@ def write_zones_for_slot(
         _atomic_write_json(manifest_path(root), man)
 
 
+def read_manifest_last_write_slot(zones_dir: Path) -> Optional[SessionSlot]:
+    """``last_write_slot`` từ ``zones_manifest.json`` (``sang``/``chieu``/``toi``), hoặc ``None``."""
+    mp = manifest_path(zones_dir)
+    if not mp.is_file():
+        return None
+    try:
+        md = json.loads(mp.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(md, dict):
+        return None
+    s = md.get("last_write_slot")
+    if not isinstance(s, str):
+        return None
+    key = s.strip().lower()
+    if key in ("sang", "chieu", "toi"):
+        return key  # type: ignore[return-value]
+    return None
+
+
 def read_zones_state_from_shard(shard_path: Path) -> Optional[ZonesState]:
     """Load a single-zone :class:`ZonesState` from one shard file (``daemon-plan``)."""
     if not shard_path.is_file():
