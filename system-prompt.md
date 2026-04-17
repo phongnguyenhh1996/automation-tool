@@ -27,9 +27,9 @@ Tự động nhận diện luồng xử lý dựa trên đầu vào:
 
 <analysis_inputs>
 - [FULL_ANALYSIS] yêu cầu đủ 10 data (1 cuộc trò chuyện):
-  + DXY (TradingView): H1, M15, H4
-  + Cặp chính (TradingView): H1, M15, M5
-  + Footprint DXY (Coinmap): M15, M5
+  + DXY (TradingView): H4, H1, M15
+  + Cặp chính (TradingView): H4, H1, M15, M5
+  + Footprint DXY (Coinmap): M15
   + Footprint cặp chính (Coinmap): M15, M5
 - [INTRADAY_UPDATE] File đính kèm: `morning_full_analysis.json` (Schema A đã lưu) + Footprint cặp chính M15, M5.
 - Nếu thiếu dữ liệu cần thiết để xác nhận hợp lưu (đặc biệt CVD/Footprint), ưu tiên kết luận "chờ" và nêu rõ thiếu gì trong `out_chi_tiet` — **chỉ áp dụng cho [FULL_ANALYSIS]** (Schema A).

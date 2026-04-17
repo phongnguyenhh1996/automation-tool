@@ -51,8 +51,9 @@ def test_chart_image_order_for_main_symbol() -> None:
     assert ("coinmap", "EURUSD", "5m") in o
     assert all("XAUUSD" not in x for x in o)
     assert ("tradingview", "DXY", "4h") in o
+    assert ("tradingview", "EURUSD", "4h") in o
     assert ("coinmap", "DXY", "15m") in o
-    assert ("coinmap", "DXY", "5m") in o
+    assert ("coinmap", "DXY", "5m") not in o
 
 
 def test_marker_roundtrip(tmp_path: Path) -> None:

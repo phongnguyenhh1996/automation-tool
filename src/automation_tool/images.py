@@ -98,19 +98,19 @@ def chart_image_order_for_main_symbol(main_sym: str) -> tuple[tuple[str, str, st
     Filenames: ``{{stamp}}_tradingview_{{SYMBOL}}_{{interval}}.url`` (https, one line) or ``.png`` / ``coinmap_…``.
     ``main_sym`` replaces the default XAUUSD block (DXY TV block unchanged).
 
-    **10 slots (default full-analysis set):** DXY TV H1/M15/H4 → main TV H1/M15/M5 → Coinmap DXY
-    footprint M15/M5 → Coinmap main M15/M5.
+    **10 slots (default full-analysis set):** DXY TV H4/H1/M15 → main TV H4/H1/M15/M5 → Coinmap DXY
+    footprint M15 → Coinmap main M15/M5.
     """
     m = normalize_main_chart_symbol(main_sym)
     return (
+        ("tradingview", "DXY", "4h"),
         ("tradingview", "DXY", "1h"),
         ("tradingview", "DXY", "15m"),
-        ("tradingview", "DXY", "4h"),
+        ("tradingview", m, "4h"),
         ("tradingview", m, "1h"),
         ("tradingview", m, "15m"),
         ("tradingview", m, "5m"),
         ("coinmap", "DXY", "15m"),
-        ("coinmap", "DXY", "5m"),
         ("coinmap", m, "15m"),
         ("coinmap", m, "5m"),
     )
@@ -276,7 +276,7 @@ def ordered_chart_openai_payloads(
 
 def ordered_chart_images(charts_dir: Path, *, stamp: Optional[str] = None) -> list[Path]:
     """
-    Return chart paths in analysis order (DXY TV H1/M15/H4 → main TV H1/M15/M5 → DXY Coinmap M15/M5
+    Return chart paths in analysis order (DXY TV H4/H1/M15 → main TV H4/H1/M15/M5 → DXY Coinmap M15
     → main Coinmap M15/M5).
     Only includes files that exist. Uses latest stamp in directory when ``stamp`` is omitted.
     """
