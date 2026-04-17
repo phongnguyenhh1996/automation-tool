@@ -42,6 +42,7 @@ from automation_tool.openai_prompt_flow import TP1_POST_TOUCH_USER_TEMPLATE, run
 from automation_tool.playwright_browser import close_browser_and_context, launch_chrome_context
 from automation_tool.state_files import read_last_response_id
 from automation_tool.telegram_bot import (
+    mt5_zone_label_display_vn,
     send_message,
     send_mt5_execution_log_to_ngan_gon_chat,
     send_openai_output_to_telegram,
@@ -1273,6 +1274,12 @@ def _daemon_plan_main_loop(
                     z.tp1_followup_done = False
                     changed = True
                     _send_log(settings, f"[tp1] arm | zone_id={z.id} vao_lenh->cho_tp1 last={p_last}")
+                    _thr_tp1 = arm_threshold_tp1_for_label(z.label or "")
+                    _plan_vn = mt5_zone_label_display_vn(z.label) or (z.label or "").strip() or "—"
+                    _send_user_notice(
+                        settings,
+                        f"({_plan_vn}) Giá đã cách entry {_thr_tp1:g} giá - sẽ xử lý khi chạm TP1",
+                    )
             if changed:
                 _state_write(params, st_tp1)
 
