@@ -7,6 +7,8 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from automation_tool.zones_paths import (
+    label_from_shard_stem,
+    session_slot_display_vn,
     session_slot_from_shard_path,
     session_slot_now_hcm,
     shard_filename,
@@ -32,3 +34,16 @@ def test_shard_filename_and_zone_id() -> None:
 def test_session_slot_from_shard_path() -> None:
     assert session_slot_from_shard_path(Path("zones/vung_scalp_toi.json")) == "toi"
     assert session_slot_from_shard_path(Path("vung_plan_phu_chieu.json")) == "chieu"
+
+
+def test_label_from_shard_stem() -> None:
+    assert label_from_shard_stem("vung_plan_chinh_sang") == "plan_chinh"
+    assert label_from_shard_stem("vung_scalp_toi") == "scalp"
+
+
+def test_session_slot_display_vn() -> None:
+    assert session_slot_display_vn("sang") == "Sáng"
+    assert session_slot_display_vn("chieu") == "Chiều"
+    assert session_slot_display_vn("toi") == "Tối"
+    assert session_slot_display_vn(None) is None
+    assert session_slot_display_vn("other") is None

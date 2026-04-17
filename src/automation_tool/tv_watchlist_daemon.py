@@ -65,7 +65,15 @@ from automation_tool.last_price_ipc import (
     read_last_price_for_daemon_plan,
     write_last_price_shared,
 )
-from automation_tool.zones_paths import default_last_price_path, default_zones_dir, read_last_price_file, write_last_price_file
+from automation_tool.zones_paths import (
+    default_last_price_path,
+    default_zones_dir,
+    label_from_shard_stem,
+    read_last_price_file,
+    session_slot_display_vn,
+    session_slot_from_shard_path,
+    write_last_price_file,
+)
 from automation_tool.zones_state import (
     Zone,
     ZonesState,
@@ -256,12 +264,57 @@ def _send_log(settings: Settings, text: str) -> None:
         return
 
 
-def _send_user_notice(settings: Settings, title: str, body: str = "") -> None:
+def _user_notice_plan_slot_tag(
+    *,
+    zone: Optional[Zone] = None,
+    params: Optional[WatchlistDaemonParams] = None,
+    zone_label: Optional[str] = None,
+) -> str:
+    """
+    Tiền tố hiển thị plan + khung giờ, ví dụ ``(Plan chính - Sáng)`` / ``(Scalp - Chiều)``.
+    Slot: ``zone.session_slot`` hoặc parse từ ``params.shard_path`` (``vung_*_{sang|chieu|toi}.json``).
+    """
+    slot_raw: Optional[str] = None
+    if zone is not None and getattr(zone, "session_slot", None) in ("sang", "chieu", "toi"):
+        slot_raw = zone.session_slot
+    elif params is not None and params.shard_path is not None:
+        slot_raw = session_slot_from_shard_path(params.shard_path)
+
+    lab_disp: Optional[str] = None
+    if zone is not None and (zone.label or "").strip():
+        lab_disp = mt5_zone_label_display_vn(zone.label) or (zone.label or "").strip()
+    elif zone_label is not None and str(zone_label).strip():
+        zl = str(zone_label).strip()
+        lab_disp = mt5_zone_label_display_vn(zl) or zl
+    elif params is not None and params.shard_path is not None:
+        raw = label_from_shard_stem(params.shard_path.stem)
+        if raw:
+            lab_disp = mt5_zone_label_display_vn(raw) or raw
+
+    slot_vn = session_slot_display_vn(slot_raw) if slot_raw else None
+    if lab_disp and slot_vn:
+        return f"({lab_disp} - {slot_vn})"
+    if lab_disp:
+        return f"({lab_disp})"
+    return ""
+
+
+def _send_user_notice(
+    settings: Settings,
+    title: str,
+    body: str = "",
+    *,
+    zone: Optional[Zone] = None,
+    params: Optional[WatchlistDaemonParams] = None,
+    zone_label: Optional[str] = None,
+) -> None:
     """Tin ngắn tới TELEGRAM_PYTHON_BOT_CHAT_ID (non-tech)."""
+    tag = _user_notice_plan_slot_tag(zone=zone, params=params, zone_label=zone_label)
+    out_title = f"{tag} {title}".strip() if tag else (title or "").strip()
     send_user_friendly_notice(
         bot_token=settings.telegram_bot_token,
         chat_id=settings.telegram_python_bot_chat_id,
-        title=title,
+        title=out_title,
         body=body,
     )
 
@@ -337,8 +390,10 @@ def _maybe_loai_zone_if_last_hit_sl(
     )
     _send_user_notice(
         settings,
-        f"Loại plan {zone.label}: giá chạm SL ({parsed.sl}).",
+        f"Loại vùng: giá chạm SL ({parsed.sl}).",
         f"Last {p_last} — vùng chờ không còn hiệu lực.",
+        zone=zone,
+        params=params,
     )
     return True
 
@@ -488,6 +543,8 @@ def _tp1_followup_job(
                 settings,
                 "Scalp chạm TP1 — đã huỷ lệnh (không gọi AI).",
                 "Vùng scalp chuyển trạng thái loại.",
+                zone=z0,
+                params=params,
             )
             return
 
@@ -499,6 +556,8 @@ def _tp1_followup_job(
             settings,
             "Giá đã tới vùng theo dõi sau TP1.",
             "Đang lấy biểu đồ M5 và hỏi AI bước tiếp theo.",
+            zone=z0,
+            params=params,
         )
 
         capture_charts(
@@ -567,6 +626,8 @@ def _tp1_followup_job(
                 settings,
                 "Sau TP1: không đọc được quyết định từ AI.",
                 "Hệ thống sẽ thử lại — xem log kỹ thuật nếu cần chi tiết.",
+                zone=z1,
+                params=params,
             )
             return
 
@@ -581,6 +642,8 @@ def _tp1_followup_job(
                 settings,
                 "Sau TP1: AI chọn «giữ nguyên» — không đổi lệnh.",
                 "Tiếp tục theo dõi theo plan.",
+                zone=z1,
+                params=params,
             )
             return
 
@@ -594,6 +657,8 @@ def _tp1_followup_job(
                 settings,
                 "Sau TP1: AI chọn «loại» — đóng / bỏ theo dõi vùng.",
                 "Đã gửi lệnh đóng trên MT5 nếu bật thực thi.",
+                zone=z1,
+                params=params,
             )
             return
 
@@ -649,6 +714,8 @@ def _tp1_followup_job(
                 settings,
                 "Sau TP1: đã đặt lệnh mới theo trade line cập nhật.",
                 "\n".join(_tp1_lines),
+                zone=z1,
+                params=params,
             )
         z1.trade_line = dec.trade_line_moi.strip()
         z1.status = "vao_lenh"
@@ -657,7 +724,7 @@ def _tp1_followup_job(
         return
     except Exception as e:
         _send_log(settings, f"[tp1] ERROR | zone_id={zone_id} | {e!s}")
-        _send_user_notice(settings, "Lỗi khi xử lý bước sau TP1.", str(e))
+        _send_user_notice(settings, "Lỗi khi xử lý bước sau TP1.", str(e), params=params)
         re_raise_unless_openai(e)
 
 
@@ -707,6 +774,8 @@ def _auto_entry_job(
                 settings,
                 "Tự động vào lệnh đang tắt.",
                 "Vùng được giữ ở trạng thái chờ — bật thực thi MT5 nếu cần.",
+                zone=z0,
+                params=params,
             )
             z0.status = "cham"
             z0.auto_entry_retry_after = ""
@@ -728,6 +797,8 @@ def _auto_entry_job(
                 settings,
                 "Tự động vào lệnh: không hiểu được dòng lệnh.",
                 "Kiểm tra trade_line trong trạng thái vùng.",
+                zone=z0,
+                params=params,
             )
             return
 
@@ -756,6 +827,8 @@ def _auto_entry_job(
             settings,
             "Tự động vào lệnh — kết quả MT5",
             "\n".join(_lines),
+            zone=z0,
+            params=params,
         )
 
         tid = int(ex.order) if ex.order else 0
@@ -782,7 +855,7 @@ def _auto_entry_job(
         return
     except Exception as e:
         _send_log(settings, f"[auto-entry] ERROR | zone_id={zone_id} | {e!s}")
-        _send_user_notice(settings, "Lỗi khi tự động vào lệnh.", str(e))
+        _send_user_notice(settings, "Lỗi khi tự động vào lệnh.", str(e), params=params)
         re_raise_unless_openai(e)
 
 
@@ -819,14 +892,16 @@ def _zone_touch_job(
         )
         side_vn = "mua" if (zone.side or "").strip().upper() == "BUY" else "bán"
         _touch_title = (
-            f"Sau {_RETRY_WAIT_MINUTES}p giá chạm vùng chờ ({zone.label})."
+            f"Sau {_RETRY_WAIT_MINUTES}p giá chạm vùng chờ."
             if after_retry_wait
-            else f"Giá đã chạm vùng chờ ({zone.label})."
+            else "Giá đã chạm vùng chờ."
         )
         _send_user_notice(
             settings,
             _touch_title,
             "Đang lấy dữ liệu biểu đồ M5 và phân tích lại với AI.",
+            zone=zone,
+            params=params,
         )
 
         loai_confirm_rounds = 6
@@ -938,6 +1013,8 @@ def _zone_touch_job(
                     settings,
                     "Vùng được đánh dấu «loại» sau nhiều lần xác nhận.",
                     "Hệ thống không còn theo dõi vùng này theo kịch bản chạm giá.",
+                    zone=z1,
+                    params=params,
                 )
                 return
             # keep touched state; daemon will re-dispatch after retry_at
@@ -953,6 +1030,8 @@ def _zone_touch_job(
                 settings,
                 "AI gợi ý «loại» — chưa đủ lần xác nhận.",
                 "Vùng vẫn được theo dõi; sẽ thử lại sau.",
+                zone=z1,
+                params=params,
             )
             return
 
@@ -973,6 +1052,8 @@ def _zone_touch_job(
                 settings,
                 "Sau khi chạm vùng: chưa vào lệnh lần này.",
                 f"AI trả về hành động «{act}». Hệ thống sẽ thử lại sau.",
+                zone=z1,
+                params=params,
             )
             return
 
@@ -1002,7 +1083,9 @@ def _zone_touch_job(
         )
         _send_user_notice(
             settings,
-            f"Sau khi chạm vùng: AI xác nhận «VÀO LỆNH» ({z1.label}).",
+            "Sau khi chạm vùng: AI xác nhận «VÀO LỆNH».",
+            zone=z1,
+            params=params,
         )
 
         if not params.mt5_execute:
@@ -1041,6 +1124,8 @@ def _zone_touch_job(
             settings,
             "Tự động vào lệnh — kết quả MT5",
             "\n".join(_lines),
+            zone=z1,
+            params=params,
         )
 
         tid = int(ex.order) if ex.order else 0
@@ -1073,6 +1158,8 @@ def _zone_touch_job(
             settings,
             "Lỗi khi xử lý chạm vùng chờ.",
             "Xem kênh log kỹ thuật để biết chi tiết.",
+            zone=zone,
+            params=params,
         )
         re_raise_unless_openai(e)
 
@@ -1314,10 +1401,11 @@ def _daemon_plan_main_loop(
                     changed = True
                     _send_log(settings, f"[tp1] arm | zone_id={z.id} vao_lenh->cho_tp1 last={p_last}")
                     _thr_tp1 = arm_threshold_tp1_for_label(z.label or "")
-                    _plan_vn = mt5_zone_label_display_vn(z.label) or (z.label or "").strip() or "—"
                     _send_user_notice(
                         settings,
-                        f"({_plan_vn}) Giá đã cách entry {_thr_tp1:g} giá - sẽ xử lý khi chạm TP1",
+                        f"Giá đã cách entry {_thr_tp1:g} giá — sẽ xử lý khi chạm TP1",
+                        zone=z,
+                        params=params,
                     )
             if changed:
                 _state_write(params, st_tp1)

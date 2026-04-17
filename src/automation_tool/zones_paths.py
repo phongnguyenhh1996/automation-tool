@@ -137,3 +137,32 @@ def session_slot_from_shard_path(path: Path) -> Optional[SessionSlot]:
         if stem.endswith("_" + s):
             return s
     return None
+
+
+def label_from_shard_stem(stem: str) -> Optional[str]:
+    """
+    From ``vung_plan_chinh_sang`` → ``plan_chinh``; ``vung_scalp_toi`` → ``scalp``.
+    """
+    s = (stem or "").strip()
+    if not s:
+        return None
+    for slot in SLOTS_ORDER:
+        if s.endswith("_" + slot):
+            base = s[: -(len(slot) + 1)]
+            if base.startswith("vung_"):
+                return base[5:]
+    return None
+
+
+def session_slot_display_vn(slot: Optional[str]) -> Optional[str]:
+    """``sang`` / ``chieu`` / ``toi`` → tiếng Việt cho tin user."""
+    if not slot or not str(slot).strip():
+        return None
+    key = str(slot).strip().lower()
+    if key == "sang":
+        return "Sáng"
+    if key == "chieu":
+        return "Chiều"
+    if key == "toi":
+        return "Tối"
+    return None
