@@ -140,6 +140,8 @@ class Zone:
     hop_luu: Optional[int] = None
     trade_line: str = ""
     mt5_ticket: Optional[int] = None
+    # Đa tài khoản MT5: map account_id → ticket (primary ticket vẫn ở ``mt5_ticket``).
+    mt5_tickets_by_account: Optional[dict[str, int]] = None
     loai_streak: int = 0
     tp1_followup_done: bool = False
     retry_at: str = ""
@@ -166,6 +168,8 @@ class Zone:
             "status": self.status,
             "source": self.source,
         }
+        if self.mt5_tickets_by_account:
+            out["mt5_tickets_by_account"] = dict(self.mt5_tickets_by_account)
         if self.session_slot:
             out["session_slot"] = self.session_slot
         return out
@@ -241,6 +245,17 @@ def _parse_zone(d: dict[str, Any]) -> Optional[Zone]:
             mt5_ticket = int(tk)
         except Exception:
             mt5_ticket = None
+    mt5_tickets_by_account: Optional[dict[str, int]] = None
+    mta = d.get("mt5_tickets_by_account")
+    if isinstance(mta, dict) and mta:
+        mt5_tickets_by_account = {}
+        for ak, av in mta.items():
+            try:
+                mt5_tickets_by_account[str(ak)] = int(av)
+            except (TypeError, ValueError):
+                continue
+        if not mt5_tickets_by_account:
+            mt5_tickets_by_account = None
     ls_raw = d.get("loai_streak")
     loai_streak = 0
     if ls_raw is not None:
@@ -281,6 +296,7 @@ def _parse_zone(d: dict[str, Any]) -> Optional[Zone]:
         hop_luu=hop_luu,
         trade_line=trade_line,
         mt5_ticket=mt5_ticket,
+        mt5_tickets_by_account=mt5_tickets_by_account,
         loai_streak=loai_streak,
         tp1_followup_done=tp1_done,
         retry_at=retry_at,
@@ -342,6 +358,9 @@ def write_zones_for_slot(
                 hop_luu=z.hop_luu,
                 trade_line=z.trade_line,
                 mt5_ticket=z.mt5_ticket,
+                mt5_tickets_by_account=dict(z.mt5_tickets_by_account)
+                if z.mt5_tickets_by_account
+                else None,
                 loai_streak=z.loai_streak,
                 tp1_followup_done=z.tp1_followup_done,
                 retry_at=z.retry_at,

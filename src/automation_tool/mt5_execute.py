@@ -26,6 +26,8 @@ class MT5ExecutionResult:
     retcode: Optional[int] = None
     order: Optional[int] = None
     deal: Optional[int] = None
+    # Multi-account: id trong ``accounts.json`` (optional)
+    account_id: Optional[str] = None
     request: Optional[dict[str, Any]] = None
     # Tuple (code, message) từ mt5.last_error() sau thao tác lỗi (nếu có)
     last_error: Optional[tuple[Any, ...]] = None
@@ -38,7 +40,10 @@ class MT5ExecutionResult:
 
 def format_mt5_execution_for_telegram(ex: MT5ExecutionResult) -> str:
     """Chuỗi plain text cho log Telegram (TELEGRAM_CHAT_ID sau ``execute_trade``)."""
-    parts: list[str] = [ex.message]
+    parts: list[str] = []
+    if ex.account_id:
+        parts.append(f"[{ex.account_id}]")
+    parts.append(ex.message)
     if ex.resolved_symbol:
         parts.append(f"Symbol: {ex.resolved_symbol}")
     if ex.request is not None:
@@ -447,6 +452,22 @@ def _ensure_symbol(mt5: Any, symbol: str) -> tuple[Optional[str], Optional[str]]
     )
 
 
+def resolve_trade_symbol_on_broker(
+    mt5: Any,
+    trade: ParsedTrade,
+    symbol_override: Optional[str],
+) -> tuple[Optional[ParsedTrade], Optional[str]]:
+    """
+    Chuẩn hóa symbol (override + XAUUSDm) và ``symbol_select`` trên broker.
+    Dùng trước khi tính lot theo ``contract_size`` (multi-account).
+    """
+    t = resolve_mt5_trade_symbol(trade, symbol_override)
+    sym, err = _ensure_symbol(mt5, t.symbol)
+    if err or not sym:
+        return None, err or "Không resolve được symbol."
+    return replace(t, symbol=sym), None
+
+
 def build_request(
     mt5: Any,
     trade: ParsedTrade,
@@ -537,6 +558,7 @@ def execute_trade(
     log_tp2: bool = True,
     symbol_override: Optional[str] = None,
     lot_override: Optional[float] = None,
+    account_id: Optional[str] = None,
 ) -> MT5ExecutionResult:
     """
     Gửi lệnh qua MetaTrader5. MT5 chỉ có một TP trên lệnh; TP2 được in ra nếu có.
@@ -545,6 +567,8 @@ def execute_trade(
 
     Symbol: ``symbol_override`` (CLI ``--symbol``) nếu có, không thì symbol đã parse; luôn chuẩn hóa ``XAUUSD`` → ``XAUUSDm``.
     Lot: ``lot_override`` ghi đè volume từ file (tiện test với lot nhỏ).
+
+    ``account_id``: nhãn đa tài khoản (log/Telegram).
     """
     trade = resolve_mt5_trade_symbol(trade, symbol_override)
     if lot_override is not None:
@@ -573,6 +597,7 @@ def execute_trade(
         return MT5ExecutionResult(
             ok=True,
             message=f"[DRY-RUN] Sẽ gửi: {req_preview}{extra}",
+            account_id=account_id,
             request=req_preview,
             resolved_symbol=trade.symbol,
         )
@@ -589,6 +614,7 @@ def execute_trade(
         return MT5ExecutionResult(
             ok=False,
             message=f"mt5.initialize thất bại: {format_last_error(mt5)}",
+            account_id=account_id,
             last_error=le,
             resolved_symbol=trade.symbol,
         )
@@ -606,6 +632,7 @@ def execute_trade(
             return MT5ExecutionResult(
                 ok=False,
                 message=f"{e}",
+                account_id=account_id,
                 last_error=le,
                 resolved_symbol=trade.symbol,
             )
@@ -616,6 +643,7 @@ def execute_trade(
             return MT5ExecutionResult(
                 ok=False,
                 message=f"order_check trả về None. {format_last_error(mt5)}",
+                account_id=account_id,
                 last_error=le,
                 request=request,
                 resolved_symbol=str(request.get("symbol") or trade.symbol),
@@ -631,6 +659,7 @@ def execute_trade(
                     f"order_check không đạt: retcode={_retcode_label(mt5, chk_rc)} "
                     f"trade_check={chk_d!r} {format_last_error(mt5)}{hint}"
                 ),
+                account_id=account_id,
                 retcode=int(chk_rc) if chk_rc is not None else None,
                 last_error=le,
                 trade_check=chk_d,
@@ -643,6 +672,7 @@ def execute_trade(
             return MT5ExecutionResult(
                 ok=False,
                 message=f"order_send trả về None. {format_last_error(mt5)}",
+                account_id=account_id,
                 last_error=le,
                 request=request,
                 resolved_symbol=str(request.get("symbol") or trade.symbol),
@@ -658,6 +688,7 @@ def execute_trade(
                     f"order_send thất bại: retcode={_retcode_label(mt5, rc)} "
                     f"trade_result={rd!r} {format_last_error(mt5)}{hint}{extra}"
                 ),
+                account_id=account_id,
                 retcode=int(rc) if rc is not None else None,
                 last_error=le,
                 trade_result=rd,
@@ -671,6 +702,7 @@ def execute_trade(
                 f"OK: {_retcode_label(mt5, rc)} order={getattr(ret, 'order', None)} "
                 f"deal={getattr(ret, 'deal', None)} trade_result={rd!r}{extra}"
             ),
+            account_id=account_id,
             retcode=rc_int,
             order=getattr(ret, "order", None),
             deal=getattr(ret, "deal", None),

@@ -224,7 +224,8 @@ class LastAlertState:
     ``entry_manual_by_label``: True = vào lệnh thủ công (ghi tay ngoài bot); False = qua tool/MT5.
     ``trade_line_by_label``: dòng lệnh pipe MT5 theo vùng — ghi từ JSON phân tích OpenAI
     (``prices[].trade_line``) khi parse; sau đó có thể cập nhật khi ``execute_trade`` thành công.
-    ``mt5_ticket_by_label``: ticket sau MT5 (TP1 pipeline).
+    ``mt5_ticket_by_label``: ticket sau MT5 (TP1 pipeline) — **tài khoản primary** (tương thích cũ).
+    ``mt5_tickets_by_label``: optional map ``label → { account_id → ticket }`` (đa tài khoản).
     ``tp1_followup_done_by_label``: đã gửi follow-up TP1 cho lần ``cho_tp1`` hiện tại (tránh spam).
     """
 
@@ -234,6 +235,7 @@ class LastAlertState:
     entry_manual_by_label: dict[str, bool] = field(default_factory=dict)
     trade_line_by_label: dict[str, str] = field(default_factory=dict)
     mt5_ticket_by_label: dict[str, int] = field(default_factory=dict)
+    mt5_tickets_by_label: dict[str, dict[str, int]] = field(default_factory=dict)
     tp1_followup_done_by_label: dict[str, bool] = field(default_factory=dict)
     updated_at: str = ""
 
@@ -253,6 +255,11 @@ class LastAlertState:
                 k: int(self.mt5_ticket_by_label[k])
                 for k in self.labels
                 if k in self.mt5_ticket_by_label
+            },
+            "mt5_tickets_by_label": {
+                lab: {str(aid): int(tk) for aid, tk in self.mt5_tickets_by_label[lab].items()}
+                for lab in self.labels
+                if lab in self.mt5_tickets_by_label and self.mt5_tickets_by_label[lab]
             },
             "tp1_followup_done_by_label": {
                 k: bool(self.tp1_followup_done_by_label.get(k, False)) for k in self.labels
@@ -335,6 +342,22 @@ def read_last_alert_state(path: Optional[Path] = None) -> Optional[LastAlertStat
             except (TypeError, ValueError):
                 pass
 
+    mt5_tickets_by_label: dict[str, dict[str, int]] = {}
+    mtmap = data.get("mt5_tickets_by_label")
+    if isinstance(mtmap, dict):
+        for lab in labels:
+            inner = mtmap.get(lab)
+            if not isinstance(inner, dict):
+                continue
+            acc_map: dict[str, int] = {}
+            for aid, tv in inner.items():
+                try:
+                    acc_map[str(aid)] = int(tv)
+                except (TypeError, ValueError):
+                    continue
+            if acc_map:
+                mt5_tickets_by_label[lab] = acc_map
+
     tp1_done: dict[str, bool] = {}
     td = data.get("tp1_followup_done_by_label")
     if isinstance(td, dict):
@@ -353,6 +376,7 @@ def read_last_alert_state(path: Optional[Path] = None) -> Optional[LastAlertStat
         entry_manual_by_label=entry_manual_by_label,
         trade_line_by_label=trade_line_by_label,
         mt5_ticket_by_label=mt5_ticket_by_label,
+        mt5_tickets_by_label=mt5_tickets_by_label,
         tp1_followup_done_by_label=tp1_done,
         updated_at=ts,
     )
@@ -367,6 +391,9 @@ def write_last_alert_state(state: LastAlertState, path: Optional[Path] = None) -
         entry_manual_by_label=dict(state.entry_manual_by_label),
         trade_line_by_label=dict(state.trade_line_by_label),
         mt5_ticket_by_label=dict(state.mt5_ticket_by_label),
+        mt5_tickets_by_label={
+            k: dict(v) for k, v in state.mt5_tickets_by_label.items()
+        },
         tp1_followup_done_by_label=dict(state.tp1_followup_done_by_label),
         updated_at=datetime.now(timezone.utc).isoformat(),
     )
@@ -390,6 +417,7 @@ def merge_alert_prices_with_status(
             entry_manual_by_label={lab: False for lab in labels},
             trade_line_by_label={lab: "" for lab in labels},
             mt5_ticket_by_label={},
+            mt5_tickets_by_label={},
             tp1_followup_done_by_label={lab: False for lab in labels},
             updated_at=datetime.now(timezone.utc).isoformat(),
         )
@@ -397,6 +425,11 @@ def merge_alert_prices_with_status(
     new_manual: dict[str, bool] = {}
     new_tl = {lab: old.trade_line_by_label.get(lab, "") for lab in labels}
     new_tk = {k: v for k, v in old.mt5_ticket_by_label.items() if k in labels}
+    new_tmap = {
+        k: dict(v)
+        for k, v in old.mt5_tickets_by_label.items()
+        if k in labels
+    }
     new_tp1d = {lab: old.tp1_followup_done_by_label.get(lab, False) for lab in labels}
     for i, lab in enumerate(labels):
         op = old.prices[i]
@@ -406,6 +439,7 @@ def merge_alert_prices_with_status(
             new_manual[lab] = False
             new_tl[lab] = ""
             new_tk.pop(lab, None)
+            new_tmap.pop(lab, None)
             new_tp1d[lab] = False
         else:
             new_status[lab] = old.status_by_label.get(lab, VUNG_CHO)
@@ -417,9 +451,34 @@ def merge_alert_prices_with_status(
         entry_manual_by_label=new_manual,
         trade_line_by_label=new_tl,
         mt5_ticket_by_label=new_tk,
+        mt5_tickets_by_label=new_tmap,
         tp1_followup_done_by_label=new_tp1d,
         updated_at=datetime.now(timezone.utc).isoformat(),
     )
+
+
+def mt5_primary_ticket_for_label(
+    state: LastAlertState,
+    label: str,
+    primary_account_id: Optional[str] = None,
+) -> Optional[int]:
+    """
+    Ticket dùng cho pipeline TP1 (acc primary).
+
+    Nếu có ``mt5_tickets_by_label[label]`` và ``primary_account_id``: lấy ticket acc đó.
+    Ngược lại dùng ``mt5_ticket_by_label[label]``.
+    """
+    if primary_account_id:
+        m = state.mt5_tickets_by_label.get(label)
+        if m and primary_account_id in m:
+            return int(m[primary_account_id])
+    tk = state.mt5_ticket_by_label.get(label)
+    if tk is None:
+        return None
+    try:
+        return int(tk)
+    except (TypeError, ValueError):
+        return None
 
 
 def update_single_plan_status(
@@ -453,6 +512,7 @@ def update_single_plan_status(
             entry_manual_by_label=em,
             trade_line_by_label=dict(st.trade_line_by_label),
             mt5_ticket_by_label=dict(st.mt5_ticket_by_label),
+            mt5_tickets_by_label={k: dict(v) for k, v in st.mt5_tickets_by_label.items()},
             tp1_followup_done_by_label=dict(st.tp1_followup_done_by_label),
             updated_at=st.updated_at,
         ),
@@ -500,9 +560,14 @@ def update_plan_mt5_entry(
     *,
     trade_line: str,
     mt5_ticket: int,
+    mt5_tickets_by_account: Optional[dict[str, int]] = None,
     path: Optional[Path] = None,
 ) -> None:
-    """Ghi / cập nhật ``trade_line`` và ticket MT5 cho một plan (sau ``execute_trade`` thành công)."""
+    """Ghi / cập nhật ``trade_line`` và ticket MT5 cho một plan (sau ``execute_trade`` thành công).
+
+    ``mt5_tickets_by_account``: map ``account_id → ticket`` (đa tài khoản). Khi ``None``, xóa map đa acc
+    cho label đó (chế độ một tài khoản).
+    """
     st = read_last_alert_state(path)
     if st is None:
         raise SystemExit(
@@ -512,8 +577,13 @@ def update_plan_mt5_entry(
         raise SystemExit(f"Unknown plan label {label!r}; expected one of {st.labels}.")
     tl = dict(st.trade_line_by_label)
     tk = dict(st.mt5_ticket_by_label)
+    tmap = {k: dict(v) for k, v in st.mt5_tickets_by_label.items()}
     tl[label] = trade_line.strip()
     tk[label] = int(mt5_ticket)
+    if mt5_tickets_by_account is not None:
+        tmap[label] = {str(a): int(t) for a, t in mt5_tickets_by_account.items()}
+    else:
+        tmap.pop(label, None)
     write_last_alert_state(
         LastAlertState(
             prices=st.prices,
@@ -522,6 +592,7 @@ def update_plan_mt5_entry(
             entry_manual_by_label=dict(st.entry_manual_by_label),
             trade_line_by_label=tl,
             mt5_ticket_by_label=tk,
+            mt5_tickets_by_label=tmap,
             tp1_followup_done_by_label=dict(st.tp1_followup_done_by_label),
             updated_at=st.updated_at,
         ),
@@ -548,6 +619,7 @@ def update_plan_tp1_followup_done(
             entry_manual_by_label=dict(st.entry_manual_by_label),
             trade_line_by_label=dict(st.trade_line_by_label),
             mt5_ticket_by_label=dict(st.mt5_ticket_by_label),
+            mt5_tickets_by_label={k: dict(v) for k, v in st.mt5_tickets_by_label.items()},
             tp1_followup_done_by_label=d,
             updated_at=st.updated_at,
         ),
@@ -564,9 +636,11 @@ def clear_plan_mt5_fields(label: str, path: Optional[Path] = None) -> None:
         return
     tl = dict(st.trade_line_by_label)
     tk = dict(st.mt5_ticket_by_label)
+    tmap = {k: dict(v) for k, v in st.mt5_tickets_by_label.items()}
     td = dict(st.tp1_followup_done_by_label)
     tl[label] = ""
     tk.pop(label, None)
+    tmap.pop(label, None)
     td[label] = False
     write_last_alert_state(
         LastAlertState(
@@ -576,6 +650,7 @@ def clear_plan_mt5_fields(label: str, path: Optional[Path] = None) -> None:
             entry_manual_by_label=dict(st.entry_manual_by_label),
             trade_line_by_label=tl,
             mt5_ticket_by_label=tk,
+            mt5_tickets_by_label=tmap,
             tp1_followup_done_by_label=td,
             updated_at=st.updated_at,
         ),
@@ -647,6 +722,7 @@ def merge_trade_lines_from_openai_analysis_text(
             entry_manual_by_label=dict(st.entry_manual_by_label),
             trade_line_by_label=tl,
             mt5_ticket_by_label=dict(st.mt5_ticket_by_label),
+            mt5_tickets_by_label={k: dict(v) for k, v in st.mt5_tickets_by_label.items()},
             tp1_followup_done_by_label=dict(st.tp1_followup_done_by_label),
             updated_at=st.updated_at,
         ),

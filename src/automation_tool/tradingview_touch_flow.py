@@ -27,8 +27,10 @@ from automation_tool.coinmap import capture_charts
 from automation_tool.config import Settings, resolved_model_for_intraday_alert
 from automation_tool.first_response_trade import apply_first_response_vao_lenh
 from automation_tool.images import coinmap_xauusd_5m_json_path, read_main_chart_symbol
+from automation_tool.mt5_accounts import load_mt5_accounts_for_cli, primary_account
 from automation_tool.mt5_execute import execute_trade, format_mt5_execution_for_telegram
 from automation_tool.mt5_manage import mt5_latest_position_ticket
+from automation_tool.mt5_multi import execute_trade_all_accounts, format_mt5_multi_for_telegram
 from automation_tool.mt5_openai_parse import (
     is_last_price_hit_stop_loss,
     normalize_broker_xau_symbol,
@@ -211,6 +213,7 @@ class TouchFlowParams:
     openai_model: Optional[str] = None
     # Raw CLI ``--model`` only (not merged with OPENAI_MODEL); used for INTRADAY_ALERT model resolution.
     openai_model_cli: Optional[str] = None
+    mt5_accounts_json: Optional[Path] = None
 
 
 def _sleep_wait_minutes_with_poll(
@@ -507,6 +510,7 @@ def run_intraday_touch_flow(
             telegram_output_ngan_gon_chat_id=settings.telegram_output_ngan_gon_chat_id,
             telegram_source_label="tv-touch (watch)",
             auto_mt5_zone_label=touched_label,
+            mt5_accounts_json=params.mt5_accounts_json,
         )
 
         act = parse_journal_intraday_action_from_openai_text(out_text)
@@ -578,37 +582,88 @@ def run_intraday_touch_flow(
                 entry_manual=False,
             )
             if params.mt5_execute:
-                ex = execute_trade(
-                    parsed,
-                    dry_run=params.mt5_dry_run,
-                    symbol_override=params.mt5_symbol,
-                )
-                _ts_log(tz, "tv-touch", ex.message)
-                if not params.no_telegram:
-                    send_mt5_execution_log_to_ngan_gon_chat(
-                        bot_token=settings.telegram_bot_token,
-                        telegram_chat_id=settings.telegram_chat_id,
-                        source="tv-touch",
-                        text=format_mt5_execution_for_telegram(ex),
-                        zone_label=touched_label,
-                        trade_line=(parsed.raw_line or "").strip() or None,
-                        execution_ok=ex.ok,
+                accounts = load_mt5_accounts_for_cli(params.mt5_accounts_json)
+                if accounts:
+                    summary = execute_trade_all_accounts(
+                        parsed,
+                        accounts,
+                        dry_run=params.mt5_dry_run,
+                        symbol_override=params.mt5_symbol,
                     )
-                tid = int(ex.order) if ex.order else 0
-                if (not tid or tid <= 0) and not params.mt5_dry_run and (ex.resolved_symbol or "").strip():
-                    alt = mt5_latest_position_ticket(str(ex.resolved_symbol).strip())
-                    if alt:
-                        tid = int(alt)
-                if ex.ok and tid > 0 and (parsed.raw_line or "").strip():
-                    try:
-                        update_plan_mt5_entry(
-                            touched_label,
-                            trade_line=parsed.raw_line.strip(),
-                            mt5_ticket=tid,
-                            path=last_alert_path,
+                    multi_txt = format_mt5_multi_for_telegram(summary)
+                    _ts_log(tz, "tv-touch", multi_txt)
+                    if not params.no_telegram:
+                        send_mt5_execution_log_to_ngan_gon_chat(
+                            bot_token=settings.telegram_bot_token,
+                            telegram_chat_id=settings.telegram_chat_id,
+                            source="tv-touch",
+                            text=multi_txt,
+                            zone_label=touched_label,
+                            trade_line=(parsed.raw_line or "").strip() or None,
+                            execution_ok=summary.ok_all,
                         )
-                    except SystemExit:
-                        pass
+                    tid = summary.primary_ticket(accounts)
+                    prim = primary_account(accounts)
+                    sym0 = ""
+                    for rex in summary.results:
+                        if rex.account_id == prim.id and rex.resolved_symbol:
+                            sym0 = str(rex.resolved_symbol).strip()
+                            break
+                    if not sym0 and summary.results:
+                        sym0 = (summary.results[0].resolved_symbol or "").strip()
+                    if (not tid or tid <= 0) and not params.mt5_dry_run and sym0:
+                        alt = mt5_latest_position_ticket(
+                            sym0,
+                            login=prim.login,
+                            password=prim.password,
+                            server=prim.server,
+                        )
+                        if alt:
+                            tid = int(alt)
+                    if tid > 0 and (parsed.raw_line or "").strip():
+                        try:
+                            update_plan_mt5_entry(
+                                touched_label,
+                                trade_line=parsed.raw_line.strip(),
+                                mt5_ticket=tid,
+                                mt5_tickets_by_account=summary.tickets_by_account_id
+                                or None,
+                                path=last_alert_path,
+                            )
+                        except SystemExit:
+                            pass
+                else:
+                    ex = execute_trade(
+                        parsed,
+                        dry_run=params.mt5_dry_run,
+                        symbol_override=params.mt5_symbol,
+                    )
+                    _ts_log(tz, "tv-touch", ex.message)
+                    if not params.no_telegram:
+                        send_mt5_execution_log_to_ngan_gon_chat(
+                            bot_token=settings.telegram_bot_token,
+                            telegram_chat_id=settings.telegram_chat_id,
+                            source="tv-touch",
+                            text=format_mt5_execution_for_telegram(ex),
+                            zone_label=touched_label,
+                            trade_line=(parsed.raw_line or "").strip() or None,
+                            execution_ok=ex.ok,
+                        )
+                    tid = int(ex.order) if ex.order else 0
+                    if (not tid or tid <= 0) and not params.mt5_dry_run and (ex.resolved_symbol or "").strip():
+                        alt = mt5_latest_position_ticket(str(ex.resolved_symbol).strip())
+                        if alt:
+                            tid = int(alt)
+                    if ex.ok and tid > 0 and (parsed.raw_line or "").strip():
+                        try:
+                            update_plan_mt5_entry(
+                                touched_label,
+                                trade_line=parsed.raw_line.strip(),
+                                mt5_ticket=tid,
+                                path=last_alert_path,
+                            )
+                        except SystemExit:
+                            pass
             if not params.no_telegram:
                 send_openai_output_to_telegram(
                     bot_token=settings.telegram_bot_token,

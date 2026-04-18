@@ -1,0 +1,24 @@
+[
+  {
+    "id": "acc_main",
+    "login": 103003411,
+    "password": "Huynhcuong1-",
+    "server": "Exness-MT5Real15",
+    "primary": true,
+    "lot": {
+      "mode": "fixed",
+      "volume": 0.01
+    }
+  },
+  {
+    "id": "acc_secondary",
+    "login": 41885778,
+    "password": "@Phongks12",
+    "server": "Exness-MT5Real8",
+    "primary": false,
+    "lot": {
+      "mode": "fixed",
+      "volume": 0.01
+    }
+  }
+]

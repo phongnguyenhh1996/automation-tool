@@ -15,8 +15,19 @@ from playwright.sync_api import BrowserContext, Page
 from automation_tool.coinmap import capture_charts
 from automation_tool.config import Settings, resolved_model_for_intraday_alert
 from automation_tool.images import coinmap_xauusd_5m_json_path, read_main_chart_symbol
+from automation_tool.mt5_accounts import (
+    load_mt5_accounts_for_cli,
+    primary_account,
+    primary_account_id,
+)
 from automation_tool.mt5_execute import execute_trade, format_mt5_execution_for_telegram
 from automation_tool.mt5_manage import mt5_cancel_pending_or_close_position, mt5_ticket_still_open
+from automation_tool.mt5_multi import (
+    execute_trade_all_accounts,
+    format_mt5_multi_for_telegram,
+    format_mt5_multi_manage_for_telegram,
+    mt5_cancel_pending_or_close_all_accounts,
+)
 from automation_tool.mt5_openai_parse import ParsedTrade, parse_openai_output_md
 from automation_tool.openai_analysis_json import arm_threshold_tp1_for_label
 from automation_tool.openai_prompt_flow import (
@@ -28,6 +39,7 @@ from automation_tool.state_files import (
     LOAI,
     VAO_LENH,
     clear_plan_mt5_fields,
+    mt5_primary_ticket_for_label,
     read_last_alert_state,
     update_plan_mt5_entry,
     update_plan_tp1_followup_done,
@@ -162,11 +174,24 @@ def _run_tp1_openai_and_act(
     no_save = params.no_save_storage
 
     st0 = read_last_alert_state(last_alert_path)
-    tk0 = int(st0.mt5_ticket_by_label.get(label) or 0) if st0 else 0
+    accounts0 = load_mt5_accounts_for_cli(getattr(params, "mt5_accounts_json", None))
+    pid0 = primary_account_id(accounts0) if accounts0 else None
+    tk0 = (
+        int(mt5_primary_ticket_for_label(st0, label, pid0) or 0)
+        if st0
+        else 0
+    )
     dry = bool(getattr(params, "mt5_dry_run", False))
     exe = getattr(params, "mt5_execute", True)
     if exe and tk0 > 0:
-        still_open, ticket_msg = mt5_ticket_still_open(tk0, dry_run=dry)
+        prim0 = primary_account(accounts0) if accounts0 else None
+        still_open, ticket_msg = mt5_ticket_still_open(
+            tk0,
+            dry_run=dry,
+            login=prim0.login if prim0 else None,
+            password=prim0.password if prim0 else None,
+            server=prim0.server if prim0 else None,
+        )
         _log_tp1.info("tp1-followup kiểm tra ticket | %s", ticket_msg)
         if not still_open:
             _log.info(
@@ -252,7 +277,9 @@ def _run_tp1_openai_and_act(
         return new_id
 
     st = read_last_alert_state(last_alert_path)
-    tk = (st.mt5_ticket_by_label.get(label) if st else None) or 0
+    accounts = load_mt5_accounts_for_cli(getattr(params, "mt5_accounts_json", None))
+    pid = primary_account_id(accounts) if accounts else None
+    tk = int(mt5_primary_ticket_for_label(st, label, pid) or 0) if st else 0
     _log_tp1.info(
         "tp1-followup parse OK | sau_tp1=%s | mt5_execute=%s mt5_dry_run=%s | trade_line_moi_len=%d",
         dec.sau_tp1,
@@ -263,8 +290,17 @@ def _run_tp1_openai_and_act(
 
     if dec.sau_tp1 == "loại":
         if exe and tk > 0:
-            r = mt5_cancel_pending_or_close_position(int(tk), dry_run=dry)
-            _log.info("tp1-followup loại: %s", r.message)
+            tmap = (st.mt5_tickets_by_label.get(label) or {}) if st else {}
+            if accounts and tmap:
+                summ = mt5_cancel_pending_or_close_all_accounts(tmap, accounts, dry_run=dry)
+                log_txt = format_mt5_multi_manage_for_telegram(summ)
+                _log.info("tp1-followup loại multi: %s", log_txt)
+                r_ok = summ.ok_all
+            else:
+                r = mt5_cancel_pending_or_close_position(int(tk), dry_run=dry)
+                log_txt = r.message
+                _log.info("tp1-followup loại: %s", r.message)
+                r_ok = r.ok
             if settings.telegram_bot_token and settings.telegram_chat_id and not getattr(
                 params, "no_telegram", False
             ):
@@ -272,9 +308,9 @@ def _run_tp1_openai_and_act(
                     bot_token=settings.telegram_bot_token,
                     telegram_chat_id=settings.telegram_chat_id,
                     source="tp1-followup",
-                    text=f"{label}: loại sau TP1\n{r.message}",
+                    text=f"{label}: loại sau TP1\n{log_txt}",
                     trade_line=(st.trade_line_by_label.get(label) or "") if st else None,
-                    execution_ok=r.ok,
+                    execution_ok=r_ok,
                 )
         update_single_plan_status(label, LOAI, path=last_alert_path)
         clear_plan_mt5_fields(label, path=last_alert_path)
@@ -305,35 +341,74 @@ def _run_tp1_openai_and_act(
         update_plan_tp1_followup_done(label, False, path=last_alert_path)
         return new_id
     if exe and tk > 0:
-        r0 = mt5_cancel_pending_or_close_position(int(tk), dry_run=dry)
-        _log.info("tp1-followup: đóng/huỷ lệnh cũ: %s", r0.message)
+        tmap_old = (st.mt5_tickets_by_label.get(label) or {}) if st else {}
+        if accounts and tmap_old:
+            r0m = mt5_cancel_pending_or_close_all_accounts(tmap_old, accounts, dry_run=dry)
+            _log.info(
+                "tp1-followup: đóng/huỷ lệnh cũ (multi): %s",
+                format_mt5_multi_manage_for_telegram(r0m),
+            )
+        else:
+            r0 = mt5_cancel_pending_or_close_position(int(tk), dry_run=dry)
+            _log.info("tp1-followup: đóng/huỷ lệnh cũ: %s", r0.message)
     if exe:
-        ex = execute_trade(
-            new_parsed,
-            dry_run=dry,
-            symbol_override=getattr(params, "mt5_symbol", None),
-        )
-        _log.info("tp1-followup: execute_trade → %s", ex.message)
-        if settings.telegram_bot_token and settings.telegram_chat_id and not getattr(
-            params, "no_telegram", False
-        ):
-            send_mt5_execution_log_to_ngan_gon_chat(
-                bot_token=settings.telegram_bot_token,
-                telegram_chat_id=settings.telegram_chat_id,
-                source="tp1-followup-chinh",
-                text=format_mt5_execution_for_telegram(ex),
-                zone_label=label,
-                trade_line=dec.trade_line_moi.strip(),
-                execution_ok=ex.ok,
+        if accounts:
+            summary = execute_trade_all_accounts(
+                new_parsed,
+                accounts,
+                dry_run=dry,
+                symbol_override=getattr(params, "mt5_symbol", None),
             )
-        tid = int(ex.order) if ex.order else 0
-        if tid > 0:
-            update_plan_mt5_entry(
-                label,
-                trade_line=dec.trade_line_moi.strip(),
-                mt5_ticket=tid,
-                path=last_alert_path,
+            multi_txt = format_mt5_multi_for_telegram(summary)
+            _log.info("tp1-followup: execute_trade multi → %s", multi_txt[:400])
+            if settings.telegram_bot_token and settings.telegram_chat_id and not getattr(
+                params, "no_telegram", False
+            ):
+                send_mt5_execution_log_to_ngan_gon_chat(
+                    bot_token=settings.telegram_bot_token,
+                    telegram_chat_id=settings.telegram_chat_id,
+                    source="tp1-followup-chinh",
+                    text=multi_txt,
+                    zone_label=label,
+                    trade_line=dec.trade_line_moi.strip(),
+                    execution_ok=summary.ok_all,
+                )
+            tid = summary.primary_ticket(accounts)
+            if tid > 0:
+                update_plan_mt5_entry(
+                    label,
+                    trade_line=dec.trade_line_moi.strip(),
+                    mt5_ticket=tid,
+                    mt5_tickets_by_account=summary.tickets_by_account_id or None,
+                    path=last_alert_path,
+                )
+        else:
+            ex = execute_trade(
+                new_parsed,
+                dry_run=dry,
+                symbol_override=getattr(params, "mt5_symbol", None),
             )
+            _log.info("tp1-followup: execute_trade → %s", ex.message)
+            if settings.telegram_bot_token and settings.telegram_chat_id and not getattr(
+                params, "no_telegram", False
+            ):
+                send_mt5_execution_log_to_ngan_gon_chat(
+                    bot_token=settings.telegram_bot_token,
+                    telegram_chat_id=settings.telegram_chat_id,
+                    source="tp1-followup-chinh",
+                    text=format_mt5_execution_for_telegram(ex),
+                    zone_label=label,
+                    trade_line=dec.trade_line_moi.strip(),
+                    execution_ok=ex.ok,
+                )
+            tid = int(ex.order) if ex.order else 0
+            if tid > 0:
+                update_plan_mt5_entry(
+                    label,
+                    trade_line=dec.trade_line_moi.strip(),
+                    mt5_ticket=tid,
+                    path=last_alert_path,
+                )
     update_single_plan_status(label, VAO_LENH, path=last_alert_path, entry_manual=False)
     update_plan_tp1_followup_done(label, False, path=last_alert_path)
     _log_tp1.info("tp1-followup kết thúc nhánh chỉnh trade_line | label=%s → vao_lenh + ticket mới (nếu có)", label)
@@ -380,12 +455,14 @@ def maybe_post_entry_tp1_tick(
         )
 
         arm_action = False
+        accounts_m = load_mt5_accounts_for_cli(getattr(params, "mt5_accounts_json", None))
+        pid_m = primary_account_id(accounts_m) if accounts_m else None
         for lab in st.labels:
             if st.status_by_label.get(lab, "") != VAO_LENH:
                 continue
             tl = (st.trade_line_by_label.get(lab) or "").strip()
-            tk = st.mt5_ticket_by_label.get(lab)
-            if not tl or not tk or int(tk) <= 0:
+            tk = mt5_primary_ticket_for_label(st, lab, pid_m)
+            if not tl or tk is None or int(tk) <= 0:
                 _log_tp1.info(
                     "tp1 arm: bỏ qua %s — thiếu trade_line hoặc ticket (tl=%s tk=%s)",
                     lab,
@@ -452,8 +529,8 @@ def maybe_post_entry_tp1_tick(
                 )
                 continue
             tl = (st.trade_line_by_label.get(lab) or "").strip()
-            tk = st.mt5_ticket_by_label.get(lab)
-            if not tl or not tk or int(tk) <= 0:
+            tk = mt5_primary_ticket_for_label(st, lab, pid_m)
+            if not tl or tk is None or int(tk) <= 0:
                 _log_tp1.info("tp1 TP1: bỏ qua %s — thiếu trade_line hoặc ticket", lab)
                 continue
             minimal = json.dumps(
@@ -485,9 +562,20 @@ def maybe_post_entry_tp1_tick(
                 dry = bool(getattr(params, "mt5_dry_run", False))
                 exe = getattr(params, "mt5_execute", True)
                 tk_sc = int(tk or 0)
-                if exe and tk_sc > 0:
-                    r = mt5_cancel_pending_or_close_position(tk_sc, dry_run=dry)
-                    _log.info("tp1: scalp cho_tp1 chạm TP1 — huỷ ticket | %s", r.message)
+                accs_sp = load_mt5_accounts_for_cli(getattr(params, "mt5_accounts_json", None))
+                tmap_sp = (st.mt5_tickets_by_label.get(lab) or {}) if st else {}
+                if exe and (tk_sc > 0 or tmap_sp):
+                    if accs_sp and tmap_sp:
+                        summ_sp = mt5_cancel_pending_or_close_all_accounts(
+                            tmap_sp, accs_sp, dry_run=dry
+                        )
+                        msg_sp = format_mt5_multi_manage_for_telegram(summ_sp)
+                        r_ok_sp = summ_sp.ok_all
+                    else:
+                        r = mt5_cancel_pending_or_close_position(tk_sc, dry_run=dry)
+                        msg_sp = r.message
+                        r_ok_sp = r.ok
+                    _log.info("tp1: scalp cho_tp1 chạm TP1 — huỷ ticket | %s", msg_sp)
                     if settings.telegram_bot_token and settings.telegram_chat_id and not getattr(
                         params, "no_telegram", False
                     ):
@@ -495,10 +583,10 @@ def maybe_post_entry_tp1_tick(
                             bot_token=settings.telegram_bot_token,
                             telegram_chat_id=settings.telegram_chat_id,
                             source="tp1-scalp-tp1",
-                            text=f"{lab}: scalp chạm TP1 — huỷ ticket\n{r.message}",
+                            text=f"{lab}: scalp chạm TP1 — huỷ ticket\n{msg_sp}",
                             zone_label=lab,
                             trade_line=tl,
-                            execution_ok=r.ok,
+                            execution_ok=r_ok_sp,
                         )
                 else:
                     _log.info(
@@ -549,6 +637,7 @@ def tp1_dry_run_report(
     last_alert_path: Path,
     p_last: float,
     symbol_override: Optional[str] = None,
+    mt5_accounts_json: Optional[Path] = None,
 ) -> str:
     """
     Báo cáo text cho CLI: so ``p_last`` với entry/TP1 parse từ ``trade_line`` (không browser/OpenAI/MT5).
@@ -556,6 +645,8 @@ def tp1_dry_run_report(
     st = read_last_alert_state(last_alert_path)
     if st is None:
         return f"Không đọc được last_alert_prices: {last_alert_path}\n"
+    accs = load_mt5_accounts_for_cli(mt5_accounts_json)
+    pid = primary_account_id(accs) if accs else None
     lines: list[str] = [
         f"last_alert: {last_alert_path}",
         f"p_last (cùng quy ước Last watchlist): {p_last}",
@@ -567,7 +658,7 @@ def tp1_dry_run_report(
         if s not in (VAO_LENH, CHO_TP1):
             continue
         tl = (st.trade_line_by_label.get(lab) or "").strip()
-        tk = st.mt5_ticket_by_label.get(lab)
+        tk = mt5_primary_ticket_for_label(st, lab, pid)
         if not tl or tk is None or int(tk) <= 0:
             lines.append(f"[{lab}] status={s} — thiếu trade_line hoặc ticket hợp lệ")
             lines.append("")

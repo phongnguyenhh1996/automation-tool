@@ -30,7 +30,14 @@ from automation_tool.coinmap import (
 from automation_tool.coinmap import _tradingview_ensure_watchlist_open  # reuse internal helper
 from automation_tool.config import Settings, resolved_model_for_intraday_alert
 from automation_tool.images import DEFAULT_MAIN_CHART_SYMBOL, get_active_main_symbol
+from automation_tool.mt5_accounts import load_mt5_accounts_for_cli, primary_account
 from automation_tool.mt5_execute import execute_trade, format_mt5_execution_for_telegram
+from automation_tool.mt5_multi import (
+    execute_trade_all_accounts,
+    format_mt5_multi_for_telegram,
+    format_mt5_multi_manage_for_telegram,
+    mt5_cancel_pending_or_close_all_accounts,
+)
 from automation_tool.mt5_openai_parse import (
     is_last_price_hit_stop_loss,
     parse_journal_intraday_action_from_openai_text,
@@ -196,6 +203,7 @@ class WatchlistDaemonParams:
     eps: float = _EPS_DEFAULT  # max |Δ| between integer-rounded Last and touch ref (default 0.0)
     openai_model: Optional[str] = None
     openai_model_cli: Optional[str] = None
+    mt5_accounts_json: Optional[Path] = None
 
 
 def _state_read(params: WatchlistDaemonParams) -> Optional[ZonesState]:
@@ -518,7 +526,15 @@ def _tp1_followup_job(
         dry = bool(params.mt5_dry_run)
         exe = bool(params.mt5_execute)
         if exe and tk_check > 0:
-            still_open, ticket_msg = mt5_ticket_still_open(tk_check, dry_run=dry)
+            accs_chk = load_mt5_accounts_for_cli(params.mt5_accounts_json)
+            prim_chk = primary_account(accs_chk) if accs_chk else None
+            still_open, ticket_msg = mt5_ticket_still_open(
+                tk_check,
+                dry_run=dry,
+                login=prim_chk.login if prim_chk else None,
+                password=prim_chk.password if prim_chk else None,
+                server=prim_chk.server if prim_chk else None,
+            )
             _send_log(settings, f"[tp1] kiểm tra ticket | {ticket_msg}")
             if not still_open:
                 st_done = _state_read(params)
@@ -527,6 +543,7 @@ def _tp1_followup_job(
                     if z_done is not None:
                         z_done.status = "done"
                         z_done.mt5_ticket = None
+                        z_done.mt5_tickets_by_account = None
                         z_done.tp1_followup_done = True
                         _state_write(params, st_done)
                 _send_log(
@@ -669,9 +686,21 @@ def _tp1_followup_job(
 
         if dec.sau_tp1 == "loại":
             if exe and tk > 0:
-                r = mt5_cancel_pending_or_close_position(tk, dry_run=dry)
-                _send_log(settings, f"[tp1] mt5_cancel_close: {r.message}".strip())
+                accs_lo = load_mt5_accounts_for_cli(params.mt5_accounts_json)
+                tmap_lo = z1.mt5_tickets_by_account or {}
+                if accs_lo and tmap_lo:
+                    summ_lo = mt5_cancel_pending_or_close_all_accounts(
+                        tmap_lo, accs_lo, dry_run=dry
+                    )
+                    _send_log(
+                        settings,
+                        f"[tp1] mt5_cancel_close multi: {format_mt5_multi_manage_for_telegram(summ_lo)}".strip(),
+                    )
+                else:
+                    r = mt5_cancel_pending_or_close_position(tk, dry_run=dry)
+                    _send_log(settings, f"[tp1] mt5_cancel_close: {r.message}".strip())
             z1.status = "loai"
+            z1.mt5_tickets_by_account = None
             _state_write(params, st1)
             _send_user_notice(
                 settings,
@@ -691,8 +720,19 @@ def _tp1_followup_job(
 
         # close old ticket then execute new trade line
         if exe and tk > 0:
-            r0 = mt5_cancel_pending_or_close_position(tk, dry_run=dry)
-            _send_log(settings, f"[tp1] mt5_close_old: {r0.message}".strip())
+            accs_old = load_mt5_accounts_for_cli(params.mt5_accounts_json)
+            tmap_old = z1.mt5_tickets_by_account or {}
+            if accs_old and tmap_old:
+                r0m = mt5_cancel_pending_or_close_all_accounts(
+                    tmap_old, accs_old, dry_run=dry
+                )
+                _send_log(
+                    settings,
+                    f"[tp1] mt5_close_old multi: {format_mt5_multi_manage_for_telegram(r0m)}".strip(),
+                )
+            else:
+                r0 = mt5_cancel_pending_or_close_position(tk, dry_run=dry)
+                _send_log(settings, f"[tp1] mt5_close_old: {r0.message}".strip())
 
         minimal = json.dumps(
             {"intraday_hanh_dong": "VÀO LỆNH", "trade_line": dec.trade_line_moi.strip()},
@@ -706,34 +746,67 @@ def _tp1_followup_job(
             return
 
         if exe:
-            ex = execute_trade(
-                new_parsed,
-                dry_run=dry,
-                symbol_override=params.mt5_symbol,
-            )
-            if not params.no_telegram:
-                send_mt5_execution_log_to_ngan_gon_chat(
-                    bot_token=settings.telegram_bot_token,
-                    telegram_chat_id=settings.telegram_chat_id,
-                    source="tp1-followup",
-                    text=format_mt5_execution_for_telegram(ex),
-                    zone_label=z1.label,
-                    trade_line=dec.trade_line_moi.strip(),
-                    execution_ok=ex.ok,
-                    session_slot=resolve_session_slot_raw(
-                        zone_session_slot=getattr(z1, "session_slot", None),
-                        shard_path=params.shard_path,
-                    ),
+            accs_new = load_mt5_accounts_for_cli(params.mt5_accounts_json)
+            if accs_new:
+                summary = execute_trade_all_accounts(
+                    new_parsed,
+                    accs_new,
+                    dry_run=dry,
+                    symbol_override=params.mt5_symbol,
                 )
-            _send_log(settings, f"[tp1] mt5_execute_trade: {ex.message}".strip())
-            tid = int(ex.order) if ex.order else 0
-            if ex.ok and tid > 0:
-                z1.mt5_ticket = tid
-            _tp1_lines = [ex.message]
-            if ex.order:
-                _tp1_lines.append(f"Mã lệnh: {ex.order}")
-            if dry:
-                _tp1_lines.append("(Chế độ thử.)")
+                multi_txt = format_mt5_multi_for_telegram(summary)
+                if not params.no_telegram:
+                    send_mt5_execution_log_to_ngan_gon_chat(
+                        bot_token=settings.telegram_bot_token,
+                        telegram_chat_id=settings.telegram_chat_id,
+                        source="tp1-followup",
+                        text=multi_txt,
+                        zone_label=z1.label,
+                        trade_line=dec.trade_line_moi.strip(),
+                        execution_ok=summary.ok_all,
+                        session_slot=resolve_session_slot_raw(
+                            zone_session_slot=getattr(z1, "session_slot", None),
+                            shard_path=params.shard_path,
+                        ),
+                    )
+                _send_log(settings, f"[tp1] mt5_execute_trade multi: {multi_txt[:500]}".strip())
+                tid = summary.primary_ticket(accs_new)
+                if tid > 0:
+                    z1.mt5_ticket = tid
+                    z1.mt5_tickets_by_account = summary.tickets_by_account_id or None
+                _tp1_lines = [multi_txt]
+                if dry:
+                    _tp1_lines.append("(Chế độ thử.)")
+            else:
+                ex = execute_trade(
+                    new_parsed,
+                    dry_run=dry,
+                    symbol_override=params.mt5_symbol,
+                )
+                if not params.no_telegram:
+                    send_mt5_execution_log_to_ngan_gon_chat(
+                        bot_token=settings.telegram_bot_token,
+                        telegram_chat_id=settings.telegram_chat_id,
+                        source="tp1-followup",
+                        text=format_mt5_execution_for_telegram(ex),
+                        zone_label=z1.label,
+                        trade_line=dec.trade_line_moi.strip(),
+                        execution_ok=ex.ok,
+                        session_slot=resolve_session_slot_raw(
+                            zone_session_slot=getattr(z1, "session_slot", None),
+                            shard_path=params.shard_path,
+                        ),
+                    )
+                _send_log(settings, f"[tp1] mt5_execute_trade: {ex.message}".strip())
+                tid = int(ex.order) if ex.order else 0
+                if ex.ok and tid > 0:
+                    z1.mt5_ticket = tid
+                z1.mt5_tickets_by_account = None
+                _tp1_lines = [ex.message]
+                if ex.order:
+                    _tp1_lines.append(f"Mã lệnh: {ex.order}")
+                if dry:
+                    _tp1_lines.append("(Chế độ thử.)")
             _send_user_notice(
                 settings,
                 "Sau TP1: đã đặt lệnh mới theo trade line cập nhật.",
@@ -826,6 +899,64 @@ def _auto_entry_job(
             )
             return
 
+        accs_ae = load_mt5_accounts_for_cli(params.mt5_accounts_json)
+        if accs_ae:
+            summary_ae = execute_trade_all_accounts(
+                parsed,
+                accs_ae,
+                dry_run=params.mt5_dry_run,
+                symbol_override=params.mt5_symbol,
+            )
+            multi_ae = format_mt5_multi_for_telegram(summary_ae)
+            if not params.no_telegram:
+                send_mt5_execution_log_to_ngan_gon_chat(
+                    bot_token=settings.telegram_bot_token,
+                    telegram_chat_id=settings.telegram_chat_id,
+                    source="auto-entry",
+                    text=multi_ae,
+                    zone_label=z0.label,
+                    trade_line=z0.trade_line,
+                    execution_ok=summary_ae.ok_all,
+                    session_slot=resolve_session_slot_raw(
+                        zone_session_slot=getattr(z0, "session_slot", None),
+                        shard_path=params.shard_path,
+                    ),
+                )
+            _send_log(settings, f"[auto-entry] mt5_execute_trade multi: {multi_ae[:400]}".strip())
+            _lines = [multi_ae]
+            if params.mt5_dry_run:
+                _lines.append("(Chế độ thử.)")
+            _send_user_notice(
+                settings,
+                "Tự động vào lệnh — kết quả MT5",
+                "\n".join(_lines),
+                zone=z0,
+                params=params,
+            )
+            tid = summary_ae.primary_ticket(accs_ae)
+            ok_ae = tid > 0
+            st2 = _state_read(params)
+            if st2 is None:
+                return
+            for z in st2.zones:
+                if z.id != zone_id:
+                    continue
+                if ok_ae and tid > 0:
+                    z.mt5_ticket = tid
+                    z.mt5_tickets_by_account = summary_ae.tickets_by_account_id or None
+                    z.status = "vao_lenh"
+                    z.auto_entry_retry_after = ""
+                else:
+                    z.status = "cham"
+                    z.auto_entry_retry_after = _retry_at_iso()
+                    _send_log(
+                        settings,
+                        f"[auto-entry] mt5_failed -> cham cooldown_until={z.auto_entry_retry_after} | zone_id={zone_id}",
+                    )
+                break
+            _state_write(params, st2)
+            return
+
         ex = execute_trade(
             parsed,
             dry_run=params.mt5_dry_run,
@@ -868,6 +999,7 @@ def _auto_entry_job(
                 continue
             if ex.ok and tid > 0:
                 z.mt5_ticket = tid
+                z.mt5_tickets_by_account = None
                 z.status = "vao_lenh"
                 z.auto_entry_retry_after = ""
             else:
@@ -1127,6 +1259,54 @@ def _zone_touch_job(
             )
             return
 
+        accs_zt = load_mt5_accounts_for_cli(params.mt5_accounts_json)
+        if accs_zt:
+            summary_zt = execute_trade_all_accounts(
+                parsed,
+                accs_zt,
+                dry_run=params.mt5_dry_run,
+                symbol_override=params.mt5_symbol,
+            )
+            zt_txt = format_mt5_multi_for_telegram(summary_zt)
+            if not params.no_telegram:
+                send_mt5_execution_log_to_ngan_gon_chat(
+                    bot_token=settings.telegram_bot_token,
+                    telegram_chat_id=settings.telegram_chat_id,
+                    source="zone-touch",
+                    text=zt_txt,
+                    zone_label=z1.label,
+                    trade_line=z1.trade_line,
+                    execution_ok=summary_zt.ok_all,
+                    session_slot=resolve_session_slot_raw(
+                        zone_session_slot=getattr(z1, "session_slot", None),
+                        shard_path=params.shard_path,
+                    ),
+                )
+            _send_log(settings, f"[zone-touch] mt5_execute_trade multi: {zt_txt[:400]}".strip())
+            _lines = [zt_txt]
+            if params.mt5_dry_run:
+                _lines.append("(Chế độ thử.)")
+            _send_user_notice(
+                settings,
+                "Tự động vào lệnh — kết quả MT5",
+                "\n".join(_lines),
+                zone=z1,
+                params=params,
+            )
+            tid = summary_zt.primary_ticket(accs_zt)
+            if tid > 0:
+                st2 = _state_read(params)
+                if st2 is None:
+                    return
+                for z in st2.zones:
+                    if z.id == zone_id:
+                        z.mt5_ticket = tid
+                        z.mt5_tickets_by_account = summary_zt.tickets_by_account_id or None
+                        break
+                _state_write(params, st2)
+                _send_log(settings, f"[zone-touch] mt5_ticket_saved | zone_id={zone_id} ticket={tid}")
+            return
+
         ex = execute_trade(
             parsed,
             dry_run=params.mt5_dry_run,
@@ -1168,6 +1348,7 @@ def _zone_touch_job(
             for z in st2.zones:
                 if z.id == zone_id:
                     z.mt5_ticket = tid
+                    z.mt5_tickets_by_account = None
                     break
             _state_write(params, st2)
             _send_log(settings, f"[zone-touch] mt5_ticket_saved | zone_id={zone_id} ticket={tid}")

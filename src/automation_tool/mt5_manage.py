@@ -18,16 +18,29 @@ class MT5ManageResult:
     kind: Optional[Literal["pending", "position", "none"]] = None
 
 
-def _mt5_init() -> Any:
+def _mt5_init(
+    login: Optional[int] = None,
+    password: Optional[str] = None,
+    server: Optional[str] = None,
+) -> Any:
+    """
+    ``initialize()`` — ưu tiên ``login``/``password``/``server`` nếu đủ ba giá trị;
+    không thì đọc ``MT5_*`` từ env (hành vi cũ).
+    """
     mt5 = _load_mt5()
     kwargs: dict[str, Any] = {}
-    login_i = int(os.getenv("MT5_LOGIN", "0") or "0")
-    password_s = os.getenv("MT5_PASSWORD") or ""
-    server_s = os.getenv("MT5_SERVER") or ""
-    if login_i and password_s and server_s:
-        kwargs["login"] = login_i
-        kwargs["password"] = password_s
-        kwargs["server"] = server_s
+    if login is not None and password and server:
+        kwargs["login"] = int(login)
+        kwargs["password"] = password
+        kwargs["server"] = server
+    else:
+        login_i = int(os.getenv("MT5_LOGIN", "0") or "0")
+        password_s = os.getenv("MT5_PASSWORD") or ""
+        server_s = os.getenv("MT5_SERVER") or ""
+        if login_i and password_s and server_s:
+            kwargs["login"] = login_i
+            kwargs["password"] = password_s
+            kwargs["server"] = server_s
     if not mt5.initialize(**kwargs):
         return None
     return mt5
@@ -43,7 +56,14 @@ def _is_done(mt5: Any, ret: Any) -> bool:
         return False
 
 
-def mt5_cancel_pending_order(ticket: int, *, dry_run: bool = False) -> MT5ManageResult:
+def mt5_cancel_pending_order(
+    ticket: int,
+    *,
+    dry_run: bool = False,
+    login: Optional[int] = None,
+    password: Optional[str] = None,
+    server: Optional[str] = None,
+) -> MT5ManageResult:
     """``TRADE_ACTION_REMOVE`` cho order ticket (lệnh chờ)."""
     if dry_run:
         return MT5ManageResult(
@@ -51,7 +71,7 @@ def mt5_cancel_pending_order(ticket: int, *, dry_run: bool = False) -> MT5Manage
             message=f"[DRY-RUN] Sẽ huỷ pending order ticket={ticket}",
             kind="pending",
         )
-    mt5 = _mt5_init()
+    mt5 = _mt5_init(login, password, server)
     if mt5 is None:
         return MT5ManageResult(ok=False, message="mt5.initialize thất bại", kind=None)
     try:
@@ -78,7 +98,14 @@ def mt5_cancel_pending_order(ticket: int, *, dry_run: bool = False) -> MT5Manage
         mt5.shutdown()
 
 
-def mt5_close_position(ticket: int, *, dry_run: bool = False) -> MT5ManageResult:
+def mt5_close_position(
+    ticket: int,
+    *,
+    dry_run: bool = False,
+    login: Optional[int] = None,
+    password: Optional[str] = None,
+    server: Optional[str] = None,
+) -> MT5ManageResult:
     """Đóng toàn bộ volume của position ``ticket`` (market close)."""
     if dry_run:
         return MT5ManageResult(
@@ -86,7 +113,7 @@ def mt5_close_position(ticket: int, *, dry_run: bool = False) -> MT5ManageResult
             message=f"[DRY-RUN] Sẽ đóng position ticket={ticket}",
             kind="position",
         )
-    mt5 = _mt5_init()
+    mt5 = _mt5_init(login, password, server)
     if mt5 is None:
         return MT5ManageResult(ok=False, message="mt5.initialize thất bại", kind=None)
     try:
@@ -154,9 +181,12 @@ def mt5_latest_position_ticket(
     symbol: str,
     *,
     magic: Optional[int] = None,
+    login: Optional[int] = None,
+    password: Optional[str] = None,
+    server: Optional[str] = None,
 ) -> Optional[int]:
     """Ticket position mới nhất cho ``symbol`` (lọc magic nếu có)."""
-    mt5 = _mt5_init()
+    mt5 = _mt5_init(login, password, server)
     if mt5 is None:
         return None
     try:
@@ -176,7 +206,14 @@ def mt5_latest_position_ticket(
         mt5.shutdown()
 
 
-def mt5_ticket_still_open(ticket: int, *, dry_run: bool = False) -> tuple[bool, str]:
+def mt5_ticket_still_open(
+    ticket: int,
+    *,
+    dry_run: bool = False,
+    login: Optional[int] = None,
+    password: Optional[str] = None,
+    server: Optional[str] = None,
+) -> tuple[bool, str]:
     """
     ``True`` nếu ``ticket`` vẫn là lệnh chờ *hoặc* position đang mở trên MT5.
 
@@ -190,7 +227,7 @@ def mt5_ticket_still_open(ticket: int, *, dry_run: bool = False) -> tuple[bool, 
         return True, "[DRY-RUN] bỏ qua kiểm tra ticket"
     if ticket <= 0:
         return False, f"ticket không hợp lệ: {ticket}"
-    mt5 = _mt5_init()
+    mt5 = _mt5_init(login, password, server)
     if mt5 is None:
         return True, "mt5.initialize thất bại — tiếp tục follow-up (không xác nhận được ticket)"
     try:
@@ -205,11 +242,18 @@ def mt5_ticket_still_open(ticket: int, *, dry_run: bool = False) -> tuple[bool, 
     return False, f"ticket={ticket} không còn (đã khớp đóng/chốt hoặc huỷ)"
 
 
-def mt5_cancel_pending_or_close_position(ticket: int, *, dry_run: bool = False) -> MT5ManageResult:
+def mt5_cancel_pending_or_close_position(
+    ticket: int,
+    *,
+    dry_run: bool = False,
+    login: Optional[int] = None,
+    password: Optional[str] = None,
+    server: Optional[str] = None,
+) -> MT5ManageResult:
     """Thử tìm pending ``ticket``; không có thì đóng position ``ticket``."""
     if dry_run:
         return MT5ManageResult(ok=True, message="[DRY-RUN] cancel/close", kind="none")
-    mt5 = _mt5_init()
+    mt5 = _mt5_init(login, password, server)
     if mt5 is None:
         return MT5ManageResult(ok=False, message="mt5.initialize thất bại", kind=None)
     try:
@@ -218,9 +262,13 @@ def mt5_cancel_pending_or_close_position(ticket: int, *, dry_run: bool = False) 
     finally:
         mt5.shutdown()
     if has_order:
-        return mt5_cancel_pending_order(ticket, dry_run=False)
+        return mt5_cancel_pending_order(
+            ticket, dry_run=False, login=login, password=password, server=server
+        )
     if has_pos:
-        return mt5_close_position(ticket, dry_run=False)
+        return mt5_close_position(
+            ticket, dry_run=False, login=login, password=password, server=server
+        )
     return MT5ManageResult(
         ok=False,
         message=f"Không có order/pending/position ticket={ticket}",

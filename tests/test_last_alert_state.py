@@ -17,6 +17,7 @@ from automation_tool.state_files import (
     all_plans_terminal,
     merge_alert_prices_with_status,
     merge_trade_lines_from_openai_analysis_text,
+    mt5_primary_ticket_for_label,
     needs_post_entry_price_watch,
     read_last_alert_state,
     remove_last_alert_prices_file,
@@ -78,6 +79,43 @@ def test_all_plans_terminal_true() -> None:
         },
     )
     assert all_plans_terminal(st)
+
+
+def test_mt5_primary_ticket_prefers_map_for_primary_id() -> None:
+    st = LastAlertState(
+        prices=(1.0, 2.0, 3.0),
+        labels=("plan_chinh", "plan_phu", "scalp"),
+        status_by_label={lab: VUNG_CHO for lab in ("plan_chinh", "plan_phu", "scalp")},
+        mt5_ticket_by_label={"plan_chinh": 111},
+        mt5_tickets_by_label={"plan_chinh": {"main": 222, "alt": 333}},
+    )
+    assert mt5_primary_ticket_for_label(st, "plan_chinh", "main") == 222
+    assert mt5_primary_ticket_for_label(st, "plan_chinh", None) == 111
+
+
+def test_read_legacy_mt5_ticket_only_still_works() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "last_alert_prices.json"
+        p.write_text(
+            json.dumps(
+                {
+                    "prices": [1.0, 2.0, 3.0],
+                    "labels": ["plan_chinh", "plan_phu", "scalp"],
+                    "status_by_label": {
+                        "plan_chinh": VAO_LENH,
+                        "plan_phu": LOAI,
+                        "scalp": LOAI,
+                    },
+                    "trade_line_by_label": {"plan_chinh": "BUY 0.1 @ 1"},
+                    "mt5_ticket_by_label": {"plan_chinh": 999},
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        st = read_last_alert_state(p)
+        assert st is not None
+        assert mt5_primary_ticket_for_label(st, "plan_chinh", "any") == 999
 
 
 def test_watchlist_journal_active_work_post_entry() -> None:

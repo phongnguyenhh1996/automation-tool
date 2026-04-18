@@ -7,8 +7,10 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+from automation_tool.mt5_accounts import load_mt5_accounts_for_cli, primary_account
 from automation_tool.mt5_execute import execute_trade, format_mt5_execution_for_telegram
 from automation_tool.mt5_manage import mt5_latest_position_ticket
+from automation_tool.mt5_multi import execute_trade_all_accounts, format_mt5_multi_for_telegram
 from automation_tool.mt5_openai_parse import ParsedTrade, parse_openai_output_md
 from automation_tool.openai_analysis_json import (
     AUTO_MT5_HOP_LUU_THRESHOLD,
@@ -131,6 +133,7 @@ def apply_first_response_vao_lenh(
     telegram_output_ngan_gon_chat_id: Optional[str] = None,
     telegram_source_label: str = "phân tích chart (phản hồi đầu)",
     auto_mt5_zone_label: Optional[str] = None,
+    mt5_accounts_json: Optional[Path] = None,
 ) -> bool:
     """
     Ghi ``last_alert_prices`` khi đủ triple giá.
@@ -405,6 +408,72 @@ def apply_first_response_vao_lenh(
         return True
 
     try:
+        accounts = load_mt5_accounts_for_cli(mt5_accounts_json)
+        if accounts:
+            summary = execute_trade_all_accounts(
+                parsed,
+                accounts,
+                dry_run=mt5_dry_run,
+                symbol_override=mt5_symbol,
+            )
+            multi_text = format_mt5_multi_for_telegram(summary)
+            print(multi_text, flush=True)
+            _log.info(
+                "first_response MT5 multi dry_run=%s ok_all=%s",
+                mt5_dry_run,
+                summary.ok_all,
+            )
+            if telegram_bot_token and (telegram_chat_id or "").strip():
+                send_mt5_execution_log_to_ngan_gon_chat(
+                    bot_token=telegram_bot_token,
+                    telegram_chat_id=telegram_chat_id,
+                    source=telegram_source_label,
+                    text=multi_text,
+                    zone_label=label,
+                    trade_line=zone_trade_line,
+                    execution_ok=summary.ok_all,
+                )
+            _mt5_lines = [multi_text]
+            if mt5_dry_run:
+                _mt5_lines.append("(Chế độ thử — kiểm tra trước khi gửi lệnh thật.)")
+            _nf(
+                telegram_bot_token=telegram_bot_token,
+                telegram_python_bot_chat_id=telegram_python_bot_chat_id,
+                title=f"Kết quả lệnh MT5 — «{_zone_display(label)}»",
+                body="\n".join(_mt5_lines),
+            )
+            tid = summary.primary_ticket(accounts)
+            prim = primary_account(accounts)
+            sym0 = ""
+            for rex in summary.results:
+                if rex.account_id == prim.id and rex.resolved_symbol:
+                    sym0 = str(rex.resolved_symbol).strip()
+                    break
+            if not sym0 and summary.results:
+                sym0 = (summary.results[0].resolved_symbol or "").strip()
+            if (not tid or tid <= 0) and not mt5_dry_run and sym0:
+                alt = mt5_latest_position_ticket(
+                    sym0,
+                    login=prim.login,
+                    password=prim.password,
+                    server=prim.server,
+                )
+                if alt:
+                    tid = int(alt)
+            tickets_map = summary.tickets_by_account_id
+            if tid > 0:
+                try:
+                    update_plan_mt5_entry(
+                        label,
+                        trade_line=zone_trade_line.strip(),
+                        mt5_ticket=tid,
+                        mt5_tickets_by_account=tickets_map if tickets_map else None,
+                        path=last_alert_path,
+                    )
+                except SystemExit as pe:
+                    _log.warning("first_response: không ghi trade_line/ticket — %s", pe)
+            return True
+
         ex = execute_trade(
             parsed,
             dry_run=mt5_dry_run,

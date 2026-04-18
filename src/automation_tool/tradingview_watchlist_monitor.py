@@ -85,6 +85,7 @@ class WatchlistMonitorParams:
     mt5_execute: bool = True
     mt5_symbol: Optional[str] = None
     mt5_dry_run: bool = False
+    mt5_accounts_json: Optional[Path] = None
     session_cutoff_end: Optional[datetime] = None
     openai_model: Optional[str] = None
     openai_model_cli: Optional[str] = None
@@ -310,6 +311,7 @@ def run_tv_watchlist_monitor(
                     mt5_execute=params.mt5_execute,
                     mt5_symbol=params.mt5_symbol,
                     mt5_dry_run=params.mt5_dry_run,
+                    mt5_accounts_json=params.mt5_accounts_json,
                     session_cutoff_end=params.session_cutoff_end,
                     openai_model=params.openai_model,
                     openai_model_cli=params.openai_model_cli,

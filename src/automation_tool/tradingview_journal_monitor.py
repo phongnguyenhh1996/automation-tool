@@ -29,7 +29,9 @@ from automation_tool.images import (
     read_main_chart_symbol,
 )
 from automation_tool.first_response_trade import apply_first_response_vao_lenh
+from automation_tool.mt5_accounts import load_mt5_accounts_for_cli
 from automation_tool.mt5_execute import execute_trade, format_mt5_execution_for_telegram
+from automation_tool.mt5_multi import execute_trade_all_accounts, format_mt5_multi_for_telegram
 from automation_tool.openai_errors import re_raise_unless_openai
 from automation_tool.openai_prompt_flow import (
     JOURNAL_INTRADAY_FIRST_USER_TEMPLATE,
@@ -137,6 +139,7 @@ class JournalMonitorParams:
     openai_model_cli: Optional[str] = None
     # Đặt khi chạy monitor: mốc dừng động (trước 13:00 → 13:00 cùng ngày; từ 13:00 → 02:00 sáng hôm sau).
     session_cutoff_end: Optional[datetime] = None
+    mt5_accounts_json: Optional[Path] = None
 
 
 def _journal_panel_css(tv: dict[str, Any]) -> str:
@@ -594,6 +597,7 @@ def _run_intraday_touch_loop(
             telegram_output_ngan_gon_chat_id=settings.telegram_output_ngan_gon_chat_id,
             telegram_source_label="tv-journal-monitor (Nhật ký)",
             auto_mt5_zone_label=touched_label,
+            mt5_accounts_json=params.mt5_accounts_json,
         )
         if hop_done:
             _journal_log(
@@ -671,22 +675,43 @@ def _run_intraday_touch_loop(
                     tz,
                     f"MT5 ({'dry-run' if params.mt5_dry_run else 'live'}): gửi lệnh…",
                 )
-                ex = execute_trade(
-                    parsed,
-                    dry_run=params.mt5_dry_run,
-                    symbol_override=params.mt5_symbol,
-                )
-                _journal_log(tz, ex.message)
-                if not params.no_telegram:
-                    send_mt5_execution_log_to_ngan_gon_chat(
-                        bot_token=settings.telegram_bot_token,
-                        telegram_chat_id=settings.telegram_chat_id,
-                        source="tv-journal-monitor",
-                        text=format_mt5_execution_for_telegram(ex),
-                        zone_label=touched_label,
-                        trade_line=(parsed.raw_line or "").strip() or None,
-                        execution_ok=ex.ok,
+                accounts = load_mt5_accounts_for_cli(params.mt5_accounts_json)
+                if accounts:
+                    summary = execute_trade_all_accounts(
+                        parsed,
+                        accounts,
+                        dry_run=params.mt5_dry_run,
+                        symbol_override=params.mt5_symbol,
                     )
+                    multi_txt = format_mt5_multi_for_telegram(summary)
+                    _journal_log(tz, multi_txt)
+                    if not params.no_telegram:
+                        send_mt5_execution_log_to_ngan_gon_chat(
+                            bot_token=settings.telegram_bot_token,
+                            telegram_chat_id=settings.telegram_chat_id,
+                            source="tv-journal-monitor",
+                            text=multi_txt,
+                            zone_label=touched_label,
+                            trade_line=(parsed.raw_line or "").strip() or None,
+                            execution_ok=summary.ok_all,
+                        )
+                else:
+                    ex = execute_trade(
+                        parsed,
+                        dry_run=params.mt5_dry_run,
+                        symbol_override=params.mt5_symbol,
+                    )
+                    _journal_log(tz, ex.message)
+                    if not params.no_telegram:
+                        send_mt5_execution_log_to_ngan_gon_chat(
+                            bot_token=settings.telegram_bot_token,
+                            telegram_chat_id=settings.telegram_chat_id,
+                            source="tv-journal-monitor",
+                            text=format_mt5_execution_for_telegram(ex),
+                            zone_label=touched_label,
+                            trade_line=(parsed.raw_line or "").strip() or None,
+                            execution_ok=ex.ok,
+                        )
             if not params.no_telegram:
                 _journal_log(tz, "Gửi Telegram (VÀO LỆNH) — chat chính + OUTPUT_NGAN_GON nếu cấu hình.")
                 send_openai_output_to_telegram(
@@ -1002,6 +1027,7 @@ def run_tv_journal_monitor(
                         mt5_execute=params.mt5_execute,
                         mt5_symbol=params.mt5_symbol,
                         mt5_dry_run=params.mt5_dry_run,
+                        mt5_accounts_json=params.mt5_accounts_json,
                         session_cutoff_end=params.session_cutoff_end,
                         openai_model=params.openai_model,
                         openai_model_cli=params.openai_model_cli,

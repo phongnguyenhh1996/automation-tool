@@ -100,7 +100,9 @@ from automation_tool.telegram_listen import TelegramListenParams, run_telegram_l
 from automation_tool.telegram_logging import setup_automation_logging
 from automation_tool.config import load_all_dotenv
 from automation_tool.mt5_openai_parse import parse_openai_output_md
+from automation_tool.mt5_accounts import load_mt5_accounts_for_cli
 from automation_tool.mt5_execute import check_mt5_login, execute_trade, format_mt5_execution_for_telegram
+from automation_tool.mt5_multi import execute_trade_all_accounts, format_mt5_multi_for_telegram
 
 from playwright.sync_api import sync_playwright
 
@@ -131,6 +133,18 @@ _OPENAI_MODEL_HELP = (
     "OpenAI Responses API model id (e.g. gpt-5.2). "
     "Overrides OPENAI_MODEL env and the model configured on the dashboard prompt."
 )
+
+_MT5_ACCOUNTS_JSON_HELP = (
+    "File accounts.json: nhiều tài khoản MT5 (đăng nhập tuần tự). "
+    "Ưu tiên hơn biến môi trường MT5_ACCOUNTS_JSON."
+)
+
+
+def _resolved_mt5_accounts_json(args: argparse.Namespace) -> Optional[Path]:
+    p = getattr(args, "mt5_accounts_json", None)
+    if p is None:
+        return None
+    return Path(p).expanduser()
 
 
 def _configure_stdio_utf8() -> None:
@@ -229,6 +243,13 @@ def _parser() -> argparse.ArgumentParser:
         "--mt5-dry-run",
         action="store_true",
         help="Phản hồi đầu: chỉ mô phỏng MT5, không gửi lệnh thật (mặc định: lệnh thật)",
+    )
+    a.add_argument(
+        "--mt5-accounts-json",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help=_MT5_ACCOUNTS_JSON_HELP,
     )
     a.add_argument(
         "--telegram-detail-chat-id",
@@ -394,6 +415,13 @@ def _parser() -> argparse.ArgumentParser:
         help="If --mt5-execute is enabled: send real orders (default: dry-run)",
     )
     am.add_argument("--mt5-symbol", default=None, metavar="SYM", help="Symbol MT5 override (first response)")
+    am.add_argument(
+        "--mt5-accounts-json",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help=_MT5_ACCOUNTS_JSON_HELP,
+    )
     am.add_argument(
         "--telegram-detail-chat-id",
         default=None,
@@ -590,6 +618,13 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Chỉ dry-run MT5 cho auto-MT5 sau follow-up",
     )
+    up.add_argument(
+        "--mt5-accounts-json",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help=_MT5_ACCOUNTS_JSON_HELP,
+    )
     up.add_argument("--model", default=None, metavar="ID", help=_OPENAI_MODEL_HELP)
     up.add_argument(
         "--zones-json",
@@ -653,6 +688,13 @@ def _parser() -> argparse.ArgumentParser:
     wd.add_argument("--no-mt5-execute", action="store_true")
     wd.add_argument("--mt5-symbol", default=None, metavar="SYM")
     wd.add_argument("--mt5-dry-run", action="store_true")
+    wd.add_argument(
+        "--mt5-accounts-json",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help=_MT5_ACCOUNTS_JSON_HELP,
+    )
     wd.add_argument("--model", default=None, metavar="ID", help=_OPENAI_MODEL_HELP)
     wd.set_defaults(func=cmd_tv_watchlist_daemon)
 
@@ -683,6 +725,13 @@ def _parser() -> argparse.ArgumentParser:
     zt.add_argument("--no-mt5-execute", action="store_true")
     zt.add_argument("--mt5-symbol", default=None, metavar="SYM")
     zt.add_argument("--mt5-dry-run", action="store_true")
+    zt.add_argument(
+        "--mt5-accounts-json",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help=_MT5_ACCOUNTS_JSON_HELP,
+    )
     zt.add_argument("--model", default=None, metavar="ID", help=_OPENAI_MODEL_HELP)
     zt.set_defaults(func=cmd_zone_touch)
 
@@ -727,6 +776,13 @@ def _parser() -> argparse.ArgumentParser:
     dp.add_argument("--no-mt5-execute", action="store_true")
     dp.add_argument("--mt5-symbol", default=None, metavar="SYM")
     dp.add_argument("--mt5-dry-run", action="store_true")
+    dp.add_argument(
+        "--mt5-accounts-json",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help=_MT5_ACCOUNTS_JSON_HELP,
+    )
     dp.add_argument("--model", default=None, metavar="ID", help=_OPENAI_MODEL_HELP)
     dp.set_defaults(func=cmd_daemon_plan)
 
@@ -866,6 +922,13 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Chỉ dry-run MT5 (mặc định: gửi lệnh thật)",
     )
+    tj.add_argument(
+        "--mt5-accounts-json",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help=_MT5_ACCOUNTS_JSON_HELP,
+    )
     tj.add_argument("--model", default=None, metavar="ID", help=_OPENAI_MODEL_HELP)
     tj.set_defaults(func=cmd_tv_journal_monitor)
 
@@ -895,6 +958,13 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         metavar="SYM",
         help="Symbol override khi parse trade_line (giống các lệnh khác)",
+    )
+    tp1d.add_argument(
+        "--mt5-accounts-json",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help=_MT5_ACCOUNTS_JSON_HELP,
     )
     tp1d.set_defaults(func=cmd_tp1_tick_dry_run)
 
@@ -943,6 +1013,13 @@ def _parser() -> argparse.ArgumentParser:
         "--mt5-dry-run",
         action="store_true",
         help="Giống analyze: dry-run MT5 (mặc định: lệnh thật)",
+    )
+    g.add_argument(
+        "--mt5-accounts-json",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help=_MT5_ACCOUNTS_JSON_HELP,
     )
     g.add_argument(
         "--telegram-detail-chat-id",
@@ -994,6 +1071,13 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         metavar="SIZE",
         help="Ghi đè khối lượng từ file .md (vd. 0.01 để test nhỏ hơn 0.02).",
+    )
+    mt5.add_argument(
+        "--mt5-accounts-json",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help=_MT5_ACCOUNTS_JSON_HELP,
     )
     mt5.set_defaults(func=cmd_mt5_trade)
 
@@ -1581,6 +1665,7 @@ def cmd_analyze(args: argparse.Namespace) -> None:
             mt5_execute=not args.no_mt5_execute,
             mt5_dry_run=args.mt5_dry_run,
             mt5_symbol=args.mt5_symbol,
+            mt5_accounts_json=_resolved_mt5_accounts_json(args),
             telegram_bot_token=s.telegram_bot_token,
             telegram_chat_id=s.telegram_chat_id,
             telegram_log_chat_id=s.telegram_log_chat_id,
@@ -1663,6 +1748,7 @@ def cmd_analyze_many(args: argparse.Namespace) -> None:
                         mt5_execute=mt5_execute,
                         mt5_dry_run=mt5_dry_run,
                         mt5_symbol=args.mt5_symbol,
+                        mt5_accounts_json=_resolved_mt5_accounts_json(args),
                         telegram_bot_token=s.telegram_bot_token,
                         telegram_chat_id=s.telegram_chat_id,
                         telegram_log_chat_id=s.telegram_log_chat_id,
@@ -1677,6 +1763,7 @@ def cmd_analyze_many(args: argparse.Namespace) -> None:
                 mt5_execute=mt5_execute,
                 mt5_dry_run=mt5_dry_run,
                 mt5_symbol=args.mt5_symbol,
+                mt5_accounts_json=_resolved_mt5_accounts_json(args),
                 telegram_bot_token=s.telegram_bot_token,
                 telegram_chat_id=s.telegram_chat_id,
                 telegram_log_chat_id=s.telegram_log_chat_id,
@@ -1786,6 +1873,32 @@ def cmd_mt5_trade(args: argparse.Namespace) -> None:
     )
     if err or trade is None:
         raise SystemExit(err or "Không parse được lệnh.")
+    accounts = load_mt5_accounts_for_cli(_resolved_mt5_accounts_json(args))
+    if accounts:
+        summ = execute_trade_all_accounts(
+            trade,
+            accounts,
+            dry_run=args.dry_run,
+            symbol_override=args.symbol,
+        )
+        tg_text = format_mt5_multi_for_telegram(summ)
+        send_mt5_execution_log_to_ngan_gon_chat(
+            bot_token=s_mt5.telegram_bot_token,
+            telegram_chat_id=s_mt5.telegram_chat_id,
+            source="mt5-trade",
+            text=tg_text,
+            trade_line=(trade.raw_line or "").strip() or None,
+            execution_ok=summ.ok_all,
+        )
+        for ex in summ.results:
+            if ex.resolved_symbol:
+                print("Symbol MT5 (đã resolve):", ex.resolved_symbol)
+                break
+        print(tg_text)
+        if not summ.ok_all:
+            raise SystemExit(1)
+        return
+
     out = execute_trade(
         trade,
         dry_run=args.dry_run,
@@ -2111,6 +2224,7 @@ def cmd_tv_journal_monitor(args: argparse.Namespace) -> None:
         mt5_execute=not args.no_mt5_execute,
         mt5_symbol=args.mt5_symbol,
         mt5_dry_run=args.mt5_dry_run,
+        mt5_accounts_json=_resolved_mt5_accounts_json(args),
         openai_model=resolved_openai_model(s, getattr(args, "model", None)),
         openai_model_cli=getattr(args, "model", None),
     )
@@ -2146,6 +2260,7 @@ def cmd_tp1_tick_dry_run(args: argparse.Namespace) -> None:
         last_alert_path=lap,
         p_last=float(args.last),
         symbol_override=args.mt5_symbol,
+        mt5_accounts_json=_resolved_mt5_accounts_json(args),
     )
     print(text, end="")
 
@@ -2342,6 +2457,7 @@ def cmd_tv_watchlist_daemon(args: argparse.Namespace) -> None:
         mt5_execute=not args.no_mt5_execute,
         mt5_symbol=args.mt5_symbol,
         mt5_dry_run=args.mt5_dry_run,
+        mt5_accounts_json=_resolved_mt5_accounts_json(args),
         eps=float(args.eps),
         openai_model=resolved_openai_model(s, getattr(args, "model", None)),
         openai_model_cli=getattr(args, "model", None),
@@ -2373,6 +2489,7 @@ def cmd_daemon_plan(args: argparse.Namespace) -> None:
         mt5_execute=not args.no_mt5_execute,
         mt5_symbol=args.mt5_symbol,
         mt5_dry_run=args.mt5_dry_run,
+        mt5_accounts_json=_resolved_mt5_accounts_json(args),
         eps=float(args.eps),
         openai_model=resolved_openai_model(s, getattr(args, "model", None)),
         openai_model_cli=getattr(args, "model", None),
@@ -2420,6 +2537,7 @@ def cmd_zone_touch(args: argparse.Namespace) -> None:
         mt5_execute=not args.no_mt5_execute,
         mt5_symbol=args.mt5_symbol,
         mt5_dry_run=args.mt5_dry_run,
+        mt5_accounts_json=_resolved_mt5_accounts_json(args),
         openai_model=resolved_openai_model(s, getattr(args, "model", None)),
         openai_model_cli=getattr(args, "model", None),
     )
