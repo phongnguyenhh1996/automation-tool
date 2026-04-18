@@ -66,7 +66,6 @@ from automation_tool.daemon_launcher import (
     reconcile_daemon_plans_at_boot,
     register_daemon_plan_pidfile_for_current_process,
     register_stop_daemon_plans_on_exit,
-    stop_daemon_plans_in_zones,
 )
 from automation_tool.last_price_ipc import (
     open_writer_shared_memory,
@@ -1405,17 +1404,9 @@ def _tv_watchlist_price_only_loop(
                     elif cur_manifest_slot != prev_manifest_slot:
                         _log.info(
                             "tv-watchlist-daemon (gia) | zones_manifest last_write_slot %s -> %s | "
-                            "stop-daemon-plans then reconcile",
+                            "reconcile-daemon-plans (no stop)",
                             prev_manifest_slot,
                             cur_manifest_slot,
-                        )
-                        n_stop = stop_daemon_plans_in_zones(
-                            zones_dir,
-                            wait_for_exit_s=30.0,
-                        )
-                        _log.info(
-                            "tv-watchlist-daemon (gia) | stop-daemon-plans signalled %s process(es)",
-                            n_stop,
                         )
                         n_rec = reconcile_daemon_plans_at_boot(zones_dir)
                         _log.info(
@@ -1425,7 +1416,7 @@ def _tv_watchlist_price_only_loop(
                         prev_manifest_slot = cur_manifest_slot
             except Exception as e:
                 _log.warning(
-                    "tv-watchlist-daemon (gia) | last_write_slot watch / daemon-plan restart: %s",
+                    "tv-watchlist-daemon (gia) | last_write_slot watch / reconcile-daemon-plans: %s",
                     e,
                 )
 
