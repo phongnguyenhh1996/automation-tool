@@ -638,9 +638,9 @@ def _parser() -> argparse.ArgumentParser:
     wd = sub.add_parser(
         "tv-watchlist-daemon",
         help=(
-            "Daemon giá: đọc Last từ title tab TradingView mỗi poll (mặc định 1s), ghi vào shared memory "
-            "(tùy chọn mirror ``last.txt``). Logic vùng: ``daemon-plan`` (một process mỗi shard); "
-            "sau Last đầu tiên gọi reconcile-daemon-plans nếu chưa chạy."
+            "[Legacy] Daemon giá: đọc Last từ title tab TradingView, ghi shared memory / last.txt. "
+            "``daemon-plan`` hiện lấy giá trực tiếp từ MT5 (ask/bid theo trade_line); có thể không cần "
+            "chạy lệnh này. Sau Last đầu tiên: reconcile-daemon-plans."
         ),
     )
     wd.add_argument(
@@ -737,7 +737,12 @@ def _parser() -> argparse.ArgumentParser:
 
     dp = sub.add_parser(
         "daemon-plan",
-        help="Một process cho một file shard: đọc last.txt, cập nhật zone (tuần tự); thoát khi done/loại.",
+        help=(
+            "Một process / file shard: giá từ MT5 symbol_info_tick (BUY→ask, SELL→bid theo trade_line hoặc zone.side); "
+            "cập nhật zone tuần tự; thoát khi done/loại hoặc đến --stop-at-hour (mặc định 0 = 12h đêm): "
+            "lệnh chờ → huỷ; chỉ chờ khi còn position đã khớp. "
+            "Cần Windows + terminal MT5 (hoặc --mt5-dry-run)."
+        ),
     )
     dp.add_argument(
         "--shard",
@@ -750,7 +755,7 @@ def _parser() -> argparse.ArgumentParser:
         "--config",
         type=Path,
         default=None,
-        help="Yaml tradingview (ký hiệu; daemon-plan không mở TV — đọc Last qua IPC / last.txt)",
+        help="Yaml coinmap (ký hiệu; daemon-plan không mở TradingView — giá từ MT5)",
     )
     dp.add_argument("--capture-config", type=Path, default=None)
     dp.add_argument("--charts-dir", type=Path, default=None)
@@ -759,6 +764,28 @@ def _parser() -> argparse.ArgumentParser:
     dp.add_argument("--headed", action="store_true")
     dp.add_argument("--no-telegram", action="store_true")
     dp.add_argument("--poll-seconds", type=float, default=1.0)
+    dp.add_argument(
+        "--timezone",
+        default="Asia/Ho_Chi_Minh",
+        help="Múi giờ IANA cho --stop-at-hour (mặc định: Asia/Ho_Chi_Minh)",
+    )
+    dp.add_argument(
+        "--stop-at-hour",
+        type=int,
+        default=0,
+        metavar="H",
+        help=(
+            "Mốc cắt giờ local (kèm --stop-at-minute): 0 = 12h đêm (00:00 ngày kế, tức 24h); "
+            "1-23 = giờ trong ngày; -1 = tắt cắt giờ (chỉ thoát done/loại)."
+        ),
+    )
+    dp.add_argument(
+        "--stop-at-minute",
+        type=int,
+        default=0,
+        metavar="M",
+        help="Phút đi kèm --stop-at-hour (mặc định 0).",
+    )
     dp.add_argument(
         "--eps",
         type=float,
@@ -771,7 +798,7 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         metavar="FILE",
-        help="Fallback đọc Last từ file nếu IPC chưa có (mặc định data/<SYM>/last.txt)",
+        help="[Không dùng] Giá daemon-plan lấy từ MT5; giữ tham số để tương thích CLI cũ.",
     )
     dp.add_argument("--no-mt5-execute", action="store_true")
     dp.add_argument("--mt5-symbol", default=None, metavar="SYM")
@@ -1964,6 +1991,13 @@ def cmd_telegram_listen(args: argparse.Namespace) -> None:
     run_telegram_listener(settings=s, params=params)
 
 
+def _reconcile_daemon_plans_after_cli(zones_dir: Path, log_step: str) -> None:
+    """Spawn daemon-plan for each non-terminal ``vung_*.json`` missing a live PID (same as ``reconcile-daemon-plans``)."""
+    n = reconcile_daemon_plans_at_boot(zones_dir)
+    _log.info("%s: reconcile-daemon-plans | spawned=%s | dir=%s", log_step, n, zones_dir)
+    print(f"reconcile-daemon-plans: spawned {n} process(es) | dir={zones_dir}", flush=True)
+
+
 def cmd_all(args: argparse.Namespace) -> None:
     s = load_settings()
     from automation_tool.images import set_active_main_symbol_file
@@ -2129,6 +2163,8 @@ def cmd_all(args: argparse.Namespace) -> None:
                 "Warning: could not parse analysis JSON for zones (no `prices` or empty).",
                 file=sys.stderr,
             )
+
+    _reconcile_daemon_plans_after_cli(zones_dir, "all")
 
 
 def cmd_tv_alerts(args: argparse.Namespace) -> None:
@@ -2355,6 +2391,7 @@ def cmd_update(args: argparse.Namespace) -> None:
     _log.info("update: OpenAI follow-up xong | new_response_id=%s", new_id)
 
     update_payload = parse_analysis_from_openai_text(out_text)
+    zones_dir = zones_dir_from_cli_path(getattr(args, "zones_json", None))
 
     def _send_phan_tich_update_if_any() -> None:
         if args.no_telegram:
@@ -2383,7 +2420,6 @@ def cmd_update(args: argparse.Namespace) -> None:
         from automation_tool.images import get_active_main_symbol
 
         sym = get_active_main_symbol().strip().upper()
-        zones_dir = zones_dir_from_cli_path(getattr(args, "zones_json", None))
         slot: SessionSlot = session_slot_now_hcm()
         zones = zones_from_analysis_payload(
             symbol=sym,
@@ -2406,11 +2442,13 @@ def cmd_update(args: argparse.Namespace) -> None:
     if no_change_json is True:
         _send_phan_tich_update_if_any()
         _log.info("update: no_change (JSON) — không ghi giá mới")
+        _reconcile_daemon_plans_after_cli(zones_dir, "update")
         return
     if new_triple is None:
         if is_no_change_action_line(out_text):
             _send_phan_tich_update_if_any()
             _log.info("update: no_change (action line) — không ghi giá mới")
+            _reconcile_daemon_plans_after_cli(zones_dir, "update")
             return
         _send_phan_tich_update_if_any()
         raise SystemExit(zerr or "Could not parse three zone prices from model output.")
@@ -2431,6 +2469,7 @@ def cmd_update(args: argparse.Namespace) -> None:
     # Không cần tạo TradingView alerts nữa; monitor đọc trực tiếp giá realtime từ Watchlist.
 
     _send_phan_tich_update_if_any()
+    _reconcile_daemon_plans_after_cli(zones_dir, "update")
 
 
 def cmd_tv_watchlist_daemon(args: argparse.Namespace) -> None:
@@ -2474,6 +2513,8 @@ def cmd_daemon_plan(args: argparse.Namespace) -> None:
     charts_dir = args.charts_dir or default_charts_dir()
     storage = args.storage_state or default_storage_state_path()
     shard = args.shard.expanduser().resolve()
+    stop_h = int(getattr(args, "stop_at_hour", 0))
+    stop_at_hour = None if stop_h < 0 else stop_h
     params = WatchlistDaemonParams(
         coinmap_tv_yaml=cfg_tv,
         capture_coinmap_yaml=cfg_cap,
@@ -2482,6 +2523,7 @@ def cmd_daemon_plan(args: argparse.Namespace) -> None:
         headless=not args.headed,
         no_save_storage=args.no_save_storage,
         poll_seconds=float(args.poll_seconds),
+        timezone_name=str(getattr(args, "timezone", None) or "Asia/Ho_Chi_Minh"),
         no_telegram=args.no_telegram,
         zones_state_path=None,
         shard_path=shard,
@@ -2493,6 +2535,8 @@ def cmd_daemon_plan(args: argparse.Namespace) -> None:
         eps=float(args.eps),
         openai_model=resolved_openai_model(s, getattr(args, "model", None)),
         openai_model_cli=getattr(args, "model", None),
+        stop_at_hour=stop_at_hour,
+        stop_at_minute=int(getattr(args, "stop_at_minute", 0) or 0),
     )
     outcome = run_daemon_plan(settings=s, params=params)
     print(outcome, flush=True)
@@ -2501,8 +2545,7 @@ def cmd_daemon_plan(args: argparse.Namespace) -> None:
 def cmd_reconcile_daemon_plans(args: argparse.Namespace) -> None:
     load_settings()
     zd = zones_dir_from_cli_path(getattr(args, "zones_json", None))
-    n = reconcile_daemon_plans_at_boot(zd)
-    print(f"reconcile-daemon-plans: spawned {n} process(es) | dir={zd}", flush=True)
+    _reconcile_daemon_plans_after_cli(zd, "reconcile-daemon-plans")
 
 
 def cmd_stop_daemon_plans(args: argparse.Namespace) -> None:

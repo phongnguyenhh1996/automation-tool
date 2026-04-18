@@ -242,6 +242,38 @@ def mt5_ticket_still_open(
     return False, f"ticket={ticket} không còn (đã khớp đóng/chốt hoặc huỷ)"
 
 
+def mt5_ticket_status_for_cutoff(
+    ticket: int,
+    *,
+    dry_run: bool = False,
+    login: Optional[int] = None,
+    password: Optional[str] = None,
+    server: Optional[str] = None,
+) -> tuple[Literal["pending", "position", "none", "error"], str]:
+    """
+    Phân loại ticket trên MT5 cho bước cắt giờ daemon-plan (lệnh chờ vs position vs đã hết).
+
+    ``error`` = không kết nối được terminal (cần thử lại).
+    """
+    if dry_run:
+        return "none", "[DRY-RUN]"
+    if ticket <= 0:
+        return "none", f"ticket không hợp lệ: {ticket}"
+    mt5 = _mt5_init(login, password, server)
+    if mt5 is None:
+        return "error", "mt5.initialize thất bại"
+    try:
+        has_order = any(int(o.ticket) == int(ticket) for o in (mt5.orders_get() or []))
+        has_pos = any(int(p.ticket) == int(ticket) for p in (mt5.positions_get() or []))
+    finally:
+        mt5.shutdown()
+    if has_order:
+        return "pending", "lệnh chờ (pending)"
+    if has_pos:
+        return "position", "position đã khớp"
+    return "none", "không còn pending/position"
+
+
 def mt5_cancel_pending_or_close_position(
     ticket: int,
     *,

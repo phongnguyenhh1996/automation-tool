@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, replace
-from typing import Any, Optional
+from pathlib import Path
+from typing import Any, Literal, Optional
 
 import automation_tool.config  # noqa: F401 — nạp .env khi import
 
@@ -712,3 +713,108 @@ def execute_trade(
         )
     finally:
         mt5.shutdown()
+
+
+def execution_price_from_tick(tick: Any, side: Literal["BUY", "SELL"]) -> float:
+    """
+    Giá thực thi một phía: BUY → ``ask`` (mua); SELL → ``bid`` (bán).
+    Khớp cách đặt giá market trong :func:`build_request`.
+    """
+    if side == "BUY":
+        return float(tick.ask)
+    return float(tick.bid)
+
+
+class DaemonPlanMt5PriceSession:
+    """
+    Một phiên ``initialize`` + ``symbol_select`` cho ``daemon-plan``; gọi ``symbol_info_tick`` mỗi poll.
+    """
+
+    def __init__(
+        self,
+        *,
+        symbol_hint: str,
+        symbol_override: Optional[str],
+        dry_run: bool,
+        accounts_json: Optional[Path],
+    ) -> None:
+        ovr = _normalize_symbol_str(symbol_override)
+        base = ovr if ovr else (symbol_hint or "").strip()
+        self._symbol_hint = normalize_broker_xau_symbol(base or "XAUUSD")
+        self._dry_run = bool(dry_run)
+        self._accounts_json = accounts_json
+        self._mt5: Any = None
+        self._resolved: Optional[str] = None
+        self._last_error: Optional[str] = None
+
+    def _build_init_kwargs(self) -> dict[str, Any]:
+        from automation_tool.mt5_accounts import (  # noqa: WPS433
+            load_mt5_accounts_optional,
+            primary_account,
+            resolve_mt5_accounts_path,
+        )
+
+        accs = load_mt5_accounts_optional(resolve_mt5_accounts_path(self._accounts_json))
+        if accs:
+            prim = primary_account(accs)
+            return {
+                "login": int(prim.login),
+                "password": str(prim.password),
+                "server": str(prim.server),
+            }
+        login_i = _env_int("MT5_LOGIN", 0)
+        password_s = os.getenv("MT5_PASSWORD") or ""
+        server_s = os.getenv("MT5_SERVER") or ""
+        if login_i and password_s and server_s:
+            return {"login": login_i, "password": password_s, "server": server_s}
+        return {}
+
+    def _ensure_connected(self) -> bool:
+        if self._dry_run:
+            self._last_error = "mt5_dry_run"
+            return False
+        try:
+            mt5 = _load_mt5()
+        except SystemExit as e:
+            self._last_error = str(e)
+            return False
+        kwargs = self._build_init_kwargs()
+        if not mt5.initialize(**kwargs):
+            self._last_error = f"mt5.initialize thất bại: {format_last_error(mt5)}"
+            return False
+        sym, err = _ensure_symbol(mt5, self._symbol_hint)
+        if err or not sym:
+            mt5.shutdown()
+            self._last_error = err or f"symbol_info({self._symbol_hint!r})"
+            return False
+        self._mt5 = mt5
+        self._resolved = sym
+        self._last_error = None
+        return True
+
+    def read_execution_price(self, side: Literal["BUY", "SELL"]) -> tuple[Optional[float], Optional[str]]:
+        """
+        Trả về ``(giá, lỗi)``. Giá là ask (BUY) hoặc bid (SELL).
+        """
+        if self._mt5 is None:
+            if not self._ensure_connected():
+                return None, self._last_error
+        assert self._mt5 is not None and self._resolved is not None
+        tick = self._mt5.symbol_info_tick(self._resolved)
+        if tick is None:
+            err = f"symbol_info_tick({self._resolved!r}) None. {format_last_error(self._mt5)}"
+            return None, err
+        return execution_price_from_tick(tick, side), None
+
+    def shutdown(self) -> None:
+        if self._mt5 is not None:
+            try:
+                self._mt5.shutdown()
+            except Exception:
+                pass
+            self._mt5 = None
+            self._resolved = None
+
+    @property
+    def resolved_symbol(self) -> Optional[str]:
+        return self._resolved

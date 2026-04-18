@@ -9,9 +9,9 @@ echo CWD    : %cd%
 echo Args   : %*
 echo ============================================================
 
-REM 24/24 daemon giá: TradingView Last -> shared memory (daemon-plan đọc IPC; fallback last.txt nếu mirror)
+REM [Legacy] tv-watchlist-daemon: TradingView title -> shared memory / last.txt (daemon-plan lay gia tu MT5 ask/bid, khong doc IPC).
 REM Sau Last hop le dau tien: tu dong reconcile-daemon-plans (spawn daemon-plan neu chua chay).
-REM --stop-daemon-plans-on-exit: khi tắt cửa sổ CMD (hoặc Ctrl+C) se dung cac daemon-plan.
+REM --stop-daemon-plans-on-exit: khi tat CMD hoac Ctrl+C se dung cac daemon-plan.
 REM De ghi them last.txt: them --mirror-last-price-file [--last-price-file data\XAUUSD\last.txt]
 REM Intended for Windows Task Scheduler ("At startup" / "On log on")
 REM Browser: chạy browser_up.bat trước (hoặc lịch Task Scheduler riêng).

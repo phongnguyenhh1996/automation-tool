@@ -8,10 +8,11 @@ import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time as dt_time, timedelta, timezone
+from zoneinfo import ZoneInfo
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from playwright.sync_api import sync_playwright
 
@@ -31,7 +32,11 @@ from automation_tool.coinmap import _tradingview_ensure_watchlist_open  # reuse 
 from automation_tool.config import Settings, resolved_model_for_intraday_alert
 from automation_tool.images import DEFAULT_MAIN_CHART_SYMBOL, get_active_main_symbol
 from automation_tool.mt5_accounts import load_mt5_accounts_for_cli, primary_account
-from automation_tool.mt5_execute import execute_trade, format_mt5_execution_for_telegram
+from automation_tool.mt5_execute import (
+    DaemonPlanMt5PriceSession,
+    execute_trade,
+    format_mt5_execution_for_telegram,
+)
 from automation_tool.mt5_multi import (
     execute_trade_all_accounts,
     format_mt5_multi_for_telegram,
@@ -43,7 +48,12 @@ from automation_tool.mt5_openai_parse import (
     parse_journal_intraday_action_from_openai_text,
     parse_openai_output_md,
 )
-from automation_tool.mt5_manage import mt5_cancel_pending_or_close_position, mt5_ticket_still_open
+from automation_tool.mt5_manage import (
+    mt5_cancel_pending_or_close_position,
+    mt5_cancel_pending_order,
+    mt5_ticket_still_open,
+    mt5_ticket_status_for_cutoff,
+)
 from automation_tool.openai_errors import re_raise_unless_openai
 from automation_tool.openai_prompt_flow import TP1_POST_TOUCH_USER_TEMPLATE, run_single_followup_responses
 from automation_tool.playwright_browser import close_browser_and_context, launch_chrome_context
@@ -69,7 +79,6 @@ from automation_tool.daemon_launcher import (
 )
 from automation_tool.last_price_ipc import (
     open_writer_shared_memory,
-    read_last_price_for_daemon_plan,
     write_last_price_shared,
 )
 from automation_tool.zones_paths import (
@@ -203,6 +212,149 @@ class WatchlistDaemonParams:
     openai_model: Optional[str] = None
     openai_model_cli: Optional[str] = None
     mt5_accounts_json: Optional[Path] = None
+    stop_at_hour: Optional[int] = 0
+    """0 + phút 0 = 12h đêm (00:00 ngày kế, local); 1-23 = mốc cùng ngày; ``None`` = không cắt giờ."""
+    stop_at_minute: int = 0
+    """Phút đi kèm ``stop_at_hour`` (mặc định 0)."""
+
+
+def compute_daemon_plan_stop_deadline_local(
+    started_at: datetime,
+    timezone_name: str,
+    stop_hour: int,
+    stop_minute: int = 0,
+) -> datetime:
+    """
+    - ``stop_hour == 0`` và ``stop_minute == 0``: **12h đêm** = 24h = ``00:00`` **ngày kế** (local).
+    - Khác: mốc **cùng ngày dương lịch** với ``started_at`` tại ``stop_hour:stop_minute`` (đã qua → thoát sau khi hết ticket).
+    Thoát khi ``now(local) >= mốc`` (sau khi kiểm tra ticket MT5).
+    """
+    z = ZoneInfo(timezone_name)
+    s = started_at.astimezone(z)
+    sh = int(stop_hour)
+    sm = int(stop_minute)
+    if sh == 0 and sm == 0:
+        next_day = s.date() + timedelta(days=1)
+        return datetime.combine(next_day, dt_time(0, 0), tzinfo=z)
+    return s.replace(hour=sh, minute=sm, second=0, microsecond=0)
+
+
+def _daemon_plan_collect_ticket_account_pairs(zone: Zone) -> list[tuple[Optional[str], int]]:
+    """``(account_id | None = primary/env, ticket)`` — ưu tiên map đa tài khoản."""
+    out: list[tuple[Optional[str], int]] = []
+    tmap = zone.mt5_tickets_by_account or {}
+    if tmap:
+        for aid, tk in tmap.items():
+            try:
+                tki = int(tk)
+            except (TypeError, ValueError):
+                continue
+            if tki > 0:
+                out.append((str(aid).strip() or None, tki))
+        return out
+    try:
+        tk = int(zone.mt5_ticket or 0)
+    except (TypeError, ValueError):
+        tk = 0
+    if tk > 0:
+        out.append((None, tk))
+    return out
+
+
+def _daemon_plan_resolve_mt5_creds(
+    accounts_json: Optional[Path],
+    account_id: Optional[str],
+) -> tuple[Optional[int], Optional[str], Optional[str]]:
+    accs = load_mt5_accounts_for_cli(accounts_json)
+    if accs:
+        if account_id:
+            for a in accs:
+                if a.id == account_id:
+                    return a.login, a.password, a.server
+            return None, None, None
+        p = primary_account(accs)
+        return p.login, p.password, p.server
+    return None, None, None
+
+
+def daemon_plan_resolve_cutoff_mt5(
+    zones: list[Zone],
+    *,
+    dry_run: bool,
+    accounts_json: Optional[Path],
+    settings: Settings,
+    shard_tag: str,
+) -> tuple[bool, str]:
+    """
+    Quá giờ cắt: **lệnh chờ** → huỷ rồi tiếp tục; **position đã khớp** → chặn thoát (chờ đóng);
+    ticket đã đóng / không còn trên MT5 → không chặn.
+
+    Chỉ dùng ticket trong ``zones`` (state của **shard hiện tại** — ``mt5_ticket`` / ``mt5_tickets_by_account``);
+    không quét mọi lệnh trên tài khoản MT5.
+
+    Trả ``(True, ...)`` nếu cần chờ thêm (còn position) hoặc lỗi MT5; ``(False, ...)`` khi có thể kết thúc.
+    """
+    if dry_run:
+        return False, "[daemon-plan] mt5_dry_run — bỏ qua cutoff MT5"
+    pairs: list[tuple[Optional[str], int]] = []
+    for z in zones:
+        pairs.extend(_daemon_plan_collect_ticket_account_pairs(z))
+    if not pairs:
+        return False, "no mt5_ticket in state"
+    seen: set[tuple[str, int]] = set()
+    unique_pairs: list[tuple[Optional[str], int]] = []
+    for acc_id, ticket in pairs:
+        key = (acc_id or "", int(ticket))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_pairs.append((acc_id, int(ticket)))
+
+    for acc_id, ticket in unique_pairs:
+        login, password, server = _daemon_plan_resolve_mt5_creds(accounts_json, acc_id)
+        if acc_id and login is None:
+            return True, f"account_id={acc_id!r} không tìm thấy trong accounts.json (ticket={ticket})"
+        st, msg = mt5_ticket_status_for_cutoff(
+            ticket,
+            dry_run=False,
+            login=login,
+            password=password,
+            server=server,
+        )
+        if st == "error":
+            return True, msg
+        if st != "pending":
+            continue
+        r = mt5_cancel_pending_order(
+            ticket,
+            dry_run=False,
+            login=login,
+            password=password,
+            server=server,
+        )
+        if not r.ok:
+            return True, f"huỷ pending ticket={ticket}: {r.message}"
+        _send_log(
+            settings,
+            f"[daemon-plan] quá giờ cắt — đã huỷ lệnh chờ | shard={shard_tag} | {r.message}",
+        )
+
+    for acc_id, ticket in unique_pairs:
+        login, password, server = _daemon_plan_resolve_mt5_creds(accounts_json, acc_id)
+        if acc_id and login is None:
+            return True, f"account_id={acc_id!r} không tìm thấy trong accounts.json (ticket={ticket})"
+        st, msg = mt5_ticket_status_for_cutoff(
+            ticket,
+            dry_run=False,
+            login=login,
+            password=password,
+            server=server,
+        )
+        if st == "error":
+            return True, msg
+        if st == "position":
+            return True, f"ticket={ticket} còn position ({msg}) — chờ đóng lệnh"
+    return False, "cutoff: không còn pending/position theo ticket trong state"
 
 
 def _state_read(params: WatchlistDaemonParams) -> Optional[ZonesState]:
@@ -375,6 +527,28 @@ def _parse_trade_from_zone_trade_line(trade_line: str, *, symbol_override: Optio
     return parse_openai_output_md(minimal, symbol_override=symbol_override)
 
 
+def _daemon_plan_execution_side(zone: Zone, *, params: WatchlistDaemonParams) -> Literal["BUY", "SELL"]:
+    """
+    BUY → ``tick.ask``; SELL → ``tick.bid``. Ưu tiên ``side`` từ ``trade_line``; không parse được thì ``zone.side``.
+    """
+    tl = (zone.trade_line or "").strip()
+    if tl:
+        parsed, err = _parse_trade_from_zone_trade_line(tl, symbol_override=params.mt5_symbol)
+        if not err and parsed is not None:
+            s = getattr(parsed, "side", None)
+            if s == "SELL":
+                return "SELL"
+            return "BUY"
+    s = (zone.side or "BUY").strip().upper()
+    if s == "SELL":
+        return "SELL"
+    return "BUY"
+
+
+def _execution_leg_for_side(side: Literal["BUY", "SELL"]) -> str:
+    return "ask" if side == "BUY" else "bid"
+
+
 def _maybe_loai_zone_if_last_hit_sl(
     zone: Zone,
     p_last: float,
@@ -427,23 +601,23 @@ def _daemon_plan_watch_telegram_text(
     sym: str,
     shard_tag: str,
     p_last: Optional[float],
+    exec_side: Optional[Literal["BUY", "SELL"]] = None,
+    exec_leg: Optional[str] = None,
 ) -> str:
-    """Một dòng cho kênh log kỹ thuật: plan/shard đang theo dõi."""
+    """Một dòng cho kênh log kỹ thuật: plan/shard đang theo dõi (giá MT5 ask/bid theo phía lệnh)."""
     shard_name = Path(shard_tag).name
     last_s = f"{p_last}" if p_last is not None else "(none)"
     extra: list[str] = []
+    if exec_side and exec_leg:
+        extra.append(f"mt5={exec_side}@{exec_leg}")
     if z.mt5_ticket is not None and int(z.mt5_ticket) > 0:
-        extra.append(f"mt5={z.mt5_ticket}")
+        extra.append(f"ticket={z.mt5_ticket}")
     if z.hop_luu is not None:
         extra.append(f"hop_luu={z.hop_luu}")
-    vc = (z.vung_cho or "").replace("\n", " ").strip()
-    if len(vc) > 100:
-        vc = vc[:97] + "..."
-    ref = _zone_side_ref_from_vung_cho(z)
-    ref_s = f"{ref}" if ref is not None else "—"
     tail = " | ".join(extra) if extra else ""
     base = (
-        f"[daemon-plan] watch | zone_id={z.id} | status={z.status} | last={last_s}"
+        f"[daemon-plan] watch | shard={shard_name} | sym={sym} | zone_id={z.id} | "
+        f"status={z.status} | exec_price={last_s}"
     )
     return f"{base} | {tail}" if tail else base
 
@@ -1480,12 +1654,18 @@ def _daemon_plan_main_loop(
     poll_s: float,
 ) -> None:
     """
-    One shard, one thread: read Last from shared memory (fallback ``last.txt``), run zone pipeline **sequentially**.
+    One shard, one thread: read execution price from MT5 ``symbol_info_tick`` (BUY→ask, SELL→bid),
+    side from ``trade_line`` or ``zone.side``. Run zone pipeline **sequentially**.
     Exit when the zone reaches ``done`` or ``loai``.
     """
     if params.shard_path is None:
         raise ValueError("daemon-plan requires params.shard_path")
-    last_path = params.last_price_path or default_last_price_path()
+    mt5_sess = DaemonPlanMt5PriceSession(
+        symbol_hint=sym,
+        symbol_override=params.mt5_symbol,
+        dry_run=bool(params.mt5_dry_run),
+        accounts_json=params.mt5_accounts_json,
+    )
     heartbeat_s = 300.0
     last_heartbeat_at = 0.0
     shard_tag = str(params.shard_path)
@@ -1493,195 +1673,260 @@ def _daemon_plan_main_loop(
     last_plan_tg_at = 0.0
     _send_log(
         settings,
-        f"[daemon-plan] start | shard={shard_tag} last_ipc+file={last_path} symbol={sym}",
+        f"[daemon-plan] start | shard={shard_tag} symbol={sym} mt5_exec=BUY@ask|SELL@bid (trade_line side or zone.side)",
     )
-    while True:
-        st = _state_read(params)
-        if st is None or not st.zones:
-            _poll_terminal.info(
-                "daemon-plan | shard=%s | tick | zones=0 (no state)",
-                shard_tag,
+    stop_deadline: Optional[datetime] = None
+    last_stop_wait_log_at = 0.0
+    if params.stop_at_hour is not None:
+        tz_name = (params.timezone_name or "Asia/Ho_Chi_Minh").strip() or "Asia/Ho_Chi_Minh"
+        sh = int(params.stop_at_hour)
+        sm = int(params.stop_at_minute or 0)
+        started = datetime.now(ZoneInfo(tz_name))
+        stop_deadline = compute_daemon_plan_stop_deadline_local(started, tz_name, sh, sm)
+        if sh == 0 and sm == 0:
+            cut_desc = f"12h đêm (00:00 ngày kế, {tz_name}) | mốc={stop_deadline.strftime('%Y-%m-%d %H:%M')}"
+        else:
+            cut_desc = (
+                f"dừng khi ≥ {sh:02d}:{sm:02d} ({tz_name}) | mốc cùng ngày={stop_deadline.strftime('%Y-%m-%d %H:%M')}"
             )
-            time.sleep(poll_s)
-            continue
-
-        z0 = st.zones[0]
-        if z0.status in ("done", "loai"):
-            _send_log(
-                settings,
-                f"[daemon-plan] exit | status={z0.status} shard={shard_tag} zone_id={z0.id}",
-            )
-            return
-
-        p_last = read_last_price_for_daemon_plan(sym, last_path)
-        now_plan_tg = time.monotonic()
-        if (now_plan_tg - last_plan_tg_at) >= telegram_plan_interval_s:
-            last_plan_tg_at = now_plan_tg
-            _send_log(
-                settings,
-                _daemon_plan_watch_telegram_text(
-                    z0, sym=sym, shard_tag=shard_tag, p_last=p_last
-                ),
-            )
-        if p_last is None:
-            _poll_terminal.info(
-                "daemon-plan | shard=%s | tick | last=(none) ipc|file=%s",
-                shard_tag,
-                last_path,
-            )
-            time.sleep(poll_s)
-            continue
-
-        _poll_terminal.info(
-            "daemon-plan | shard=%s | tick | last=%s",
-            shard_tag,
-            p_last,
+        _send_log(
+            settings,
+            f"[daemon-plan] cắt giờ | {cut_desc} (pending → huỷ; chỉ chờ khi còn position đã khớp)",
         )
+    try:
+        while True:
+            st = _state_read(params)
+            if stop_deadline is not None:
+                tz_nm = (params.timezone_name or "Asia/Ho_Chi_Minh").strip() or "Asia/Ho_Chi_Minh"
+                now_local = datetime.now(ZoneInfo(tz_nm))
+                if now_local >= stop_deadline:
+                    zones_list = list(st.zones) if st is not None and st.zones else []
+                    blocking, detail = daemon_plan_resolve_cutoff_mt5(
+                        zones_list,
+                        dry_run=bool(params.mt5_dry_run),
+                        accounts_json=params.mt5_accounts_json,
+                        settings=settings,
+                        shard_tag=shard_tag,
+                    )
+                    if blocking:
+                        now_mono = time.monotonic()
+                        if (now_mono - last_stop_wait_log_at) >= 60.0:
+                            last_stop_wait_log_at = now_mono
+                            _send_log(
+                                settings,
+                                f"[daemon-plan] quá giờ cắt — chưa kết thúc | shard={shard_tag} | {detail}",
+                            )
+                            _poll_terminal.info(
+                                "daemon-plan | shard=%s | past_cutoff waiting mt5 | %s",
+                                shard_tag,
+                                detail,
+                            )
+                        time.sleep(poll_s)
+                        continue
+                    _send_log(
+                        settings,
+                        f"[daemon-plan] exit | past_cutoff shard={shard_tag} | {detail}",
+                    )
+                    return
 
-        try:
-            now_mono = time.monotonic()
-            if (now_mono - last_heartbeat_at) >= heartbeat_s:
-                last_heartbeat_at = now_mono
-        except Exception:
-            pass
-
-        # vung_cho / cham / vao_lenh / cho_tp1: SL hit (theo trade_line) → loại
-        sl_invalidated = False
-        for z in st.zones:
-            if z.status not in _DAEMON_PLAN_SL_LOAI_STATUSES:
+            if st is None or not st.zones:
+                _poll_terminal.info(
+                    "daemon-plan | shard=%s | tick | zones=0 (no state)",
+                    shard_tag,
+                )
+                time.sleep(poll_s)
                 continue
-            if _maybe_loai_zone_if_last_hit_sl(z, float(p_last), settings=settings, params=params):
-                sl_invalidated = True
-        if sl_invalidated:
-            _state_write(params, st)
 
-        st_auto = _state_read(params)
-        if st_auto is not None:
-            for z in st_auto.zones:
-                if z.status not in ("vung_cho", "cham"):
-                    continue
-                if z.mt5_ticket is not None and int(z.mt5_ticket or 0) > 0:
-                    continue
-                if not z.trade_line:
-                    continue
-                if z.hop_luu is None:
-                    continue
-                thr = int(auto_mt5_hop_luu_threshold_for_label(z.label))
-                if int(z.hop_luu) < thr:
-                    continue
-                aer = (getattr(z, "auto_entry_retry_after", "") or "").strip()
-                if aer and not _is_retry_due(aer):
-                    continue
-                z.status = "dang_vao_lenh"
-                z.auto_entry_retry_after = ""
-                _state_write(params, st_auto)
+            z0 = st.zones[0]
+            if z0.status in ("done", "loai"):
                 _send_log(
                     settings,
-                    f"[auto-entry] dispatch | zone_id={z.id} label={z.label} hop_luu={z.hop_luu} thr(>=)={thr}",
+                    f"[daemon-plan] exit | status={z0.status} shard={shard_tag} zone_id={z0.id}",
                 )
-                _auto_entry_job(settings=settings, params=params, zone_id=z.id)
+                return
 
-        st_retry = _state_read(params)
-        if st_retry is not None:
-            for z in st_retry.zones:
-                if z.status != "cham":
+            exec_side = _daemon_plan_execution_side(z0, params=params)
+            exec_leg = _execution_leg_for_side(exec_side)
+            p_last, mt5_err = mt5_sess.read_execution_price(exec_side)
+            now_plan_tg = time.monotonic()
+            if (now_plan_tg - last_plan_tg_at) >= telegram_plan_interval_s:
+                last_plan_tg_at = now_plan_tg
+                _send_log(
+                    settings,
+                    _daemon_plan_watch_telegram_text(
+                        z0,
+                        sym=sym,
+                        shard_tag=shard_tag,
+                        p_last=p_last,
+                        exec_side=exec_side,
+                        exec_leg=exec_leg,
+                    ),
+                )
+            if p_last is None:
+                _poll_terminal.info(
+                    "daemon-plan | shard=%s | tick | mt5_exec=(none) side=%s %s err=%s",
+                    shard_tag,
+                    exec_side,
+                    exec_leg,
+                    mt5_err or "?",
+                )
+                time.sleep(poll_s)
+                continue
+
+            _poll_terminal.info(
+                "daemon-plan | shard=%s | tick | side=%s %s=%s",
+                shard_tag,
+                exec_side,
+                exec_leg,
+                p_last,
+            )
+
+            try:
+                now_mono = time.monotonic()
+                if (now_mono - last_heartbeat_at) >= heartbeat_s:
+                    last_heartbeat_at = now_mono
+            except Exception:
+                pass
+
+            # vung_cho / cham / vao_lenh / cho_tp1: SL hit (theo trade_line) → loại
+            sl_invalidated = False
+            for z in st.zones:
+                if z.status not in _DAEMON_PLAN_SL_LOAI_STATUSES:
                     continue
-                if not _is_retry_due(getattr(z, "retry_at", "")):
+                if _maybe_loai_zone_if_last_hit_sl(z, float(p_last), settings=settings, params=params):
+                    sl_invalidated = True
+            if sl_invalidated:
+                _state_write(params, st)
+
+            st_auto = _state_read(params)
+            if st_auto is not None:
+                for z in st_auto.zones:
+                    if z.status not in ("vung_cho", "cham"):
+                        continue
+                    if z.mt5_ticket is not None and int(z.mt5_ticket or 0) > 0:
+                        continue
+                    if not z.trade_line:
+                        continue
+                    if z.hop_luu is None:
+                        continue
+                    thr = int(auto_mt5_hop_luu_threshold_for_label(z.label))
+                    if int(z.hop_luu) < thr:
+                        continue
+                    aer = (getattr(z, "auto_entry_retry_after", "") or "").strip()
+                    if aer and not _is_retry_due(aer):
+                        continue
+                    z.status = "dang_vao_lenh"
+                    z.auto_entry_retry_after = ""
+                    _state_write(params, st_auto)
+                    _send_log(
+                        settings,
+                        f"[auto-entry] dispatch | zone_id={z.id} label={z.label} hop_luu={z.hop_luu} thr(>=)={thr}",
+                    )
+                    _auto_entry_job(settings=settings, params=params, zone_id=z.id)
+
+            st_retry = _state_read(params)
+            if st_retry is not None:
+                for z in st_retry.zones:
+                    if z.status != "cham":
+                        continue
+                    if not _is_retry_due(getattr(z, "retry_at", "")):
+                        continue
+                    z.status = "dang_thuc_thi"
+                    z.retry_at = ""
+                    _state_write(params, st_retry)
+                    _send_log(settings, f"[zone-touch] retry_dispatch | zone_id={z.id} last={p_last}")
+                    _zone_touch_job(
+                        settings=settings,
+                        params=params,
+                        zone_id=z.id,
+                        last_price=float(p_last),
+                        after_retry_wait=True,
+                    )
+
+            st = _state_read(params)
+            if st is None or not st.zones:
+                time.sleep(poll_s)
+                continue
+
+            matched: list[Zone] = []
+            for z in st.zones:
+                if z.status != "vung_cho":
                     continue
-                z.status = "dang_thuc_thi"
-                z.retry_at = ""
-                _state_write(params, st_retry)
-                _send_log(settings, f"[zone-touch] retry_dispatch | zone_id={z.id} last={p_last}")
+                ref = _zone_side_ref_from_vung_cho(z)
+                if ref is None:
+                    continue
+                try:
+                    p_last_n = _price_round_nearest_int(p_last)
+                    ref_n = _price_round_nearest_int(ref)
+                except Exception:
+                    p_last_n = float(p_last)
+                    ref_n = float(ref)
+                if abs(p_last_n - ref_n) <= float(params.eps):
+                    matched.append(z)
+
+            for z in matched:
+                z.status = "cham"
+                _state_write(params, st)
                 _zone_touch_job(
                     settings=settings,
                     params=params,
                     zone_id=z.id,
                     last_price=float(p_last),
-                    after_retry_wait=True,
                 )
 
-        st = _state_read(params)
-        if st is None or not st.zones:
-            time.sleep(poll_s)
-            continue
-
-        matched: list[Zone] = []
-        for z in st.zones:
-            if z.status != "vung_cho":
-                continue
-            ref = _zone_side_ref_from_vung_cho(z)
-            if ref is None:
-                continue
-            try:
-                p_last_n = _price_round_nearest_int(p_last)
-                ref_n = _price_round_nearest_int(ref)
-            except Exception:
-                p_last_n = float(p_last)
-                ref_n = float(ref)
-            if abs(p_last_n - ref_n) <= float(params.eps):
-                matched.append(z)
-
-        for z in matched:
-            z.status = "cham"
-            _state_write(params, st)
-            _zone_touch_job(
-                settings=settings,
-                params=params,
-                zone_id=z.id,
-                last_price=float(p_last),
-            )
-
-        st_tp1 = _state_read(params)
-        if st_tp1 is not None:
-            changed = False
-            for z in st_tp1.zones:
-                if z.status != "vao_lenh":
-                    continue
-                if not z.trade_line or not z.mt5_ticket or int(z.mt5_ticket) <= 0:
-                    continue
-                if _arm_threshold_met_for_zone(z, float(p_last), symbol_override=params.mt5_symbol):
-                    z.status = "cho_tp1"
-                    z.tp1_followup_done = False
-                    changed = True
-                    _send_log(settings, f"[tp1] arm | zone_id={z.id} vao_lenh->cho_tp1 last={p_last}")
-                    _thr_tp1 = arm_threshold_tp1_for_label(z.label or "")
-                    _send_user_notice(
-                        settings,
-                        f"Giá đã cách entry {_thr_tp1:g} giá — sẽ xử lý khi chạm TP1",
-                        zone=z,
-                        params=params,
-                    )
-            if changed:
-                _state_write(params, st_tp1)
-
-            st_tp1b = _state_read(params)
-            if st_tp1b is not None:
-                for z in st_tp1b.zones:
-                    if z.status != "cho_tp1":
-                        continue
-                    if z.tp1_followup_done:
+            st_tp1 = _state_read(params)
+            if st_tp1 is not None:
+                changed = False
+                for z in st_tp1.zones:
+                    if z.status != "vao_lenh":
                         continue
                     if not z.trade_line or not z.mt5_ticket or int(z.mt5_ticket) <= 0:
                         continue
-                    parsed, err = _parse_trade_from_zone_trade_line(
-                        z.trade_line, symbol_override=params.mt5_symbol
-                    )
-                    if err or parsed is None:
-                        continue
-                    if not _tp1_touched(parsed, float(p_last)):
-                        continue
-                    z.status = "dang_thuc_thi"
-                    z.tp1_followup_done = True
-                    _state_write(params, st_tp1b)
-                    _send_log(settings, f"[tp1] touched | zone_id={z.id} -> followup last={p_last}")
-                    _tp1_followup_job(
-                        settings=settings,
-                        params=params,
-                        zone_id=z.id,
-                        p_last=float(p_last),
-                    )
+                    if _arm_threshold_met_for_zone(z, float(p_last), symbol_override=params.mt5_symbol):
+                        z.status = "cho_tp1"
+                        z.tp1_followup_done = False
+                        changed = True
+                        _send_log(settings, f"[tp1] arm | zone_id={z.id} vao_lenh->cho_tp1 last={p_last}")
+                        _thr_tp1 = arm_threshold_tp1_for_label(z.label or "")
+                        _send_user_notice(
+                            settings,
+                            f"Giá đã cách entry {_thr_tp1:g} giá — sẽ xử lý khi chạm TP1",
+                            zone=z,
+                            params=params,
+                        )
+                if changed:
+                    _state_write(params, st_tp1)
 
-        time.sleep(poll_s)
+                st_tp1b = _state_read(params)
+                if st_tp1b is not None:
+                    for z in st_tp1b.zones:
+                        if z.status != "cho_tp1":
+                            continue
+                        if z.tp1_followup_done:
+                            continue
+                        if not z.trade_line or not z.mt5_ticket or int(z.mt5_ticket) <= 0:
+                            continue
+                        parsed, err = _parse_trade_from_zone_trade_line(
+                            z.trade_line, symbol_override=params.mt5_symbol
+                        )
+                        if err or parsed is None:
+                            continue
+                        if not _tp1_touched(parsed, float(p_last)):
+                            continue
+                        z.status = "dang_thuc_thi"
+                        z.tp1_followup_done = True
+                        _state_write(params, st_tp1b)
+                        _send_log(settings, f"[tp1] touched | zone_id={z.id} -> followup last={p_last}")
+                        _tp1_followup_job(
+                            settings=settings,
+                            params=params,
+                            zone_id=z.id,
+                            p_last=float(p_last),
+                        )
+
+            time.sleep(poll_s)
+    finally:
+        mt5_sess.shutdown()
 
 
 def _tv_watchlist_rpc_poll_price(
@@ -2025,7 +2270,7 @@ def run_daemon_plan(
     params: WatchlistDaemonParams,
 ) -> str:
     """
-    One process per shard JSON: reads Last from daemon giá (shared memory, fallback ``last.txt``).
+    One process per shard JSON: đọc giá thực thi từ MT5 (BUY→ask, SELL→bid) theo trade_line / zone.side.
     """
     if params.shard_path is None:
         raise SystemExit("daemon-plan requires --shard PATH (vung_*.json)")
@@ -2034,13 +2279,12 @@ def run_daemon_plan(
     if poll_s <= 0:
         poll_s = 1.0
     sym = get_active_main_symbol().strip().upper()
-    last_p = params.last_price_path or default_last_price_path()
     _log.info(
-        "daemon-plan start | shard=%s poll=%.1fs symbol=%s last_price=%s",
+        "daemon-plan start | shard=%s poll=%.1fs symbol=%s mt5_accounts=%s",
         params.shard_path,
         poll_s,
         sym,
-        last_p,
+        params.mt5_accounts_json,
     )
     _daemon_plan_main_loop(settings=settings, params=params, sym=sym, poll_s=poll_s)
     return "stopped"
