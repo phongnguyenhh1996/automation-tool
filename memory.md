@@ -30,8 +30,8 @@ Tạo checklist chuẩn cho user:
 - Mỗi khi đề xuất lệnh, sẽ tự động chấm điểm theo thang này (0–100), và báo rõ lệnh đạt bao nhiêu điểm, có đủ hợp lưu để limit ngay hay chỉ là vùng chờ/scalp backup.
 - Đối với lệnh scalp > 60 điểm có thể limit ngay
 - Nếu <70 điểm → báo “không đủ hợp lưu / chỉ backup”.
-- Nếu 70–75 điểm → vùng chờ, chấp nhận được nhưng chưa đẹp.
-- Nếu ≥75 điểm → hợp lưu mạnh, có thể limit ngay.
+- Nếu 70–80 điểm → vùng chờ, chấp nhận được nhưng chưa đẹp.
+- Nếu ≥80 điểm → hợp lưu mạnh, có thể limit ngay.
 - Nếu 100/100 → chuẩn tuyệt đối, lệnh đẹp nhất.
 
 Lưu ý mới cho USDJPY: khi setup lệnh SELL, SL phải đặt theo công thức anti-sweep riêng, tức là giấu sau liquidity pool (EQH/stop cluster) + buffer 3–5 pip. Không đặt SL ngay sát Premium. Nếu cần, có thể dời SL xa thêm 10 pip (ví dụ 148.05–148.10) và giảm lot cụm để giữ tổng risk = 140$. Ngoài ra, không giữ lệnh limit qua tin đỏ lớn (CPI, FOMC) để tránh sweep. Đây là quy tắc điều chỉnh riêng cho USDJPY.

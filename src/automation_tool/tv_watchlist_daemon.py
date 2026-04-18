@@ -787,7 +787,7 @@ def _auto_entry_job(
             _state_write(params, st0)
             return
         thr = int(auto_mt5_hop_luu_threshold_for_label(z0.label))
-        if int(z0.hop_luu) <= thr:
+        if int(z0.hop_luu) < thr:
             z0.status = "cham"
             z0.auto_entry_retry_after = ""
             _state_write(params, st0)
@@ -1395,7 +1395,7 @@ def _daemon_plan_main_loop(
                 if z.hop_luu is None:
                     continue
                 thr = int(auto_mt5_hop_luu_threshold_for_label(z.label))
-                if int(z.hop_luu) <= thr:
+                if int(z.hop_luu) < thr:
                     continue
                 aer = (getattr(z, "auto_entry_retry_after", "") or "").strip()
                 if aer and not _is_retry_due(aer):
@@ -1405,7 +1405,7 @@ def _daemon_plan_main_loop(
                 _state_write(params, st_auto)
                 _send_log(
                     settings,
-                    f"[auto-entry] dispatch | zone_id={z.id} label={z.label} hop_luu={z.hop_luu} thr(>)={thr}",
+                    f"[auto-entry] dispatch | zone_id={z.id} label={z.label} hop_luu={z.hop_luu} thr(>=)={thr}",
                 )
                 _auto_entry_job(settings=settings, params=params, zone_id=z.id)
 

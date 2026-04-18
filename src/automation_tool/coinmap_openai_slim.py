@@ -34,12 +34,12 @@ def slim_limits_for_interval(interval: str) -> Optional[tuple[int, int]]:
     iv = interval.strip().lower()
     if iv == "15m":
         return (
-            _env_int("COINMAP_OPENAI_BARS_15M", 30),
+            _env_int("COINMAP_OPENAI_BARS_15M", 60),
             _env_int("COINMAP_OPENAI_FP_15M", 11),
         )
     if iv == "5m":
         return (
-            _env_int("COINMAP_OPENAI_BARS_5M", 35),
+            _env_int("COINMAP_OPENAI_BARS_5M", 60),
             _env_int("COINMAP_OPENAI_FP_5M", 16),
         )
     return None
