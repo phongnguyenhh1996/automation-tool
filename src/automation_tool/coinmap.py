@@ -5,6 +5,7 @@ import concurrent.futures
 import copy
 import json
 import logging
+import os
 import re
 import time
 from datetime import datetime, timezone
@@ -17,7 +18,7 @@ import yaml
 from playwright.sync_api import BrowserContext, Playwright, sync_playwright
 
 from automation_tool.coinmap_openai_slim import slim_coinmap_export_for_openai
-from automation_tool.config import default_logs_dir
+from automation_tool.config import default_coinmap_bearer_cache_path, default_logs_dir
 from automation_tool.browser_client import browser_service_state_path, try_attach_playwright_via_service
 from automation_tool.playwright_browser import close_browser_and_context, launch_chrome_context
 
@@ -499,6 +500,58 @@ def _coinmap_bearer_log(api_cd: Optional[dict[str, Any]], message: str) -> None:
     if not _coinmap_bearer_log_enabled(api_cd):
         return
     logging.getLogger("automation_tool").info("[coinmap bearer] %s", message)
+
+
+class CoinmapBearerCacheInvalid(Exception):
+    """cm-api returned 401/403; cached bearer token should be refreshed via the browser."""
+
+
+def _coinmap_bearer_token_cache_enabled(api_cd: dict[str, Any]) -> bool:
+    return api_cd.get("bearer_token_cache", True) is not False
+
+
+def _coinmap_bearer_token_cache_resolved_path(api_cd: dict[str, Any]) -> Path:
+    raw = api_cd.get("bearer_token_cache_path")
+    if isinstance(raw, str) and raw.strip():
+        p = Path(raw.strip()).expanduser()
+        if not p.is_absolute():
+            from automation_tool.config import _root
+
+            p = _root() / p
+        return p
+    return default_coinmap_bearer_cache_path()
+
+
+def _coinmap_read_bearer_token_cache(path: Path) -> Optional[str]:
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not text:
+        return None
+    return text
+
+
+def _coinmap_write_bearer_token_cache(path: Path, authorization: str) -> None:
+    auth = authorization.strip()
+    if not auth:
+        return
+    _ensure_dir(path.parent)
+    path.write_text(auth + "\n", encoding="utf-8")
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def _coinmap_bearer_shot_has_auth_failure(shot: dict[str, Any]) -> bool:
+    for key in _COINMAP_API_KEYS:
+        block = shot.get(key)
+        if isinstance(block, dict):
+            st = block.get("status")
+            if st in (401, 403):
+                return True
+    return False
 
 
 _COINMAP_INTERVAL_MINUTES: dict[str, int] = {
@@ -1666,6 +1719,150 @@ def _run_coinmap_multi_shot_flow(
     return written
 
 
+def _coinmap_run_bearer_api_only_exports(
+    page,
+    *,
+    charts_dir: Path,
+    stamp: str,
+    cd: dict[str, Any],
+    api_cd: dict[str, Any],
+    auth: str,
+    only_retry_paths: Optional[list[Path]] = None,
+    prefer_httpx: bool = False,
+    abort_on_http_auth_error: bool = False,
+) -> list[Path]:
+    """
+    After ``auth`` is known, resolve capture plan and write cm-api JSON files (httpx and/or
+    Playwright ``context.request`` per ``prefer_httpx`` / parallel settings).
+
+    If ``abort_on_http_auth_error`` is true, any 401/403 on cm-api endpoints raises
+    :class:`CoinmapBearerCacheInvalid` before writing files.
+    """
+    if not prefer_httpx and page is None:
+        raise ValueError("coinmap bearer export: page is required when prefer_httpx is False")
+
+    written: list[Path] = []
+    plan = _coinmap_resolve_capture_plan(cd)
+    if only_retry_paths:
+        if not plan:
+            raise SystemExit(
+                "coinmap bearer retry requires multi_shot capture_plan "
+                "(cannot target paths for single-shot fullscreen export)."
+            )
+        from automation_tool.chart_payload_validate import filter_coinmap_plan_for_retry_paths
+
+        plan = filter_coinmap_plan_for_retry_paths(plan, stamp, list(only_retry_paths))
+        if not plan:
+            raise SystemExit(
+                "coinmap bearer retry: no capture_plan steps match the target files "
+                f"(stamp={stamp!r})."
+            )
+    if plan:
+        n = len(plan)
+        use_parallel = _bearer_http_parallel_enabled(api_cd) or prefer_httpx
+        if use_parallel:
+            _coinmap_bearer_log(
+                api_cd,
+                f"Fetching cm-api for {n} capture_plan step(s) (httpx: parallel shots + endpoints)",
+            )
+            shots = _coinmap_asyncio_run(
+                _coinmap_api_only_plan_gather_shots(api_cd, plan, auth)
+            )
+            for shot in shots:
+                if abort_on_http_auth_error and _coinmap_bearer_shot_has_auth_failure(shot):
+                    raise CoinmapBearerCacheInvalid()
+            for idx, (step, shot) in enumerate(zip(plan, shots), start=1):
+                sym = step["symbol"]
+                interval = step["interval"]
+                ex = step.get("export_symbol")
+                label = (ex.strip() if isinstance(ex, str) and ex.strip() else sym)
+                sym_slug = re.sub(r"[^\w.-]+", "_", label).strip("_")[:40] or "sym"
+                iv_slug = re.sub(r"[^\w]+", "_", interval).strip("_")[:20] or "iv"
+                _coinmap_bearer_log(
+                    api_cd,
+                    f"Step {idx}/{n}: wrote JSON (symbol={sym!r} interval={interval!r})",
+                )
+                _coinmap_maybe_fail_api_shot(api_cd, shot)
+                stem = f"{stamp}_coinmap_{sym_slug}_{iv_slug}"
+                json_path = _write_coinmap_api_shot_json(
+                    charts_dir, file_stem=stem, stamp=stamp, shot=shot, api_cd=api_cd
+                )
+                written.append(json_path)
+        else:
+            _coinmap_bearer_log(api_cd, f"Fetching cm-api for {n} capture_plan step(s)")
+            for idx, step in enumerate(plan, start=1):
+                sym = step["symbol"]
+                interval = step["interval"]
+                cat = step.get("watchlist_category")
+                step_ctx: dict[str, Any] = {
+                    "symbol": sym,
+                    "interval": interval,
+                    "watchlist_category": cat,
+                    "api_query": step.get("api_query"),
+                }
+                ex = step.get("export_symbol")
+                if isinstance(ex, str) and ex.strip():
+                    step_ctx["export_symbol"] = ex.strip()
+                label = (ex.strip() if isinstance(ex, str) and ex.strip() else sym)
+                sym_slug = re.sub(r"[^\w.-]+", "_", label).strip("_")[:40] or "sym"
+                iv_slug = re.sub(r"[^\w]+", "_", interval).strip("_")[:20] or "iv"
+                _coinmap_bearer_log(
+                    api_cd,
+                    f"Step {idx}/{n}: HTTP GET cm-api (symbol={sym!r} interval={interval!r})",
+                )
+                if prefer_httpx:
+                    shot = _coinmap_collect_one_shot_api_data_httpx(
+                        api_cd, step_ctx, bearer_authorization=auth
+                    )
+                else:
+                    shot = _coinmap_collect_one_shot_api_data(
+                        page, api_cd, step_ctx, bearer_authorization=auth
+                    )
+                if abort_on_http_auth_error and _coinmap_bearer_shot_has_auth_failure(shot):
+                    raise CoinmapBearerCacheInvalid()
+                _coinmap_maybe_fail_api_shot(api_cd, shot)
+                stem = f"{stamp}_coinmap_{sym_slug}_{iv_slug}"
+                json_path = _write_coinmap_api_shot_json(
+                    charts_dir, file_stem=stem, stamp=stamp, shot=shot, api_cd=api_cd
+                )
+                written.append(json_path)
+    else:
+        _coinmap_bearer_log(
+            api_cd,
+            "Single-shot cm-api (no multi_shot capture_plan): stem chart_fullscreen",
+        )
+        use_parallel = _bearer_http_parallel_enabled(api_cd) or prefer_httpx
+        if use_parallel:
+            shot = _coinmap_collect_one_shot_api_data_httpx(
+                api_cd,
+                {"symbol": "", "interval": "", "watchlist_category": None},
+                bearer_authorization=auth,
+            )
+        else:
+            shot = _coinmap_collect_one_shot_api_data(
+                page,
+                api_cd,
+                {"symbol": "", "interval": "", "watchlist_category": None},
+                bearer_authorization=auth,
+            )
+        if abort_on_http_auth_error and _coinmap_bearer_shot_has_auth_failure(shot):
+            raise CoinmapBearerCacheInvalid()
+        _coinmap_maybe_fail_api_shot(api_cd, shot)
+        json_path = _write_coinmap_api_shot_json(
+            charts_dir,
+            file_stem=f"{stamp}_chart_fullscreen",
+            stamp=stamp,
+            shot=shot,
+            api_cd=api_cd,
+        )
+        written.append(json_path)
+    _coinmap_bearer_log(
+        api_cd,
+        f"API-only export finished: wrote {len(written)} JSON file(s)",
+    )
+    return written
+
+
 def _run_bearer_request_api_only_flow(
     page,
     *,
@@ -1707,111 +1904,21 @@ def _run_bearer_request_api_only_flow(
             f"within {timeout_ms}ms. Check login, bearer_trigger_url, or use mode network_capture."
         )
 
-    written: list[Path] = []
-    plan = _coinmap_resolve_capture_plan(cd)
-    if only_retry_paths:
-        if not plan:
-            raise SystemExit(
-                "coinmap bearer retry requires multi_shot capture_plan "
-                "(cannot target paths for single-shot fullscreen export)."
-            )
-        from automation_tool.chart_payload_validate import filter_coinmap_plan_for_retry_paths
-
-        plan = filter_coinmap_plan_for_retry_paths(plan, stamp, list(only_retry_paths))
-        if not plan:
-            raise SystemExit(
-                "coinmap bearer retry: no capture_plan steps match the target files "
-                f"(stamp={stamp!r})."
-            )
-    if plan:
-        n = len(plan)
-        if _bearer_http_parallel_enabled(api_cd):
-            _coinmap_bearer_log(
-                api_cd,
-                f"Fetching cm-api for {n} capture_plan step(s) (httpx: parallel shots + endpoints)",
-            )
-            shots = _coinmap_asyncio_run(
-                _coinmap_api_only_plan_gather_shots(api_cd, plan, auth)
-            )
-            for idx, (step, shot) in enumerate(zip(plan, shots), start=1):
-                sym = step["symbol"]
-                interval = step["interval"]
-                ex = step.get("export_symbol")
-                label = (ex.strip() if isinstance(ex, str) and ex.strip() else sym)
-                sym_slug = re.sub(r"[^\w.-]+", "_", label).strip("_")[:40] or "sym"
-                iv_slug = re.sub(r"[^\w]+", "_", interval).strip("_")[:20] or "iv"
-                _coinmap_bearer_log(
-                    api_cd,
-                    f"Step {idx}/{n}: wrote JSON (symbol={sym!r} interval={interval!r})",
-                )
-                _coinmap_maybe_fail_api_shot(api_cd, shot)
-                stem = f"{stamp}_coinmap_{sym_slug}_{iv_slug}"
-                json_path = _write_coinmap_api_shot_json(
-                    charts_dir, file_stem=stem, stamp=stamp, shot=shot, api_cd=api_cd
-                )
-                written.append(json_path)
-        else:
-            _coinmap_bearer_log(api_cd, f"Fetching cm-api for {n} capture_plan step(s)")
-            for idx, step in enumerate(plan, start=1):
-                sym = step["symbol"]
-                interval = step["interval"]
-                cat = step.get("watchlist_category")
-                step_ctx: dict[str, Any] = {
-                    "symbol": sym,
-                    "interval": interval,
-                    "watchlist_category": cat,
-                    "api_query": step.get("api_query"),
-                }
-                ex = step.get("export_symbol")
-                if isinstance(ex, str) and ex.strip():
-                    step_ctx["export_symbol"] = ex.strip()
-                label = (ex.strip() if isinstance(ex, str) and ex.strip() else sym)
-                sym_slug = re.sub(r"[^\w.-]+", "_", label).strip("_")[:40] or "sym"
-                iv_slug = re.sub(r"[^\w]+", "_", interval).strip("_")[:20] or "iv"
-                _coinmap_bearer_log(
-                    api_cd,
-                    f"Step {idx}/{n}: HTTP GET cm-api (symbol={sym!r} interval={interval!r})",
-                )
-                shot = _coinmap_collect_one_shot_api_data(
-                    page, api_cd, step_ctx, bearer_authorization=auth
-                )
-                _coinmap_maybe_fail_api_shot(api_cd, shot)
-                stem = f"{stamp}_coinmap_{sym_slug}_{iv_slug}"
-                json_path = _write_coinmap_api_shot_json(
-                    charts_dir, file_stem=stem, stamp=stamp, shot=shot, api_cd=api_cd
-                )
-                written.append(json_path)
-    else:
-        _coinmap_bearer_log(
-            api_cd,
-            "Single-shot cm-api (no multi_shot capture_plan): stem chart_fullscreen",
-        )
-        if _bearer_http_parallel_enabled(api_cd):
-            shot = _coinmap_collect_one_shot_api_data_httpx(
-                api_cd,
-                {"symbol": "", "interval": "", "watchlist_category": None},
-                bearer_authorization=auth,
-            )
-        else:
-            shot = _coinmap_collect_one_shot_api_data(
-                page,
-                api_cd,
-                {"symbol": "", "interval": "", "watchlist_category": None},
-                bearer_authorization=auth,
-            )
-        _coinmap_maybe_fail_api_shot(api_cd, shot)
-        json_path = _write_coinmap_api_shot_json(
-            charts_dir,
-            file_stem=f"{stamp}_chart_fullscreen",
-            stamp=stamp,
-            shot=shot,
-            api_cd=api_cd,
-        )
-        written.append(json_path)
-    _coinmap_bearer_log(
-        api_cd,
-        f"API-only flow finished: wrote {len(written)} JSON file(s)",
+    written = _coinmap_run_bearer_api_only_exports(
+        page,
+        charts_dir=charts_dir,
+        stamp=stamp,
+        cd=cd,
+        api_cd=api_cd,
+        auth=auth,
+        only_retry_paths=only_retry_paths,
+        prefer_httpx=False,
+        abort_on_http_auth_error=False,
     )
+    if _coinmap_bearer_token_cache_enabled(api_cd):
+        cache_path = _coinmap_bearer_token_cache_resolved_path(api_cd)
+        _coinmap_write_bearer_token_cache(cache_path, auth)
+        _coinmap_bearer_log(api_cd, f"Saved bearer token cache: {cache_path}")
     return written
 
 
@@ -2524,11 +2631,64 @@ def _capture_charts_in_context(
 
     written: list[Path] = []
     logs_dir = default_logs_dir()
+    cd = cfg.get("chart_download") or {}
+    if not isinstance(cd, dict):
+        cd = {}
+    coinmap_bearer_satisfied_from_cache = False
+    api_cd_cache = _api_export_config(cd) if cd.get("enabled", False) else None
+    if (
+        api_cd_cache is not None
+        and _api_export_mode(api_cd_cache) == "bearer_request"
+        and api_cd_cache.get("bearer_skip_chart_ui") is not False
+        and _coinmap_bearer_token_cache_enabled(api_cd_cache)
+    ):
+        cache_p = _coinmap_bearer_token_cache_resolved_path(api_cd_cache)
+        if cache_p.is_file():
+            cached_auth = _coinmap_read_bearer_token_cache(cache_p)
+            if cached_auth:
+                try:
+                    cache_paths = _coinmap_run_bearer_api_only_exports(
+                        None,
+                        charts_dir=charts_dir,
+                        stamp=stamp,
+                        cd=cd,
+                        api_cd=api_cd_cache,
+                        auth=cached_auth,
+                        only_retry_paths=coinmap_only_retry_paths,
+                        prefer_httpx=True,
+                        abort_on_http_auth_error=True,
+                    )
+                    written.extend(cache_paths)
+                    coinmap_bearer_satisfied_from_cache = True
+                    _coinmap_bearer_log(
+                        api_cd_cache,
+                        "Bearer token cache hit — skipped Coinmap login/chart navigation for API-only export",
+                    )
+                except CoinmapBearerCacheInvalid:
+                    try:
+                        cache_p.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    _coinmap_bearer_log(
+                        api_cd_cache,
+                        "Bearer token cache rejected (401/403); refreshing via browser",
+                    )
+                except SystemExit:
+                    raise
+                except Exception as e:
+                    _coinmap_bearer_log(
+                        api_cd_cache,
+                        f"Bearer token cache probe failed ({e!r}); falling back to browser",
+                    )
 
     page = context.new_page()
     bearer_capture: Optional[CoinmapBearerCapture] = None
     cd_pre = cfg.get("chart_download")
-    if isinstance(cd_pre, dict) and cd_pre.get("enabled", False):
+    if (
+        not coinmap_bearer_satisfied_from_cache
+        and isinstance(cd_pre, dict)
+        and cd_pre.get("enabled", False)
+    ):
         api_pre = _api_export_config(cd_pre)
         if api_pre is not None and _api_export_mode(api_pre) == "bearer_request":
             bearer_capture = CoinmapBearerCapture(page, api_pre)
@@ -2562,10 +2722,7 @@ def _capture_charts_in_context(
             except Exception:
                 pass
 
-        cd = cfg.get("chart_download") or {}
-        if not isinstance(cd, dict):
-            cd = {}
-        if cd.get("enabled", False):
+        if cd.get("enabled", False) and not coinmap_bearer_satisfied_from_cache:
             try:
                 if progress_hook is not None:
                     progress_hook()
@@ -2655,6 +2812,9 @@ def _capture_charts_in_context(
 
         screenshot_after = bool(cfg.get("screenshot_after_chart_download", True))
         skip_canvas = bool(cd.get("enabled")) and not screenshot_after
+        if coinmap_bearer_satisfied_from_cache:
+            # Chart page was never opened; avoid canvas/fullpage shots of the wrong view.
+            skip_canvas = True
 
         if not skip_canvas:
             idx = 0

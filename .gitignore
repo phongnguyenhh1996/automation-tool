@@ -13,6 +13,7 @@ data/charts/*
 !data/charts/.gitkeep
 data/conversation.json
 data/storage_state.json
+data/coinmap_bearer_authorization.txt
 data/coinmap_data.json
 data/chrome_user_data/
 data/

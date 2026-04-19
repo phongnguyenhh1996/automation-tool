@@ -125,6 +125,11 @@ def default_storage_state_path() -> Path:
     return default_data_dir() / "storage_state.json"
 
 
+def default_coinmap_bearer_cache_path() -> Path:
+    """Cached ``Authorization: Bearer …`` for Coinmap ``bearer_request`` API-only capture."""
+    return default_data_dir() / "coinmap_bearer_authorization.txt"
+
+
 def _parse_vector_store_ids() -> list[str]:
     raw = os.getenv("OPENAI_VECTOR_STORE_IDS") or os.getenv("OPENAI_VECTOR_STORE_ID") or ""
     return [p.strip() for p in raw.split(",") if p.strip()]
