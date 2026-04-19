@@ -16,7 +16,12 @@ from automation_tool.mt5_accounts import (
     primary_account,
 )
 from automation_tool.mt5_execute import MT5ExecutionResult, execute_trade, format_mt5_execution_for_telegram
-from automation_tool.mt5_manage import MT5ManageResult, mt5_cancel_pending_or_close_position
+from automation_tool.mt5_manage import (
+    MT5ChinhTradeLineResult,
+    MT5ManageResult,
+    mt5_cancel_pending_or_close_position,
+    mt5_chinh_trade_line_inplace,
+)
 from automation_tool.mt5_openai_parse import ParsedTrade
 
 
@@ -165,4 +170,85 @@ def format_mt5_multi_manage_for_telegram(summary: MT5MultiManageSummary) -> str:
     parts: list[str] = []
     for acc_id, r in summary.results:
         parts.append(f"[{acc_id}] {r.message}")
+    return "\n".join(parts)
+
+
+@dataclass
+class MT5MultiChinhSummary:
+    """Kết quả chỉnh trade line tại chỗ trên từng tài khoản (SLTP / modify pending)."""
+
+    results: list[tuple[str, MT5ChinhTradeLineResult]] = field(default_factory=list)
+    ok_all_inplace: bool = True
+
+    def all_ticket_missing(self) -> bool:
+        if not self.results:
+            return False
+        return all(r.outcome == "ticket_missing" for _, r in self.results)
+
+
+def mt5_chinh_trade_line_all_accounts(
+    ticket_by_account_id: dict[str, int],
+    accounts: list[MT5AccountEntry],
+    new_parsed: ParsedTrade,
+    *,
+    dry_run: bool = False,
+    symbol_override: Optional[str] = None,
+) -> MT5MultiChinhSummary:
+    """
+    Mỗi ticket theo ``ticket_by_account_id`` — position → SLTP; pending → MODIFY.
+    ``ok_all_inplace`` = mọi tài khoản đều thành công (hoặc dry_run) tại chỗ.
+    """
+    summary = MT5MultiChinhSummary()
+    by_id = {a.id: a for a in accounts}
+    for acc_id, ticket in ticket_by_account_id.items():
+        acc = by_id.get(acc_id)
+        if acc is None:
+            summary.results.append(
+                (
+                    acc_id,
+                    MT5ChinhTradeLineResult(
+                        ok=False,
+                        message=f"Không tìm thấy account id={acc_id!r} trong accounts.json",
+                        outcome="modify_failed",
+                    ),
+                )
+            )
+            summary.ok_all_inplace = False
+            continue
+        if int(ticket) <= 0:
+            summary.results.append(
+                (
+                    acc_id,
+                    MT5ChinhTradeLineResult(
+                        ok=False,
+                        message=f"bỏ qua ticket không hợp lệ: {ticket}",
+                        outcome="ticket_missing",
+                    ),
+                )
+            )
+            summary.ok_all_inplace = False
+            continue
+        r = mt5_chinh_trade_line_inplace(
+            int(ticket),
+            new_parsed,
+            dry_run=dry_run,
+            symbol_override=symbol_override,
+            login=acc.login,
+            password=acc.password,
+            server=acc.server,
+        )
+        summary.results.append((acc_id, r))
+        if not (
+            r.ok
+            and r.outcome
+            in ("modified_sltp", "modified_pending", "dry_run")
+        ):
+            summary.ok_all_inplace = False
+    return summary
+
+
+def format_mt5_multi_chinh_for_telegram(summary: MT5MultiChinhSummary) -> str:
+    parts: list[str] = []
+    for acc_id, r in summary.results:
+        parts.append(f"[{acc_id}] {r.message} ({r.outcome})")
     return "\n".join(parts)

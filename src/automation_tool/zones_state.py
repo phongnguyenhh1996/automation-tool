@@ -144,9 +144,13 @@ class Zone:
     mt5_tickets_by_account: Optional[dict[str, int]] = None
     loai_streak: int = 0
     tp1_followup_done: bool = False
+    # Đã gửi một lần [TRADE_MANAGEMENT] khi giá đạt 1R (daemon zones); tránh spam.
+    r1_followup_done: bool = False
     retry_at: str = ""
-    # ISO UTC: sau khi auto-entry MT5 thất bại, không dispatch lại cho đến thời điểm này (tránh lặp vô hạn).
+    # ISO UTC: giữ tương thích state cũ; luồng hiện tại dùng ``auto_entry_mt5_failed`` thay vì cooldown.
     auto_entry_retry_after: str = ""
+    # True: auto-entry MT5 đã thất bại — không tự dispatch lại cho đến khi chu kỳ chạm vùng mới (reset trong daemon).
+    auto_entry_mt5_failed: bool = False
     status: ZoneStatus = "vung_cho"
     source: str = ""
     # Sharded storage: ``sang`` | ``chieu`` | ``toi``; ``None`` = legacy single-file state.
@@ -163,8 +167,10 @@ class Zone:
             "mt5_ticket": self.mt5_ticket,
             "loai_streak": self.loai_streak,
             "tp1_followup_done": self.tp1_followup_done,
+            "r1_followup_done": self.r1_followup_done,
             "retry_at": self.retry_at,
             "auto_entry_retry_after": self.auto_entry_retry_after,
+            "auto_entry_mt5_failed": self.auto_entry_mt5_failed,
             "status": self.status,
             "source": self.source,
         }
@@ -267,10 +273,14 @@ def _parse_zone(d: dict[str, Any]) -> Optional[Zone]:
         loai_streak = 0
     td_raw = d.get("tp1_followup_done")
     tp1_done = bool(td_raw) if isinstance(td_raw, bool) else False
+    r1_raw = d.get("r1_followup_done")
+    r1_done = bool(r1_raw) if isinstance(r1_raw, bool) else False
     ra_raw = d.get("retry_at")
     retry_at = ra_raw.strip() if isinstance(ra_raw, str) else ""
     aer_raw = d.get("auto_entry_retry_after")
     auto_entry_retry_after = aer_raw.strip() if isinstance(aer_raw, str) else ""
+    aemf_raw = d.get("auto_entry_mt5_failed")
+    auto_entry_mt5_failed = bool(aemf_raw) if isinstance(aemf_raw, bool) else False
     st = str(d.get("status") or "").strip()
     if st not in (
         "vung_cho",
@@ -299,8 +309,10 @@ def _parse_zone(d: dict[str, Any]) -> Optional[Zone]:
         mt5_tickets_by_account=mt5_tickets_by_account,
         loai_streak=loai_streak,
         tp1_followup_done=tp1_done,
+        r1_followup_done=r1_done,
         retry_at=retry_at,
         auto_entry_retry_after=auto_entry_retry_after,
+        auto_entry_mt5_failed=auto_entry_mt5_failed,
         status=st,  # type: ignore[assignment]
         source=src,
         session_slot=session_slot,
@@ -363,8 +375,10 @@ def write_zones_for_slot(
                 else None,
                 loai_streak=z.loai_streak,
                 tp1_followup_done=z.tp1_followup_done,
+                r1_followup_done=z.r1_followup_done,
                 retry_at=z.retry_at,
                 auto_entry_retry_after=z.auto_entry_retry_after,
+                auto_entry_mt5_failed=z.auto_entry_mt5_failed,
                 status=z.status,
                 source=z.source,
                 session_slot=slot,

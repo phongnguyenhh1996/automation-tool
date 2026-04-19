@@ -490,6 +490,17 @@ TP1_POST_TOUCH_USER_TEMPLATE = (
     "Mức TP1 từ trade_line: {tp1_price}\n\n"
 )
 
+# Daemon zones: giá đạt +1R (lợi nhuận bằng khoảng |Entry−SL|) khi đang ``vao_lenh`` / ``cho_tp1``.
+R1_POST_TOUCH_USER_TEMPLATE = (
+    "[TRADE_MANAGEMENT]\n"
+    "Giá đã đạt mức 1R; "
+    "đánh giá Footprint M5 đính kèm (giữ hay thoát / chỉnh dòng lệnh).\n"
+    "Vùng (label): {plan_label}\n"
+    "Entry tham chiếu: {entry_ref}\n"
+    "Mức 1R (hướng có lợi): {r1_price}\n"
+    "trade_line đã vào MT5: {trade_line_snip}\n\n"
+)
+
 
 def run_single_followup_responses(
     *,

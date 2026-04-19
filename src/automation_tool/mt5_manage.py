@@ -8,7 +8,15 @@ from typing import Any, Literal, Optional
 
 import automation_tool.config  # noqa: F401 — load .env
 
-from automation_tool.mt5_execute import _filling_for_symbol, _load_mt5, format_last_error
+from automation_tool.mt5_execute import (
+    _ensure_symbol,
+    _filling_for_symbol,
+    _load_mt5,
+    _order_type_for_pending,
+    format_last_error,
+    resolve_mt5_trade_symbol,
+)
+from automation_tool.mt5_openai_parse import ParsedTrade
 
 
 @dataclass
@@ -306,3 +314,219 @@ def mt5_cancel_pending_or_close_position(
         message=f"Không có order/pending/position ticket={ticket}",
         kind="none",
     )
+
+
+ChinhOutcome = Literal[
+    "modified_sltp",
+    "modified_pending",
+    "dry_run",
+    "ticket_missing",
+    "incompatible_kind",
+    "modify_failed",
+]
+
+
+@dataclass
+class MT5ChinhTradeLineResult:
+    """Kết quả chỉnh trade line tại chỗ (SL/TP hoặc modify pending), không đóng + mở mới."""
+
+    ok: bool
+    message: str
+    outcome: ChinhOutcome
+
+
+def _order_price_open_py(o: Any) -> float:
+    v = getattr(o, "price_open", None)
+    if v is not None:
+        return float(v)
+    v2 = getattr(o, "price", None)
+    if v2 is not None:
+        return float(v2)
+    return 0.0
+
+
+def _order_volume_initial_py(o: Any) -> float:
+    v = getattr(o, "volume_initial", None)
+    if v is not None:
+        return float(v)
+    v2 = getattr(o, "volume_current", None)
+    if v2 is not None:
+        return float(v2)
+    return 0.0
+
+
+def mt5_chinh_trade_line_inplace(
+    ticket: int,
+    new_trade: ParsedTrade,
+    *,
+    dry_run: bool = False,
+    symbol_override: Optional[str] = None,
+    login: Optional[int] = None,
+    password: Optional[str] = None,
+    server: Optional[str] = None,
+) -> MT5ChinhTradeLineResult:
+    """
+    Đã khớp (position) → ``TRADE_ACTION_SLTP`` (chỉ SL/TP).
+    Chưa khớp (pending) → ``TRADE_ACTION_MODIFY`` (giá / SL / TP / lot nếu đổi).
+
+    Nếu ticket không còn, loại lệnh AI không khớp pending (LIMIT↔STOP), hoặc broker từ chối:
+    trả ``outcome`` tương ứng để caller quyết định (đặt mới / huỷ rồi đặt).
+    """
+    nt = resolve_mt5_trade_symbol(new_trade, symbol_override)
+
+    if dry_run:
+        return MT5ChinhTradeLineResult(
+            ok=True,
+            message=f"[DRY-RUN] Sẽ SLTP/modify ticket={ticket} theo trade_line mới (SL={nt.sl} TP={nt.tp1})",
+            outcome="dry_run",
+        )
+
+    if int(ticket) <= 0:
+        return MT5ChinhTradeLineResult(
+            ok=False,
+            message=f"ticket không hợp lệ: {ticket}",
+            outcome="ticket_missing",
+        )
+
+    mt5 = _mt5_init(login, password, server)
+    if mt5 is None:
+        return MT5ChinhTradeLineResult(
+            ok=False,
+            message="mt5.initialize thất bại",
+            outcome="modify_failed",
+        )
+
+    try:
+        order_obj: Any = None
+        for o in mt5.orders_get() or []:
+            if int(o.ticket) == int(ticket):
+                order_obj = o
+                break
+
+        pos_obj: Any = None
+        if order_obj is None:
+            for p in mt5.positions_get() or []:
+                if int(p.ticket) == int(ticket):
+                    pos_obj = p
+                    break
+
+        if order_obj is None and pos_obj is None:
+            return MT5ChinhTradeLineResult(
+                ok=False,
+                message=f"Không tìm thấy pending/position ticket={ticket}",
+                outcome="ticket_missing",
+            )
+
+        if pos_obj is not None:
+            sym = str(pos_obj.symbol)
+            sym2, err = _ensure_symbol(mt5, sym)
+            if err or not sym2:
+                return MT5ChinhTradeLineResult(
+                    ok=False,
+                    message=err or f"Không select được symbol {sym!r}",
+                    outcome="modify_failed",
+                )
+            req: dict[str, Any] = {
+                "action": mt5.TRADE_ACTION_SLTP,
+                "symbol": sym2,
+                "position": int(ticket),
+                "sl": float(nt.sl),
+                "tp": float(nt.tp1),
+            }
+            r = mt5.order_send(req)
+            if r is None:
+                return MT5ChinhTradeLineResult(
+                    ok=False,
+                    message=f"order_send SLTP trả None. {format_last_error(mt5)}",
+                    outcome="modify_failed",
+                )
+            if not _is_done(mt5, r):
+                return MT5ChinhTradeLineResult(
+                    ok=False,
+                    message=f"Sửa SL/TP position thất bại: retcode={getattr(r, 'retcode', None)}",
+                    outcome="modify_failed",
+                )
+            return MT5ChinhTradeLineResult(
+                ok=True,
+                message=f"Đã sửa SL/TP position ticket={ticket} symbol={sym2} SL={nt.sl} TP={nt.tp1}",
+                outcome="modified_sltp",
+            )
+
+        o = order_obj
+        sym_o = str(o.symbol)
+        sym2, err = _ensure_symbol(mt5, sym_o)
+        if err or not sym2:
+            return MT5ChinhTradeLineResult(
+                ok=False,
+                message=err or f"Không select được symbol {sym_o!r}",
+                outcome="modify_failed",
+            )
+
+        otype_existing = int(o.type)
+        price_cur = _order_price_open_py(o)
+        if price_cur <= 0:
+            return MT5ChinhTradeLineResult(
+                ok=False,
+                message="Không đọc được giá lệnh chờ trên MT5",
+                outcome="modify_failed",
+            )
+
+        if nt.kind in ("LIMIT", "STOP"):
+            try:
+                expected = int(_order_type_for_pending(nt, mt5))
+            except ValueError:
+                return MT5ChinhTradeLineResult(
+                    ok=False,
+                    message=f"Loại lệnh không hỗ trợ pending: {nt.kind}",
+                    outcome="incompatible_kind",
+                )
+            if expected != otype_existing:
+                return MT5ChinhTradeLineResult(
+                    ok=False,
+                    message=(
+                        f"Loại lệnh AI ({nt.side} {nt.kind}) không khớp lệnh chờ trên MT5 "
+                        f"(type={otype_existing}) — cần huỷ và đặt lại"
+                    ),
+                    outcome="incompatible_kind",
+                )
+
+        if nt.kind == "MARKET":
+            price_mod = price_cur
+        else:
+            price_mod = float(nt.price) if nt.price is not None else price_cur
+
+        vol_o = _order_volume_initial_py(o)
+        req_m: dict[str, Any] = {
+            "action": mt5.TRADE_ACTION_MODIFY,
+            "order": int(ticket),
+            "symbol": sym2,
+            "price": price_mod,
+            "sl": float(nt.sl),
+            "tp": float(nt.tp1),
+        }
+        if vol_o > 0 and abs(float(nt.lot) - vol_o) > 1e-9:
+            req_m["volume"] = float(nt.lot)
+
+        r2 = mt5.order_send(req_m)
+        if r2 is None:
+            return MT5ChinhTradeLineResult(
+                ok=False,
+                message=f"order_send MODIFY trả None. {format_last_error(mt5)}",
+                outcome="modify_failed",
+            )
+        if not _is_done(mt5, r2):
+            return MT5ChinhTradeLineResult(
+                ok=False,
+                message=f"Modify lệnh chờ thất bại: retcode={getattr(r2, 'retcode', None)}",
+                outcome="modify_failed",
+            )
+        return MT5ChinhTradeLineResult(
+            ok=True,
+            message=(
+                f"Đã modify pending ticket={ticket} symbol={sym2} "
+                f"price={price_mod} SL={nt.sl} TP={nt.tp1}"
+            ),
+            outcome="modified_pending",
+        )
+    finally:
+        mt5.shutdown()
