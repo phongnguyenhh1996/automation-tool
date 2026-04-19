@@ -8,6 +8,8 @@ import os
 import signal
 import sys
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from collections.abc import Callable
 from pathlib import Path
 from typing import Optional, Sequence
@@ -92,6 +94,7 @@ from automation_tool.telegram_bot import (
     send_message,
     send_mt5_execution_log_to_ngan_gon_chat,
     send_openai_output_to_telegram,
+    send_user_friendly_notice,
     split_analysis_json_chi_tiet_ngan_gon,
     split_output_chi_tiet_ngan_gon,
 )
@@ -108,6 +111,30 @@ from playwright.sync_api import sync_playwright
 from automation_tool.playwright_browser import close_browser_and_context, launch_chrome_context
 
 _log = logging.getLogger("automation_tool.cli")
+
+_HCM = ZoneInfo("Asia/Ho_Chi_Minh")
+
+
+def _now_clock_hcm() -> str:
+    """Giờ:phút hiện tại theo Asia/Ho_Chi_Minh (chuỗi hiển thị ngắn)."""
+    dt = datetime.now(_HCM)
+    return f"{dt.hour}:{dt.minute:02d}"
+
+
+def _send_python_bot_job_started(
+    settings,
+    *,
+    title: str,
+    no_telegram: bool = False,
+) -> None:
+    """Tin «Bước quan trọng» tới TELEGRAM_PYTHON_BOT_CHAT_ID khi job CLI bắt đầu."""
+    if no_telegram:
+        return
+    tok = (settings.telegram_bot_token or "").strip()
+    cid = (settings.telegram_python_bot_chat_id or "").strip()
+    if not tok or not cid:
+        return
+    send_user_friendly_notice(bot_token=tok, chat_id=cid, title=title, body="")
 
 
 def _telegram_log_technical(settings, text: str) -> None:
@@ -1952,6 +1979,11 @@ def cmd_all(args: argparse.Namespace) -> None:
         args.no_tradingview,
         args.no_tv_journal_monitor,
     )
+    _send_python_bot_job_started(
+        s,
+        title="Phân tích đầu ngày bắt đầu chạy",
+        no_telegram=args.no_telegram,
+    )
     paths = capture_charts(
         coinmap_yaml=cfg,
         charts_dir=args.charts_dir,
@@ -2261,6 +2293,11 @@ def cmd_update(args: argparse.Namespace) -> None:
     except json.JSONDecodeError as e:
         raise SystemExit(f"Invalid JSON in {morning_path}: {e}") from e
 
+    _send_python_bot_job_started(
+        s,
+        title=f"Cập nhật vào lúc {_now_clock_hcm()} bắt đầu chạy",
+        no_telegram=args.no_telegram,
+    )
     paths = capture_charts(
         coinmap_yaml=cfg_cap,
         charts_dir=args.charts_dir,

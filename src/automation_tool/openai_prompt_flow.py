@@ -463,6 +463,7 @@ def build_intraday_update_user_text() -> str:
         f"{time_line}"
         f"Đính kèm **ba** file JSON theo thứ tự: **(1)** `{MORNING_FULL_ANALYSIS_FILENAME}` (snapshot FULL_ANALYSIS sáng), "
         "**(2) M15**, **(3) M5**.\n"
+        "Trả về JSON đúng schema (có `phan_tich_update`, `prices`, … theo system prompt).\n"
     )
 
 # TradingView tab Nhật ký: giá chạm → Coinmap M5 + OpenAI (intraday).
