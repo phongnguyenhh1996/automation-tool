@@ -301,12 +301,11 @@ def _run_tp1_openai_and_act(
                 log_txt = r.message
                 _log.info("tp1-followup loại: %s", r.message)
                 r_ok = r.ok
-            if settings.telegram_bot_token and settings.telegram_chat_id and not getattr(
-                params, "no_telegram", False
-            ):
+            if settings.telegram_bot_token and not getattr(params, "no_telegram", False):
                 send_mt5_execution_log_to_ngan_gon_chat(
                     bot_token=settings.telegram_bot_token,
                     telegram_chat_id=settings.telegram_chat_id,
+                    telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
                     source="tp1-followup",
                     text=f"{label}: loại sau TP1\n{log_txt}",
                     trade_line=(st.trade_line_by_label.get(label) or "") if st else None,
@@ -361,12 +360,11 @@ def _run_tp1_openai_and_act(
             )
             multi_txt = format_mt5_multi_for_telegram(summary)
             _log.info("tp1-followup: execute_trade multi → %s", multi_txt[:400])
-            if settings.telegram_bot_token and settings.telegram_chat_id and not getattr(
-                params, "no_telegram", False
-            ):
+            if settings.telegram_bot_token and not getattr(params, "no_telegram", False):
                 send_mt5_execution_log_to_ngan_gon_chat(
                     bot_token=settings.telegram_bot_token,
                     telegram_chat_id=settings.telegram_chat_id,
+                    telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
                     source="tp1-followup-chinh",
                     text=multi_txt,
                     zone_label=label,
@@ -389,12 +387,11 @@ def _run_tp1_openai_and_act(
                 symbol_override=getattr(params, "mt5_symbol", None),
             )
             _log.info("tp1-followup: execute_trade → %s", ex.message)
-            if settings.telegram_bot_token and settings.telegram_chat_id and not getattr(
-                params, "no_telegram", False
-            ):
+            if settings.telegram_bot_token and not getattr(params, "no_telegram", False):
                 send_mt5_execution_log_to_ngan_gon_chat(
                     bot_token=settings.telegram_bot_token,
                     telegram_chat_id=settings.telegram_chat_id,
+                    telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
                     source="tp1-followup-chinh",
                     text=format_mt5_execution_for_telegram(ex),
                     zone_label=label,
@@ -576,12 +573,11 @@ def maybe_post_entry_tp1_tick(
                         msg_sp = r.message
                         r_ok_sp = r.ok
                     _log.info("tp1: scalp cho_tp1 chạm TP1 — huỷ ticket | %s", msg_sp)
-                    if settings.telegram_bot_token and settings.telegram_chat_id and not getattr(
-                        params, "no_telegram", False
-                    ):
+                    if settings.telegram_bot_token and not getattr(params, "no_telegram", False):
                         send_mt5_execution_log_to_ngan_gon_chat(
                             bot_token=settings.telegram_bot_token,
                             telegram_chat_id=settings.telegram_chat_id,
+                            telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
                             source="tp1-scalp-tp1",
                             text=f"{lab}: scalp chạm TP1 — huỷ ticket\n{msg_sp}",
                             zone_label=lab,

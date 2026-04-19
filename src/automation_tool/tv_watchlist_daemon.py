@@ -63,7 +63,7 @@ from automation_tool.telegram_bot import (
     send_message,
     send_mt5_execution_log_to_ngan_gon_chat,
     send_openai_output_to_telegram,
-    send_phan_tich_alert_to_main_chat_if_any,
+    send_phan_tich_alert_to_python_bot_if_any,
     send_user_friendly_notice,
 )
 from automation_tool.openai_analysis_json import (
@@ -547,11 +547,15 @@ def _touch_prompt(
 
     Model chỉ cần ``phan_tich_alert`` + ``intraday_hanh_dong``. Khi ``VÀO LỆNH``.
     """
-    ref = _zone_side_ref_from_vung_cho(zone)
-    ref_bit = f" (mức so Last: {ref})" if ref is not None else ""
+    trade_line = (zone.trade_line or "").strip()
+    baseline_line = (
+        f"Dòng lệnh trade_line sẽ đưa vào MT5 theo gợi ý ban đầu: {trade_line}\n" if trade_line else ""
+    )
     return (
         "[INTRADAY_ALERT]\n"
-        f"Cảnh báo chạm vùng chờ {zone.vung_cho}{ref_bit} (plan: {zone.label}).\n"
+        f"Cảnh báo chạm vùng chờ {zone.vung_cho} (plan: {zone.label}).\n"
+        f"Last hiện tại (MT5): {last_price}.\n"
+        f"{baseline_line}"
         "Footprint Coinmap M5 JSON đính kèm.\n"
     )
 
@@ -785,10 +789,11 @@ def _tp1_followup_job(
             if exe and tk > 0:
                 r = mt5_cancel_pending_or_close_position(tk, dry_run=dry)
                 _send_log(settings, f"[tp1] scalp chạm TP1 — mt5_cancel_close: {r.message}".strip())
-                if not params.no_telegram and settings.telegram_bot_token and settings.telegram_chat_id:
+                if not params.no_telegram and settings.telegram_bot_token:
                     send_mt5_execution_log_to_ngan_gon_chat(
                         bot_token=settings.telegram_bot_token,
                         telegram_chat_id=settings.telegram_chat_id,
+                        telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
                         source="tp1-scalp-tp1",
                         text=f"scalp: chạm TP1 — huỷ ticket\n{r.message}",
                         zone_label="scalp",
@@ -986,6 +991,7 @@ def _tp1_followup_job(
                     send_mt5_execution_log_to_ngan_gon_chat(
                         bot_token=settings.telegram_bot_token,
                         telegram_chat_id=settings.telegram_chat_id,
+                        telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
                         source="tp1-followup",
                         text=multi_txt,
                         zone_label=z1.label,
@@ -1014,6 +1020,7 @@ def _tp1_followup_job(
                     send_mt5_execution_log_to_ngan_gon_chat(
                         bot_token=settings.telegram_bot_token,
                         telegram_chat_id=settings.telegram_chat_id,
+                        telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
                         source="tp1-followup",
                         text=format_mt5_execution_for_telegram(ex),
                         zone_label=z1.label,
@@ -1139,6 +1146,7 @@ def _auto_entry_job(
                 send_mt5_execution_log_to_ngan_gon_chat(
                     bot_token=settings.telegram_bot_token,
                     telegram_chat_id=settings.telegram_chat_id,
+                    telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
                     source="auto-entry",
                     text=multi_ae,
                     zone_label=z0.label,
@@ -1193,6 +1201,7 @@ def _auto_entry_job(
             send_mt5_execution_log_to_ngan_gon_chat(
                 bot_token=settings.telegram_bot_token,
                 telegram_chat_id=settings.telegram_chat_id,
+                telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
                 source="auto-entry",
                 text=format_mt5_execution_for_telegram(ex),
                 zone_label=z0.label,
@@ -1350,11 +1359,10 @@ def _zone_touch_job(
         if new_id:
             _send_log(settings, f"[zone-touch] openai_response_id={new_id}")
 
-        send_phan_tich_alert_to_main_chat_if_any(
+        send_phan_tich_alert_to_python_bot_if_any(
             bot_token=settings.telegram_bot_token,
-            chat_id=settings.telegram_chat_id,
+            telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
             raw_openai_text=out_text,
-            default_parse_mode=settings.telegram_parse_mode,
             no_telegram=params.no_telegram,
             alert_label=zone.label,
             alert_vung_cho=(zone.vung_cho or "").strip(),
@@ -1499,6 +1507,7 @@ def _zone_touch_job(
                 send_mt5_execution_log_to_ngan_gon_chat(
                     bot_token=settings.telegram_bot_token,
                     telegram_chat_id=settings.telegram_chat_id,
+                    telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
                     source="zone-touch",
                     text=zt_txt,
                     zone_label=z1.label,
@@ -1543,6 +1552,7 @@ def _zone_touch_job(
             send_mt5_execution_log_to_ngan_gon_chat(
                 bot_token=settings.telegram_bot_token,
                 telegram_chat_id=settings.telegram_chat_id,
+                telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
                 source="zone-touch",
                 text=format_mt5_execution_for_telegram(ex),
                 zone_label=z1.label,
@@ -1781,6 +1791,13 @@ def _daemon_plan_main_loop(
                         settings,
                         f"[daemon-plan] exit | past_cutoff shard={shard_tag} | {detail}",
                     )
+                    _send_user_notice(
+                        settings,
+                        "Đã ngưng theo dõi.",
+                        f"Lý do: quá giờ cắt — {detail}",
+                        zone=st.zones[0] if st is not None and st.zones else None,
+                        params=params,
+                    )
                     return
 
             if st is None or not st.zones:
@@ -1797,6 +1814,18 @@ def _daemon_plan_main_loop(
                     settings,
                     f"[daemon-plan] exit | status={z0.status} shard={shard_tag} zone_id={z0.id}",
                 )
+                _loai_done_reason = (
+                    "vùng đã hoàn thành (done)."
+                    if z0.status == "done"
+                    else "vùng đã loại."
+                )
+                _send_user_notice(
+                    settings,
+                    "Đã ngưng theo dõi.",
+                    f"Lý do: {_loai_done_reason}",
+                    zone=z0,
+                    params=params,
+                )
                 return
 
             exit_closed, closed_detail = daemon_plan_should_exit_if_mt5_tickets_closed(
@@ -1811,6 +1840,13 @@ def _daemon_plan_main_loop(
                     "daemon-plan | shard=%s | exit | mt5_ticket_closed | %s",
                     shard_tag,
                     closed_detail,
+                )
+                _send_user_notice(
+                    settings,
+                    "Đã ngưng theo dõi.",
+                    f"Lý do: {closed_detail}",
+                    zone=z0,
+                    params=params,
                 )
                 return
 

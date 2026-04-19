@@ -528,6 +528,7 @@ def send_mt5_execution_log_to_ngan_gon_chat(
     *,
     bot_token: str,
     telegram_chat_id: Optional[str] = None,
+    telegram_python_bot_chat_id: Optional[str] = None,
     source: str,
     text: str,
     execution_ok: bool,
@@ -536,30 +537,32 @@ def send_mt5_execution_log_to_ngan_gon_chat(
     session_slot: Optional[str] = None,
 ) -> None:
     """
-    Gửi thông báo sau thực thi MT5 (sau ``execute_trade`` / huỷ ticket) tới ``TELEGRAM_CHAT_ID``.
+    Gửi thông báo sau thực thi MT5 (sau ``execute_trade`` / huỷ ticket).
 
-    Khi ``execution_ok`` là True: một câu cố định (chọn ngẫu nhiên); (tuỳ chọn) dòng
-    ``Đã vào lệnh cho "Plan chính"`` / ``Đã vào lệnh cho "Scalp - Sáng"`` khi ``zone_label``
-    (và tuỳ chọn ``session_slot``) khớp; (tuỳ chọn) ``trade_line``.
+    Khi ``execution_ok`` là True: gửi tới ``TELEGRAM_CHAT_ID`` — một câu cố định (chọn ngẫu nhiên);
+    (tuỳ chọn) dòng ``Đã vào lệnh cho "Plan chính"`` / ``Đã vào lệnh cho "Scalp - Sáng"`` khi
+    ``zone_label`` (và tuỳ chọn ``session_slot``) khớp; (tuỳ chọn) ``trade_line``.
     Tham số ``text`` chỉ dùng để kiểm tra có nội dung — **không** đính kèm log chi tiết
     (tránh tin quá dài khi đã vào lệnh thành công).
 
-    Khi ``execution_ok`` là False: **không** dùng câu chúc mừng / «Đã vào lệnh»; gửi cảnh báo
-    và toàn bộ ``text`` (log chi tiết từ ``format_mt5_execution_for_telegram`` hoặc ``MT5ManageResult``).
+    Khi ``execution_ok`` là False: gửi tới ``TELEGRAM_PYTHON_BOT_CHAT_ID`` qua
+    ``send_user_friendly_notice`` (cùng kiểu tin như ``_send_user_notice`` trong daemon): tiêu đề
+    cảnh báo + nguồn / vùng / trade_line + toàn bộ ``text`` (log chi tiết).
 
     Plain text; không dùng parse_mode để tránh lỗi ký tự đặc biệt từ broker/API.
     """
     body = (text or "").strip()
     if not body:
         return
-    main = (telegram_chat_id or "").strip()
-    if not main:
+    tok = (bot_token or "").strip()
+    if not tok:
         return
 
     if not execution_ok:
-        lines: list[str] = [
-            "⚠️ MT5: lệnh không thành công hoặc bị từ chối — chi tiết bên dưới.",
-        ]
+        py = (telegram_python_bot_chat_id or "").strip()
+        if not py:
+            return
+        lines: list[str] = []
         src = (source or "").strip()
         if src:
             lines.append(f"Nguồn: {src}")
@@ -573,14 +576,19 @@ def send_mt5_execution_log_to_ngan_gon_chat(
         tl = (trade_line or "").strip()
         if tl:
             lines.append(tl)
-        lines.append("")
+        if lines:
+            lines.append("")
         lines.append(body)
-        _send_plain_text_to_chat_id(
-            bot_token=bot_token,
-            chat_id=main,
-            text="\n".join(lines),
-            log_context="TELEGRAM_CHAT_ID",
+        send_user_friendly_notice(
+            bot_token=tok,
+            chat_id=py,
+            title="MT5: lệnh không thành công hoặc bị từ chối",
+            body="\n".join(lines),
         )
+        return
+
+    main = (telegram_chat_id or "").strip()
+    if not main:
         return
 
     out = random.choice(_MT5_NGAN_GON_MESSAGES)
@@ -637,30 +645,30 @@ def send_first_response_log_to_analysis_detail_chat(
     )
 
 
-def _intraday_alert_telegram_prefix(*, label: str, vung_cho: str) -> str:
+def _intraday_alert_user_notice_title(*, label: str, vung_cho: str) -> str:
+    """Tiêu đề tin «Phản hồi khi chạm giá» (không có dấu hai chấm ở cuối)."""
     lab = (label or "").strip()
     vc = (vung_cho or "").strip()
     rest = " ".join(x for x in (lab, vc) if x)
     if rest:
-        return f"Phản hồi khi chạm giá {rest}: "
-    return "Phản hồi khi chạm giá: "
+        return f"Phản hồi khi chạm giá {rest}"
+    return "Phản hồi khi chạm giá"
 
 
-def send_phan_tich_alert_to_main_chat_if_any(
+def send_phan_tich_alert_to_python_bot_if_any(
     *,
     bot_token: str,
-    chat_id: str,
+    telegram_python_bot_chat_id: Optional[str],
     raw_openai_text: str,
-    default_parse_mode: Optional[str],
     no_telegram: bool,
     alert_label: str = "",
     alert_vung_cho: str = "",
 ) -> None:
     """
     [INTRADAY_ALERT] / Schema E: nếu JSON có ``phan_tich_alert``, gửi nội dung đó tới
-    ``TELEGRAM_CHAT_ID`` (chat chính), kèm tiền tố ``Phản hồi khi chạm giá {label} {vung_cho}: ``.
+    ``TELEGRAM_PYTHON_BOT_CHAT_ID`` qua ``send_user_friendly_notice`` (cùng kiểu tin user-friendly).
     """
-    if no_telegram or not (chat_id or "").strip():
+    if no_telegram or not (telegram_python_bot_chat_id or "").strip():
         return
     payload = parse_analysis_from_openai_text(raw_openai_text)
     if payload is None:
@@ -668,12 +676,11 @@ def send_phan_tich_alert_to_main_chat_if_any(
     body = (payload.phan_tich_alert or "").strip()
     if not body:
         return
-    prefix = _intraday_alert_telegram_prefix(label=alert_label, vung_cho=alert_vung_cho)
-    send_message(
+    send_user_friendly_notice(
         bot_token=bot_token,
-        chat_id=chat_id.strip(),
-        text=prefix + body,
-        parse_mode=default_parse_mode,
+        chat_id=(telegram_python_bot_chat_id or "").strip(),
+        title=_intraday_alert_user_notice_title(label=alert_label, vung_cho=alert_vung_cho),
+        body=body,
     )
 
 

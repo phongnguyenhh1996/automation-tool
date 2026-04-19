@@ -62,7 +62,7 @@ from automation_tool.state_files import (
 from automation_tool.telegram_bot import (
     send_mt5_execution_log_to_ngan_gon_chat,
     send_openai_output_to_telegram,
-    send_phan_tich_alert_to_main_chat_if_any,
+    send_phan_tich_alert_to_python_bot_if_any,
     send_user_friendly_notice,
 )
 from automation_tool.zones_state import resolve_vung_cho_for_plan_label
@@ -571,11 +571,10 @@ def _run_intraday_touch_loop(
         _journal_log(tz, "--- Hết output OpenAI ---")
         prev_id = new_id
 
-        send_phan_tich_alert_to_main_chat_if_any(
+        send_phan_tich_alert_to_python_bot_if_any(
             bot_token=settings.telegram_bot_token,
-            chat_id=settings.telegram_chat_id,
+            telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
             raw_openai_text=out_text,
-            default_parse_mode=settings.telegram_parse_mode,
             no_telegram=params.no_telegram,
             alert_label=touched_label,
             alert_vung_cho=resolve_vung_cho_for_plan_label(
@@ -689,6 +688,7 @@ def _run_intraday_touch_loop(
                         send_mt5_execution_log_to_ngan_gon_chat(
                             bot_token=settings.telegram_bot_token,
                             telegram_chat_id=settings.telegram_chat_id,
+                            telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
                             source="tv-journal-monitor",
                             text=multi_txt,
                             zone_label=touched_label,
@@ -706,6 +706,7 @@ def _run_intraday_touch_loop(
                         send_mt5_execution_log_to_ngan_gon_chat(
                             bot_token=settings.telegram_bot_token,
                             telegram_chat_id=settings.telegram_chat_id,
+                            telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
                             source="tv-journal-monitor",
                             text=format_mt5_execution_for_telegram(ex),
                             zone_label=touched_label,

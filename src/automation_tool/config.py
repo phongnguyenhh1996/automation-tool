@@ -61,7 +61,8 @@ class Settings:
     # Optional: chat/channel/supergroup to listen for inbound commands (e.g. /full).
     # Defaults to telegram_chat_id when unset.
     telegram_listen_chat_id: Optional[str]
-    # Optional second chat: [OUTPUT_NGAN_GON] (dual markers); MT5 logs go to telegram_chat_id only.
+    # Optional second chat: [OUTPUT_NGAN_GON] (dual markers). MT5: thành công → telegram_chat_id;
+    # thất bại / từ chối → telegram_python_bot_chat_id (tin user-friendly).
     telegram_output_ngan_gon_chat_id: Optional[str]
     # Optional: [OUTPUT_CHI_TIET] / JSON out_chi_tiet → this channel (analyze / dual-send).
     telegram_analysis_detail_chat_id: Optional[str]

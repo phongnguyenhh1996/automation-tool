@@ -146,7 +146,9 @@ def apply_first_response_vao_lenh(
 
     Telegram: log phản hồi đầu (hop_luu, vùng, lỗi…) → ``telegram_log_chat_id``
     (``TELEGRAM_LOG_CHAT_ID``). Tin ngắn non-tech → ``telegram_python_bot_chat_id``
-    (``TELEGRAM_PYTHON_BOT_CHAT_ID``). Kết quả ``execute_trade`` → ``telegram_chat_id`` (``TELEGRAM_CHAT_ID``).
+    (``TELEGRAM_PYTHON_BOT_CHAT_ID``). Kết quả ``execute_trade`` thành công → ``telegram_chat_id``
+    (``TELEGRAM_CHAT_ID``); thất bại / từ chối → chi tiết qua ``telegram_python_bot_chat_id`` (cùng kiểu
+    ``send_user_friendly_notice``).
 
     Returns:
         ``True`` nếu đã hoàn tất nhánh auto-MT5 (đã ghi ``vao_lenh`` cho vùng chọn; MT5 chạy thành công
@@ -378,7 +380,10 @@ def apply_first_response_vao_lenh(
         "Đã ghi vao_lenh (entry_manual=false)."
     )
     if mt5_execute:
-        summary += "\nKết quả MT5 (hoặc dry-run) gửi tới TELEGRAM_CHAT_ID."
+        summary += (
+            "\nKết quả MT5 thành công (hoặc dry-run) → TELEGRAM_CHAT_ID; "
+            "thất bại / từ chối → TELEGRAM_PYTHON_BOT_CHAT_ID."
+        )
     else:
         summary += "\n--no-mt5-execute: không gọi MT5."
     _tg(
@@ -423,10 +428,11 @@ def apply_first_response_vao_lenh(
                 mt5_dry_run,
                 summary.ok_all,
             )
-            if telegram_bot_token and (telegram_chat_id or "").strip():
+            if telegram_bot_token:
                 send_mt5_execution_log_to_ngan_gon_chat(
                     bot_token=telegram_bot_token,
                     telegram_chat_id=telegram_chat_id,
+                    telegram_python_bot_chat_id=telegram_python_bot_chat_id,
                     source=telegram_source_label,
                     text=multi_text,
                     zone_label=label,
@@ -485,10 +491,11 @@ def apply_first_response_vao_lenh(
             mt5_dry_run,
             ex.message,
         )
-        if telegram_bot_token and (telegram_chat_id or "").strip():
+        if telegram_bot_token:
             send_mt5_execution_log_to_ngan_gon_chat(
                 bot_token=telegram_bot_token,
                 telegram_chat_id=telegram_chat_id,
+                telegram_python_bot_chat_id=telegram_python_bot_chat_id,
                 source=telegram_source_label,
                 text=format_mt5_execution_for_telegram(ex),
                 zone_label=label,

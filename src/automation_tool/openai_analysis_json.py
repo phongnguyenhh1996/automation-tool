@@ -180,7 +180,7 @@ class AnalysisPayload:
     output_ngan_gon: str = ""
     #: [INTRADAY_UPDATE] only: short analysis for Telegram (Schema B).
     phan_tich_update: str = ""
-    #: [INTRADAY_ALERT] only: short analysis → ``TELEGRAM_CHAT_ID`` (Schema E).
+    #: [INTRADAY_ALERT] only: short analysis → ``TELEGRAM_PYTHON_BOT_CHAT_ID`` (Schema E).
     phan_tich_alert: str = ""
     prices: list[PriceZoneEntry] = field(default_factory=list)
     intraday_hanh_dong: Optional[IntradayHanhDong] = None

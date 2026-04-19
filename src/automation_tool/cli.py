@@ -7,7 +7,6 @@ import logging
 import os
 import signal
 import sys
-import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -394,34 +393,6 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     am.add_argument("--no-telegram", action="store_true", help="Do not send results to Telegram")
-    am.add_argument(
-        "--last-alert-json",
-        type=Path,
-        default=None,
-        metavar="FILE",
-        help=(
-            "Override last_alert_prices.json path (advanced). "
-            "Default is per-symbol data/{SYM}/last_alert_prices.json."
-        ),
-    )
-    am.add_argument(
-        "--mt5-execute",
-        action="store_true",
-        help="Allow execute_trade from first response (default: disabled for safety)",
-    )
-    am.add_argument(
-        "--mt5-live",
-        action="store_true",
-        help="If --mt5-execute is enabled: send real orders (default: dry-run)",
-    )
-    am.add_argument("--mt5-symbol", default=None, metavar="SYM", help="Symbol MT5 override (first response)")
-    am.add_argument(
-        "--mt5-accounts-json",
-        type=Path,
-        default=None,
-        metavar="FILE",
-        help=_MT5_ACCOUNTS_JSON_HELP,
-    )
     am.add_argument(
         "--telegram-detail-chat-id",
         default=None,
@@ -1736,10 +1707,6 @@ def cmd_analyze_many(args: argparse.Namespace) -> None:
     symbols = _parse_symbols_arg(args.symbols)
     parallel = max(1, int(args.parallel or 1))
 
-    # Safety defaults for multi-symbol: no MT5 execute unless explicitly enabled; dry-run unless --mt5-live.
-    mt5_execute = bool(getattr(args, "mt5_execute", False))
-    mt5_dry_run = not bool(getattr(args, "mt5_live", False))
-    mt5_lock = threading.Lock()
     detail_chat_id = (
         str(args.telegram_detail_chat_id).strip()
         if getattr(args, "telegram_detail_chat_id", None) is not None
@@ -1748,12 +1715,10 @@ def cmd_analyze_many(args: argparse.Namespace) -> None:
     )
 
     _log.info(
-        "analyze-many: start | symbols=%s parallel=%s no_telegram=%s mt5_execute=%s mt5_dry_run=%s",
+        "analyze-many: start | symbols=%s parallel=%s no_telegram=%s",
         ",".join(symbols),
         parallel,
         args.no_telegram,
-        mt5_execute,
-        mt5_dry_run,
     )
 
     def _analyze_one(sym: str) -> tuple[str, Optional[PromptTwoStepResult], Optional[BaseException]]:
@@ -1762,42 +1727,6 @@ def cmd_analyze_many(args: argparse.Namespace) -> None:
         _warn_if_incomplete_chart_payloads(charts_dir, payloads)
         if not payloads:
             return sym, None, SystemExit(f"No chart files under {charts_dir} (run capture-many first).")
-
-        lap = args.last_alert_json or (symbol_data_dir(sym) / "last_alert_prices.json")
-
-        def _on_first(text: str) -> None:
-            # Guardrail: if MT5 execution is enabled, serialize the side-effectful part.
-            if mt5_execute:
-                with mt5_lock:
-                    apply_first_response_vao_lenh(
-                        text,
-                        last_alert_path=lap,
-                        mt5_execute=mt5_execute,
-                        mt5_dry_run=mt5_dry_run,
-                        mt5_symbol=args.mt5_symbol,
-                        mt5_accounts_json=_resolved_mt5_accounts_json(args),
-                        telegram_bot_token=s.telegram_bot_token,
-                        telegram_chat_id=s.telegram_chat_id,
-                        telegram_log_chat_id=s.telegram_log_chat_id,
-                        telegram_python_bot_chat_id=s.telegram_python_bot_chat_id,
-                        telegram_output_ngan_gon_chat_id=s.telegram_output_ngan_gon_chat_id,
-                        telegram_source_label=f"analyze-many ({sym}) (phản hồi đầu)",
-                    )
-                return
-            apply_first_response_vao_lenh(
-                text,
-                last_alert_path=lap,
-                mt5_execute=mt5_execute,
-                mt5_dry_run=mt5_dry_run,
-                mt5_symbol=args.mt5_symbol,
-                mt5_accounts_json=_resolved_mt5_accounts_json(args),
-                telegram_bot_token=s.telegram_bot_token,
-                telegram_chat_id=s.telegram_chat_id,
-                telegram_log_chat_id=s.telegram_log_chat_id,
-                telegram_python_bot_chat_id=s.telegram_python_bot_chat_id,
-                telegram_output_ngan_gon_chat_id=s.telegram_output_ngan_gon_chat_id,
-                telegram_source_label=f"analyze-many ({sym}) (phản hồi đầu)",
-            )
 
         prompt = (
             str(args.prompt).strip()
@@ -1812,7 +1741,7 @@ def cmd_analyze_many(args: argparse.Namespace) -> None:
                 prompt,
                 args.max_images_per_call,
                 chart_payloads=payloads,
-                on_first_model_text=_on_first,
+                on_first_model_text=None,
                 model=resolved_openai_model(s, getattr(args, "model", None)),
             )
             return sym, out, None
@@ -1912,6 +1841,7 @@ def cmd_mt5_trade(args: argparse.Namespace) -> None:
         send_mt5_execution_log_to_ngan_gon_chat(
             bot_token=s_mt5.telegram_bot_token,
             telegram_chat_id=s_mt5.telegram_chat_id,
+            telegram_python_bot_chat_id=s_mt5.telegram_python_bot_chat_id,
             source="mt5-trade",
             text=tg_text,
             trade_line=(trade.raw_line or "").strip() or None,
@@ -1935,6 +1865,7 @@ def cmd_mt5_trade(args: argparse.Namespace) -> None:
     send_mt5_execution_log_to_ngan_gon_chat(
         bot_token=s_mt5.telegram_bot_token,
         telegram_chat_id=s_mt5.telegram_chat_id,
+        telegram_python_bot_chat_id=s_mt5.telegram_python_bot_chat_id,
         source="mt5-trade",
         text=format_mt5_execution_for_telegram(out),
         trade_line=(trade.raw_line or "").strip() or None,
