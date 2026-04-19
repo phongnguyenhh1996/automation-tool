@@ -14,7 +14,7 @@ Tự động nhận diện luồng xử lý dựa trên đầu vào:
 
 2. [INTRADAY_ALERT]: Khi giá chạm vùng chờ (Cảnh báo TradingView). Phân tích Footprint M5 để đưa ra hướng xử lý đối với vùng chờ đó. Trả về **Schema E**.
 
-3. [INTRADAY_UPDATE]: Cập nhật định kỳ (vd. 1h chiều / 7h tối). Đính kèm **ba** file JSON theo thứ tự: **(1)** `morning_full_analysis.json` (object Schema A đã lưu sau [FULL_ANALYSIS]), **(2) M15**, **(3) M5** (Footprint cặp chính). So sánh snapshot sáng với footprint M15/M5; Phân tích và tìm tiếp 3 plan mới.
+3. [INTRADAY_UPDATE]: Cập nhật định kỳ (vd. 1h chiều / 7h tối). **Tiếp nối chuỗi phản hồi** sau [FULL_ANALYSIS] hoặc sau lần [INTRADAY_UPDATE] trước. Đính kèm **hai** file JSON: **(1) M15**, **(2) M5** (Footprint cặp chính). Context phân tích sáng / cập nhật trước nằm trong lịch sử thread; so sánh với footprint M15/M5 hiện tại; phân tích và tìm tiếp 3 plan mới.
 
 4. [RETROSPECTIVE_ANALYSIS]: Khi được hỏi "Tại sao/Explain". Giải thích logic dựa trên context trước đó. Trả về Schema C.
 
@@ -31,7 +31,7 @@ Tự động nhận diện luồng xử lý dựa trên đầu vào:
   + Cặp chính (TradingView): H4, H1, M15, M5
   + Footprint DXY (Coinmap): M15
   + Footprint cặp chính (Coinmap): M15, M5
-- [INTRADAY_UPDATE] File đính kèm: `morning_full_analysis.json` (Schema A đã lưu) + Footprint cặp chính M15, M5.
+- [INTRADAY_UPDATE] File đính kèm: Footprint mới nhất của cặp chính M15, M5.
 - Nếu thiếu dữ liệu cần thiết để xác nhận hợp lưu (đặc biệt CVD/Footprint), ưu tiên kết luận "chờ" và nêu rõ thiếu gì trong `out_chi_tiet` — **chỉ áp dụng cho [FULL_ANALYSIS]** (Schema A).
 </analysis_inputs>
 

@@ -2281,17 +2281,12 @@ def cmd_update(args: argparse.Namespace) -> None:
     storage = args.storage_state or default_storage_state_path()
     cfg_tv = args.tv_config or default_coinmap_config_path()
 
-    morning_path = default_morning_full_analysis_path()
-    if not morning_path.is_file():
+    prev_response_id = read_last_response_id()
+    if not (prev_response_id or "").strip():
         raise SystemExit(
-            f"Missing {morning_path} — run `coinmap-automation all` successfully first "
-            "(FULL_ANALYSIS JSON snapshot)."
+            f"Missing {default_last_response_id_path()} — run `coinmap-automation all` "
+            "or `update` first so OpenAI has a thread id to chain [INTRADAY_UPDATE]."
         )
-    try:
-        morning_raw = morning_path.read_text(encoding="utf-8")
-        json.loads(morning_raw)
-    except json.JSONDecodeError as e:
-        raise SystemExit(f"Invalid JSON in {morning_path}: {e}") from e
 
     _send_python_bot_job_started(
         s,
@@ -2343,9 +2338,9 @@ def cmd_update(args: argparse.Namespace) -> None:
             prompt_id=s.openai_prompt_id,
             prompt_version=s.openai_prompt_version,
             user_text=user_msg,
-            morning_snapshot_path=morning_path,
+            morning_snapshot_path=None,
             coinmap_json_paths=[m15, m5],
-            previous_response_id=None,
+            previous_response_id=prev_response_id.strip(),
             vector_store_ids=s.openai_vector_store_ids,
             store=s.openai_responses_store,
             include=s.openai_responses_include,

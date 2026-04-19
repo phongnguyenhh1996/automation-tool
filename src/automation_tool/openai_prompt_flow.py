@@ -449,21 +449,23 @@ def run_prompt_two_step_flow(
 
 DEFAULT_UPDATE_PROMPT_TEMPLATE = (
     "[INTRADAY_UPDATE]\n"
-    "Dựa vào snapshot phân tích sáng + footprint M15 + M5 (JSON đính kèm theo thứ tự).\n"
+    "Tiếp tục chuỗi phản hồi sau [FULL_ANALYSIS] hoặc cập nhật trước; footprint M15 + M5 (JSON đính kèm theo thứ tự).\n"
 )
 
 
 def build_intraday_update_user_text() -> str:
     """
     User message for ``coinmap-automation update``: thời gian + nhiệm vụ ngắn (không nhúng baseline vùng chờ).
+
+    Context từ phân tích sáng / lần update trước nằm trong thread OpenAI (``previous_response_id``);
+    chỉ đính kèm M15 và M5.
     """
     time_line = format_intraday_update_time_line()
     return (
         "[INTRADAY_UPDATE]\n"
         f"{time_line}"
-        f"Đính kèm **ba** file JSON theo thứ tự: **(1)** `{MORNING_FULL_ANALYSIS_FILENAME}` (snapshot FULL_ANALYSIS sáng), "
-        "**(2) M15**, **(3) M5**.\n"
-        "Trả về JSON đúng schema (có `phan_tich_update`, `prices`, … theo system prompt).\n"
+        "Context phân tích trước đó nằm trong **chuỗi phản hồi** (sau [FULL_ANALYSIS] hoặc [INTRADAY_UPDATE] trước).\n"
+        "Đính kèm **hai** file JSON theo thứ tự: **(1) M15**, **(2) M5** (footprint cặp chính).\n"
     )
 
 # TradingView tab Nhật ký: giá chạm → Coinmap M5 + OpenAI (intraday).

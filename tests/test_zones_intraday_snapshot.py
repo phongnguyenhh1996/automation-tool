@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from automation_tool.openai_prompt_flow import build_intraday_update_user_text
-from automation_tool.state_files import MORNING_FULL_ANALYSIS_FILENAME
 from automation_tool.zones_state import (
     Zone,
     ZonesState,
@@ -59,9 +58,8 @@ def test_build_intraday_update_user_text_contains_tasks() -> None:
     t = build_intraday_update_user_text()
     assert "[INTRADAY_UPDATE]" in t
     assert "Thời gian hiện tại" in t
-    assert "ba" in t and "M15" in t and "M5" in t
-    assert MORNING_FULL_ANALYSIS_FILENAME in t
-    assert "phan_tich_update" in t
+    assert "hai" in t and "M15" in t and "M5" in t
+    assert "chuỗi phản hồi" in t
     assert "Trạng thái các vùng" not in t
 
 
