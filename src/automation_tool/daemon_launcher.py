@@ -121,9 +121,31 @@ def _read_pid(path: Path) -> Optional[int]:
         return None
 
 
+def _pid_alive_windows(pid: int) -> bool:
+    """
+    Windows: ``os.kill(pid, 0)`` is not a reliable existence check (often raises OSError).
+    Use OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION); ACCESS_DENIED(5) ⇒ process likely exists.
+    """
+    import ctypes
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    ERROR_ACCESS_DENIED = 5
+    kernel32 = ctypes.windll.kernel32
+    h = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, ctypes.c_uint32(pid))
+    if h:
+        kernel32.CloseHandle(h)
+        return True
+    err = kernel32.GetLastError()
+    if err == ERROR_ACCESS_DENIED:
+        return True
+    return False
+
+
 def _pid_alive(pid: int) -> bool:
     if pid <= 0:
         return False
+    if sys.platform == "win32":
+        return _pid_alive_windows(pid)
     try:
         os.kill(pid, 0)
         return True
@@ -132,7 +154,6 @@ def _pid_alive(pid: int) -> bool:
     except PermissionError:
         return True
     except OSError:
-        # Windows: e.g. WinError 87 (ERROR_INVALID_PARAMETER) for stale/garbage PIDs — not alive.
         return False
 
 
