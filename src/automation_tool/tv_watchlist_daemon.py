@@ -1158,16 +1158,6 @@ def _auto_entry_job(
                     ),
                 )
             _send_log(settings, f"[auto-entry] mt5_execute_trade multi: {multi_ae[:400]}".strip())
-            _lines = [multi_ae]
-            if params.mt5_dry_run:
-                _lines.append("(Chế độ thử.)")
-            _send_user_notice(
-                settings,
-                "Tự động vào lệnh — kết quả MT5",
-                "\n".join(_lines),
-                zone=z0,
-                params=params,
-            )
             tid = summary_ae.primary_ticket(accs_ae)
             ok_ae = tid > 0
             st2 = _state_read(params)
@@ -1181,6 +1171,13 @@ def _auto_entry_job(
                     z.mt5_tickets_by_account = summary_ae.tickets_by_account_id or None
                     z.status = "vao_lenh"
                     z.auto_entry_retry_after = ""
+                    _send_user_notice(
+                        settings,
+                        "Đã tự động vào lệnh MT5",
+                        "",
+                        zone=z0,
+                        params=params,
+                    )
                 else:
                     z.status = "cham"
                     z.auto_entry_retry_after = _retry_at_iso()
@@ -1213,18 +1210,6 @@ def _auto_entry_job(
                 ),
             )
         _send_log(settings, f"[auto-entry] mt5_execute_trade: {ex.message}".strip())
-        _lines = [ex.message]
-        if ex.order:
-            _lines.append(f"Mã lệnh: {ex.order}")
-        if params.mt5_dry_run:
-            _lines.append("(Chế độ thử.)")
-        _send_user_notice(
-            settings,
-            "Tự động vào lệnh — kết quả MT5",
-            "\n".join(_lines),
-            zone=z0,
-            params=params,
-        )
 
         tid = int(ex.order) if ex.order else 0
         st2 = _state_read(params)
@@ -1238,6 +1223,13 @@ def _auto_entry_job(
                 z.mt5_tickets_by_account = None
                 z.status = "vao_lenh"
                 z.auto_entry_retry_after = ""
+                _send_user_notice(
+                    settings,
+                    "Đã tự động vào lệnh MT5",
+                    "",
+                    zone=z0,
+                    params=params,
+                )
             else:
                 # allow retry sau cooldown; tránh auto-entry lặp mỗi tick khi MT5 lỗi (vd. INVALID_PRICE)
                 z.status = "cham"
@@ -1519,16 +1511,6 @@ def _zone_touch_job(
                     ),
                 )
             _send_log(settings, f"[zone-touch] mt5_execute_trade multi: {zt_txt[:400]}".strip())
-            _lines = [zt_txt]
-            if params.mt5_dry_run:
-                _lines.append("(Chế độ thử.)")
-            _send_user_notice(
-                settings,
-                "Tự động vào lệnh — kết quả MT5",
-                "\n".join(_lines),
-                zone=z1,
-                params=params,
-            )
             tid = summary_zt.primary_ticket(accs_zt)
             if tid > 0:
                 st2 = _state_read(params)
@@ -1541,6 +1523,13 @@ def _zone_touch_job(
                         break
                 _state_write(params, st2)
                 _send_log(settings, f"[zone-touch] mt5_ticket_saved | zone_id={zone_id} ticket={tid}")
+                _send_user_notice(
+                    settings,
+                    "Đã tự động vào lệnh MT5",
+                    "",
+                    zone=z1,
+                    params=params,
+                )
             return
 
         ex = execute_trade(
@@ -1564,18 +1553,6 @@ def _zone_touch_job(
                 ),
             )
         _send_log(settings, f"[zone-touch] mt5_execute_trade: {ex.message}".strip())
-        _lines = [ex.message]
-        if ex.order:
-            _lines.append(f"Mã lệnh: {ex.order}")
-        if params.mt5_dry_run:
-            _lines.append("(Chế độ thử.)")
-        _send_user_notice(
-            settings,
-            "Tự động vào lệnh — kết quả MT5",
-            "\n".join(_lines),
-            zone=z1,
-            params=params,
-        )
 
         tid = int(ex.order) if ex.order else 0
         if ex.ok and tid > 0:
@@ -1589,6 +1566,13 @@ def _zone_touch_job(
                     break
             _state_write(params, st2)
             _send_log(settings, f"[zone-touch] mt5_ticket_saved | zone_id={zone_id} ticket={tid}")
+            _send_user_notice(
+                settings,
+                "Đã tự động vào lệnh MT5",
+                "",
+                zone=z1,
+                params=params,
+            )
         return
     except Exception as e:
         # On any error: keep touched state (no revert to vung_cho); daemon will retry using retry_at
