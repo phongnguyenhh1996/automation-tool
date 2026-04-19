@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-
 from datetime import datetime
-
+from unittest.mock import MagicMock
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from automation_tool.mt5_execute import execution_price_from_tick
-from automation_tool.tv_watchlist_daemon import compute_daemon_plan_stop_deadline_local
+from automation_tool.tv_watchlist_daemon import (
+    compute_daemon_plan_stop_deadline_local,
+    daemon_plan_should_exit_if_mt5_tickets_closed,
+)
+from automation_tool.zones_state import Zone
 
 
 @dataclass
@@ -56,3 +61,70 @@ def test_daemon_plan_stop_deadline_midnight_late_same_evening() -> None:
     started = datetime(2026, 4, 18, 23, 45, tzinfo=z)
     d = compute_daemon_plan_stop_deadline_local(started, "Asia/Ho_Chi_Minh", 0, 0)
     assert d == datetime(2026, 4, 19, 0, 0, tzinfo=z)
+
+
+def test_daemon_plan_ticket_closed_exits_when_none_on_mt5(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "automation_tool.tv_watchlist_daemon.mt5_ticket_status_for_cutoff",
+        lambda ticket, **kwargs: ("none", "closed"),
+    )
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon._send_log", lambda *a, **k: None)
+    z = Zone(
+        id="z1",
+        label="L1",
+        vung_cho="2600-2700",
+        side="BUY",
+        mt5_ticket=123456,
+    )
+    settings = MagicMock()
+    ok, msg = daemon_plan_should_exit_if_mt5_tickets_closed(
+        [z],
+        dry_run=False,
+        accounts_json=None,
+        settings=settings,
+        shard_tag="/tmp/vung_x.json",
+    )
+    assert ok is True
+    assert "123456" in msg
+
+
+def test_daemon_plan_ticket_closed_keeps_running_if_position(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "automation_tool.tv_watchlist_daemon.mt5_ticket_status_for_cutoff",
+        lambda ticket, **kwargs: ("position", "open"),
+    )
+    z = Zone(
+        id="z1",
+        label="L1",
+        vung_cho="2600-2700",
+        side="BUY",
+        mt5_ticket=123456,
+    )
+    settings = MagicMock()
+    ok, _ = daemon_plan_should_exit_if_mt5_tickets_closed(
+        [z],
+        dry_run=False,
+        accounts_json=None,
+        settings=settings,
+        shard_tag="shard",
+    )
+    assert ok is False
+
+
+def test_daemon_plan_ticket_closed_no_ticket_in_state() -> None:
+    z = Zone(
+        id="z1",
+        label="L1",
+        vung_cho="2600-2700",
+        side="BUY",
+        mt5_ticket=None,
+    )
+    settings = MagicMock()
+    ok, _ = daemon_plan_should_exit_if_mt5_tickets_closed(
+        [z],
+        dry_run=False,
+        accounts_json=None,
+        settings=settings,
+        shard_tag="shard",
+    )
+    assert ok is False

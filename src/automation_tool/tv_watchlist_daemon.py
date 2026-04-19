@@ -357,6 +357,60 @@ def daemon_plan_resolve_cutoff_mt5(
     return False, "cutoff: không còn pending/position theo ticket trong state"
 
 
+def daemon_plan_should_exit_if_mt5_tickets_closed(
+    zones: list[Zone],
+    *,
+    dry_run: bool,
+    accounts_json: Optional[Path],
+    settings: Settings,
+    shard_tag: str,
+) -> tuple[bool, str]:
+    """
+    Nếu state có ``mt5_ticket`` / ``mt5_tickets_by_account`` và **mọi** ticket đó đều không còn
+    trên MT5 (đã huỷ / chốt / đóng) → trả ``(True, ...)`` để ``daemon-plan`` thoát.
+
+    Còn pending hoặc position trên bất kỳ ticket nào → tiếp tục. Lỗi kết nối MT5 → không thoát (thử lại sau).
+    """
+    if dry_run:
+        return False, "[daemon-plan] mt5_dry_run — bỏ qua kiểm tra ticket đã đóng"
+    pairs: list[tuple[Optional[str], int]] = []
+    for z in zones:
+        pairs.extend(_daemon_plan_collect_ticket_account_pairs(z))
+    if not pairs:
+        return False, "no mt5_ticket in state"
+    seen: set[tuple[str, int]] = set()
+    unique_pairs: list[tuple[Optional[str], int]] = []
+    for acc_id, ticket in pairs:
+        key = (acc_id or "", int(ticket))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_pairs.append((acc_id, int(ticket)))
+
+    for acc_id, ticket in unique_pairs:
+        login, password, server = _daemon_plan_resolve_mt5_creds(accounts_json, acc_id)
+        if acc_id and login is None:
+            return False, f"account_id={acc_id!r} không tìm thấy trong accounts.json (ticket={ticket})"
+        st, msg = mt5_ticket_status_for_cutoff(
+            ticket,
+            dry_run=False,
+            login=login,
+            password=password,
+            server=server,
+        )
+        if st == "error":
+            return False, msg
+        if st in ("pending", "position"):
+            return False, f"ticket={ticket} còn ({st})"
+
+    tickets_desc = ", ".join(f"{t}" for _, t in unique_pairs)
+    _send_log(
+        settings,
+        f"[daemon-plan] ticket MT5 đã đóng trên terminal — dừng | shard={shard_tag} | tickets=[{tickets_desc}]",
+    )
+    return True, f"mọi ticket đã đóng trên MT5: {tickets_desc}"
+
+
 def _state_read(params: WatchlistDaemonParams) -> Optional[ZonesState]:
     if params.shard_path is not None:
         return read_zones_state_from_shard(params.shard_path)
@@ -1742,6 +1796,21 @@ def _daemon_plan_main_loop(
                 _send_log(
                     settings,
                     f"[daemon-plan] exit | status={z0.status} shard={shard_tag} zone_id={z0.id}",
+                )
+                return
+
+            exit_closed, closed_detail = daemon_plan_should_exit_if_mt5_tickets_closed(
+                list(st.zones),
+                dry_run=bool(params.mt5_dry_run),
+                accounts_json=params.mt5_accounts_json,
+                settings=settings,
+                shard_tag=shard_tag,
+            )
+            if exit_closed:
+                _poll_terminal.info(
+                    "daemon-plan | shard=%s | exit | mt5_ticket_closed | %s",
+                    shard_tag,
+                    closed_detail,
                 )
                 return
 
