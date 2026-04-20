@@ -54,6 +54,17 @@ def _mt5_init(
     return mt5
 
 
+def _mt5_init_current_terminal() -> Any:
+    """
+    ``initialize()`` không đối số — bám phiên MetaTrader đang mở (đã login sẵn trong terminal).
+    Dùng chung với daemon đọc giá; **không** gọi ``shutdown`` ở caller nếu muốn giữ phiên.
+    """
+    mt5 = _load_mt5()
+    if not mt5.initialize():
+        return None
+    return mt5
+
+
 def _is_done(mt5: Any, ret: Any) -> bool:
     rc = getattr(ret, "retcode", None)
     if rc is None:
@@ -71,15 +82,25 @@ def mt5_cancel_pending_order(
     login: Optional[int] = None,
     password: Optional[str] = None,
     server: Optional[str] = None,
+    shutdown_after: bool = True,
+    terminal_session_only: bool = False,
 ) -> MT5ManageResult:
-    """``TRADE_ACTION_REMOVE`` cho order ticket (lệnh chờ)."""
+    """``TRADE_ACTION_REMOVE`` cho order ticket (lệnh chờ).
+
+    ``terminal_session_only=True``: chỉ dùng acc đang login sẵn trong terminal (``initialize()`` không đối số).
+
+    ``shutdown_after=False``: không gọi ``shutdown`` (vd. cắt giờ daemon-plan, giữ phiên đọc giá).
+    """
     if dry_run:
         return MT5ManageResult(
             ok=True,
             message=f"[DRY-RUN] Sẽ huỷ pending order ticket={ticket}",
             kind="pending",
         )
-    mt5 = _mt5_init(login, password, server)
+    if terminal_session_only:
+        mt5 = _mt5_init_current_terminal()
+    else:
+        mt5 = _mt5_init(login, password, server)
     if mt5 is None:
         return MT5ManageResult(ok=False, message="mt5.initialize thất bại", kind=None)
     try:
@@ -103,7 +124,8 @@ def mt5_cancel_pending_order(
             kind="pending",
         )
     finally:
-        mt5.shutdown()
+        if shutdown_after:
+            mt5.shutdown()
 
 
 def mt5_close_position(
@@ -254,12 +276,12 @@ def mt5_ticket_status_for_cutoff(
     ticket: int,
     *,
     dry_run: bool = False,
-    login: Optional[int] = None,
-    password: Optional[str] = None,
-    server: Optional[str] = None,
 ) -> tuple[Literal["pending", "position", "none", "error"], str]:
     """
     Phân loại ticket trên MT5 cho bước cắt giờ daemon-plan (lệnh chờ vs position vs đã hết).
+
+    Chỉ xem **tài khoản đang login sẵn** trong terminal (``initialize()`` không đối số, không đăng nhập API).
+    Không gọi ``shutdown`` — giữ phiên chung với daemon đọc giá.
 
     ``error`` = không kết nối được terminal (cần thử lại).
     """
@@ -267,14 +289,11 @@ def mt5_ticket_status_for_cutoff(
         return "none", "[DRY-RUN]"
     if ticket <= 0:
         return "none", f"ticket không hợp lệ: {ticket}"
-    mt5 = _mt5_init(login, password, server)
+    mt5 = _mt5_init_current_terminal()
     if mt5 is None:
         return "error", "mt5.initialize thất bại"
-    try:
-        has_order = any(int(o.ticket) == int(ticket) for o in (mt5.orders_get() or []))
-        has_pos = any(int(p.ticket) == int(ticket) for p in (mt5.positions_get() or []))
-    finally:
-        mt5.shutdown()
+    has_order = any(int(o.ticket) == int(ticket) for o in (mt5.orders_get() or []))
+    has_pos = any(int(p.ticket) == int(ticket) for p in (mt5.positions_get() or []))
     if has_order:
         return "pending", "lệnh chờ (pending)"
     if has_pos:

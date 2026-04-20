@@ -273,20 +273,17 @@ def _daemon_plan_collect_ticket_account_pairs(zone: Zone) -> list[tuple[Optional
     return out
 
 
-def _daemon_plan_resolve_mt5_creds(
-    accounts_json: Optional[Path],
-    account_id: Optional[str],
-) -> tuple[Optional[int], Optional[str], Optional[str]]:
-    accs = load_mt5_accounts_for_cli(accounts_json)
-    if accs:
-        if account_id:
-            for a in accs:
-                if a.id == account_id:
-                    return a.login, a.password, a.server
-            return None, None, None
-        p = primary_account(accs)
-        return p.login, p.password, p.server
-    return None, None, None
+def _daemon_plan_unique_tickets(zones: list[Zone]) -> list[int]:
+    """Các ``mt5_ticket`` duy nhất trong state — kiểm tra trên acc đang login trong terminal."""
+    seen: set[int] = set()
+    out: list[int] = []
+    for z in zones:
+        for _acc_id, tk in _daemon_plan_collect_ticket_account_pairs(z):
+            if tk in seen:
+                continue
+            seen.add(tk)
+            out.append(tk)
+    return out
 
 
 def daemon_plan_resolve_cutoff_mt5(
@@ -301,38 +298,20 @@ def daemon_plan_resolve_cutoff_mt5(
     Quá giờ cắt: **lệnh chờ** → huỷ rồi tiếp tục; **position đã khớp** → chặn thoát (chờ đóng);
     ticket đã đóng / không còn trên MT5 → không chặn.
 
-    Chỉ dùng ticket trong ``zones`` (state của **shard hiện tại** — ``mt5_ticket`` / ``mt5_tickets_by_account``);
-    không quét mọi lệnh trên tài khoản MT5.
+    Chỉ xét **tài khoản đang login sẵn** trong terminal (không duyệt ``accounts.json`` / đổi acc).
+    ``accounts_json`` giữ trong chữ ký để tương thích caller; không dùng.
 
     Trả ``(True, ...)`` nếu cần chờ thêm (còn position) hoặc lỗi MT5; ``(False, ...)`` khi có thể kết thúc.
     """
     if dry_run:
         return False, "[daemon-plan] mt5_dry_run — bỏ qua cutoff MT5"
-    pairs: list[tuple[Optional[str], int]] = []
-    for z in zones:
-        pairs.extend(_daemon_plan_collect_ticket_account_pairs(z))
-    if not pairs:
+    _ = accounts_json
+    tickets = _daemon_plan_unique_tickets(zones)
+    if not tickets:
         return False, "no mt5_ticket in state"
-    seen: set[tuple[str, int]] = set()
-    unique_pairs: list[tuple[Optional[str], int]] = []
-    for acc_id, ticket in pairs:
-        key = (acc_id or "", int(ticket))
-        if key in seen:
-            continue
-        seen.add(key)
-        unique_pairs.append((acc_id, int(ticket)))
 
-    for acc_id, ticket in unique_pairs:
-        login, password, server = _daemon_plan_resolve_mt5_creds(accounts_json, acc_id)
-        if acc_id and login is None:
-            return True, f"account_id={acc_id!r} không tìm thấy trong accounts.json (ticket={ticket})"
-        st, msg = mt5_ticket_status_for_cutoff(
-            ticket,
-            dry_run=False,
-            login=login,
-            password=password,
-            server=server,
-        )
+    for ticket in tickets:
+        st, msg = mt5_ticket_status_for_cutoff(ticket, dry_run=False)
         if st == "error":
             return True, msg
         if st != "pending":
@@ -340,9 +319,8 @@ def daemon_plan_resolve_cutoff_mt5(
         r = mt5_cancel_pending_order(
             ticket,
             dry_run=False,
-            login=login,
-            password=password,
-            server=server,
+            terminal_session_only=True,
+            shutdown_after=False,
         )
         if not r.ok:
             return True, f"huỷ pending ticket={ticket}: {r.message}"
@@ -351,17 +329,8 @@ def daemon_plan_resolve_cutoff_mt5(
             f"[daemon-plan] quá giờ cắt — đã huỷ lệnh chờ | shard={shard_tag} | {r.message}",
         )
 
-    for acc_id, ticket in unique_pairs:
-        login, password, server = _daemon_plan_resolve_mt5_creds(accounts_json, acc_id)
-        if acc_id and login is None:
-            return True, f"account_id={acc_id!r} không tìm thấy trong accounts.json (ticket={ticket})"
-        st, msg = mt5_ticket_status_for_cutoff(
-            ticket,
-            dry_run=False,
-            login=login,
-            password=password,
-            server=server,
-        )
+    for ticket in tickets:
+        st, msg = mt5_ticket_status_for_cutoff(ticket, dry_run=False)
         if st == "error":
             return True, msg
         if st == "position":
@@ -382,40 +351,24 @@ def daemon_plan_should_exit_if_mt5_tickets_closed(
     trên MT5 (đã huỷ / chốt / đóng) → trả ``(True, ...)`` để ``daemon-plan`` thoát.
 
     Còn pending hoặc position trên bất kỳ ticket nào → tiếp tục. Lỗi kết nối MT5 → không thoát (thử lại sau).
+
+    Chỉ kiểm tra trên **acc đang login** trong terminal; ``accounts_json`` không dùng.
     """
     if dry_run:
         return False, "[daemon-plan] mt5_dry_run — bỏ qua kiểm tra ticket đã đóng"
-    pairs: list[tuple[Optional[str], int]] = []
-    for z in zones:
-        pairs.extend(_daemon_plan_collect_ticket_account_pairs(z))
-    if not pairs:
+    _ = accounts_json
+    tickets = _daemon_plan_unique_tickets(zones)
+    if not tickets:
         return False, "no mt5_ticket in state"
-    seen: set[tuple[str, int]] = set()
-    unique_pairs: list[tuple[Optional[str], int]] = []
-    for acc_id, ticket in pairs:
-        key = (acc_id or "", int(ticket))
-        if key in seen:
-            continue
-        seen.add(key)
-        unique_pairs.append((acc_id, int(ticket)))
 
-    for acc_id, ticket in unique_pairs:
-        login, password, server = _daemon_plan_resolve_mt5_creds(accounts_json, acc_id)
-        if acc_id and login is None:
-            return False, f"account_id={acc_id!r} không tìm thấy trong accounts.json (ticket={ticket})"
-        st, msg = mt5_ticket_status_for_cutoff(
-            ticket,
-            dry_run=False,
-            login=login,
-            password=password,
-            server=server,
-        )
+    for ticket in tickets:
+        st, msg = mt5_ticket_status_for_cutoff(ticket, dry_run=False)
         if st == "error":
             return False, msg
         if st in ("pending", "position"):
             return False, f"ticket={ticket} còn ({st})"
 
-    tickets_desc = ", ".join(f"{t}" for _, t in unique_pairs)
+    tickets_desc = ", ".join(f"{t}" for t in tickets)
     _send_log(
         settings,
         f"[daemon-plan] ticket MT5 đã đóng trên terminal — dừng | shard={shard_tag} | tickets=[{tickets_desc}]",
