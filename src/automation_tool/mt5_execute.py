@@ -715,14 +715,37 @@ def execute_trade(
         mt5.shutdown()
 
 
+def _tick_price_or_none(tick: Any, leg: Literal["ask", "bid"]) -> Optional[float]:
+    """Giá > 0 từ tick; ``None`` nếu thuộc tính thiếu, không hợp lệ hoặc ≤ 0."""
+    raw = getattr(tick, leg, None)
+    if raw is None:
+        return None
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return v if v > 0.0 else None
+
+
 def execution_price_from_tick(tick: Any, side: Literal["BUY", "SELL"]) -> float:
     """
     Giá thực thi một phía: BUY → ``ask`` (mua); SELL → ``bid`` (bán).
+    Nếu phía ưu tiên thiếu hoặc ≤ 0, fallback sang phía kia (BUY → bid; SELL → ask).
     Khớp cách đặt giá market trong :func:`build_request`.
     """
+    ask = _tick_price_or_none(tick, "ask")
+    bid = _tick_price_or_none(tick, "bid")
     if side == "BUY":
-        return float(tick.ask)
-    return float(tick.bid)
+        if ask is not None:
+            return ask
+        if bid is not None:
+            return bid
+        return float(getattr(tick, "ask"))
+    if bid is not None:
+        return bid
+    if ask is not None:
+        return ask
+    return float(getattr(tick, "bid"))
 
 
 class DaemonPlanMt5PriceSession:

@@ -19,8 +19,8 @@ from automation_tool.zones_state import Zone
 
 @dataclass
 class _FakeTick:
-    bid: float
-    ask: float
+    bid: float | None
+    ask: float | None
 
 
 def test_execution_price_from_tick_buy_uses_ask() -> None:
@@ -28,9 +28,24 @@ def test_execution_price_from_tick_buy_uses_ask() -> None:
     assert execution_price_from_tick(t, "BUY") == 2650.5
 
 
+def test_execution_price_from_tick_buy_falls_back_to_bid_if_ask_missing() -> None:
+    t = _FakeTick(bid=2650.1, ask=None)
+    assert execution_price_from_tick(t, "BUY") == 2650.1
+
+
+def test_execution_price_from_tick_buy_falls_back_to_bid_if_ask_zero() -> None:
+    t = _FakeTick(bid=2650.1, ask=0.0)
+    assert execution_price_from_tick(t, "BUY") == 2650.1
+
+
 def test_execution_price_from_tick_sell_uses_bid() -> None:
     t = _FakeTick(bid=2650.1, ask=2650.5)
     assert execution_price_from_tick(t, "SELL") == 2650.1
+
+
+def test_execution_price_from_tick_sell_falls_back_to_ask_if_bid_missing() -> None:
+    t = _FakeTick(bid=None, ask=2650.5)
+    assert execution_price_from_tick(t, "SELL") == 2650.5
 
 
 def test_daemon_plan_stop_deadline_same_calendar_day() -> None:
