@@ -66,6 +66,7 @@ def _lot_override_for_entry(
             password=acc.password,
             server=acc.server,
             symbol_override=symbol_override,
+            account_symbol_map=acc.symbol_map or None,
         )
         return vol, hint
     return None, f"lot rule không hỗ trợ: {rule!r}"
@@ -101,6 +102,7 @@ def execute_trade_all_accounts(
             symbol_override=symbol_override,
             lot_override=lot_ov,
             account_id=acc.id,
+            account_symbol_map=acc.symbol_map or None,
         )
         out.results.append(ex)
         if not ex.ok:
@@ -233,6 +235,7 @@ def mt5_chinh_trade_line_all_accounts(
             new_parsed,
             dry_run=dry_run,
             symbol_override=symbol_override,
+            account_symbol_map=acc.symbol_map or None,
             login=acc.login,
             password=acc.password,
             server=acc.server,

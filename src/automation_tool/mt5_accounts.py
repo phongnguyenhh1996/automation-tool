@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import math
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Optional, Union
 
@@ -45,6 +45,25 @@ class MT5AccountEntry:
     server: str
     primary: bool
     lot: LotRule
+    #: Map symbol logic (XAUUSD, EURUSD, …) → tên đúng trên broker của acc đó (vd. XAUUSD vs XAUUSDm).
+    symbol_map: dict[str, str] = field(default_factory=dict)
+
+
+def _parse_symbol_map(obj: Any, index: int) -> dict[str, str]:
+    if obj is None:
+        return {}
+    if not isinstance(obj, dict):
+        raise ValueError(f"accounts[{index}].symbol_map phải là object hoặc bỏ qua")
+    out: dict[str, str] = {}
+    for k, v in obj.items():
+        ks = str(k).strip().upper()
+        vs = str(v).strip()
+        if not ks or not vs:
+            raise ValueError(
+                f"accounts[{index}].symbol_map: mỗi key/value phải là chuỗi không rỗng"
+            )
+        out[ks] = vs
+    return out
 
 
 def _parse_lot(d: Any) -> LotRule:
@@ -81,6 +100,7 @@ def _parse_one(obj: Any, index: int) -> MT5AccountEntry:
         raise ValueError(f"accounts[{index}].server bắt buộc")
     primary = bool(obj.get("primary", False))
     lot = _parse_lot(obj.get("lot") or {"mode": "fixed", "volume": 0.01})
+    sym_map = _parse_symbol_map(obj.get("symbol_map"), index)
     return MT5AccountEntry(
         id=acc_id,
         login=int(login),
@@ -88,6 +108,7 @@ def _parse_one(obj: Any, index: int) -> MT5AccountEntry:
         server=server,
         primary=primary,
         lot=lot,
+        symbol_map=sym_map,
     )
 
 
@@ -234,6 +255,7 @@ def compute_volume_for_max_notional_live(
     password: str,
     server: str,
     symbol_override: Optional[str],
+    account_symbol_map: Optional[dict[str, str]] = None,
 ) -> tuple[float, Optional[str]]:
     """
     Một lần ``initialize`` + tính volume (rồi caller gọi ``execute_trade`` sẽ init lại).
@@ -254,7 +276,12 @@ def compute_volume_for_max_notional_live(
     if not mt5.initialize(**kwargs):
         return float(trade.lot), f"mt5.initialize thất bại: {format_last_error(mt5)}"
     try:
-        rt, err = resolve_trade_symbol_on_broker(mt5, trade, symbol_override)
+        rt, err = resolve_trade_symbol_on_broker(
+            mt5,
+            trade,
+            symbol_override,
+            account_symbol_map=account_symbol_map,
+        )
         if err or rt is None:
             return float(trade.lot), err
         return compute_lot_override(

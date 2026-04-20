@@ -166,6 +166,7 @@ _OPENAI_MODEL_HELP = (
 
 _MT5_ACCOUNTS_JSON_HELP = (
     "File accounts.json: nhiều tài khoản MT5 (đăng nhập tuần tự). "
+    "Mỗi account có thể có symbol_map (vd. XAUUSD→XAUUSD hoặc XAUUSDm). "
     "Ưu tiên hơn biến môi trường MT5_ACCOUNTS_JSON."
 )
 
@@ -663,6 +664,16 @@ def _parser() -> argparse.ArgumentParser:
     wd.add_argument("--headed", action="store_true")
     wd.add_argument("--no-telegram", action="store_true")
     wd.add_argument("--poll-seconds", type=float, default=1.0)
+    wd.add_argument(
+        "--mt5-stale-reconnect-seconds",
+        type=float,
+        default=60.0,
+        metavar="SEC",
+        help=(
+            "Daemon giá (MT5 bid): nếu bid không đổi trong SEC giây thì reconnect MT5 "
+            "(shutdown + initialize; ưu tiên MT5_* env nếu có). 0 = tắt. Mặc định 60."
+        ),
+    )
     wd.add_argument(
         "--eps",
         type=float,
@@ -2496,6 +2507,9 @@ def cmd_tv_watchlist_daemon(args: argparse.Namespace) -> None:
         openai_model=resolved_openai_model(s, getattr(args, "model", None)),
         openai_model_cli=getattr(args, "model", None),
         last_price_from_mt5=not bool(getattr(args, "tv_title_price", False)),
+        mt5_stale_reconnect_seconds=float(
+            getattr(args, "mt5_stale_reconnect_seconds", 60.0) or 0.0
+        ),
     )
     outcome = run_tv_watchlist_daemon(settings=s, params=params)
     print(outcome, flush=True)

@@ -457,12 +457,18 @@ def resolve_trade_symbol_on_broker(
     mt5: Any,
     trade: ParsedTrade,
     symbol_override: Optional[str],
+    *,
+    account_symbol_map: Optional[dict[str, str]] = None,
 ) -> tuple[Optional[ParsedTrade], Optional[str]]:
     """
-    Chuẩn hóa symbol (override + XAUUSDm) và ``symbol_select`` trên broker.
+    Chuẩn hóa symbol (override + ``symbol_map`` từng acc hoặc XAUUSD→XAUUSDm) và ``symbol_select`` trên broker.
     Dùng trước khi tính lot theo ``contract_size`` (multi-account).
     """
-    t = resolve_mt5_trade_symbol(trade, symbol_override)
+    t = resolve_mt5_trade_symbol(
+        trade,
+        symbol_override,
+        account_symbol_map=account_symbol_map,
+    )
     sym, err = _ensure_symbol(mt5, t.symbol)
     if err or not sym:
         return None, err or "Không resolve được symbol."
@@ -531,19 +537,45 @@ def _env_int(name: str, default: int = 0) -> int:
     return int(raw)
 
 
+def _mt5_initialize_kwargs_from_env() -> dict[str, Any]:
+    """
+    Tham số ``initialize`` khi có đủ ``MT5_LOGIN`` / ``MT5_PASSWORD`` / ``MT5_SERVER``.
+    Rỗng nếu thiếu — dùng phiên terminal đang mở.
+    """
+    login_i = _env_int("MT5_LOGIN", 0)
+    password_s = os.getenv("MT5_PASSWORD") or ""
+    server_s = os.getenv("MT5_SERVER") or ""
+    if login_i and password_s and server_s:
+        return {"login": login_i, "password": password_s, "server": server_s}
+    return {}
+
+
 def _normalize_symbol_str(val: Optional[str]) -> str:
     if not val:
         return ""
     return str(val).strip().strip('"').strip("'")
 
 
-def resolve_mt5_trade_symbol(trade: ParsedTrade, symbol_override: Optional[str]) -> ParsedTrade:
+def resolve_mt5_trade_symbol(
+    trade: ParsedTrade,
+    symbol_override: Optional[str],
+    *,
+    account_symbol_map: Optional[dict[str, str]] = None,
+) -> ParsedTrade:
     """
-    ``--symbol`` CLI (nếu có) thay symbol đã parse; sau đó ``XAUUSD`` → ``XAUUSDm`` (broker).
+    ``--mt5-symbol`` / ``--symbol`` (nếu có) thay symbol đã parse.
+
+    Nếu ``account_symbol_map`` có entry cho symbol logic (uppercase), dùng đúng tên broker đó.
+    Nếu không: giữ hành vi cũ ``XAUUSD`` → ``XAUUSDm`` (``normalize_broker_xau_symbol``).
     """
     ovr = _normalize_symbol_str(symbol_override)
-    base = ovr if ovr else trade.symbol
-    sym = normalize_broker_xau_symbol(base)
+    base_raw = ovr if ovr else trade.symbol
+    base = (base_raw or "").strip()
+    key = base.upper()
+    if account_symbol_map and key in account_symbol_map:
+        sym = account_symbol_map[key]
+    else:
+        sym = normalize_broker_xau_symbol(base)
     return replace(trade, symbol=sym)
 
 
@@ -560,18 +592,24 @@ def execute_trade(
     symbol_override: Optional[str] = None,
     lot_override: Optional[float] = None,
     account_id: Optional[str] = None,
+    account_symbol_map: Optional[dict[str, str]] = None,
 ) -> MT5ExecutionResult:
     """
     Gửi lệnh qua MetaTrader5. MT5 chỉ có một TP trên lệnh; TP2 được in ra nếu có.
 
     Credentials: env ``MT5_LOGIN``, ``MT5_PASSWORD``, ``MT5_SERVER`` hoặc tham số.
 
-    Symbol: ``symbol_override`` (CLI ``--symbol``) nếu có, không thì symbol đã parse; luôn chuẩn hóa ``XAUUSD`` → ``XAUUSDm``.
+    Symbol: ``symbol_override`` (CLI) nếu có, không thì symbol đã parse; sau đó
+    ``account_symbol_map`` (từ ``accounts.json``) hoặc mặc định ``XAUUSD`` → ``XAUUSDm``.
     Lot: ``lot_override`` ghi đè volume từ file (tiện test với lot nhỏ).
 
     ``account_id``: nhãn đa tài khoản (log/Telegram).
     """
-    trade = resolve_mt5_trade_symbol(trade, symbol_override)
+    trade = resolve_mt5_trade_symbol(
+        trade,
+        symbol_override,
+        account_symbol_map=account_symbol_map,
+    )
     if lot_override is not None:
         trade = replace(trade, lot=float(lot_override))
 
@@ -770,6 +808,9 @@ class DaemonPlanMt5PriceSession:
     bám phiên MT5 đang mở (``initialize()`` không đối số). Tránh đăng nhập lại account primary
     và làm đổi phiên khi luồng khác đang gửi lệnh multi-account (account phụ).
 
+    :meth:`reconnect` (dùng khi giá bid “đứng” quá lâu) gọi ``shutdown`` rồi ``initialize`` lại;
+    nếu env có đủ ``MT5_*`` thì ưu tiên đăng nhập qua API, không thì bám terminal như lần đầu.
+
     ``daemon-plan`` không dùng class này nữa — đọc Last đã ghi shared memory; giữ :meth:`read_execution_price`
     cho tương thích / test.
     """
@@ -793,7 +834,7 @@ class DaemonPlanMt5PriceSession:
         # Giá bid/ask theo symbol không phụ thuộc account đang active; không ép login.
         return {}
 
-    def _ensure_connected(self) -> bool:
+    def _connect_with_init_kwargs(self, kwargs: dict[str, Any]) -> bool:
         if self._dry_run:
             self._last_error = "mt5_dry_run"
             return False
@@ -802,7 +843,6 @@ class DaemonPlanMt5PriceSession:
         except SystemExit as e:
             self._last_error = str(e)
             return False
-        kwargs = self._build_init_kwargs()
         if not mt5.initialize(**kwargs):
             self._last_error = f"mt5.initialize thất bại: {format_last_error(mt5)}"
             return False
@@ -815,6 +855,24 @@ class DaemonPlanMt5PriceSession:
         self._resolved = sym
         self._last_error = None
         return True
+
+    def _ensure_connected(self) -> bool:
+        if self._mt5 is not None:
+            return True
+        return self._connect_with_init_kwargs(self._build_init_kwargs())
+
+    def reconnect(self) -> bool:
+        """
+        ``shutdown`` Python session rồi kết nối lại MT5 (đăng nhập API nếu có đủ env, không thì phiên terminal).
+        Dùng khi bid không đổi trong khoảng thời gian dài (feed có thể kẹt).
+        """
+        self.shutdown()
+        kwargs = _mt5_initialize_kwargs_from_env()
+        return self._connect_with_init_kwargs(kwargs)
+
+    @property
+    def last_error(self) -> Optional[str]:
+        return self._last_error
 
     def read_execution_price(self, side: Literal["BUY", "SELL"]) -> tuple[Optional[float], Optional[str]]:
         """

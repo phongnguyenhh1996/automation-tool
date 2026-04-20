@@ -232,6 +232,13 @@ class WatchlistDaemonParams:
     """Phút đi kèm ``stop_at_hour`` (mặc định 0)."""
     last_price_from_mt5: bool = True
     """Daemon giá: ``True`` = đọc MT5 bid → shared memory; ``False`` = title TradingView (legacy)."""
+    mt5_stale_reconnect_seconds: float = 60.0
+    """Bid không đổi trong khoảng này (giây) thì ``shutdown``/``initialize`` lại MT5; ``0`` = tắt."""
+
+
+def _daemon_gia_same_bid(a: float, b: float) -> bool:
+    """So sánh bid liên tiếp (tránh float noise)."""
+    return abs(float(a) - float(b)) <= 1e-5
 
 
 def compute_daemon_plan_stop_deadline_local(
@@ -2014,6 +2021,8 @@ def _tv_watchlist_price_only_loop(
     poll_s: float,
     get_price: Callable[[int], Optional[float]],
     price_log_source: str = "TradingView title",
+    mt5_stale_reconnect_s: float = 0.0,
+    mt5_sess: Optional[DaemonPlanMt5PriceSession] = None,
 ) -> None:
     """Daemon giá: poll giá (MT5 bid hoặc title TV) → shared memory (optional mirror ``last.txt``)."""
     last_path = params.last_price_path or default_last_price_path(sym)
@@ -2025,6 +2034,9 @@ def _tv_watchlist_price_only_loop(
     last_heartbeat_at = 0.0
     telegram_log_interval_s = 60.0
     last_telegram_log_at = 0.0
+    stale_s = float(mt5_stale_reconnect_s or 0.0)
+    last_stale_bid: Optional[float] = None
+    last_stale_change_mono = time.monotonic()
     try:
         while True:
             try:
@@ -2053,6 +2065,34 @@ def _tv_watchlist_price_only_loop(
 
             wms = min(15_000, max(2_000, int(poll_s * 1000)))
             p_last = get_price(wms)
+            if stale_s > 0 and mt5_sess is not None:
+                if p_last is None:
+                    last_stale_bid = None
+                else:
+                    now_m = time.monotonic()
+                    pl = float(p_last)
+                    if last_stale_bid is None:
+                        last_stale_bid = pl
+                        last_stale_change_mono = now_m
+                    elif not _daemon_gia_same_bid(pl, last_stale_bid):
+                        last_stale_bid = pl
+                        last_stale_change_mono = now_m
+                    elif (now_m - last_stale_change_mono) >= stale_s:
+                        _log.warning(
+                            "tv-watchlist-daemon (gia) | bid %.5f unchanged for >= %.0fs — MT5 reconnect",
+                            last_stale_bid,
+                            stale_s,
+                        )
+                        if mt5_sess.reconnect():
+                            last_stale_change_mono = time.monotonic()
+                            last_stale_bid = None
+                            p_last = get_price(wms)
+                        else:
+                            _log.warning(
+                                "tv-watchlist-daemon (gia) | MT5 reconnect failed: %s",
+                                mt5_sess.last_error,
+                            )
+                            last_stale_change_mono = time.monotonic()
             if p_last is not None:
                 write_last_price_shared(shm, float(p_last))
                 if params.mirror_last_price_file:
@@ -2724,13 +2764,14 @@ def run_tv_watchlist_daemon(
     last_p = params.last_price_path or default_last_price_path(sym)
     _log.info(
         "tv-watchlist-daemon (gia) start | symbol=%s poll=%.1fs mirror_last_file=%s path=%s "
-        "stop_plans_on_exit=%s last_price_from_mt5=%s",
+        "stop_plans_on_exit=%s last_price_from_mt5=%s mt5_stale_reconnect_s=%s",
         sym,
         poll_s,
         params.mirror_last_price_file,
         last_p,
         params.stop_daemon_plans_on_exit,
         params.last_price_from_mt5,
+        float(params.mt5_stale_reconnect_seconds or 0.0) if params.last_price_from_mt5 else 0.0,
     )
     if params.stop_daemon_plans_on_exit:
         register_stop_daemon_plans_on_exit(default_zones_dir(sym))
@@ -2754,6 +2795,8 @@ def run_tv_watchlist_daemon(
                 poll_s=poll_s,
                 get_price=get_price,
                 price_log_source="MT5 bid",
+                mt5_stale_reconnect_s=float(params.mt5_stale_reconnect_seconds or 0.0),
+                mt5_sess=mt5_sess,
             )
         finally:
             mt5_sess.shutdown()

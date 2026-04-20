@@ -416,6 +416,7 @@ def mt5_chinh_trade_line_inplace(
     *,
     dry_run: bool = False,
     symbol_override: Optional[str] = None,
+    account_symbol_map: Optional[dict[str, str]] = None,
     login: Optional[int] = None,
     password: Optional[str] = None,
     server: Optional[str] = None,
@@ -427,7 +428,11 @@ def mt5_chinh_trade_line_inplace(
     Nếu ticket không còn, loại lệnh AI không khớp pending (LIMIT↔STOP), hoặc broker từ chối:
     trả ``outcome`` tương ứng để caller quyết định (đặt mới / huỷ rồi đặt).
     """
-    nt = resolve_mt5_trade_symbol(new_trade, symbol_override)
+    nt = resolve_mt5_trade_symbol(
+        new_trade,
+        symbol_override,
+        account_symbol_map=account_symbol_map,
+    )
 
     if dry_run:
         return MT5ChinhTradeLineResult(

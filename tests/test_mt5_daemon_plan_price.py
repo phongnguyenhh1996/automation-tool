@@ -9,7 +9,12 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from automation_tool.mt5_execute import bid_price_from_tick, execution_price_from_tick
+from automation_tool.mt5_execute import (
+    _mt5_initialize_kwargs_from_env,
+    bid_price_from_tick,
+    execution_price_from_tick,
+)
+from automation_tool.tv_watchlist_daemon import _daemon_gia_same_bid
 from automation_tool.tv_watchlist_daemon import (
     compute_daemon_plan_stop_deadline_local,
     daemon_plan_should_exit_if_mt5_tickets_closed,
@@ -56,6 +61,29 @@ def test_bid_price_from_tick_uses_bid() -> None:
 def test_bid_price_from_tick_falls_back_to_ask_if_bid_missing() -> None:
     t = _FakeTick(bid=None, ask=2650.5)
     assert bid_price_from_tick(t) == 2650.5
+
+
+def test_daemon_gia_same_bid_treats_micro_float_as_unchanged() -> None:
+    assert _daemon_gia_same_bid(2650.12345, 2650.123451)
+    assert not _daemon_gia_same_bid(2650.12, 2650.13)
+
+
+def test_mt5_initialize_kwargs_from_env_empty_without_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MT5_LOGIN", raising=False)
+    monkeypatch.delenv("MT5_PASSWORD", raising=False)
+    monkeypatch.delenv("MT5_SERVER", raising=False)
+    assert _mt5_initialize_kwargs_from_env() == {}
+
+
+def test_mt5_initialize_kwargs_from_env_when_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MT5_LOGIN", "12345")
+    monkeypatch.setenv("MT5_PASSWORD", "secret")
+    monkeypatch.setenv("MT5_SERVER", "Broker-Server")
+    assert _mt5_initialize_kwargs_from_env() == {
+        "login": 12345,
+        "password": "secret",
+        "server": "Broker-Server",
+    }
 
 
 def test_daemon_plan_stop_deadline_same_calendar_day() -> None:

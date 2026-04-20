@@ -13,6 +13,8 @@ from automation_tool.mt5_accounts import (
     LotRuleMaxNotionalUsd,
     load_mt5_accounts_from_path,
 )
+from automation_tool.mt5_execute import resolve_mt5_trade_symbol
+from automation_tool.mt5_openai_parse import ParsedTrade
 
 
 def _write_accounts(path: Path, data: list | dict) -> None:
@@ -98,3 +100,56 @@ def test_rejects_duplicate_ids() -> None:
         )
         with pytest.raises(ValueError, match="khác nhau"):
             load_mt5_accounts_from_path(p)
+
+
+def test_load_symbol_map_optional() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "accounts.json"
+        _write_accounts(
+            p,
+            [
+                {
+                    "id": "micro",
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                    "lot": {"mode": "fixed", "volume": 0.01},
+                    "symbol_map": {"XAUUSD": "XAUUSDm", "EURUSD": "EURUSD"},
+                },
+                {
+                    "id": "std",
+                    "login": 2,
+                    "password": "y",
+                    "server": "S",
+                    "primary": False,
+                    "lot": {"mode": "fixed", "volume": 0.01},
+                    "symbol_map": {"XAUUSD": "XAUUSD"},
+                },
+            ],
+        )
+        accs = load_mt5_accounts_from_path(p)
+        assert accs[0].symbol_map["XAUUSD"] == "XAUUSDm"
+        assert accs[1].symbol_map["XAUUSD"] == "XAUUSD"
+
+
+def test_resolve_mt5_trade_symbol_uses_per_account_map() -> None:
+    t = ParsedTrade(
+        symbol="XAUUSD",
+        side="BUY",
+        kind="LIMIT",
+        price=2600.0,
+        sl=2590.0,
+        tp1=2610.0,
+        tp2=None,
+        lot=0.01,
+        raw_line="",
+    )
+    m_micro = {"XAUUSD": "XAUUSDm"}
+    r1 = resolve_mt5_trade_symbol(t, None, account_symbol_map=m_micro)
+    assert r1.symbol == "XAUUSDm"
+    m_std = {"XAUUSD": "XAUUSD"}
+    r2 = resolve_mt5_trade_symbol(t, None, account_symbol_map=m_std)
+    assert r2.symbol == "XAUUSD"
+    r3 = resolve_mt5_trade_symbol(t, None, account_symbol_map=None)
+    assert r3.symbol == "XAUUSDm"
