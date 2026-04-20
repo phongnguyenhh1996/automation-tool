@@ -727,6 +727,20 @@ def _tick_price_or_none(tick: Any, leg: Literal["ask", "bid"]) -> Optional[float
     return v if v > 0.0 else None
 
 
+def bid_price_from_tick(tick: Any) -> float:
+    """
+    Giá bid từ tick; nếu bid thiếu hoặc ≤0 thì fallback sang ask (cùng logic một phía “bán”).
+    Dùng cho daemon giá (shared Last) và đồng bộ với đọc một mức thị trường.
+    """
+    ask = _tick_price_or_none(tick, "ask")
+    bid = _tick_price_or_none(tick, "bid")
+    if bid is not None:
+        return bid
+    if ask is not None:
+        return ask
+    return float(getattr(tick, "bid"))
+
+
 def execution_price_from_tick(tick: Any, side: Literal["BUY", "SELL"]) -> float:
     """
     Giá thực thi một phía: BUY → ``ask`` (mua); SELL → ``bid`` (bán).
@@ -750,11 +764,14 @@ def execution_price_from_tick(tick: Any, side: Literal["BUY", "SELL"]) -> float:
 
 class DaemonPlanMt5PriceSession:
     """
-    Một phiên ``initialize`` + ``symbol_select`` cho ``daemon-plan``; gọi ``symbol_info_tick`` mỗi poll.
+    Một phiên ``initialize`` + ``symbol_select``; gọi ``symbol_info_tick`` (daemon giá: :meth:`read_bid_price`).
 
     **Không** truyền ``login``/``password``/``server`` vào ``initialize``: chỉ đọc giá theo symbol,
     bám phiên MT5 đang mở (``initialize()`` không đối số). Tránh đăng nhập lại account primary
     và làm đổi phiên khi luồng khác đang gửi lệnh multi-account (account phụ).
+
+    ``daemon-plan`` không dùng class này nữa — đọc Last đã ghi shared memory; giữ :meth:`read_execution_price`
+    cho tương thích / test.
     """
 
     def __init__(
@@ -812,6 +829,20 @@ class DaemonPlanMt5PriceSession:
             err = f"symbol_info_tick({self._resolved!r}) None. {format_last_error(self._mt5)}"
             return None, err
         return execution_price_from_tick(tick, side), None
+
+    def read_bid_price(self) -> tuple[Optional[float], Optional[str]]:
+        """
+        Chỉ bid (và fallback ask nếu bid không hợp lệ) — dùng cho daemon giá ghi shared memory.
+        """
+        if self._mt5 is None:
+            if not self._ensure_connected():
+                return None, self._last_error
+        assert self._mt5 is not None and self._resolved is not None
+        tick = self._mt5.symbol_info_tick(self._resolved)
+        if tick is None:
+            err = f"symbol_info_tick({self._resolved!r}) None. {format_last_error(self._mt5)}"
+            return None, err
+        return bid_price_from_tick(tick), None
 
     def shutdown(self) -> None:
         if self._mt5 is not None:

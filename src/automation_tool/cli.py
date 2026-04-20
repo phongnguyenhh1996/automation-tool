@@ -636,9 +636,9 @@ def _parser() -> argparse.ArgumentParser:
     wd = sub.add_parser(
         "tv-watchlist-daemon",
         help=(
-            "[Legacy] Daemon giá: đọc Last từ title tab TradingView, ghi shared memory / last.txt. "
-            "``daemon-plan`` hiện lấy giá trực tiếp từ MT5 (ask/bid theo trade_line); có thể không cần "
-            "chạy lệnh này. Sau Last đầu tiên: reconcile-daemon-plans."
+            "Daemon giá: mặc định đọc MT5 bid → shared memory / optional last.txt; "
+            "``--tv-title-price`` = đọc Last từ title tab TradingView (cần chart_url). "
+            "``daemon-plan`` đọc Last đó (IPC). Sau Last đầu tiên: reconcile-daemon-plans."
         ),
     )
     wd.add_argument(
@@ -677,6 +677,11 @@ def _parser() -> argparse.ArgumentParser:
         "--mirror-last-price-file",
         action="store_true",
         help="Ngoài shared memory, ghi thêm atomic last.txt (tùy chọn debug / tương thích cũ)",
+    )
+    wd.add_argument(
+        "--tv-title-price",
+        action="store_true",
+        help="Đọc Last từ title TradingView (cũ); mặc định: MT5 bid → shared memory (không cần mở browser)",
     )
     wd.add_argument(
         "--stop-daemon-plans-on-exit",
@@ -736,10 +741,10 @@ def _parser() -> argparse.ArgumentParser:
     dp = sub.add_parser(
         "daemon-plan",
         help=(
-            "Một process / file shard: giá từ MT5 symbol_info_tick (BUY→ask, SELL→bid theo trade_line hoặc zone.side); "
+            "Một process / file shard: Last từ shared memory / last.txt (MT5 bid do daemon giá ghi); "
             "cập nhật zone tuần tự; thoát khi done/loại hoặc đến --stop-at-hour (mặc định 0 = 12h đêm): "
             "lệnh chờ → huỷ; chỉ chờ khi còn position đã khớp. "
-            "Cần Windows + terminal MT5 (hoặc --mt5-dry-run)."
+            "Chạy ``tv-watchlist-daemon`` (giá) cùng máy; cutoff ticket vẫn cần MT5."
         ),
     )
     dp.add_argument(
@@ -753,7 +758,7 @@ def _parser() -> argparse.ArgumentParser:
         "--config",
         type=Path,
         default=None,
-        help="Yaml coinmap (ký hiệu; daemon-plan không mở TradingView — giá từ MT5)",
+        help="Yaml coinmap (ký hiệu; daemon-plan không mở TradingView — Last từ IPC)",
     )
     dp.add_argument("--capture-config", type=Path, default=None)
     dp.add_argument("--charts-dir", type=Path, default=None)
@@ -796,7 +801,7 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         metavar="FILE",
-        help="[Không dùng] Giá daemon-plan lấy từ MT5; giữ tham số để tương thích CLI cũ.",
+        help="Fallback file last.txt nếu chưa có shared memory (mặc định data/<SYM>/last.txt)",
     )
     dp.add_argument("--no-mt5-execute", action="store_true")
     dp.add_argument("--mt5-symbol", default=None, metavar="SYM")
@@ -2463,6 +2468,7 @@ def cmd_tv_watchlist_daemon(args: argparse.Namespace) -> None:
         eps=float(args.eps),
         openai_model=resolved_openai_model(s, getattr(args, "model", None)),
         openai_model_cli=getattr(args, "model", None),
+        last_price_from_mt5=not bool(getattr(args, "tv_title_price", False)),
     )
     outcome = run_tv_watchlist_daemon(settings=s, params=params)
     print(outcome, flush=True)

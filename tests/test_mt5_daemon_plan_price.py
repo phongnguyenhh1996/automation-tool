@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from automation_tool.mt5_execute import execution_price_from_tick
+from automation_tool.mt5_execute import bid_price_from_tick, execution_price_from_tick
 from automation_tool.tv_watchlist_daemon import (
     compute_daemon_plan_stop_deadline_local,
     daemon_plan_should_exit_if_mt5_tickets_closed,
@@ -46,6 +46,16 @@ def test_execution_price_from_tick_sell_uses_bid() -> None:
 def test_execution_price_from_tick_sell_falls_back_to_ask_if_bid_missing() -> None:
     t = _FakeTick(bid=None, ask=2650.5)
     assert execution_price_from_tick(t, "SELL") == 2650.5
+
+
+def test_bid_price_from_tick_uses_bid() -> None:
+    t = _FakeTick(bid=2650.1, ask=2650.5)
+    assert bid_price_from_tick(t) == 2650.1
+
+
+def test_bid_price_from_tick_falls_back_to_ask_if_bid_missing() -> None:
+    t = _FakeTick(bid=None, ask=2650.5)
+    assert bid_price_from_tick(t) == 2650.5
 
 
 def test_daemon_plan_stop_deadline_same_calendar_day() -> None:

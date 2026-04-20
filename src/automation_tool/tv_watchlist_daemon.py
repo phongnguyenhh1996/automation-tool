@@ -12,7 +12,7 @@ from datetime import datetime, time as dt_time, timedelta, timezone
 from zoneinfo import ZoneInfo
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Optional
 
 from playwright.sync_api import sync_playwright
 
@@ -91,6 +91,7 @@ from automation_tool.daemon_launcher import (
 )
 from automation_tool.last_price_ipc import (
     open_writer_shared_memory,
+    read_last_price_for_daemon_plan,
     write_last_price_shared,
 )
 from automation_tool.zones_paths import (
@@ -228,6 +229,8 @@ class WatchlistDaemonParams:
     """0 + phút 0 = 12h đêm (00:00 ngày kế, local); 1-23 = mốc cùng ngày; ``None`` = không cắt giờ."""
     stop_at_minute: int = 0
     """Phút đi kèm ``stop_at_hour`` (mặc định 0)."""
+    last_price_from_mt5: bool = True
+    """Daemon giá: ``True`` = đọc MT5 bid → shared memory; ``False`` = title TradingView (legacy)."""
 
 
 def compute_daemon_plan_stop_deadline_local(
@@ -550,28 +553,6 @@ def _parse_trade_from_zone_trade_line(trade_line: str, *, symbol_override: Optio
     return parse_openai_output_md(minimal, symbol_override=symbol_override)
 
 
-def _daemon_plan_execution_side(zone: Zone, *, params: WatchlistDaemonParams) -> Literal["BUY", "SELL"]:
-    """
-    BUY → ``tick.ask``; SELL → ``tick.bid``. Ưu tiên ``side`` từ ``trade_line``; không parse được thì ``zone.side``.
-    """
-    tl = (zone.trade_line or "").strip()
-    if tl:
-        parsed, err = _parse_trade_from_zone_trade_line(tl, symbol_override=params.mt5_symbol)
-        if not err and parsed is not None:
-            s = getattr(parsed, "side", None)
-            if s == "SELL":
-                return "SELL"
-            return "BUY"
-    s = (zone.side or "BUY").strip().upper()
-    if s == "SELL":
-        return "SELL"
-    return "BUY"
-
-
-def _execution_leg_for_side(side: Literal["BUY", "SELL"]) -> str:
-    return "ask" if side == "BUY" else "bid"
-
-
 def _maybe_loai_zone_if_last_hit_sl(
     zone: Zone,
     p_last: float,
@@ -624,25 +605,21 @@ def _daemon_plan_watch_telegram_text(
     sym: str,
     shard_tag: str,
     p_last: Optional[float],
-    exec_side: Optional[Literal["BUY", "SELL"]] = None,
-    exec_leg: Optional[str] = None,
 ) -> str:
-    """Một dòng cho kênh log kỹ thuật: plan/shard đang theo dõi (giá MT5 ask/bid theo phía lệnh)."""
+    """Một dòng cho kênh log kỹ thuật: Last bid chia sẻ từ daemon giá (shared memory / last.txt)."""
     shard_name = Path(shard_tag).name
     last_s = f"{p_last}" if p_last is not None else "(none)"
-    extra: list[str] = []
-    if exec_side and exec_leg:
-        extra.append(f"mt5={exec_side}@{exec_leg}")
+    extra: list[str] = ["last=mt5_bid(shared)"]
     if z.mt5_ticket is not None and int(z.mt5_ticket) > 0:
         extra.append(f"ticket={z.mt5_ticket}")
     if z.hop_luu is not None:
         extra.append(f"hop_luu={z.hop_luu}")
-    tail = " | ".join(extra) if extra else ""
+    tail = " | ".join(extra)
     base = (
         f"[daemon-plan] watch | shard={shard_name} | sym={sym} | zone_id={z.id} | "
         f"status={z.status} | exec_price={last_s}"
     )
-    return f"{base} | {tail}" if tail else base
+    return f"{base} | {tail}"
 
 
 def _entry_reference_price(parsed) -> float:
@@ -2035,9 +2012,10 @@ def _tv_watchlist_price_only_loop(
     sym: str,
     poll_s: float,
     get_price: Callable[[int], Optional[float]],
+    price_log_source: str = "TradingView title",
 ) -> None:
-    """Daemon giá: poll TradingView title price → shared memory (optional mirror ``last.txt``)."""
-    last_path = params.last_price_path or default_last_price_path()
+    """Daemon giá: poll giá (MT5 bid hoặc title TV) → shared memory (optional mirror ``last.txt``)."""
+    last_path = params.last_price_path or default_last_price_path(sym)
     shm = open_writer_shared_memory(sym)
     zones_dir = default_zones_dir(sym)
     prev_manifest_slot: Optional[SessionSlot] = None
@@ -2100,19 +2078,29 @@ def _tv_watchlist_price_only_loop(
                     mirror = f" mirror={last_path}" if params.mirror_last_price_file else ""
                     _send_log(
                         settings,
-                        f"[daemon-gia] last (shared memory) <- {p_last} | symbol={sym}{mirror}",
+                        f"[daemon-gia] last (shared memory) <- {p_last} | symbol={sym} | source={price_log_source}{mirror}",
                     )
-                _poll_terminal.info("tv-watchlist-daemon (gia) | symbol=%s | last=%s", sym, p_last)
+                _poll_terminal.info(
+                    "tv-watchlist-daemon (gia) | symbol=%s | last=%s | source=%s",
+                    sym,
+                    p_last,
+                    price_log_source,
+                )
             else:
-                _poll_terminal.info("tv-watchlist-daemon (gia) | symbol=%s | last=(none)", sym)
+                _poll_terminal.info(
+                    "tv-watchlist-daemon (gia) | symbol=%s | last=(none) | source=%s",
+                    sym,
+                    price_log_source,
+                )
             try:
                 now_mono = time.monotonic()
                 if p_last is not None and (now_mono - last_heartbeat_at) >= heartbeat_s:
                     last_heartbeat_at = now_mono
                     _log.info(
-                        "tv-watchlist-daemon (gia) alive | symbol=%s last=%s",
+                        "tv-watchlist-daemon (gia) alive | symbol=%s last=%s source=%s",
                         sym,
                         p_last,
+                        price_log_source,
                     )
             except Exception:
                 pass
@@ -2132,17 +2120,12 @@ def _daemon_plan_main_loop(
     poll_s: float,
 ) -> None:
     """
-    One shard, one thread: read execution price from MT5 ``symbol_info_tick`` (BUY→ask, SELL→bid),
-    side from ``trade_line`` or ``zone.side``. Run zone pipeline **sequentially**.
-    Exit when the zone reaches ``done`` or ``loai``.
+    One shard, one process: đọc Last (MT5 bid) từ shared memory / ``last.txt`` do daemon giá ghi.
+    Run zone pipeline **sequentially**. Exit when the zone reaches ``done`` or ``loai``.
     """
     if params.shard_path is None:
         raise ValueError("daemon-plan requires params.shard_path")
-    mt5_sess = DaemonPlanMt5PriceSession(
-        symbol_hint=sym,
-        symbol_override=params.mt5_symbol,
-        dry_run=bool(params.mt5_dry_run),
-    )
+    last_price_file = params.last_price_path or default_last_price_path(sym)
     heartbeat_s = 300.0
     last_heartbeat_at = 0.0
     shard_tag = str(params.shard_path)
@@ -2150,7 +2133,7 @@ def _daemon_plan_main_loop(
     last_plan_tg_at = 0.0
     _send_log(
         settings,
-        f"[daemon-plan] start | shard={shard_tag} symbol={sym} mt5_exec=BUY@ask|SELL@bid (trade_line side or zone.side)",
+        f"[daemon-plan] start | shard={shard_tag} symbol={sym} last=MT5_bid via shared memory (daemon giá)",
     )
     stop_deadline: Optional[datetime] = None
     last_stop_wait_log_at = 0.0
@@ -2263,9 +2246,7 @@ def _daemon_plan_main_loop(
                 )
                 return
 
-            exec_side = _daemon_plan_execution_side(z0, params=params)
-            exec_leg = _execution_leg_for_side(exec_side)
-            p_last, mt5_err = mt5_sess.read_execution_price(exec_side)
+            p_last = read_last_price_for_daemon_plan(sym, last_price_file)
             now_plan_tg = time.monotonic()
             if (now_plan_tg - last_plan_tg_at) >= telegram_plan_interval_s:
                 last_plan_tg_at = now_plan_tg
@@ -2276,26 +2257,20 @@ def _daemon_plan_main_loop(
                         sym=sym,
                         shard_tag=shard_tag,
                         p_last=p_last,
-                        exec_side=exec_side,
-                        exec_leg=exec_leg,
                     ),
                 )
             if p_last is None:
                 _poll_terminal.info(
-                    "daemon-plan | shard=%s | tick | mt5_exec=(none) side=%s %s err=%s",
+                    "daemon-plan | shard=%s | tick | last=(none) shared_memory+file=%s",
                     shard_tag,
-                    exec_side,
-                    exec_leg,
-                    mt5_err or "?",
+                    last_price_file,
                 )
                 time.sleep(poll_s)
                 continue
 
             _poll_terminal.info(
-                "daemon-plan | shard=%s | tick | side=%s %s=%s",
+                "daemon-plan | shard=%s | tick | last=%s (mt5_bid shared)",
                 shard_tag,
-                exec_side,
-                exec_leg,
                 p_last,
             )
 
@@ -2480,7 +2455,7 @@ def _daemon_plan_main_loop(
 
             time.sleep(poll_s)
     finally:
-        mt5_sess.shutdown()
+        pass
 
 
 def _tv_watchlist_rpc_poll_price(
@@ -2715,29 +2690,61 @@ def run_tv_watchlist_daemon(
 ) -> str:
     cfg = load_coinmap_yaml(params.coinmap_tv_yaml)
     tv = cfg.get("tradingview_capture") or {}
-    if not isinstance(tv, dict) or not tv.get("chart_url"):
-        raise SystemExit("tradingview_capture.chart_url missing in coinmap yaml.")
+    if not isinstance(tv, dict):
+        tv = {}
 
     poll_s = float(params.poll_seconds or 1.0)
     if poll_s <= 0:
         poll_s = 1.0
 
-    # Which symbol to read from watchlist?
     sym = (tv.get("watchlist_symbol_short") or "").strip().upper()
     if not sym or sym == DEFAULT_MAIN_CHART_SYMBOL:
         sym = get_active_main_symbol().strip().upper()
 
-    last_p = params.last_price_path or default_last_price_path()
+    last_p = params.last_price_path or default_last_price_path(sym)
     _log.info(
-        "tv-watchlist-daemon (gia) start | symbol=%s poll=%.1fs mirror_last_file=%s path=%s stop_plans_on_exit=%s",
+        "tv-watchlist-daemon (gia) start | symbol=%s poll=%.1fs mirror_last_file=%s path=%s "
+        "stop_plans_on_exit=%s last_price_from_mt5=%s",
         sym,
         poll_s,
         params.mirror_last_price_file,
         last_p,
         params.stop_daemon_plans_on_exit,
+        params.last_price_from_mt5,
     )
     if params.stop_daemon_plans_on_exit:
         register_stop_daemon_plans_on_exit(default_zones_dir(sym))
+
+    if params.last_price_from_mt5:
+        mt5_sess = DaemonPlanMt5PriceSession(
+            symbol_hint=sym,
+            symbol_override=params.mt5_symbol,
+            dry_run=bool(params.mt5_dry_run),
+        )
+        try:
+
+            def get_price(_wms: int) -> Optional[float]:
+                p, _err = mt5_sess.read_bid_price()
+                return p
+
+            _tv_watchlist_price_only_loop(
+                settings=settings,
+                params=params,
+                sym=sym,
+                poll_s=poll_s,
+                get_price=get_price,
+                price_log_source="MT5 bid",
+            )
+        finally:
+            mt5_sess.shutdown()
+        return "stopped"
+
+    if not tv.get("chart_url"):
+        raise SystemExit(
+            "tradingview_capture.chart_url missing in coinmap yaml "
+            "(bật daemon giá chỉ MT5: mặc định last_price_from_mt5=True; "
+            "hoặc thêm chart_url nếu dùng --tv-title-price)."
+        )
 
     # Browser service up: drive TradingView entirely via RPC (no second CDP client in this process).
     if is_service_responding():
@@ -2766,6 +2773,7 @@ def run_tv_watchlist_daemon(
                 sym=sym,
                 poll_s=poll_s,
                 get_price=get_price,
+                price_log_source="TradingView title (RPC)",
             )
         finally:
             try:
@@ -2802,6 +2810,7 @@ def run_tv_watchlist_daemon(
                 sym=sym,
                 poll_s=poll_s,
                 get_price=get_price,
+                price_log_source="TradingView title (Playwright)",
             )
         finally:
             try:
@@ -2824,7 +2833,7 @@ def run_daemon_plan(
     params: WatchlistDaemonParams,
 ) -> str:
     """
-    One process per shard JSON: đọc giá thực thi từ MT5 (BUY→ask, SELL→bid) theo trade_line / zone.side.
+    One process per shard JSON: đọc Last (MT5 bid) từ shared memory / ``last.txt`` do daemon giá ghi.
     """
     if params.shard_path is None:
         raise SystemExit("daemon-plan requires --shard PATH (vung_*.json)")
