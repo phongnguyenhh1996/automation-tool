@@ -2189,7 +2189,6 @@ def _daemon_plan_main_loop(
         symbol_hint=sym,
         symbol_override=params.mt5_symbol,
         dry_run=bool(params.mt5_dry_run),
-        accounts_json=params.mt5_accounts_json,
     )
     heartbeat_s = 300.0
     last_heartbeat_at = 0.0

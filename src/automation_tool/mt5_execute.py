@@ -728,6 +728,10 @@ def execution_price_from_tick(tick: Any, side: Literal["BUY", "SELL"]) -> float:
 class DaemonPlanMt5PriceSession:
     """
     Một phiên ``initialize`` + ``symbol_select`` cho ``daemon-plan``; gọi ``symbol_info_tick`` mỗi poll.
+
+    **Không** truyền ``login``/``password``/``server`` vào ``initialize``: chỉ đọc giá theo symbol,
+    bám phiên MT5 đang mở (``initialize()`` không đối số). Tránh đăng nhập lại account primary
+    và làm đổi phiên khi luồng khác đang gửi lệnh multi-account (account phụ).
     """
 
     def __init__(
@@ -736,37 +740,17 @@ class DaemonPlanMt5PriceSession:
         symbol_hint: str,
         symbol_override: Optional[str],
         dry_run: bool,
-        accounts_json: Optional[Path],
     ) -> None:
         ovr = _normalize_symbol_str(symbol_override)
         base = ovr if ovr else (symbol_hint or "").strip()
         self._symbol_hint = normalize_broker_xau_symbol(base or "XAUUSD")
         self._dry_run = bool(dry_run)
-        self._accounts_json = accounts_json
         self._mt5: Any = None
         self._resolved: Optional[str] = None
         self._last_error: Optional[str] = None
 
     def _build_init_kwargs(self) -> dict[str, Any]:
-        from automation_tool.mt5_accounts import (  # noqa: WPS433
-            load_mt5_accounts_optional,
-            primary_account,
-            resolve_mt5_accounts_path,
-        )
-
-        accs = load_mt5_accounts_optional(resolve_mt5_accounts_path(self._accounts_json))
-        if accs:
-            prim = primary_account(accs)
-            return {
-                "login": int(prim.login),
-                "password": str(prim.password),
-                "server": str(prim.server),
-            }
-        login_i = _env_int("MT5_LOGIN", 0)
-        password_s = os.getenv("MT5_PASSWORD") or ""
-        server_s = os.getenv("MT5_SERVER") or ""
-        if login_i and password_s and server_s:
-            return {"login": login_i, "password": password_s, "server": server_s}
+        # Giá bid/ask theo symbol không phụ thuộc account đang active; không ép login.
         return {}
 
     def _ensure_connected(self) -> bool:
