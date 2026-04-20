@@ -54,6 +54,7 @@ from automation_tool.mt5_manage import (
     mt5_cancel_pending_or_close_position,
     mt5_cancel_pending_order,
     mt5_chinh_trade_line_inplace,
+    mt5_ticket_is_open_position,
     mt5_ticket_still_open,
     mt5_ticket_status_for_cutoff,
 )
@@ -2224,27 +2225,28 @@ def _daemon_plan_main_loop(
                 )
                 return
 
-            exit_closed, closed_detail = daemon_plan_should_exit_if_mt5_tickets_closed(
-                list(st.zones),
-                dry_run=bool(params.mt5_dry_run),
-                accounts_json=params.mt5_accounts_json,
-                settings=settings,
-                shard_tag=shard_tag,
-            )
-            if exit_closed:
-                _poll_terminal.info(
-                    "daemon-plan | shard=%s | exit | mt5_ticket_closed | %s",
-                    shard_tag,
-                    closed_detail,
-                )
-                _send_user_notice(
-                    settings,
-                    "Đã ngưng theo dõi.",
-                    f"Lý do: {closed_detail}",
-                    zone=z0,
-                    params=params,
-                )
-                return
+            # TEMP: tắt thoát khi ticket MT5 đã đóng — bỏ comment block dưới để bật lại.
+            # exit_closed, closed_detail = daemon_plan_should_exit_if_mt5_tickets_closed(
+            #     list(st.zones),
+            #     dry_run=bool(params.mt5_dry_run),
+            #     accounts_json=params.mt5_accounts_json,
+            #     settings=settings,
+            #     shard_tag=shard_tag,
+            # )
+            # if exit_closed:
+            #     _poll_terminal.info(
+            #         "daemon-plan | shard=%s | exit | mt5_ticket_closed | %s",
+            #         shard_tag,
+            #         closed_detail,
+            #     )
+            #     _send_user_notice(
+            #         settings,
+            #         "Đã ngưng theo dõi.",
+            #         f"Lý do: {closed_detail}",
+            #         zone=z0,
+            #         params=params,
+            #     )
+            #     return
 
             p_last = read_last_price_for_daemon_plan(sym, last_price_file)
             now_plan_tg = time.monotonic()
@@ -2387,6 +2389,24 @@ def _daemon_plan_main_loop(
                     if _tp1_touched(parsed_r1, float(p_last)):
                         continue
                     if not one_r_reached(parsed_r1, float(p_last), eps=_TP1_EPS):
+                        continue
+                    tk_r1 = int(z.mt5_ticket or 0)
+                    accs_r1_chk = load_mt5_accounts_for_cli(params.mt5_accounts_json)
+                    prim_r1_chk = primary_account(accs_r1_chk) if accs_r1_chk else None
+                    is_pos_r1, pos_msg_r1 = mt5_ticket_is_open_position(
+                        tk_r1,
+                        dry_run=bool(params.mt5_dry_run),
+                        login=prim_r1_chk.login if prim_r1_chk else None,
+                        password=prim_r1_chk.password if prim_r1_chk else None,
+                        server=prim_r1_chk.server if prim_r1_chk else None,
+                    )
+                    if not is_pos_r1:
+                        _poll_terminal.info(
+                            "daemon-plan | shard=%s | r1 skip (need open position) | zone_id=%s | %s",
+                            shard_tag,
+                            z.id,
+                            pos_msg_r1,
+                        )
                         continue
                     prev_status = z.status
                     z.status = "dang_thuc_thi"

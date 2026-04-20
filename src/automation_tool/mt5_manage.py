@@ -272,6 +272,42 @@ def mt5_ticket_still_open(
     return False, f"ticket={ticket} không còn (đã khớp đóng/chốt hoặc huỷ)"
 
 
+def mt5_ticket_is_open_position(
+    ticket: int,
+    *,
+    dry_run: bool = False,
+    login: Optional[int] = None,
+    password: Optional[str] = None,
+    server: Optional[str] = None,
+) -> tuple[bool, str]:
+    """
+    ``True`` chỉ khi ``ticket`` là **position** đang mở (không tính lệnh chờ pending).
+
+    Dùng trước khi dispatch follow-up 1R: chỉ chạy khi lệnh đã khớp thành position.
+
+    ``dry_run``: coi như đạt (không gọi MT5).
+
+    ``mt5.initialize`` thất bại: trả ``True`` (không chặn — cùng triết lý :func:`mt5_ticket_still_open`).
+    """
+    if dry_run:
+        return True, "[DRY-RUN] bỏ qua kiểm tra position"
+    if ticket <= 0:
+        return False, f"ticket không hợp lệ: {ticket}"
+    mt5 = _mt5_init(login, password, server)
+    if mt5 is None:
+        return True, "mt5.initialize thất bại — tiếp tục (không xác nhận position)"
+    try:
+        has_order = any(int(o.ticket) == int(ticket) for o in (mt5.orders_get() or []))
+        has_pos = any(int(p.ticket) == int(ticket) for p in (mt5.positions_get() or []))
+    finally:
+        mt5.shutdown()
+    if has_pos:
+        return True, f"ticket={ticket} còn (position mở)"
+    if has_order:
+        return False, f"ticket={ticket} vẫn pending (chưa position) — bỏ qua R1 follow-up"
+    return False, f"ticket={ticket} không còn position/pending"
+
+
 def mt5_ticket_status_for_cutoff(
     ticket: int,
     *,
