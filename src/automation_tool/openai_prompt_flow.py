@@ -449,22 +449,46 @@ def run_prompt_two_step_flow(
 
 DEFAULT_UPDATE_PROMPT_TEMPLATE = (
     "[INTRADAY_UPDATE]\n"
-    "Tiếp tục chuỗi phản hồi sau [FULL_ANALYSIS] hoặc cập nhật trước; footprint M15 + M5 (JSON đính kèm theo thứ tự).\n"
+    "Cập nhật intraday: lần đầu sau [FULL_ANALYSIS] kèm morning_full_analysis.json + M15 + M5.\n"
 )
 
 
-def build_intraday_update_user_text() -> str:
+def is_first_intraday_update_after_all(
+    *,
+    last_response_id: str | None,
+    last_all_response_id: str | None,
+) -> bool:
     """
-    User message for ``coinmap-automation update``: thời gian + nhiệm vụ ngắn (không nhúng baseline vùng chờ).
+    True when ``last_response_id`` still matches the last ``all`` response id — first ``update`` run
+    should attach ``morning_full_analysis.json`` and start a new thread (no ``previous_response_id``).
+    """
+    a = (last_all_response_id or "").strip()
+    c = (last_response_id or "").strip()
+    if not a or not c:
+        return False
+    return c == a
 
-    Context từ phân tích sáng / lần update trước nằm trong thread OpenAI (``previous_response_id``);
-    chỉ đính kèm M15 và M5.
+
+def build_intraday_update_user_text(*, first_after_all: bool = False) -> str:
+    """
+    User message for ``coinmap-automation update``: thời gian + nhiệm vụ (không nhúng baseline vùng chờ).
+
+    * ``first_after_all=True``: đính kèm morning JSON + M15 + M5; không nối thread ``all``.
+    * ``first_after_all=False``: chỉ M15 + M5; context trước trong chuỗi ``[INTRADAY_UPDATE]``.
     """
     time_line = format_intraday_update_time_line()
+    if first_after_all:
+        return (
+            "[INTRADAY_UPDATE]\n"
+            f"{time_line}"
+            "Phân tích buổi sáng (Schema A) nằm trong file **morning_full_analysis.json** đính kèm đầu tiên.\n"
+            "Đính kèm **ba** file JSON theo thứ tự: **(1)** morning_full_analysis.json, **(2)** M15, **(3)** M5 "
+            "(footprint cặp chính).\n"
+        )
     return (
         "[INTRADAY_UPDATE]\n"
         f"{time_line}"
-        "Context phân tích trước đó nằm trong **chuỗi phản hồi** (sau [FULL_ANALYSIS] hoặc [INTRADAY_UPDATE] trước).\n"
+        "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước; plan sáng đã được đưa vào thread ở lần cập nhật đầu tiên.\n"
         "Đính kèm **hai** file JSON theo thứ tự: **(1) M15**, **(2) M5** (footprint cặp chính).\n"
     )
 

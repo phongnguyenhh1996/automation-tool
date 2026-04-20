@@ -38,6 +38,7 @@ from automation_tool.openai_prompt_flow import (
     PromptTwoStepResult,
     build_intraday_update_user_text,
     default_analysis_prompt,
+    is_first_intraday_update_after_all,
     run_analysis_responses_flow,
     run_single_followup_responses,
 )
@@ -55,13 +56,16 @@ from automation_tool.chart_recapture import recapture_failed_chart_slots
 from automation_tool.first_response_trade import apply_first_response_vao_lenh
 from automation_tool.state_files import (
     default_last_alert_prices_path,
+    default_last_all_response_id_path,
     default_last_response_id_path,
     default_morning_baseline_prices_path,
     default_morning_full_analysis_path,
     merge_trade_lines_from_openai_analysis_text,
     read_last_alert_prices,
+    read_last_all_response_id,
     read_last_response_id,
     write_last_alert_prices,
+    write_last_all_response_id,
     write_last_response_id,
     write_morning_baseline_prices,
     write_morning_full_analysis,
@@ -2076,6 +2080,7 @@ def cmd_all(args: argparse.Namespace) -> None:
     _log.info("all: OpenAI xong | response_id=%s", out.final_response_id)
 
     write_last_response_id(out.final_response_id)
+    write_last_all_response_id(out.final_response_id)
     if not args.no_telegram and out.after_charts:
         require_telegram(s)
         send_openai_output_to_telegram(
@@ -2131,8 +2136,6 @@ def cmd_all(args: argparse.Namespace) -> None:
                 "Warning: could not parse analysis JSON for zones (no `prices` or empty).",
                 file=sys.stderr,
             )
-
-    _reconcile_daemon_plans_after_cli(zones_dir, "all")
 
 
 def cmd_tv_alerts(args: argparse.Namespace) -> None:
@@ -2286,11 +2289,22 @@ def cmd_update(args: argparse.Namespace) -> None:
     storage = args.storage_state or default_storage_state_path()
     cfg_tv = args.tv_config or default_coinmap_config_path()
 
-    prev_response_id = read_last_response_id()
-    if not (prev_response_id or "").strip():
+    all_rid = read_last_all_response_id()
+    if not (all_rid or "").strip():
         raise SystemExit(
-            f"Missing {default_last_response_id_path()} — run `coinmap-automation all` "
-            "or `update` first so OpenAI has a thread id to chain [INTRADAY_UPDATE]."
+            f"Missing {default_last_all_response_id_path()} — run `coinmap-automation all` once "
+            "to seed last_all_response_id.txt for [INTRADAY_UPDATE]."
+        )
+
+    cur = (read_last_response_id() or "").strip()
+    first_after_all = is_first_intraday_update_after_all(
+        last_response_id=cur or None,
+        last_all_response_id=all_rid,
+    )
+    _log.info("update: first intraday update after all=%s", first_after_all)
+    if not first_after_all and not cur:
+        raise SystemExit(
+            f"Missing {default_last_response_id_path()} — run `coinmap-automation all` first."
         )
 
     _send_python_bot_job_started(
@@ -2335,7 +2349,23 @@ def cmd_update(args: argparse.Namespace) -> None:
         )
 
     require_openai(s)
-    user_msg = build_intraday_update_user_text()
+
+    morning_snapshot: Path | None = None
+    prev_for_openai: str | None = None
+    if first_after_all:
+        mp = default_morning_full_analysis_path()
+        if not mp.is_file():
+            raise SystemExit(
+                f"Missing {mp} — run `coinmap-automation all` so morning analysis is saved "
+                "before the first [INTRADAY_UPDATE] after each `all`."
+            )
+        morning_snapshot = mp
+        prev_for_openai = None
+    else:
+        morning_snapshot = None
+        prev_for_openai = cur
+
+    user_msg = build_intraday_update_user_text(first_after_all=first_after_all)
 
     try:
         out_text, new_id = run_single_followup_responses(
@@ -2343,9 +2373,9 @@ def cmd_update(args: argparse.Namespace) -> None:
             prompt_id=s.openai_prompt_id,
             prompt_version=s.openai_prompt_version,
             user_text=user_msg,
-            morning_snapshot_path=None,
+            morning_snapshot_path=morning_snapshot,
             coinmap_json_paths=[m15, m5],
-            previous_response_id=prev_response_id.strip(),
+            previous_response_id=prev_for_openai,
             vector_store_ids=s.openai_vector_store_ids,
             store=s.openai_responses_store,
             include=s.openai_responses_include,
@@ -2410,13 +2440,11 @@ def cmd_update(args: argparse.Namespace) -> None:
     if no_change_json is True:
         _send_phan_tich_update_if_any()
         _log.info("update: no_change (JSON) — không ghi giá mới")
-        _reconcile_daemon_plans_after_cli(zones_dir, "update")
         return
     if new_triple is None:
         if is_no_change_action_line(out_text):
             _send_phan_tich_update_if_any()
             _log.info("update: no_change (action line) — không ghi giá mới")
-            _reconcile_daemon_plans_after_cli(zones_dir, "update")
             return
         _send_phan_tich_update_if_any()
         raise SystemExit(zerr or "Could not parse three zone prices from model output.")
@@ -2437,7 +2465,6 @@ def cmd_update(args: argparse.Namespace) -> None:
     # Không cần tạo TradingView alerts nữa; monitor đọc trực tiếp giá realtime từ Watchlist.
 
     _send_phan_tich_update_if_any()
-    _reconcile_daemon_plans_after_cli(zones_dir, "update")
 
 
 def cmd_tv_watchlist_daemon(args: argparse.Namespace) -> None:

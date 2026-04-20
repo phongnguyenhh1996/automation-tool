@@ -9,7 +9,7 @@ echo CWD    : %cd%
 echo Args   : %*
 echo ============================================================
 
-REM Intraday update: chain OpenAI thread (last_response_id) + M15/M5 Coinmap JSON only, then TV sync if zones changed
+REM Intraday update: first run after all = morning_full_analysis.json + M15/M5 (new thread); later runs = M15/M5 only + chain; then TV sync if zones changed
 cd /d "%~dp0"
 
 if not exist "logs" mkdir "logs"

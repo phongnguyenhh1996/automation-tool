@@ -29,6 +29,7 @@ def migrate_legacy_flat_data_layout() -> None:
         "morning_baseline_prices.json",
         "morning_full_analysis.json",
         "last_response_id.txt",
+        "last_all_response_id.txt",
         "storage_state.json",
     )
     has_flat = any((root / n).is_file() for n in names)
