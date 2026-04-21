@@ -26,7 +26,11 @@ from zoneinfo import ZoneInfo
 from automation_tool.coinmap import capture_charts
 from automation_tool.config import Settings, resolved_model_for_intraday_alert
 from automation_tool.first_response_trade import apply_first_response_vao_lenh
-from automation_tool.images import coinmap_xauusd_5m_json_path, read_main_chart_symbol
+from automation_tool.images import (
+    coinmap_main_pair_interval_json_path,
+    coinmap_xauusd_5m_json_path,
+    read_main_chart_symbol,
+)
 from automation_tool.mt5_accounts import load_mt5_accounts_for_cli, primary_account
 from automation_tool.mt5_execute import execute_trade, format_mt5_execution_for_telegram
 from automation_tool.mt5_manage import mt5_latest_position_ticket
@@ -388,6 +392,7 @@ def run_intraday_touch_flow(
                 raise _AbortLongOp(reason="supersede", supersede=sup2)
 
         try:
+            _cm_iv = ("1m",) if touched_label.strip().lower() == "scalp" else ("5m",)
             paths = capture_charts(
                 coinmap_yaml=params.capture_coinmap_yaml,
                 charts_dir=params.charts_dir,
@@ -400,6 +405,7 @@ def run_intraday_touch_flow(
                 reuse_browser_context=browser_context,
                 main_chart_symbol=read_main_chart_symbol(params.charts_dir),
                 progress_hook=lambda: _poll_abort_during_long_ops(phase="capture"),
+                coinmap_capture_intervals=_cm_iv,
             )
             _ts_log(tz, "tv-touch", f"Coinmap capture xong: {len(paths)} file(s).")
         except _AbortLongOp as a:
@@ -419,11 +425,15 @@ def run_intraday_touch_flow(
                 loai_streak = 0
                 continue
             return ("cutoff", prev_id)
-        json_path = coinmap_xauusd_5m_json_path(params.charts_dir)
+        if touched_label.strip().lower() == "scalp":
+            json_path = coinmap_main_pair_interval_json_path(params.charts_dir, "1m")
+        else:
+            json_path = coinmap_xauusd_5m_json_path(params.charts_dir)
         if json_path is None or not json_path.is_file():
+            _exp = "1m" if touched_label.strip().lower() == "scalp" else "5m"
             raise SystemExit(
-                f"No main-pair 5m Coinmap JSON under {params.charts_dir} "
-                f"(expected stamp coinmap_{read_main_chart_symbol(params.charts_dir)}_5m)."
+                f"No main-pair {_exp} Coinmap JSON under {params.charts_dir} "
+                f"(expected stamp coinmap_{read_main_chart_symbol(params.charts_dir)}_{_exp})."
             )
 
         # OpenAI follow-up message (kept compatible with existing prompt templates)

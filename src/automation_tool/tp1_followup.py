@@ -235,6 +235,7 @@ def _run_tp1_openai_and_act(
         headless=headless,
         reuse_browser_context=browser_context,
         main_chart_symbol=read_main_chart_symbol(charts_dir),
+        coinmap_capture_intervals=("5m",),
     )
     _log.info("tp1-followup: capture_charts → %d file(s)", len(paths))
     json_path = coinmap_xauusd_5m_json_path(charts_dir)

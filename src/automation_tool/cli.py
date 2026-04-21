@@ -607,7 +607,7 @@ def _parser() -> argparse.ArgumentParser:
         "--no-mt5-execute",
         action="store_true",
         help=(
-            "Không gọi execute_trade khi follow-up có vùng đủ hop_luu (plan_chinh/plan_phu>=85, scalp>=60) + trade_line (mặc định: gọi; cần Windows + MetaTrader5)"
+            "Không gọi execute_trade khi follow-up có vùng đủ hop_luu (plan_chinh/plan_phu>=85, scalp>=65) + trade_line (mặc định: gọi; cần Windows + MetaTrader5)"
         ),
     )
     up.add_argument(

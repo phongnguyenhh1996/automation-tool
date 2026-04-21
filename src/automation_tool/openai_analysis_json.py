@@ -14,7 +14,7 @@ ZONE_LABELS_ORDER = ("plan_chinh", "plan_phu", "scalp")
 # Morning auto-MT5: hop_luu >= this value for plan_chinh / plan_phu (đồng bộ system-prompt).
 AUTO_MT5_HOP_LUU_THRESHOLD = 85
 # Scalp: hop_luu >= this value (đồng bộ system-prompt).
-AUTO_MT5_HOP_LUU_THRESHOLD_SCALP = 60
+AUTO_MT5_HOP_LUU_THRESHOLD_SCALP = 65
 
 
 def auto_mt5_hop_luu_threshold_for_label(label: str) -> int:

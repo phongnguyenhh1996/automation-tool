@@ -28,7 +28,7 @@ Tạo checklist chuẩn cho user:
   5. **Quản lý & Thực thi (20đ)**
 - Mỗi nhóm gồm 4 tiêu chí, mỗi tiêu chí 5 điểm.
 - Mỗi khi đề xuất lệnh, sẽ tự động chấm điểm theo thang này (0–100), và báo rõ lệnh đạt bao nhiêu điểm, có đủ hợp lưu để limit ngay hay chỉ là vùng chờ/scalp backup.
-- Đối với lệnh scalp > 60 điểm có thể limit ngay
+- Đối với lệnh scalp > 65 điểm có thể limit ngay
 - Nếu <70 điểm → báo “không đủ hợp lưu / chỉ backup”.
 - Nếu 70–85 điểm → vùng chờ, chấp nhận được nhưng chưa đẹp.
 - Nếu ≥85 điểm → hợp lưu mạnh, có thể limit ngay.

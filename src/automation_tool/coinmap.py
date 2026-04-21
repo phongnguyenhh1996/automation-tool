@@ -9,6 +9,7 @@ import os
 import re
 import time
 from datetime import datetime, timezone
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Callable, Optional
 from urllib.parse import urlparse
@@ -1356,6 +1357,27 @@ def _coinmap_resolve_capture_plan(cd: dict[str, Any]) -> Optional[list[dict[str,
     return _coinmap_default_capture_plan()
 
 
+def _coinmap_filter_capture_plan_by_intervals(
+    plan: Optional[list[dict[str, Any]]],
+    intervals: Optional[Sequence[str]],
+) -> Optional[list[dict[str, Any]]]:
+    """
+    Giữ lại các bước multi-shot có ``interval`` thuộc ``intervals`` (so khớp không phân biệt hoa thường).
+    Dùng để luồng intraday chỉ tải ví dụ M5 thay vì cả M15.
+    """
+    if not plan or not intervals:
+        return plan
+    want = {str(x).strip().lower() for x in intervals if str(x).strip()}
+    if not want:
+        return plan
+    out = [
+        step
+        for step in plan
+        if str(step.get("interval") or "").strip().lower() in want
+    ]
+    return out or None
+
+
 def _coinmap_toggle_right_sidebar(
     page,
     cd: dict[str, Any],
@@ -1730,6 +1752,7 @@ def _coinmap_run_bearer_api_only_exports(
     only_retry_paths: Optional[list[Path]] = None,
     prefer_httpx: bool = False,
     abort_on_http_auth_error: bool = False,
+    coinmap_capture_intervals: Optional[Sequence[str]] = None,
 ) -> list[Path]:
     """
     After ``auth`` is known, resolve capture plan and write cm-api JSON files (httpx and/or
@@ -1756,6 +1779,13 @@ def _coinmap_run_bearer_api_only_exports(
             raise SystemExit(
                 "coinmap bearer retry: no capture_plan steps match the target files "
                 f"(stamp={stamp!r})."
+            )
+    if plan is not None and coinmap_capture_intervals:
+        plan = _coinmap_filter_capture_plan_by_intervals(plan, coinmap_capture_intervals)
+        if not plan:
+            raise SystemExit(
+                "coinmap_capture_intervals removed all capture_plan steps "
+                f"(filter={list(coinmap_capture_intervals)!r})."
             )
     if plan:
         n = len(plan)
@@ -1873,6 +1903,7 @@ def _run_bearer_request_api_only_flow(
     api_cd: dict[str, Any],
     bearer_capture: CoinmapBearerCapture,
     only_retry_paths: Optional[list[Path]] = None,
+    coinmap_capture_intervals: Optional[Sequence[str]] = None,
 ) -> list[Path]:
     """
     Login already completed; capture Bearer from network, optional one-shot navigation,
@@ -1914,6 +1945,7 @@ def _run_bearer_request_api_only_flow(
         only_retry_paths=only_retry_paths,
         prefer_httpx=False,
         abort_on_http_auth_error=False,
+        coinmap_capture_intervals=coinmap_capture_intervals,
     )
     if _coinmap_bearer_token_cache_enabled(api_cd):
         cache_path = _coinmap_bearer_token_cache_resolved_path(api_cd)
@@ -1934,6 +1966,7 @@ def _run_chart_screenshot_flow(
     coinmap_login_cfg: Optional[dict[str, Any]] = None,
     bearer_capture: Optional[CoinmapBearerCapture] = None,
     coinmap_bearer_only_retry_paths: Optional[list[Path]] = None,
+    coinmap_capture_intervals: Optional[Sequence[str]] = None,
 ) -> list[Path]:
     """Open chart: multi-shot watchlist sidebar flow, or single fullscreen on current symbol (no modal search)."""
     api_cd = _api_export_config(cd)
@@ -1961,6 +1994,7 @@ def _run_chart_screenshot_flow(
             api_cd=api_cd,
             bearer_capture=bearer_capture,
             only_retry_paths=coinmap_bearer_only_retry_paths,
+            coinmap_capture_intervals=coinmap_capture_intervals,
         )
 
     net_capture: Optional[CoinmapNetworkCapture] = None
@@ -2010,6 +2044,13 @@ def _run_chart_screenshot_flow(
                 )
 
         plan = _coinmap_resolve_capture_plan(cd)
+        if plan is not None and coinmap_capture_intervals:
+            plan = _coinmap_filter_capture_plan_by_intervals(plan, coinmap_capture_intervals)
+            if not plan:
+                raise SystemExit(
+                    "coinmap_capture_intervals removed all capture_plan steps "
+                    f"(filter={list(coinmap_capture_intervals)!r})."
+                )
         if plan:
             paths = _run_coinmap_multi_shot_flow(
                 page,
@@ -2613,6 +2654,7 @@ def _capture_charts_in_context(
     stamp: str,
     progress_hook: Optional[Callable[[], None]] = None,
     coinmap_only_retry_paths: Optional[list[Path]] = None,
+    coinmap_capture_intervals: Optional[Sequence[str]] = None,
 ) -> list[Path]:
     """
     Run Coinmap (+ optional TradingView) capture using an existing browser context.
@@ -2657,6 +2699,7 @@ def _capture_charts_in_context(
                         only_retry_paths=coinmap_only_retry_paths,
                         prefer_httpx=True,
                         abort_on_http_auth_error=True,
+                        coinmap_capture_intervals=coinmap_capture_intervals,
                     )
                     written.extend(cache_paths)
                     coinmap_bearer_satisfied_from_cache = True
@@ -2737,6 +2780,7 @@ def _capture_charts_in_context(
                     coinmap_login_cfg=cfg,
                     bearer_capture=bearer_capture,
                     coinmap_bearer_only_retry_paths=coinmap_only_retry_paths,
+                    coinmap_capture_intervals=coinmap_capture_intervals,
                 )
                 written.extend(dl_paths)
                 if progress_hook is not None:
@@ -2880,6 +2924,7 @@ def capture_charts(
     progress_hook: Optional[Callable[[], None]] = None,
     require_browser_service: bool = False,
     coinmap_only_retry_paths: Optional[list[Path]] = None,
+    coinmap_capture_intervals: Optional[Sequence[str]] = None,
 ) -> list[Path]:
     """
     Optionally clear prior images in charts_dir, then log in (if credentials given),
@@ -2892,6 +2937,9 @@ def capture_charts(
 
     If ``require_browser_service`` is True, attaches via CDP to the running browser service
     with ``force=True`` and raises if attach fails (no local Chrome launch).
+
+    If ``coinmap_capture_intervals`` is set (e.g. ``("5m",)``), only those Coinmap
+    multi-shot / bearer API steps run; other intervals in the YAML are skipped.
     """
     from automation_tool.config import default_charts_dir
     from automation_tool.images import (
@@ -2983,6 +3031,7 @@ def capture_charts(
             stamp=stamp,
             progress_hook=progress_hook,
             coinmap_only_retry_paths=coinmap_only_retry_paths,
+            coinmap_capture_intervals=coinmap_capture_intervals,
         )
 
     vw = int(cfg.get("viewport_width", 1920))
@@ -3021,6 +3070,7 @@ def capture_charts(
                 stamp=stamp,
                 progress_hook=progress_hook,
                 coinmap_only_retry_paths=coinmap_only_retry_paths,
+                coinmap_capture_intervals=coinmap_capture_intervals,
             )
         finally:
             if use_browser_service:

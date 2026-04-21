@@ -30,7 +30,13 @@ from automation_tool.coinmap import (
 )
 from automation_tool.coinmap import _tradingview_ensure_watchlist_open  # reuse internal helper
 from automation_tool.config import Settings, resolved_model_for_intraday_alert
-from automation_tool.images import DEFAULT_MAIN_CHART_SYMBOL, get_active_main_symbol
+from automation_tool.images import (
+    DEFAULT_MAIN_CHART_SYMBOL,
+    coinmap_main_pair_interval_json_path,
+    coinmap_xauusd_5m_json_path,
+    get_active_main_symbol,
+    read_main_chart_symbol,
+)
 from automation_tool.mt5_accounts import load_mt5_accounts_for_cli, primary_account
 from automation_tool.mt5_execute import (
     DaemonPlanMt5PriceSession,
@@ -143,6 +149,26 @@ _TP1_EPS = 0.01
 # Re-export default cho test (plan_chinh / plan_phu).
 _ARM_THRESHOLD = ARM_THRESHOLD_TP1_DEFAULT
 _RETRY_WAIT_MINUTES = 15
+_RETRY_WAIT_MINUTES_SCALP = 10
+
+
+def _is_scalp_zone(zone: Zone) -> bool:
+    return (zone.label or "").strip().lower() == "scalp"
+
+
+def _zone_touch_retry_wait_minutes(zone: Zone) -> int:
+    """Chạm vùng scalp: gửi lại Coinmap + OpenAI mỗi 10 phút; plan khác: 15 phút."""
+    return _RETRY_WAIT_MINUTES_SCALP if _is_scalp_zone(zone) else _RETRY_WAIT_MINUTES
+
+
+def _zone_touch_coinmap_main_json_path(charts_dir: Path, zone: Zone) -> tuple[Optional[Path], str]:
+    """Scalp: JSON M1; plan_chinh / plan_phu: M5. Trả về (path, suffix log như ``1m`` / ``5m``)."""
+    if _is_scalp_zone(zone):
+        p = coinmap_main_pair_interval_json_path(charts_dir, "1m")
+        return p, "1m"
+    p = coinmap_xauusd_5m_json_path(charts_dir)
+    return p, "5m"
+
 
 # Daemon-plan: Last chạm SL theo trade_line → loại (vùng chờ/chạm hoặc đã vào lệnh / chờ TP1).
 _DAEMON_PLAN_SL_LOAI_STATUSES = frozenset({"vung_cho", "cham", "vao_lenh", "cho_tp1"})
@@ -530,12 +556,13 @@ def _touch_prompt(
         if trade_line
         else ""
     )
+    cm_tf = "M1" if _is_scalp_zone(zone) else "M5"
     return (
         "[INTRADAY_ALERT]\n"
         f"Cảnh báo chạm vùng chờ {zone.vung_cho} (plan: {zone.label}).\n"
         f"Last hiện tại (MT5): {last_price}.\n"
         f"{baseline_line}"
-        "Footprint Coinmap M5 JSON đính kèm.\n"
+        f"Footprint Coinmap {cm_tf} JSON đính kèm.\n"
     )
 
 
@@ -798,6 +825,7 @@ def _tp1_followup_job(
             headless=params.headless,
             reuse_browser_context=None,
             main_chart_symbol=read_main_chart_symbol(params.charts_dir),
+            coinmap_capture_intervals=("5m",),
         )
         json_path = coinmap_xauusd_5m_json_path(params.charts_dir)
         if json_path is None or not json_path.is_file():
@@ -1176,6 +1204,7 @@ def _r1_followup_job(
             headless=params.headless,
             reuse_browser_context=None,
             main_chart_symbol=read_main_chart_symbol(params.charts_dir),
+            coinmap_capture_intervals=("5m",),
         )
         json_path = coinmap_xauusd_5m_json_path(params.charts_dir)
         if json_path is None or not json_path.is_file():
@@ -1683,12 +1712,12 @@ def _zone_touch_job(
 ) -> None:
     """
     Fire-and-forget worker:
-    - capture Coinmap M5
+    - capture Coinmap (scalp: đính kèm JSON M1; plan khác: M5)
     - call OpenAI follow-up
     - update zone status + trade_line + mt5 ticket (optional)
 
-    ``after_retry_wait``: True khi dispatch từ vòng ``cham`` sau khi hết ``retry_at`` (~15 phút),
-    khác với lần chạm đầu từ ``vung_cho``.
+    ``after_retry_wait``: True khi dispatch từ vòng ``cham`` sau khi hết ``retry_at``
+    (scalp ~10 phút + Coinmap M1; plan khác ~15 phút + M5), khác với lần chạm đầu từ ``vung_cho``.
     """
     st0 = _state_read(params)
     if st0 is None:
@@ -1705,15 +1734,17 @@ def _zone_touch_job(
             f"vung_cho={zone.vung_cho} ref={ref} last={last_price}",
         )
         side_vn = "mua" if (zone.side or "").strip().upper() == "BUY" else "bán"
+        _rw_m = _zone_touch_retry_wait_minutes(zone)
+        _chart_tf = "M1" if _is_scalp_zone(zone) else "M5"
         _touch_title = (
-            f"Sau {_RETRY_WAIT_MINUTES}p giá chạm vùng chờ."
+            f"Sau {_rw_m}p giá chạm vùng chờ."
             if after_retry_wait
             else "Giá đã chạm vùng chờ."
         )
         _send_user_notice(
             settings,
             _touch_title,
-            "Đang lấy dữ liệu biểu đồ M5 và phân tích lại với AI.",
+            f"Đang lấy dữ liệu biểu đồ {_chart_tf} và phân tích lại với AI.",
             zone=zone,
             params=params,
         )
@@ -1737,10 +1768,10 @@ def _zone_touch_job(
         zone.retry_at = ""
         _state_write(params, st_check)
 
-        # Capture Coinmap (reuse capture pipeline)
+        # Capture Coinmap (reuse capture pipeline; scalp → đọc M1, còn lại M5)
         from automation_tool.coinmap import capture_charts
-        from automation_tool.images import coinmap_xauusd_5m_json_path, read_main_chart_symbol
 
+        _touch_iv = ("1m",) if _is_scalp_zone(zone) else ("5m",)
         capture_charts(
             coinmap_yaml=params.capture_coinmap_yaml,
             charts_dir=params.charts_dir,
@@ -1752,12 +1783,15 @@ def _zone_touch_job(
             headless=params.headless,
             reuse_browser_context=None,
             main_chart_symbol=read_main_chart_symbol(params.charts_dir),
+            coinmap_capture_intervals=_touch_iv,
         )
-        json_path = coinmap_xauusd_5m_json_path(params.charts_dir)
+        json_path, _cm_iv = _zone_touch_coinmap_main_json_path(params.charts_dir, zone)
         if json_path is None or not json_path.is_file():
-            raise SystemExit(f"zone-touch: no main 5m Coinmap JSON under {params.charts_dir}")
+            raise SystemExit(
+                f"zone-touch: no main {_cm_iv} Coinmap JSON under {params.charts_dir}"
+            )
 
-        _send_log(settings, f"[zone-touch] coinmap_m5_json={json_path}")
+        _send_log(settings, f"[zone-touch] coinmap_{_cm_iv}_json={json_path}")
 
         prev = _openai_followup_prev_response_id(params)
         user_text = _touch_prompt(zone=zone, last_price=last_price)
@@ -1832,7 +1866,7 @@ def _zone_touch_job(
                 return
             # keep touched state; daemon will re-dispatch after retry_at
             z1.status = "cham"
-            z1.retry_at = _retry_at_iso()
+            z1.retry_at = _retry_at_iso(_zone_touch_retry_wait_minutes(z1))
             _state_write(params, st1)
             _send_log(
                 settings,
@@ -1856,7 +1890,7 @@ def _zone_touch_job(
         if act != "VÀO LỆNH":
             # keep touched state (no revert to vung_cho); daemon can retry later
             z1.status = "cham"
-            z1.retry_at = _retry_at_iso()
+            z1.retry_at = _retry_at_iso(_zone_touch_retry_wait_minutes(z1))
             _state_write(params, st1)
             _send_log(
                 settings,
@@ -1881,7 +1915,7 @@ def _zone_touch_job(
         )
         if err or parsed is None:
             z1.status = "cham"
-            z1.retry_at = _retry_at_iso()
+            z1.retry_at = _retry_at_iso(_zone_touch_retry_wait_minutes(z1))
             _state_write(params, st1)
             _send_log(
                 settings,
@@ -2014,7 +2048,7 @@ def _zone_touch_job(
                 for z in stx.zones:
                     if z.id == zone_id:
                         z.status = "cham"
-                        z.retry_at = _retry_at_iso()
+                        z.retry_at = _retry_at_iso(_zone_touch_retry_wait_minutes(z))
                         break
                 _state_write(params, stx)
         except Exception:

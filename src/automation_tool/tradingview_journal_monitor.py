@@ -24,6 +24,7 @@ from automation_tool.coinmap import (
 from automation_tool.config import Settings, resolved_model_for_intraday_alert
 from automation_tool.images import (
     DEFAULT_MAIN_CHART_SYMBOL,
+    coinmap_main_pair_interval_json_path,
     coinmap_xauusd_5m_json_path,
     get_active_main_symbol,
     read_main_chart_symbol,
@@ -501,6 +502,7 @@ def _run_intraday_touch_loop(
             tz,
             f"Vòng trong #{inner_i}: chụp Coinmap (yaml={params.capture_coinmap_yaml.name}, charts_dir={params.charts_dir})",
         )
+        _cm_iv = ("1m",) if touched_label.strip().lower() == "scalp" else ("5m",)
         paths = capture_charts(
             coinmap_yaml=params.capture_coinmap_yaml,
             charts_dir=params.charts_dir,
@@ -512,6 +514,7 @@ def _run_intraday_touch_loop(
             headless=params.headless,
             reuse_browser_context=browser_context,
             main_chart_symbol=read_main_chart_symbol(params.charts_dir),
+            coinmap_capture_intervals=_cm_iv,
         )
         _journal_log(tz, f"Coinmap capture xong: {len(paths)} file(s).")
         if paths:
@@ -519,14 +522,20 @@ def _run_intraday_touch_loop(
                 _journal_log(tz, f"  [{j}] {pth}")
             if len(paths) > 12:
                 _journal_log(tz, f"  … và {len(paths) - 12} file khác.")
-        json_path = coinmap_xauusd_5m_json_path(params.charts_dir)
+        if touched_label.strip().lower() == "scalp":
+            json_path = coinmap_main_pair_interval_json_path(params.charts_dir, "1m")
+            _exp = "1m"
+        else:
+            json_path = coinmap_xauusd_5m_json_path(params.charts_dir)
+            _exp = "5m"
         if json_path is None or not json_path.is_file():
             raise SystemExit(
-                f"No main-pair 5m Coinmap JSON under {params.charts_dir} "
-                f"(expected stamp coinmap_{read_main_chart_symbol(params.charts_dir)}_5m). "
+                f"No main-pair {_exp} Coinmap JSON under {params.charts_dir} "
+                f"(expected stamp coinmap_{read_main_chart_symbol(params.charts_dir)}_{_exp}). "
                 "Check coinmap_update.yaml capture_plan and api_data_export."
             )
-        _journal_log(tz, f"JSON M5 {read_main_chart_symbol(params.charts_dir)}: {json_path}")
+        _json_tf = "M1" if touched_label.strip().lower() == "scalp" else "M5"
+        _journal_log(tz, f"JSON {_json_tf} {read_main_chart_symbol(params.charts_dir)}: {json_path}")
 
         if first:
             user_msg = JOURNAL_INTRADAY_FIRST_USER_TEMPLATE.format(
@@ -601,7 +610,7 @@ def _run_intraday_touch_loop(
         if hop_done:
             _journal_log(
                 tz,
-                "JSON prices: plan_chinh/plan_phu hop_luu>=85, scalp hop_luu>=60 + trade_line tại vùng chạm — đã ghi vao_lenh / MT5 (nếu bật). Kết thúc vòng trong.",
+                "JSON prices: plan_chinh/plan_phu hop_luu>=85, scalp hop_luu>=65 + trade_line tại vùng chạm — đã ghi vao_lenh / MT5 (nếu bật). Kết thúc vòng trong.",
             )
             if not params.no_telegram:
                 _journal_log(
