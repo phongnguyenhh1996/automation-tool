@@ -89,7 +89,9 @@ from automation_tool.openai_analysis_json import (
     ARM_THRESHOLD_TP1_DEFAULT,
     arm_threshold_tp1_for_label,
     auto_mt5_hop_luu_threshold_for_label,
+    parse_analysis_from_openai_text,
     parse_vung_cho_bounds,
+    vung_cho_zone_string_should_update,
 )
 from automation_tool.daemon_launcher import (
     reconcile_daemon_plans_at_boot,
@@ -562,12 +564,16 @@ def _touch_prompt(
     *,
     zone: Zone,
     last_price: float,
+    after_retry_wait: bool = False,
 ) -> str:
     """
     User turn for zone-touch OpenAI follow-up: ``[INTRADAY_ALERT]`` / **Schema E** (system prompt).
 
     Bắt buộc JSON: ``phan_tich_alert`` + ``intraday_hanh_dong``. Khi ``VÀO LỆNH``, nên trả thêm
     ``trade_line`` (pipe) để cập nhật lệnh theo chạm vùng; nếu không, tool dùng ``trade_line`` hiện tại (dưới) cho MT5.
+
+    ``after_retry_wait``: lần gửi sau khi đã chạm vùng trước đó (dispatch từ ``cham`` sau ``retry_at``) —
+    thêm dòng ngữ cảnh cho model.
     """
     trade_line = (zone.trade_line or "").strip()
     baseline_line = (
@@ -576,9 +582,15 @@ def _touch_prompt(
         else ""
     )
     cm_tf = "M1" if _is_scalp_zone(zone) else "M5"
+    lead = (
+        "Đánh giá sau khi đã chạm vùng trước đó.\n"
+        if after_retry_wait
+        else ""
+    )
     return (
         "[INTRADAY_ALERT]\n"
-        f"Cảnh báo chạm vùng chờ {zone.vung_cho} (plan: {zone.label}).\n"
+        f"{lead}"
+        f"Vùng chờ {zone.vung_cho} (plan: {zone.label}).\n"
         f"Last hiện tại (MT5): {last_price}.\n"
         f"{baseline_line}"
         f"Footprint Coinmap {cm_tf} JSON đính kèm.\n"
@@ -1813,7 +1825,11 @@ def _zone_touch_job(
         _send_log(settings, f"[zone-touch] coinmap_{_cm_iv}_json={json_path}")
 
         prev = _openai_followup_prev_response_id(params)
-        user_text = _touch_prompt(zone=zone, last_price=last_price)
+        user_text = _touch_prompt(
+            zone=zone,
+            last_price=last_price,
+            after_retry_wait=after_retry_wait,
+        )
         out_text, new_id = run_single_followup_responses(
             api_key=settings.openai_api_key,
             prompt_id=settings.openai_prompt_id,
@@ -1864,6 +1880,42 @@ def _zone_touch_job(
         z1 = next((z for z in st1.zones if z.id == zone_id), None)
         if z1 is None:
             return
+
+        # Schema E optional ``vung_cho``: revise waiting band when not entering / not «loại».
+        # ``VÀO LỆNH`` ignores ``vung_cho`` (entry takes precedence).
+        if act not in ("VÀO LỆNH", "loại"):
+            payload_alert = parse_analysis_from_openai_text(out_text)
+            raw_vc = (
+                (payload_alert.vung_cho or "").strip()
+                if payload_alert is not None
+                else ""
+            )
+            if raw_vc:
+                should_upd, canonical_vc = vung_cho_zone_string_should_update(
+                    z1.vung_cho or "",
+                    raw_vc,
+                )
+                if should_upd and canonical_vc:
+                    z1.vung_cho = canonical_vc
+                    z1.status = "vung_cho"
+                    z1.retry_at = ""
+                    z1.loai_streak = 0
+                    z1.tp1_followup_done = False
+                    z1.r1_followup_done = False
+                    _state_write(params, st1)
+                    _send_log(
+                        settings,
+                        "[zone-touch] vung_cho revised -> status=vung_cho | "
+                        f"zone_id={zone_id} vung_cho={canonical_vc!r}",
+                    )
+                    _send_user_notice(
+                        settings,
+                        "Vùng chờ đã được cập nhật theo AI.",
+                        "Giá cần chạm lại vùng mới để tiếp tục kịch bản.",
+                        zone=z1,
+                        params=params,
+                    )
+                    return
 
         if act == "loại":
             z1.loai_streak = int(getattr(z1, "loai_streak", 0) or 0) + 1

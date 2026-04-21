@@ -7,11 +7,13 @@ from automation_tool.openai_analysis_json import (
     AUTO_MT5_HOP_LUU_THRESHOLD_SCALP,
     AnalysisPayload,
     PriceZoneEntry,
+    VUNG_CHO_SEP,
     format_plan_lines_for_telegram,
     parse_analysis_from_openai_text,
     select_zone_for_auto_mt5,
     select_zone_for_auto_mt5_for_label,
     try_parse_analysis_payload,
+    vung_cho_zone_string_should_update,
 )
 
 
@@ -168,3 +170,57 @@ def test_select_zone_for_label_ignores_other_plans() -> None:
     assert z is not None
     assert z[0] == "plan_chinh"
     assert select_zone_for_auto_mt5_for_label(prices, "plan_phu") is None
+
+
+def test_schema_e_top_level_vung_cho_parses() -> None:
+    raw = """```json
+{
+  "phan_tich_alert": "Test.",
+  "intraday_hanh_dong": "chờ",
+  "trade_line": "",
+  "vung_cho": "4706.0–4708.5"
+}
+```"""
+    p = parse_analysis_from_openai_text(raw)
+    assert p is not None
+    assert p.vung_cho == "4706.0–4708.5"
+    assert p.intraday_hanh_dong == "chờ"
+
+
+def test_vung_cho_zone_string_should_update_same_numeric() -> None:
+    # Reversed order, same en-dash separator — same (min,max) as stored.
+    a, can = vung_cho_zone_string_should_update(
+        f"4705.0{VUNG_CHO_SEP}4709.0",
+        f"4709.0{VUNG_CHO_SEP}4705.0",
+    )
+    assert not a
+    assert can is None
+
+
+def test_vung_cho_zone_string_should_update_different() -> None:
+    a, can = vung_cho_zone_string_should_update(
+        f"4705.0{VUNG_CHO_SEP}4709.0",
+        "4706.0–4708.0",
+    )
+    assert a
+    assert can == f"4706.0{VUNG_CHO_SEP}4708.0"
+
+
+def test_vung_cho_zone_string_empty_stored_incoming_valid() -> None:
+    a, can = vung_cho_zone_string_should_update("", "100.0–101.0")
+    assert a
+    assert can == f"100.0{VUNG_CHO_SEP}101.0"
+
+
+def test_intraday_vao_lenh_payload_still_has_vung_cho_for_tool_ignore() -> None:
+    """Daemon ignores ``vung_cho`` when applying zone when action is VÀO LỆNH."""
+    data = {
+        "phan_tich_alert": "x",
+        "intraday_hanh_dong": "VÀO LỆNH",
+        "trade_line": "BUY LIMIT 1 | SL 0 | TP1 2 | Lot 0.01",
+        "vung_cho": "99.0–100.0",
+    }
+    p = try_parse_analysis_payload(data)
+    assert p is not None
+    assert p.intraday_hanh_dong == "VÀO LỆNH"
+    assert p.vung_cho == "99.0–100.0"

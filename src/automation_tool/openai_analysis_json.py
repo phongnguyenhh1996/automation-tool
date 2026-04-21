@@ -82,6 +82,42 @@ def extract_json_object(raw: str) -> Optional[dict[str, Any]]:
 _VUNG_CHO_FLOATS = re.compile(r"-?\d+(?:\.\d+)?")
 
 
+# Unicode en dash — persisted zone strings (same as zones_state / system prompt).
+VUNG_CHO_SEP = "–"
+
+
+def format_vung_cho_for_persist(lo: float, hi: float) -> str:
+    """Canonical ``vung_cho`` string for :class:`~automation_tool.zones_state.Zone` storage."""
+    a, b = float(min(lo, hi)), float(max(lo, hi))
+    return f"{a}{VUNG_CHO_SEP}{b}"
+
+
+def vung_cho_zone_string_should_update(
+    stored: str,
+    incoming: str,
+    *,
+    eps: float = 1e-9,
+) -> tuple[bool, Optional[str]]:
+    """
+    True when ``incoming`` parses to a range **numerically different** from ``stored``.
+
+    Returns ``(should_update, canonical_string)`` where canonical uses :data:`VUNG_CHO_SEP`.
+    """
+    inc = (incoming or "").strip()
+    if not inc:
+        return False, None
+    n_lo, n_hi = parse_vung_cho_bounds(inc)
+    if n_lo is None or n_hi is None:
+        return False, None
+    canonical = format_vung_cho_for_persist(n_lo, n_hi)
+    s_lo, s_hi = parse_vung_cho_bounds((stored or "").strip())
+    if s_lo is None or s_hi is None:
+        return True, canonical
+    if abs(s_lo - n_lo) <= eps and abs(s_hi - n_hi) <= eps:
+        return False, None
+    return True, canonical
+
+
 def parse_vung_cho_bounds(s: str) -> tuple[Optional[float], Optional[float]]:
     """
     Parse a waiting-zone string (e.g. ``4738.0–4742.0``) into ``(lo, hi)`` = min/max of the two numbers.
@@ -182,6 +218,8 @@ class AnalysisPayload:
     phan_tich_update: str = ""
     #: [INTRADAY_ALERT] only: short analysis → ``TELEGRAM_PYTHON_BOT_CHAT_ID`` (Schema E).
     phan_tich_alert: str = ""
+    #: [INTRADAY_ALERT] Schema E optional: revised waiting band (ignored when ``intraday_hanh_dong`` is ``VÀO LỆNH``).
+    vung_cho: Optional[str] = None
     prices: list[PriceZoneEntry] = field(default_factory=list)
     intraday_hanh_dong: Optional[IntradayHanhDong] = None
     trade_line: str = ""
@@ -235,6 +273,10 @@ def try_parse_analysis_payload(data: dict[str, Any]) -> Optional[AnalysisPayload
     phan_tich_update = ptu_raw.strip() if isinstance(ptu_raw, str) else ""
     pta_raw = data.get("phan_tich_alert")
     phan_tich_alert = pta_raw.strip() if isinstance(pta_raw, str) else ""
+    vc_top = data.get("vung_cho")
+    vung_cho: Optional[str] = None
+    if isinstance(vc_top, str) and vc_top.strip():
+        vung_cho = vc_top.strip()
 
     prices_raw = data.get("prices")
     prices: list[PriceZoneEntry] = []
@@ -264,6 +306,7 @@ def try_parse_analysis_payload(data: dict[str, Any]) -> Optional[AnalysisPayload
         and not out_ngan
         and not phan_tich_update
         and not phan_tich_alert
+        and not vung_cho
         and not prices
         and intra is None
         and not trade_line
@@ -276,6 +319,7 @@ def try_parse_analysis_payload(data: dict[str, Any]) -> Optional[AnalysisPayload
         output_ngan_gon=out_ngan,
         phan_tich_update=phan_tich_update,
         phan_tich_alert=phan_tich_alert,
+        vung_cho=vung_cho,
         prices=prices,
         intraday_hanh_dong=intra,
         trade_line=trade_line,

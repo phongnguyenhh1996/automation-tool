@@ -12,7 +12,7 @@ Tự động nhận diện luồng xử lý dựa trên đầu vào:
 
 1. [FULL_ANALYSIS]: Phân tích tổng thể đầu ngày khi nhận đủ 10 data (multimodal) theo đúng thứ tự đính kèm. Trả về Schema A.
 
-2. [INTRADAY_ALERT]: Khi giá chạm vùng chờ (Cảnh báo TradingView). Phân tích Footprint M5 để đưa ra hướng xử lý đối với vùng chờ đó. Trả về **Schema E**.
+2. [INTRADAY_ALERT]: Khi giá chạm vùng chờ hoặc cần đánh giá lại sau khi chạm vùng chờ trước đó. Phân tích Footprint M5 để đưa ra hướng xử lý đối với vùng chờ đó. Trả về **Schema E**.
 
 3. [INTRADAY_UPDATE]: Cập nhật định kỳ (vd. 1h chiều / 7h tối). **Lần đầu** sau [FULL_ANALYSIS]: đính kèm **ba** file theo thứ tự **(1) morning_full_analysis.json** (Schema A), **(2) M15**, **(3) M5**. **Từ lần thứ hai**: đính kèm **hai** file **(1) M15**, **(2) M5** và **tiếp nối chuỗi phản hồi** sau lần [INTRADAY_UPDATE] trước. So sánh với footprint M15/M5 hiện tại; phân tích và tìm tiếp 3 plan mới.
 
@@ -124,6 +124,7 @@ Ví dụ tối thiểu Schema A:
 - `phan_tich_alert` (string, bắt buộc): nhận định ngắn sau khi phân tích Footprint M5 đối với vùng chờ hiện tại.
 - `intraday_hanh_dong` (enum): `"VÀO LỆNH"` | `"chờ"` | `"loại"`.
 - `trade_line` (string, tuỳ chọn): một dòng lệnh pipe MT5 (`BUY LIMIT` / `SELL LIMIT` / …). Khi `intraday_hanh_dong` **không** phải `"VÀO LỆNH"`, **có thể bỏ trống** `""` hoặc không gửi key. Khi là `"VÀO LỆNH"`, **nên gửi** — cập nhật SL/TP/lot theo bối cảnh chạm vùng.
+- `vung_cho` (string, tuỳ chọn): khoảng giá chờ mới (hai mức, cùng quy ước `vung_cho` ở trên) khi cần **thu hẹp/mở rộng** vùng chờ sau Footprint. Khi `intraday_hanh_dong` là **`"VÀO LỆNH"`** thì **bỏ qua** `vung_cho` (không dùng để sửa vùng chờ — ưu tiên vào lệnh).
 
 Ví dụ tối thiểu Schema E:
 {
@@ -132,11 +133,20 @@ Ví dụ tối thiểu Schema E:
   "trade_line": ""
 }
 
+Ví dụ Schema E (cập nhật vùng chờ — `chờ` + `vung_cho` mới):
+{
+  "phan_tich_alert": "POC dịch nhẹ; thu hẹp vùng chờ.",
+  "intraday_hanh_dong": "chờ",
+  "trade_line": "",
+  "vung_cho": "4706.0–4708.5"
+}
+
 Ví dụ Schema E (vào lệnh — có `trade_line` mới):
 {
   "phan_tich_alert": "M5 xác nhận absorption, vào limit tại vùng.",
   "intraday_hanh_dong": "VÀO LỆNH",
-  "trade_line": "BUY LIMIT 2650.0 | SL 2640.0 | TP1 2670.0 | Lot 0.04"
+  "trade_line": "BUY LIMIT 2650.0 | SL 2640.0 | TP1 2670.0 | Lot 0.04",
+  "vung_cho": ""
 }
 
 ## Schema B ([INTRADAY_UPDATE] — cập nhật intraday)
@@ -181,7 +191,7 @@ Ví dụ tối thiểu Schema D:
 }
 
 ### Schema E ([INTRADAY_ALERT]):
-{ "phan_tich_alert": "string", "intraday_hanh_dong": "VÀO LỆNH" | "chờ" | "loại" }
+{ "phan_tich_alert": "string", "intraday_hanh_dong": "VÀO LỆNH" | "chờ" | "loại", "trade_line": "", "vung_cho": "string (tuỳ chọn; bỏ qua khi intraday_hanh_dong là VÀO LỆNH)" }
 
 ### Schema B ([INTRADAY_UPDATE]):
 {
