@@ -18,6 +18,7 @@ from automation_tool.tv_watchlist_daemon import (
     _openai_followup_persist_new_id,
     _openai_followup_prev_response_id,
     _price_round_nearest_int,
+    _should_write_intraday_alert_anchor,
     _zone_side_ref_from_vung_cho,
 )
 from automation_tool.zones_state import Zone
@@ -47,6 +48,33 @@ def test_daemon_plan_openai_sidecar_next_to_shard(tmp_path) -> None:
     assert _openai_followup_prev_response_id(params) == "thread-a"
     _openai_followup_persist_new_id(params, "thread-b")
     assert read_last_response_id(sidecar) == "thread-b"
+
+
+def test_intraday_alert_anchor_only_writes_when_sidecar_empty(tmp_path) -> None:
+    """[INTRADAY_ALERT] lần đầu ghi anchor; sidecar đã có id thì không ghi đè (retry tái dùng id)."""
+    shard = tmp_path / "vung_sang.json"
+    sidecar = _daemon_plan_response_id_path(shard)
+    base = dict(
+        coinmap_tv_yaml=tmp_path / "coinmap_tv.yaml",
+        capture_coinmap_yaml=tmp_path / "cap.yaml",
+        charts_dir=tmp_path / "charts",
+        storage_state_path=None,
+        headless=True,
+        no_save_storage=True,
+        shard_path=shard,
+    )
+    assert _should_write_intraday_alert_anchor(WatchlistDaemonParams(**base)) is True
+    write_last_response_id("first-alert-id", path=sidecar)
+    assert _should_write_intraday_alert_anchor(WatchlistDaemonParams(**base)) is False
+    no_shard = WatchlistDaemonParams(
+        coinmap_tv_yaml=tmp_path / "coinmap_tv.yaml",
+        capture_coinmap_yaml=tmp_path / "cap.yaml",
+        charts_dir=tmp_path / "charts",
+        storage_state_path=None,
+        headless=True,
+        no_save_storage=True,
+    )
+    assert _should_write_intraday_alert_anchor(no_shard) is False
 
 
 def test_daemon_plan_prev_seeds_from_main_when_sidecar_empty(monkeypatch, tmp_path) -> None:

@@ -454,6 +454,9 @@ def _openai_followup_persist_new_id(params: WatchlistDaemonParams, new_id: str) 
     """
     ``daemon-plan``: ghi id mới vào sidecar shard để lần sau chain trong cùng thread.
     Tiến trình tv-watchlist chính (không ``--shard``): không ghi ``last_response_id.txt`` (giữ hành vi cũ).
+
+    Lưu ý: [INTRADAY_ALERT] / :func:`_zone_touch_job` chỉ gọi hàm này khi
+    :func:`_should_write_intraday_alert_anchor` — lần đầu có anchor; các lần retry không ghi đè.
     """
     s = (new_id or "").strip()
     if not s:
@@ -461,6 +464,22 @@ def _openai_followup_persist_new_id(params: WatchlistDaemonParams, new_id: str) 
     if params.shard_path is None:
         return
     write_last_response_id(s, path=_daemon_plan_response_id_path(params.shard_path))
+
+
+def _should_write_intraday_alert_anchor(params: WatchlistDaemonParams) -> bool:
+    """
+    ``True`` khi cần ghi ``response_id`` mới từ [INTRADAY_ALERT] (zone-touch) vào sidecar shard.
+
+    Lần chạm đầu (file sidecar trống): sau OpenAI, lưu id để các lần sau dùng làm
+    ``previous_response_id``. Các lần chạm sau (retry ``cham``): sidecar đã có id — không ghi đè
+    bằng id mới; vẫn chain từ id đã lưu.
+
+    Không ``--shard``: luôn ``False`` (không ghi sidecar; giữ hành vi cũ).
+    """
+    if params.shard_path is None:
+        return False
+    p = _daemon_plan_response_id_path(params.shard_path)
+    return not (read_last_response_id(p) or "").strip()
 
 
 def _send_log(settings: Settings, text: str) -> None:
@@ -1807,7 +1826,8 @@ def _zone_touch_job(
             include=settings.openai_responses_include,
             model=resolved_model_for_intraday_alert(settings, params.openai_model_cli),
         )
-        _openai_followup_persist_new_id(params, new_id)
+        if _should_write_intraday_alert_anchor(params):
+            _openai_followup_persist_new_id(params, new_id)
         if new_id:
             _send_log(settings, f"[zone-touch] openai_response_id={new_id}")
 
