@@ -139,7 +139,7 @@ def apply_first_response_vao_lenh(
     Ghi ``last_alert_prices`` khi đủ triple giá.
 
     Auto-MT5 (không dry-run mặc định): ưu tiên vùng với ``hop_luu`` đạt ngưỡng
-    (plan_chinh/plan_phu >= 80; scalp >= 60) và ``trade_line`` không rỗng.
+    (plan_chinh/plan_phu >= 85; scalp >= 60) và ``trade_line`` không rỗng.
     Nếu không đủ ngưỡng nhưng JSON có ``intraday_hanh_dong: VÀO LỆNH`` và có ``trade_line``
     khả dụng cho vùng — vẫn vào lệnh (bỏ gate hợp lưu). Ghi ``vao_lenh`` + ``entry_manual`` false.
     Nếu ``auto_mt5_zone_label`` được set (vd. ``plan_chinh``), chỉ xét đúng vùng đó (Nhật ký TV).

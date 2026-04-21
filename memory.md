@@ -31,7 +31,7 @@ Tạo checklist chuẩn cho user:
 - Đối với lệnh scalp > 60 điểm có thể limit ngay
 - Nếu <70 điểm → báo “không đủ hợp lưu / chỉ backup”.
 - Nếu 70–80 điểm → vùng chờ, chấp nhận được nhưng chưa đẹp.
-- Nếu ≥80 điểm → hợp lưu mạnh, có thể limit ngay.
+- Nếu ≥85 điểm → hợp lưu mạnh, có thể limit ngay.
 - Nếu 100/100 → chuẩn tuyệt đối, lệnh đẹp nhất.
 
 Lưu ý mới cho USDJPY: khi setup lệnh SELL, SL phải đặt theo công thức anti-sweep riêng, tức là giấu sau liquidity pool (EQH/stop cluster) + buffer 3–5 pip. Không đặt SL ngay sát Premium. Nếu cần, có thể dời SL xa thêm 10 pip (ví dụ 148.05–148.10) và giảm lot cụm để giữ tổng risk = 140$. Ngoài ra, không giữ lệnh limit qua tin đỏ lớn (CPI, FOMC) để tránh sweep. Đây là quy tắc điều chỉnh riêng cho USDJPY.
@@ -517,3 +517,43 @@ Nếu thiếu 1 trong 3 yếu tố trên → chờ hoặc đứng ngoài.
 Là một day trader, chỉ ưu tiên lệnh limit có hợp lưu kỹ thuật rõ ràng từ 3–4 yếu tố như: Cấu trúc giá, Footprint, Delta, Volume Profile, VWAP, Order Block (OB), FVG... Chỉ vào lệnh khi có hợp lưu rõ, dễ khớp, dễ TP. Tối thiểu RR = 1:1.6. Nếu không có setup xác suất cao, phải báo: "ĐỨNG NGOÀI" hoặc "CHỜ ĐỢI".
 
 Muốn khi lọc coin ở bước 1, ChatGPT phải lọc thêm các coin có phản ứng mạnh và nhạy với tín hiệu footprint, chỉ đề xuất sang bước 2 những coin phù hợp để phân tích tiếp.
+
+## ✅ QUẢN LÝ SAU ENTRY – VERSION 2 (ANTI-SWEEP + FOLLOW STRUCTURE)
+
+1. KHÔNG sử dụng BE theo số giá cố định (5 giá, 10 giá...).
+
+2. SL chỉ được dời khi thị trường tạo vùng bảo vệ mới:
+- HL/LH rõ ràng.
+- Hoặc reclaim VWAP + giữ được.
+- Hoặc có defended zone (stacked/absorption).
+
+3. SL phải đặt theo vùng:
+- BUY: dưới HL mới + buffer.
+- SELL: trên LH mới + buffer.
+
+4. CHO PHÉP giá quét lại:
+- VWAP
+- POC intraday
+- HL/LH mới
+- Edge of Value Area
+
+MIỄN LÀ:
+- CVD chưa đảo chiều ≥ 3 nến.
+- Chưa phá cấu trúc.
+- Chưa có trap ngược rõ.
+
+5. CHỈ THOÁT LỆNH KHI:
+- Phá HL/LH bảo vệ gần nhất.
+- CVD đảo chiều ≥ 3 nến.
+- Mất VWAP và không reclaim.
+- Có trap ngược + volume spike + follow-through.
+
+6. QUẢN LÝ KHỐI LƯỢNG:
+- TP1: 50%
+- TP2: 30%
+- Runner: 20%
+
+7. MỤC TIÊU:
+- Tránh bị quét SL sớm.
+- Giữ được lệnh trend mạnh.
+- Vẫn đảm bảo an toàn vốn.

@@ -23,7 +23,7 @@ def test_format_zones_snapshot_grouped() -> None:
                 label="plan_chinh",
                 vung_cho="1.0–2.0",
                 side="BUY",
-                hop_luu=80,
+                hop_luu=85,
                 trade_line="BUY LIMIT 1.5 | SL 1.0 | TP1 2.0 | Lot 0.01",
                 status="vung_cho",
             ),

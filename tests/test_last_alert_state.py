@@ -214,7 +214,7 @@ def test_merge_trade_lines_from_openai_analysis_text() -> None:
         text = r"""
 {
   "prices": [
-    {"label": "plan_chinh", "value": 100, "hop_luu": 80, "trade_line": "BUY LIMIT 100 | SL 99 | TP1 101 | Lot 0.01"},
+    {"label": "plan_chinh", "value": 100, "hop_luu": 85, "trade_line": "BUY LIMIT 100 | SL 99 | TP1 101 | Lot 0.01"},
     {"label": "plan_phu", "value": 200, "hop_luu": 70, "trade_line": ""}
   ]
 }

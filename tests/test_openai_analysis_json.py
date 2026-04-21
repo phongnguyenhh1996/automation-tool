@@ -19,13 +19,13 @@ def test_format_plan_lines_for_telegram_order_and_hop_luu() -> None:
     p = AnalysisPayload(
         prices=[
             PriceZoneEntry("scalp", 3.0, hop_luu=62, trade_line="S"),
-            PriceZoneEntry("plan_chinh", 1.0, hop_luu=80, trade_line="A"),
+            PriceZoneEntry("plan_chinh", 1.0, hop_luu=85, trade_line="A"),
             PriceZoneEntry("plan_phu", 2.0, hop_luu=None, trade_line="B"),
         ]
     )
     s = format_plan_lines_for_telegram(p)
     assert s.splitlines() == [
-        "plan_chinh (hợp lưu: 80) : A",
+        "plan_chinh (hợp lưu: 85) : A",
         "plan_phu (hợp lưu: —) : B",
         "scalp (hợp lưu: 62) : S",
     ]
@@ -59,10 +59,10 @@ def test_select_zone_tiebreak_order() -> None:
 
 def test_select_zone_requires_above_threshold() -> None:
     tl = "BUY LIMIT 1 | SL 0 | TP1 2 | Lot 0.01"
-    assert AUTO_MT5_HOP_LUU_THRESHOLD == 80
+    assert AUTO_MT5_HOP_LUU_THRESHOLD == 85
     assert AUTO_MT5_HOP_LUU_THRESHOLD_SCALP == 60
-    assert select_zone_for_auto_mt5([PriceZoneEntry("plan_chinh", 1.0, hop_luu=79, trade_line=tl)]) is None
-    assert select_zone_for_auto_mt5([PriceZoneEntry("plan_chinh", 1.0, hop_luu=80, trade_line=tl)]) is not None
+    assert select_zone_for_auto_mt5([PriceZoneEntry("plan_chinh", 1.0, hop_luu=84, trade_line=tl)]) is None
+    assert select_zone_for_auto_mt5([PriceZoneEntry("plan_chinh", 1.0, hop_luu=85, trade_line=tl)]) is not None
 
 
 def test_select_zone_scalp_uses_lower_threshold() -> None:
@@ -104,7 +104,7 @@ def test_vung_cho_reversed_order_uses_min_max() -> None:
                 "label": "plan_chinh",
                 "value": 1.0,
                 "vung_cho": "4709.0–4705.0",
-                "hop_luu": 80,
+                "hop_luu": 85,
                 "trade_line": "t",
             }
         ]
@@ -125,7 +125,7 @@ def test_legacy_range_low_high_without_vung_cho() -> None:
                 "value": 1.0,
                 "range_low": 10.0,
                 "range_high": 20.0,
-                "hop_luu": 80,
+                "hop_luu": 85,
                 "trade_line": "t",
             }
         ]
@@ -145,7 +145,7 @@ def test_invalid_vung_cho_keeps_range_low_high() -> None:
                 "vung_cho": "not-a-range",
                 "range_low": 3.0,
                 "range_high": 4.0,
-                "hop_luu": 80,
+                "hop_luu": 85,
                 "trade_line": "t",
             }
         ]

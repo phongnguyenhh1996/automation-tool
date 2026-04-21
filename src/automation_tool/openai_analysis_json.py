@@ -12,7 +12,7 @@ IntradayHanhDong = Literal["chờ", "loại", "VÀO LỆNH"]
 ZONE_LABELS_ORDER = ("plan_chinh", "plan_phu", "scalp")
 
 # Morning auto-MT5: hop_luu >= this value for plan_chinh / plan_phu (đồng bộ system-prompt).
-AUTO_MT5_HOP_LUU_THRESHOLD = 80
+AUTO_MT5_HOP_LUU_THRESHOLD = 85
 # Scalp: hop_luu >= this value (đồng bộ system-prompt).
 AUTO_MT5_HOP_LUU_THRESHOLD_SCALP = 60
 

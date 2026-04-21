@@ -91,7 +91,7 @@ def test_zones_from_analysis_merged_keeps_zone_when_no_change_true() -> None:
                 label="plan_chinh",
                 vung_cho="1.0–2.0",
                 side="BUY",
-                hop_luu=80,
+                hop_luu=85,
                 trade_line="old",
                 status="vung_cho",
             ),
