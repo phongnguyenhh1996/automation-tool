@@ -514,7 +514,7 @@ TP1_POST_TOUCH_USER_TEMPLATE = (
     "Mức TP1 từ trade_line: {tp1_price}\n\n"
 )
 
-# Daemon zones: giá đạt +1R (lợi nhuận bằng khoảng |Entry−SL|) khi đang ``vao_lenh`` / ``cho_tp1``.
+# Daemon zones: giá đạt +1R (lợi nhuận bằng khoảng |Entry−SL|) khi đang ``cho_tp1`` (sau arm TP1).
 R1_POST_TOUCH_USER_TEMPLATE = (
     "[TRADE_MANAGEMENT]\n"
     "Giá đã đạt mức 1R; "

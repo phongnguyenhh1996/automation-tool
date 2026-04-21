@@ -2415,7 +2415,7 @@ def _daemon_plan_main_loop(
             st_r1 = _state_read(params)
             if st_r1 is not None:
                 for z in st_r1.zones:
-                    if z.status not in ("vao_lenh", "cho_tp1"):
+                    if z.status != "cho_tp1":
                         continue
                     if z.r1_followup_done:
                         continue
