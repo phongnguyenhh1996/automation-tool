@@ -218,7 +218,7 @@ class AnalysisPayload:
     phan_tich_update: str = ""
     #: [INTRADAY_ALERT] only: short analysis → ``TELEGRAM_PYTHON_BOT_CHAT_ID`` (Schema E).
     phan_tich_alert: str = ""
-    #: [INTRADAY_ALERT] Schema E optional: revised waiting band (ignored when ``intraday_hanh_dong`` is ``VÀO LỆNH``).
+    #: Top-level optional; [INTRADAY_ALERT] no longer applies this to persisted zones (daemon).
     vung_cho: Optional[str] = None
     prices: list[PriceZoneEntry] = field(default_factory=list)
     intraday_hanh_dong: Optional[IntradayHanhDong] = None
