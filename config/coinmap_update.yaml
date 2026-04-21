@@ -22,9 +22,6 @@ chart_download:
   multi_shot_enabled: true
   capture_plan:
     - symbol: XAUUSD
-      interval: "1m"
-      watchlist_category: "forex 1"
-    - symbol: XAUUSD
       interval: "5m"
       watchlist_category: "forex 1"
     - symbol: XAUUSD

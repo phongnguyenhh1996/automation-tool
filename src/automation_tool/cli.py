@@ -2337,6 +2337,7 @@ def cmd_update(args: argparse.Namespace) -> None:
         reuse_browser_context=None,
         main_chart_symbol=args.main_symbol,
         clear_charts_before_capture=True,
+        coinmap_capture_intervals=("5m", "15m"),
     )
     charts_dir = args.charts_dir or default_charts_dir()
     print(f"Captured {len(paths)} file(s) for update run.")

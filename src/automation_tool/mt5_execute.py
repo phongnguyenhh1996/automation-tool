@@ -11,6 +11,7 @@ Thực thi lệnh qua MetaTrader5 (Python package ``MetaTrader5``).
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, Optional
@@ -18,6 +19,10 @@ from typing import Any, Literal, Optional
 import automation_tool.config  # noqa: F401 — nạp .env khi import
 
 from automation_tool.mt5_openai_parse import ParsedTrade, normalize_broker_xau_symbol
+
+# Vào lệnh: nếu mt5.initialize (login/IPC) lỗi — chờ rồi thử lại trước khi bỏ cuộc.
+_MT5_INIT_MAX_ATTEMPTS = 3
+_MT5_INIT_RETRY_DELAY_SEC = 3.0
 
 
 @dataclass
@@ -604,6 +609,9 @@ def execute_trade(
     Lot: ``lot_override`` ghi đè volume từ file (tiện test với lot nhỏ).
 
     ``account_id``: nhãn đa tài khoản (log/Telegram).
+
+    Khởi tạo MT5: tối đa :data:`_MT5_INIT_MAX_ATTEMPTS` lần; giữa các lần thất bại chờ
+    :data:`_MT5_INIT_RETRY_DELAY_SEC` giây (xử lý IPC timeout tạm thời).
     """
     trade = resolve_mt5_trade_symbol(
         trade,
@@ -648,15 +656,28 @@ def execute_trade(
         kwargs["password"] = password_s
         kwargs["server"] = server_s
 
-    if not mt5.initialize(**kwargs):
+    le: Optional[tuple[Any, ...]] = None
+    for attempt in range(1, _MT5_INIT_MAX_ATTEMPTS + 1):
+        if mt5.initialize(**kwargs):
+            break
         le = _last_error_tuple(mt5)
-        return MT5ExecutionResult(
-            ok=False,
-            message=f"mt5.initialize thất bại: {format_last_error(mt5)}",
-            account_id=account_id,
-            last_error=le,
-            resolved_symbol=trade.symbol,
-        )
+        if attempt < _MT5_INIT_MAX_ATTEMPTS:
+            try:
+                mt5.shutdown()
+            except Exception:
+                pass
+            time.sleep(_MT5_INIT_RETRY_DELAY_SEC)
+        else:
+            return MT5ExecutionResult(
+                ok=False,
+                message=(
+                    f"mt5.initialize thất bại sau {_MT5_INIT_MAX_ATTEMPTS} lần "
+                    f"(cách {_MT5_INIT_RETRY_DELAY_SEC:.0f}s): {format_last_error(mt5)}"
+                ),
+                account_id=account_id,
+                last_error=le,
+                resolved_symbol=trade.symbol,
+            )
 
     try:
         try:
