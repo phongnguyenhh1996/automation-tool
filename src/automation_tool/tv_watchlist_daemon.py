@@ -663,20 +663,20 @@ def _daemon_plan_watch_telegram_text(
     z: Zone,
     *,
     sym: str,
-    shard_tag: str,
     p_last: Optional[float],
 ) -> str:
-    """Một dòng cho kênh log kỹ thuật: Last bid chia sẻ từ daemon giá (shared memory / last.txt)."""
-    shard_name = Path(shard_tag).name
+    """Một dòng cho kênh log kỹ thuật: Last từ daemon giá; kèm vùng chờ và trade_line."""
     last_s = f"{p_last}" if p_last is not None else "(none)"
-    extra: list[str] = ["last=mt5_bid(shared)"]
+    vc = (z.vung_cho or "").strip() or "(none)"
+    tl = (z.trade_line or "").strip() or "(none)"
+    extra: list[str] = [f"vung_cho={vc}", f"trade_line={tl}"]
     if z.mt5_ticket is not None and int(z.mt5_ticket) > 0:
         extra.append(f"ticket={z.mt5_ticket}")
     if z.hop_luu is not None:
         extra.append(f"hop_luu={z.hop_luu}")
     tail = " | ".join(extra)
     base = (
-        f"[daemon-plan] watch | shard={shard_name} | sym={sym} | zone_id={z.id} | "
+        f"[daemon-plan] watch | sym={sym} | zone_id={z.id} | "
         f"status={z.status} | exec_price={last_s}"
     )
     return f"{base} | {tail}"
@@ -2320,8 +2320,8 @@ def _daemon_plan_main_loop(
 
             if st is None or not st.zones:
                 _poll_terminal.info(
-                    "daemon-plan | shard=%s | tick | zones=0 (no state)",
-                    shard_tag,
+                    "daemon-plan | tick | sym=%s | zones=0 (no state)",
+                    sym,
                 )
                 time.sleep(poll_s)
                 continue
@@ -2378,23 +2378,26 @@ def _daemon_plan_main_loop(
                     _daemon_plan_watch_telegram_text(
                         z0,
                         sym=sym,
-                        shard_tag=shard_tag,
                         p_last=p_last,
                     ),
                 )
             if p_last is None:
                 _poll_terminal.info(
-                    "daemon-plan | shard=%s | tick | last=(none) shared_memory+file=%s",
-                    shard_tag,
+                    "daemon-plan | tick | sym=%s | zone_id=%s | last=(none) | file=%s",
+                    sym,
+                    z0.id,
                     last_price_file,
                 )
                 time.sleep(poll_s)
                 continue
 
             _poll_terminal.info(
-                "daemon-plan | shard=%s | tick | last=%s (mt5_bid shared)",
-                shard_tag,
+                "daemon-plan | tick | sym=%s | zone_id=%s | last=%s | vung_cho=%s | trade_line=%s",
+                sym,
+                z0.id,
                 p_last,
+                (z0.vung_cho or "").strip(),
+                (z0.trade_line or "").strip(),
             )
 
             try:
