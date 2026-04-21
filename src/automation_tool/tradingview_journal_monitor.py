@@ -663,11 +663,13 @@ def _run_intraday_touch_loop(
                     return InnerLoopResult("superseded", sup)
                 first = False
                 continue
+            new_tl = (parsed.raw_line or "").strip()
             update_single_plan_status(
                 touched_label,
                 VAO_LENH,
                 path=last_alert_path,
                 entry_manual=False,
+                trade_line=new_tl or None,
             )
             if params.mt5_execute:
                 _journal_log(
@@ -689,6 +691,7 @@ def _run_intraday_touch_loop(
                             bot_token=settings.telegram_bot_token,
                             telegram_chat_id=settings.telegram_chat_id,
                             telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
+                            telegram_log_chat_id=settings.telegram_log_chat_id,
                             source="tv-journal-monitor",
                             text=multi_txt,
                             zone_label=touched_label,
@@ -707,6 +710,7 @@ def _run_intraday_touch_loop(
                             bot_token=settings.telegram_bot_token,
                             telegram_chat_id=settings.telegram_chat_id,
                             telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
+                            telegram_log_chat_id=settings.telegram_log_chat_id,
                             source="tv-journal-monitor",
                             text=format_mt5_execution_for_telegram(ex),
                             zone_label=touched_label,

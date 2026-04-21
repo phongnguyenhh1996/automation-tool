@@ -123,11 +123,20 @@ Ví dụ tối thiểu Schema A:
 ## Schema E ([INTRADAY_ALERT] — cảnh báo chạm vùng)
 - `phan_tich_alert` (string, bắt buộc): nhận định ngắn sau khi phân tích Footprint M5 đối với vùng chờ hiện tại.
 - `intraday_hanh_dong` (enum): `"VÀO LỆNH"` | `"chờ"` | `"loại"`.
+- `trade_line` (string, tuỳ chọn): một dòng lệnh pipe MT5 (`BUY LIMIT` / `SELL LIMIT` / …). Khi `intraday_hanh_dong` **không** phải `"VÀO LỆNH"`, **có thể bỏ trống** `""` hoặc không gửi key. Khi là `"VÀO LỆNH"`, **nên gửi** — cập nhật SL/TP/lot theo bối cảnh chạm vùng.
 
 Ví dụ tối thiểu Schema E:
 {
   "phan_tich_alert": "Delta M5 yếu, chờ xác nhận.",
-  "intraday_hanh_dong": "chờ"
+  "intraday_hanh_dong": "chờ",
+  "trade_line": ""
+}
+
+Ví dụ Schema E (vào lệnh — có `trade_line` mới):
+{
+  "phan_tich_alert": "M5 xác nhận absorption, vào limit tại vùng.",
+  "intraday_hanh_dong": "VÀO LỆNH",
+  "trade_line": "BUY LIMIT 2650.0 | SL 2640.0 | TP1 2670.0 | Lot 0.04"
 }
 
 ## Schema B ([INTRADAY_UPDATE] — cập nhật intraday)

@@ -39,7 +39,7 @@ cp .env.example .env
 
 | File | Purpose |
 |------|---------|
-| `.env` | `OPENAI_API_KEY`, `OPENAI_PROMPT_ID`, optional `OPENAI_PROMPT_VERSION`, optional `OPENAI_VECTOR_STORE_IDS`, `OPENAI_RESPONSES_STORE`, `OPENAI_RESPONSES_INCLUDE`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, optional `TELEGRAM_LOG_CHAT_ID` (channel nhận log bước chạy + **log phản hồi đầu**: hop_luu, vùng chọn, lý do bỏ qua MT5), optional `TELEGRAM_ANALYSIS_DETAIL_CHAT_ID` (kênh nhận **OUTPUT_CHI_TIET** cho luồng `analyze-many` khi set `--telegram-detail-chat-id` hoặc dùng mặc định từ `.env`), optional `TELEGRAM_OUTPUT_NGAN_GON_CHAT_ID` (OUTPUT_NGAN_GON từ phân tích; **log MT5** chỉ gửi tới `TELEGRAM_CHAT_ID`), optional `TELEGRAM_PARSE_MODE`, optional `COINMAP_*` |
+| `.env` | `OPENAI_API_KEY`, `OPENAI_PROMPT_ID`, optional `OPENAI_PROMPT_VERSION`, optional `OPENAI_VECTOR_STORE_IDS`, `OPENAI_RESPONSES_STORE`, `OPENAI_RESPONSES_INCLUDE`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, optional `TELEGRAM_LOG_CHAT_ID` (channel nhận log bước chạy + **log phản hồi đầu** hop_luu/vùng/lý do bỏ qua MT5 + **log chi tiết kết quả MT5** `execution_ok` + nội dung broker), optional `TELEGRAM_ANALYSIS_DETAIL_CHAT_ID` (kênh nhận **OUTPUT_CHI_TIET** cho luồng `analyze-many` khi set `--telegram-detail-chat-id` hoặc dùng mặc định từ `.env`), optional `TELEGRAM_OUTPUT_NGAN_GON_CHAT_ID` (OUTPUT_NGAN_GON từ phân tích; tin MT5 tóm tắt thành công vẫn tới `TELEGRAM_CHAT_ID`), optional `TELEGRAM_PARSE_MODE`, optional `COINMAP_*` |
 
 **Telegram formatting:** mặc định không có `parse_mode` → plain text. Để **in đậm / tiêu đề** từ output kiểu markdown của model, đặt **`TELEGRAM_PARSE_MODE=HTML`**. Code sẽ chuyển `**bold**`, dòng `## tiêu đề`, và `` `code` `` sang thẻ HTML mà Telegram hỗ trợ (`<b>`, `<code>`), đồng thời escape `& < >` ở phần còn lại. **`MarkdownV2`** vẫn được hỗ trợ nhưng toàn bộ nội dung bị escape nên **trông như chữ thường** (tránh lỗi 400 với `+`, v.v.) — không dùng MDV2 nếu bạn muốn thấy định dạng.
 | `config/coinmap.yaml` | Login URL, **`chart_download`**, optional **`tradingview_capture`**, and optional canvas screenshot selectors |
@@ -111,7 +111,7 @@ Older files without `status_by_label` are treated as all `vung_cho`; missing `en
 
 ### Log tới Telegram (channel)
 
-Đặt **`TELEGRAM_LOG_CHAT_ID`** (ví dụ supergroup/channel `-100…`) cùng bot đã được thêm làm admin: mọi log mức INFO của gói `automation_tool` (lệnh `coinmap-automation`, đồng bộ cảnh báo TV, toàn bộ dòng `tv-journal`, và luồng Coinmap Bearer **`[coinmap bearer]`** — `logging` INFO trên logger `automation_tool`) được gửi **plain text** tới channel đó (tin nhắn dài được chia chunk). Stderr vẫn in giống hệt.
+Đặt **`TELEGRAM_LOG_CHAT_ID`** (ví dụ supergroup/channel `-100…`) cùng bot đã được thêm làm admin: mọi log mức INFO của gói `automation_tool` (lệnh `coinmap-automation`, đồng bộ cảnh báo TV, toàn bộ dòng `tv-journal`, và luồng Coinmap Bearer **`[coinmap bearer]`** — `logging` INFO trên logger `automation_tool`) được gửi **plain text** tới channel đó (tin nhắn dài được chia chunk). Ngoài ra, mỗi lần có kết quả thực thi MT5 (mọi luồng gọi `send_mt5_execution_log_to_ngan_gon_chat`), **bản log đầy đủ** (nguồn, `execution_ok`, vùng, `trade_line`, text từ MT5) cũng được gửi tới cùng kênh. Stderr vẫn in giống hệt.
 
 ## Security
 

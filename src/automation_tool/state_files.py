@@ -505,11 +505,15 @@ def update_single_plan_status(
     path: Optional[Path] = None,
     *,
     entry_manual: Optional[bool] = None,
+    trade_line: Optional[str] = None,
 ) -> None:
     """Set one plan's status and rewrite ``last_alert_prices.json``.
 
     ``entry_manual``: nếu không None, ghi nhận vào ``entry_manual_by_label`` cho label đó
     (ví dụ ``False`` khi vào lệnh qua bot/MT5).
+
+    ``trade_line``: nếu không None, cập nhật ``trade_line_by_label`` cho label (ví dụ dòng pipe
+    mới từ [INTRADAY_ALERT] khi ``VÀO LỆNH``).
     """
     st = read_last_alert_state(path)
     if st is None:
@@ -522,13 +526,16 @@ def update_single_plan_status(
     em = {**st.entry_manual_by_label}
     if entry_manual is not None:
         em[label] = entry_manual
+    tl = dict(st.trade_line_by_label)
+    if trade_line is not None:
+        tl[label] = trade_line.strip()
     write_last_alert_state(
         LastAlertState(
             prices=st.prices,
             labels=st.labels,
             status_by_label=d,
             entry_manual_by_label=em,
-            trade_line_by_label=dict(st.trade_line_by_label),
+            trade_line_by_label=tl,
             mt5_ticket_by_label=dict(st.mt5_ticket_by_label),
             mt5_tickets_by_label={k: dict(v) for k, v in st.mt5_tickets_by_label.items()},
             tp1_followup_done_by_label=dict(st.tp1_followup_done_by_label),

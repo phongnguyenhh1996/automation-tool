@@ -524,11 +524,54 @@ def _send_plain_text_to_ngan_gon_chat(
     )
 
 
+def _send_mt5_execution_detail_to_log_chat(
+    *,
+    bot_token: str,
+    telegram_log_chat_id: Optional[str],
+    source: str,
+    text: str,
+    execution_ok: bool,
+    zone_label: Optional[str] = None,
+    trade_line: Optional[str] = None,
+    session_slot: Optional[str] = None,
+) -> None:
+    """
+    Log kỹ thuật đầy đủ (``text``) sau MT5 tới ``TELEGRAM_LOG_CHAT_ID`` khi được cấu hình.
+    """
+    cid = (telegram_log_chat_id or "").strip()
+    if not cid:
+        return
+    body = (text or "").strip()
+    if not body:
+        return
+    src = (source or "").strip() or "MT5"
+    lines: list[str] = [f"📊 Kết quả MT5 — {src}", f"execution_ok={execution_ok}"]
+    zd = mt5_zone_label_display_vn(zone_label)
+    slot_vn = session_slot_display_vn(session_slot) if session_slot else None
+    if zd:
+        lines.append(
+            f'Vùng: "{zd} - {slot_vn}"' if slot_vn else f'Vùng: "{zd}"'
+        )
+    tl = (trade_line or "").strip()
+    if tl:
+        lines.append(f"trade_line: {tl}")
+    lines.append("")
+    lines.append(body)
+    full = "\n".join(lines)
+    _send_plain_text_to_chat_id(
+        bot_token=bot_token,
+        chat_id=cid,
+        text=full,
+        log_context="TELEGRAM_LOG_CHAT_ID",
+    )
+
+
 def send_mt5_execution_log_to_ngan_gon_chat(
     *,
     bot_token: str,
     telegram_chat_id: Optional[str] = None,
     telegram_python_bot_chat_id: Optional[str] = None,
+    telegram_log_chat_id: Optional[str] = None,
     source: str,
     text: str,
     execution_ok: bool,
@@ -538,6 +581,9 @@ def send_mt5_execution_log_to_ngan_gon_chat(
 ) -> None:
     """
     Gửi thông báo sau thực thi MT5 (sau ``execute_trade`` / huỷ ticket).
+
+    Nếu ``telegram_log_chat_id`` được set: luôn gửi **log chi tiết** (``text`` + metadata) tới
+    ``TELEGRAM_LOG_CHAT_ID`` (cả thành công và thất bại).
 
     Khi ``execution_ok`` là True: gửi tới ``TELEGRAM_CHAT_ID`` — một câu cố định (chọn ngẫu nhiên);
     (tuỳ chọn) dòng ``Đã vào lệnh cho "Plan chính"`` / ``Đã vào lệnh cho "Scalp - Sáng"`` khi
@@ -557,6 +603,17 @@ def send_mt5_execution_log_to_ngan_gon_chat(
     tok = (bot_token or "").strip()
     if not tok:
         return
+
+    _send_mt5_execution_detail_to_log_chat(
+        bot_token=tok,
+        telegram_log_chat_id=telegram_log_chat_id,
+        source=source,
+        text=body,
+        execution_ok=execution_ok,
+        zone_label=zone_label,
+        trade_line=trade_line,
+        session_slot=session_slot,
+    )
 
     if not execution_ok:
         py = (telegram_python_bot_chat_id or "").strip()

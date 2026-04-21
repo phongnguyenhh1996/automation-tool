@@ -574,11 +574,13 @@ def run_intraday_touch_flow(
                     )
                 return ("entered", prev_id)
 
+            new_tl = (parsed.raw_line or "").strip()
             update_single_plan_status(
                 touched_label,
                 VAO_LENH,
                 path=last_alert_path,
                 entry_manual=False,
+                trade_line=new_tl or None,
             )
             if params.mt5_execute:
                 accounts = load_mt5_accounts_for_cli(params.mt5_accounts_json)
@@ -596,6 +598,7 @@ def run_intraday_touch_flow(
                             bot_token=settings.telegram_bot_token,
                             telegram_chat_id=settings.telegram_chat_id,
                             telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
+                            telegram_log_chat_id=settings.telegram_log_chat_id,
                             source="tv-touch",
                             text=multi_txt,
                             zone_label=touched_label,
@@ -644,6 +647,7 @@ def run_intraday_touch_flow(
                             bot_token=settings.telegram_bot_token,
                             telegram_chat_id=settings.telegram_chat_id,
                             telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
+                            telegram_log_chat_id=settings.telegram_log_chat_id,
                             source="tv-touch",
                             text=format_mt5_execution_for_telegram(ex),
                             zone_label=touched_label,

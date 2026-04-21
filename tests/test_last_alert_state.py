@@ -167,6 +167,36 @@ def test_update_single_plan_status_roundtrip() -> None:
         assert st.entry_manual_by_label["plan_chinh"] is False
 
 
+def test_update_single_plan_status_with_trade_line() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "x.json"
+        write_last_alert_state(
+            LastAlertState(
+                prices=(100.0, 200.0, 300.0),
+                labels=("plan_chinh", "plan_phu", "scalp"),
+                status_by_label={lab: VUNG_CHO for lab in ("plan_chinh", "plan_phu", "scalp")},
+                trade_line_by_label={
+                    "plan_chinh": "OLD LINE",
+                    "plan_phu": "",
+                    "scalp": "",
+                },
+            ),
+            path=p,
+        )
+        tl_new = "BUY LIMIT 100 | SL 99 | TP1 101 | Lot 0.01"
+        update_single_plan_status(
+            "plan_chinh",
+            VAO_LENH,
+            path=p,
+            entry_manual=False,
+            trade_line=tl_new,
+        )
+        st = read_last_alert_state(p)
+        assert st is not None
+        assert st.trade_line_by_label.get("plan_chinh") == tl_new
+        assert (st.trade_line_by_label.get("plan_phu") or "") == ""
+
+
 def test_remove_last_alert_prices_file() -> None:
     with tempfile.TemporaryDirectory() as td:
         p = Path(td) / "last_alert_prices.json"

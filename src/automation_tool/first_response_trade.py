@@ -145,7 +145,8 @@ def apply_first_response_vao_lenh(
     Nếu ``auto_mt5_zone_label`` được set (vd. ``plan_chinh``), chỉ xét đúng vùng đó (Nhật ký TV).
 
     Telegram: log phản hồi đầu (hop_luu, vùng, lỗi…) → ``telegram_log_chat_id``
-    (``TELEGRAM_LOG_CHAT_ID``). Tin ngắn non-tech → ``telegram_python_bot_chat_id``
+    (``TELEGRAM_LOG_CHAT_ID``). Log chi tiết kết quả MT5 (text broker, ``execution_ok``) → cùng
+    ``telegram_log_chat_id``. Tin ngắn non-tech → ``telegram_python_bot_chat_id``
     (``TELEGRAM_PYTHON_BOT_CHAT_ID``). Kết quả ``execute_trade`` thành công → ``telegram_chat_id``
     (``TELEGRAM_CHAT_ID``); thất bại / từ chối → chi tiết qua ``telegram_python_bot_chat_id`` (cùng kiểu
     ``send_user_friendly_notice``).
@@ -433,6 +434,7 @@ def apply_first_response_vao_lenh(
                     bot_token=telegram_bot_token,
                     telegram_chat_id=telegram_chat_id,
                     telegram_python_bot_chat_id=telegram_python_bot_chat_id,
+                    telegram_log_chat_id=telegram_log_chat_id,
                     source=telegram_source_label,
                     text=multi_text,
                     zone_label=label,
@@ -496,6 +498,7 @@ def apply_first_response_vao_lenh(
                 bot_token=telegram_bot_token,
                 telegram_chat_id=telegram_chat_id,
                 telegram_python_bot_chat_id=telegram_python_bot_chat_id,
+                telegram_log_chat_id=telegram_log_chat_id,
                 source=telegram_source_label,
                 text=format_mt5_execution_for_telegram(ex),
                 zone_label=label,

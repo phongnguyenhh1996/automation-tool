@@ -521,11 +521,14 @@ def _touch_prompt(
     """
     User turn for zone-touch OpenAI follow-up: ``[INTRADAY_ALERT]`` / **Schema E** (system prompt).
 
-    Model chỉ cần ``phan_tich_alert`` + ``intraday_hanh_dong``. Khi ``VÀO LỆNH``.
+    Bắt buộc JSON: ``phan_tich_alert`` + ``intraday_hanh_dong``. Khi ``VÀO LỆNH``, nên trả thêm
+    ``trade_line`` (pipe) để cập nhật lệnh theo chạm vùng; nếu không, tool dùng baseline dưới đây.
     """
     trade_line = (zone.trade_line or "").strip()
     baseline_line = (
-        f"Dòng lệnh trade_line sẽ đưa vào MT5 theo gợi ý ban đầu: {trade_line}\n" if trade_line else ""
+        f"Dòng lệnh baseline (plan sáng), dùng nếu bạn không gửi trade_line mới: {trade_line}\n"
+        if trade_line
+        else ""
     )
     return (
         "[INTRADAY_ALERT]\n"
@@ -747,6 +750,7 @@ def _tp1_followup_job(
                         bot_token=settings.telegram_bot_token,
                         telegram_chat_id=settings.telegram_chat_id,
                         telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
+                        telegram_log_chat_id=settings.telegram_log_chat_id,
                         source="tp1-scalp-tp1",
                         text=f"scalp: chạm TP1 — huỷ ticket\n{r.message}",
                         zone_label="scalp",
@@ -936,6 +940,7 @@ def _tp1_followup_job(
                             bot_token=settings.telegram_bot_token,
                             telegram_chat_id=settings.telegram_chat_id,
                             telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
+                            telegram_log_chat_id=settings.telegram_log_chat_id,
                             source="tp1-followup",
                             text=ch_txt,
                             zone_label=z1.label,
@@ -975,6 +980,7 @@ def _tp1_followup_job(
                             bot_token=settings.telegram_bot_token,
                             telegram_chat_id=settings.telegram_chat_id,
                             telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
+                            telegram_log_chat_id=settings.telegram_log_chat_id,
                             source="tp1-followup",
                             text=cr.message,
                             zone_label=z1.label,
@@ -1005,6 +1011,7 @@ def _tp1_followup_job(
                         bot_token=settings.telegram_bot_token,
                         telegram_chat_id=settings.telegram_chat_id,
                         telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
+                        telegram_log_chat_id=settings.telegram_log_chat_id,
                         source="tp1-followup",
                         text=multi_txt,
                         zone_label=z1.label,
@@ -1034,6 +1041,7 @@ def _tp1_followup_job(
                         bot_token=settings.telegram_bot_token,
                         telegram_chat_id=settings.telegram_chat_id,
                         telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
+                        telegram_log_chat_id=settings.telegram_log_chat_id,
                         source="tp1-followup",
                         text=format_mt5_execution_for_telegram(ex),
                         zone_label=z1.label,
@@ -1309,6 +1317,7 @@ def _r1_followup_job(
                             bot_token=settings.telegram_bot_token,
                             telegram_chat_id=settings.telegram_chat_id,
                             telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
+                            telegram_log_chat_id=settings.telegram_log_chat_id,
                             source="r1-followup",
                             text=ch_txt,
                             zone_label=z1.label,
@@ -1348,6 +1357,7 @@ def _r1_followup_job(
                             bot_token=settings.telegram_bot_token,
                             telegram_chat_id=settings.telegram_chat_id,
                             telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
+                            telegram_log_chat_id=settings.telegram_log_chat_id,
                             source="r1-followup",
                             text=cr.message,
                             zone_label=z1.label,
@@ -1378,6 +1388,7 @@ def _r1_followup_job(
                         bot_token=settings.telegram_bot_token,
                         telegram_chat_id=settings.telegram_chat_id,
                         telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
+                        telegram_log_chat_id=settings.telegram_log_chat_id,
                         source="r1-followup",
                         text=multi_txt,
                         zone_label=z1.label,
@@ -1407,6 +1418,7 @@ def _r1_followup_job(
                         bot_token=settings.telegram_bot_token,
                         telegram_chat_id=settings.telegram_chat_id,
                         telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
+                        telegram_log_chat_id=settings.telegram_log_chat_id,
                         source="r1-followup",
                         text=format_mt5_execution_for_telegram(ex),
                         zone_label=z1.label,
@@ -1550,6 +1562,7 @@ def _auto_entry_job(
                     bot_token=settings.telegram_bot_token,
                     telegram_chat_id=settings.telegram_chat_id,
                     telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
+                    telegram_log_chat_id=settings.telegram_log_chat_id,
                     source="auto-entry",
                     text=multi_ae,
                     zone_label=z0.label,
@@ -1607,6 +1620,7 @@ def _auto_entry_job(
                 bot_token=settings.telegram_bot_token,
                 telegram_chat_id=settings.telegram_chat_id,
                 telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
+                telegram_log_chat_id=settings.telegram_log_chat_id,
                 source="auto-entry",
                 text=format_mt5_execution_for_telegram(ex),
                 zone_label=z0.label,
@@ -1857,7 +1871,8 @@ def _zone_touch_job(
             )
             return
 
-        # Schema E: ``VÀO LỆNH`` → vào lệnh ngay (không gate hop_luu); trade_line từ baseline vùng.
+        # Schema E: ``VÀO LỆNH`` → vào lệnh ngay (không gate hop_luu); trade_line ưu tiên JSON,
+        # không có thì markdown/OUTPUT_NGAN_GON, cuối cùng baseline vùng.
         zone_tl = (z1.trade_line or "").strip()
         parsed, err = parse_openai_output_md(
             out_text,
@@ -1915,6 +1930,7 @@ def _zone_touch_job(
                     bot_token=settings.telegram_bot_token,
                     telegram_chat_id=settings.telegram_chat_id,
                     telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
+                    telegram_log_chat_id=settings.telegram_log_chat_id,
                     source="zone-touch",
                     text=zt_txt,
                     zone_label=z1.label,
@@ -1957,6 +1973,7 @@ def _zone_touch_job(
                 bot_token=settings.telegram_bot_token,
                 telegram_chat_id=settings.telegram_chat_id,
                 telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
+                telegram_log_chat_id=settings.telegram_log_chat_id,
                 source="zone-touch",
                 text=format_mt5_execution_for_telegram(ex),
                 zone_label=z1.label,
