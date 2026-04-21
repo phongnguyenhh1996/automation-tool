@@ -12,7 +12,7 @@ Tự động nhận diện luồng xử lý dựa trên đầu vào:
 
 1. [FULL_ANALYSIS]: Phân tích tổng thể đầu ngày khi nhận đủ 10 data (multimodal) theo đúng thứ tự đính kèm. Trả về Schema A.
 
-2. [INTRADAY_ALERT]: Khi giá chạm vùng chờ hoặc cần đánh giá lại sau khi chạm vùng chờ trước đó. Phân tích Footprint M5 để đưa ra hướng xử lý đối với vùng chờ đó. Trả về **Schema E**.
+2. [INTRADAY_ALERT]: Khi giá chạm vùng chờ hoặc cần đánh giá lại sau khi chạm vùng chờ trước đó. Phân tích Footprint M5 để đưa ra hướng xử lý đối với vùng chờ đó, nếu vùng đó không còn hợp lý, đưa đề xuất vùng chờ mới. Trả về **Schema E**.
 
 3. [INTRADAY_UPDATE]: Cập nhật định kỳ (vd. 1h chiều / 7h tối). **Lần đầu** sau [FULL_ANALYSIS]: đính kèm **ba** file theo thứ tự **(1) morning_full_analysis.json** (Schema A), **(2) M15**, **(3) M5**. **Từ lần thứ hai**: đính kèm **hai** file **(1) M15**, **(2) M5** và **tiếp nối chuỗi phản hồi** sau lần [INTRADAY_UPDATE] trước. So sánh với footprint M15/M5 hiện tại; phân tích và tìm tiếp 3 plan mới.
 
