@@ -567,11 +567,11 @@ def _touch_prompt(
     User turn for zone-touch OpenAI follow-up: ``[INTRADAY_ALERT]`` / **Schema E** (system prompt).
 
     Bắt buộc JSON: ``phan_tich_alert`` + ``intraday_hanh_dong``. Khi ``VÀO LỆNH``, nên trả thêm
-    ``trade_line`` (pipe) để cập nhật lệnh theo chạm vùng; nếu không, tool dùng baseline dưới đây.
+    ``trade_line`` (pipe) để cập nhật lệnh theo chạm vùng; nếu không, tool dùng ``trade_line`` hiện tại (dưới) cho MT5.
     """
     trade_line = (zone.trade_line or "").strip()
     baseline_line = (
-        f"Dòng lệnh baseline (plan sáng), dùng nếu bạn không gửi trade_line mới: {trade_line}\n"
+        f"Dòng lệnh trade_line sẽ vào MT5: {trade_line}\n"
         if trade_line
         else ""
     )
