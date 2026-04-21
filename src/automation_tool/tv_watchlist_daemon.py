@@ -1133,7 +1133,7 @@ def _tp1_followup_job(
     except Exception as e:
         _send_log(settings, f"[tp1] ERROR | zone_id={zone_id} | {e!s}")
         _send_user_notice(settings, "Lỗi khi xử lý bước sau TP1.", str(e), params=params)
-        re_raise_unless_openai(e)
+        re_raise_unless_openai(e, exit_on_openai=False, settings=settings)
 
 
 def _r1_followup_job(
@@ -1511,7 +1511,7 @@ def _r1_followup_job(
     except Exception as e:
         _send_log(settings, f"[r1] ERROR | zone_id={zone_id} | {e!s}")
         _send_user_notice(settings, "Lỗi khi xử lý bước tại 1R.", str(e), params=params)
-        re_raise_unless_openai(e)
+        re_raise_unless_openai(e, exit_on_openai=False, settings=settings)
 
 
 def _auto_entry_job(
@@ -1718,7 +1718,7 @@ def _auto_entry_job(
     except Exception as e:
         _send_log(settings, f"[auto-entry] ERROR | zone_id={zone_id} | {e!s}")
         _send_user_notice(settings, "Lỗi khi tự động vào lệnh.", str(e), params=params)
-        re_raise_unless_openai(e)
+        re_raise_unless_openai(e, exit_on_openai=False, settings=settings)
 
 
 def _zone_touch_job(
@@ -2081,7 +2081,7 @@ def _zone_touch_job(
             zone=zone,
             params=params,
         )
-        re_raise_unless_openai(e)
+        re_raise_unless_openai(e, exit_on_openai=False, settings=settings)
 
 
 def _tv_watchlist_price_only_loop(
