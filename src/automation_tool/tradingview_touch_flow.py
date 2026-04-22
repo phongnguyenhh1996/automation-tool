@@ -468,6 +468,7 @@ def run_intraday_touch_flow(
                     store=settings.openai_responses_store,
                     include=settings.openai_responses_include,
                     model=resolved_model_for_intraday_alert(settings, params.openai_model_cli),
+                    reasoning_effort="high",
                 ),
                 poll_abort=lambda: _poll_abort_during_long_ops(phase="waiting_openai"),
                 poll_interval_s=0.75,

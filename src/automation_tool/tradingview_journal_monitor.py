@@ -572,6 +572,7 @@ def _run_intraday_touch_loop(
                 store=settings.openai_responses_store,
                 include=settings.openai_responses_include,
                 model=resolved_model_for_intraday_alert(settings, params.openai_model_cli),
+                reasoning_effort="high",
             )
         except Exception as e:
             re_raise_unless_openai(e)

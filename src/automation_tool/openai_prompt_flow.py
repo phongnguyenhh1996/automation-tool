@@ -569,6 +569,7 @@ def run_single_followup_responses(
     store: bool,
     include: list[str],
     reasoning_summary: str = "auto",
+    reasoning_effort: str | None = None,
     max_coinmap_json_chars: int | None = None,
     model: str | None = None,
 ) -> tuple[str, str]:
@@ -578,6 +579,9 @@ def run_single_followup_responses(
 
     If ``previous_response_id`` is ``None``, starts a **new** Responses thread (no chain).
     Otherwise chains to that id (intraday alert, TP1, etc.).
+
+    ``reasoning_effort``: when non-empty, added as ``reasoning.effort`` (e.g. ``high`` for
+    [INTRADAY_ALERT] / [TRADE_MANAGEMENT]) alongside ``reasoning.summary``.
     """
     paths: list[Path] = []
     if morning_snapshot_path is not None:
@@ -604,6 +608,9 @@ def run_single_followup_responses(
         )
 
     reasoning: dict[str, Any] = {"summary": reasoning_summary}
+    _eff = (reasoning_effort or "").strip()
+    if _eff:
+        reasoning["effort"] = _eff
 
     common: dict[str, Any] = {
         "prompt": prompt,

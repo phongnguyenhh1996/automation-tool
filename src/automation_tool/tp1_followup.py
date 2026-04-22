@@ -262,6 +262,7 @@ def _run_tp1_openai_and_act(
         model=resolved_model_for_intraday_alert(
             settings, getattr(params, "openai_model_cli", None)
         ),
+        reasoning_effort="high",
     )
     update_plan_tp1_followup_done(label, True, path=last_alert_path)
     _log_tp1.info(

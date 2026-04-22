@@ -970,6 +970,7 @@ def _tp1_followup_job(
             store=settings.openai_responses_store,
             include=settings.openai_responses_include,
             model=resolved_model_for_intraday_alert(settings, params.openai_model_cli),
+            reasoning_effort="high",
         )
         _openai_followup_persist_new_id(params, new_id)
         if not params.no_telegram:
@@ -1353,6 +1354,7 @@ def _r1_followup_job(
             store=settings.openai_responses_store,
             include=settings.openai_responses_include,
             model=resolved_model_for_intraday_alert(settings, params.openai_model_cli),
+            reasoning_effort="high",
         )
         _openai_followup_persist_new_id(params, new_id)
         if not params.no_telegram:
@@ -1935,6 +1937,7 @@ def _zone_touch_job(
             store=settings.openai_responses_store,
             include=settings.openai_responses_include,
             model=resolved_model_for_intraday_alert(settings, params.openai_model_cli),
+            reasoning_effort="high",
         )
         if _should_write_intraday_alert_anchor(params):
             _openai_followup_persist_new_id(params, new_id)
