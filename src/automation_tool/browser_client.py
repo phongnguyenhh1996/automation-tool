@@ -202,8 +202,11 @@ def spawn_browser_service_detached(*, cwd: Optional[Path] = None) -> subprocess.
     cmd = [sys.executable, "-m", "automation_tool.browser_service"]
     kwargs: dict[str, Any] = {
         "stdin": subprocess.DEVNULL,
-        "stdout": subprocess.PIPE,
-        "stderr": subprocess.PIPE,
+        # Important: do not PIPE here. The service can emit plenty of logs/warnings on startup
+        # (Playwright/Chrome), and if nobody drains the pipes it can deadlock and never write
+        # the state file that `browser up` is waiting for.
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
         "start_new_session": True,
     }
     if cwd is not None:

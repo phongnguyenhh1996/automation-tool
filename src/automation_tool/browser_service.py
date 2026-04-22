@@ -204,6 +204,23 @@ def chrome_user_data_dir_from_env() -> Optional[Path]:
     return Path(raw).expanduser().resolve()
 
 
+def _looks_like_profile_lock_error(exc: BaseException) -> bool:
+    msg = str(exc) or ""
+    # Chrome/Chromium profile lock:
+    # "Failed to create a ProcessSingleton for your profile directory"
+    return ("ProcessSingleton" in msg) or ("profile directory is already in use" in msg)
+
+
+def _fallback_user_data_dir() -> Path:
+    # Keep fallbacks under our data dir so they're easy to clean.
+    # A unique dir avoids Chrome's singleton lock conflicts.
+    base = default_data_dir() / "chrome_user_data_fallback"
+    base.mkdir(parents=True, exist_ok=True)
+    d = (base / str(uuid.uuid4())).resolve()
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 class BrowserServiceState:
     def __init__(self) -> None:
         self._playwright: Any = None
@@ -212,6 +229,7 @@ class BrowserServiceState:
         self._tabs: dict[str, Any] = {}
         self._subs: dict[str, asyncio.Task] = {}
         self._closing = False
+        self._user_data_dir_used: Optional[Path] = None
 
     async def start(self, *, headless: bool, cdp_port: int) -> str:
         self._playwright = await async_playwright().start()
@@ -234,19 +252,40 @@ class BrowserServiceState:
                     viewport=viewport,
                     args=args,
                 )
+                self._user_data_dir_used = user_data
             else:
                 self._browser = await p.chromium.launch(channel=channel, headless=headless, args=args)
                 self._context = await self._browser.new_context(viewport=viewport)
         except PlaywrightError as exc:
             _log.warning("launch with channel failed, fallback bundled: %s", exc)
             if user_data is not None:
+                retry_user_data = user_data
+                if _looks_like_profile_lock_error(exc):
+                    retry_user_data = _fallback_user_data_dir()
+                    _log.warning(
+                        "Chrome profile dir locked; falling back to fresh user_data_dir=%s",
+                        retry_user_data,
+                    )
                 self._browser = None
-                self._context = await p.chromium.launch_persistent_context(
-                    str(user_data),
-                    headless=headless,
-                    viewport=viewport,
-                    args=args,
-                )
+                # If the failure was *only* the profile lock, keep using the requested channel
+                # (Google Chrome) and just switch to a fresh profile dir.
+                if _looks_like_profile_lock_error(exc):
+                    self._context = await p.chromium.launch_persistent_context(
+                        str(retry_user_data),
+                        channel=channel,
+                        headless=headless,
+                        viewport=viewport,
+                        args=args,
+                    )
+                else:
+                    # Fallback to bundled Chromium (requires `playwright install`).
+                    self._context = await p.chromium.launch_persistent_context(
+                        str(retry_user_data),
+                        headless=headless,
+                        viewport=viewport,
+                        args=args,
+                    )
+                self._user_data_dir_used = retry_user_data
             else:
                 self._browser = await p.chromium.launch(headless=headless, args=args)
                 self._context = await self._browser.new_context(viewport=viewport)
@@ -594,7 +633,7 @@ async def _run() -> None:
         "pid": os.getpid(),
         "cdp_http": cdp_http,
         "control_tcp": f"127.0.0.1:{control_port}",
-        "user_data_dir": str(chrome_user_data_dir_from_env() or ""),
+        "user_data_dir": str(rt.st._user_data_dir_used or chrome_user_data_dir_from_env() or ""),
     }
     _state_path().write_text(json.dumps(state_doc, indent=2), encoding="utf-8")
 
