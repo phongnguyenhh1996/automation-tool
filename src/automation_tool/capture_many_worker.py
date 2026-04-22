@@ -60,6 +60,7 @@ def main(argv: list[str] | None = None) -> None:
     tradingview_password = payload.get("tradingview_password")
     save_storage_state = bool(payload.get("save_storage_state", True))
     headless = bool(payload.get("headless", True))
+    tradingview_force_screenshot = bool(payload.get("tradingview_force_screenshot", False))
 
     stamps: dict[str, str] = {sym: time.strftime("%Y%m%d_%H%M%S") for sym in symbols}
     all_paths: list[Path] = []
@@ -88,6 +89,7 @@ def main(argv: list[str] | None = None) -> None:
                     enable_tradingview=True,
                     clear_charts_before_capture=True,
                     stamp_override=stamps[sym],
+                    tradingview_force_screenshot=tradingview_force_screenshot,
                 )
                 all_paths.extend(paths)
 

@@ -63,6 +63,7 @@ def main(argv: list[str] | None = None) -> None:
     clear_charts_before_capture = payload.get("clear_charts_before_capture")
     stamp_override = payload.get("stamp_override")
     set_global_active_symbol = bool(payload.get("set_global_active_symbol", True))
+    tradingview_force_screenshot = bool(payload.get("tradingview_force_screenshot", False))
 
     with sync_playwright() as p:
         attached = try_attach_playwright_via_service(p, force=True)
@@ -86,6 +87,7 @@ def main(argv: list[str] | None = None) -> None:
                 enable_tradingview=enable_tradingview,
                 clear_charts_before_capture=clear_charts_before_capture,
                 stamp_override=str(stamp_override) if stamp_override is not None else None,
+                tradingview_force_screenshot=tradingview_force_screenshot,
             )
         finally:
             try:

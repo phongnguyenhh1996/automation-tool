@@ -2759,6 +2759,7 @@ def _capture_charts_in_context(
     tradingview_password: Optional[str],
     save_storage_state: bool,
     stamp: str,
+    tradingview_force_screenshot: bool = False,
     progress_hook: Optional[Callable[[], None]] = None,
     coinmap_only_retry_paths: Optional[list[Path]] = None,
     coinmap_capture_intervals: Optional[Sequence[str]] = None,
@@ -2911,6 +2912,8 @@ def _capture_charts_in_context(
         tv = cfg.get("tradingview_capture") or {}
         if isinstance(tv, dict) and tv.get("enabled", False):
             tv_ds = str(tv.get("data_source") or "browser").strip().lower()
+            if tradingview_force_screenshot and tv_ds == "tvdatafeed":
+                tv_ds = "browser"
             if tv_ds == "tvdatafeed":
                 from automation_tool.tvdatafeed_capture import run_tvdatafeed_export
 
@@ -3042,6 +3045,7 @@ def capture_charts(
     require_browser_service: bool = False,
     coinmap_only_retry_paths: Optional[list[Path]] = None,
     coinmap_capture_intervals: Optional[Sequence[str]] = None,
+    tradingview_force_screenshot: bool = False,
 ) -> list[Path]:
     """
     Optionally clear prior images in charts_dir, then log in (if credentials given),
@@ -3146,6 +3150,7 @@ def capture_charts(
             tradingview_password=tradingview_password,
             save_storage_state=save_storage_state,
             stamp=stamp,
+            tradingview_force_screenshot=tradingview_force_screenshot,
             progress_hook=progress_hook,
             coinmap_only_retry_paths=coinmap_only_retry_paths,
             coinmap_capture_intervals=coinmap_capture_intervals,
@@ -3185,6 +3190,7 @@ def capture_charts(
                 tradingview_password=tradingview_password,
                 save_storage_state=save_storage_state,
                 stamp=stamp,
+                tradingview_force_screenshot=tradingview_force_screenshot,
                 progress_hook=progress_hook,
                 coinmap_only_retry_paths=coinmap_only_retry_paths,
                 coinmap_capture_intervals=coinmap_capture_intervals,

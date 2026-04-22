@@ -1431,6 +1431,7 @@ def cmd_capture(args: argparse.Namespace) -> None:
                 "save_storage_state": not args.no_save_storage,
                 "headless": not args.headed,
                 "main_chart_symbol": args.main_symbol,
+                "tradingview_force_screenshot": True,
             },
             timeout_s=600.0,
         )
@@ -1451,6 +1452,7 @@ def cmd_capture(args: argparse.Namespace) -> None:
             reuse_browser_context=None,
             main_chart_symbol=args.main_symbol,
             require_browser_service=False,
+            tradingview_force_screenshot=True,
         )
 
     charts_dir = args.charts_dir or default_charts_dir()
@@ -1540,6 +1542,7 @@ def cmd_capture_many(args: argparse.Namespace) -> None:
                 "tradingview_password": s.tradingview_password,
                 "save_storage_state": not args.no_save_storage,
                 "headless": not args.headed,
+                "tradingview_force_screenshot": True,
             },
             timeout_s=timeout_s,
         )
@@ -1588,6 +1591,7 @@ def cmd_capture_many(args: argparse.Namespace) -> None:
                     enable_tradingview=True,
                     clear_charts_before_capture=True,
                     stamp_override=stamps[sym],
+                    tradingview_force_screenshot=True,
                 )
 
             if not args.no_save_storage and storage:
@@ -2029,6 +2033,7 @@ def cmd_all(args: argparse.Namespace) -> None:
         headless=not args.headed,
         reuse_browser_context=None,
         main_chart_symbol=args.main_symbol,
+        tradingview_force_screenshot=True,
     )
     charts_dir = args.charts_dir or default_charts_dir()
     n_art = len(paths)
