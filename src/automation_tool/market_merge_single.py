@@ -30,7 +30,7 @@ DEFAULT_HISTOGRAM_MAX = 40  # 40+20+20 around POC/VAL/VAH when compacting; plan 
 
 @dataclass
 class AnalysisPayloadOptions:
-    """Options for :func:`build_analysis_payload`."""
+    """Options for :func:`build_analysis_payload` and :func:`build_session_master`."""
 
     recent_15m: int = DEFAULT_RECENT_15M
     recent_5m: int = DEFAULT_RECENT_5M
@@ -41,6 +41,10 @@ class AnalysisPayloadOptions:
     histogram_near_vah: int = 20
     vah_val_volume_fraction: float = 0.70
     per_interval_recent: Optional[dict[str, int]] = None
+    #: When True, :func:`build_session_master` only aggregates footprint for the smallest
+    #: TF into ``session_profile`` from candles with ``t`` >= inferred ``session_start``
+    #: (aligns with typical Coinmap session VP window).
+    filter_session_profile_by_session_start: bool = True
 
 
 _INTERVAL_MINUTES: dict[str, int] = {
@@ -128,6 +132,56 @@ def _parse_ts(s: str) -> Optional[datetime]:
         return datetime.fromisoformat(s2)
     except ValueError:
         return None
+
+
+def _session_start_epoch_ms(session_start: Any) -> Optional[int]:
+    """Bar open ``t`` (epoch ms) is UTC wall-clock; compare to ``session_start`` ISO instant."""
+    if session_start is None:
+        return None
+    s = str(session_start).strip()
+    if not s:
+        return None
+    dt = _parse_ts(s)
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return int(dt.timestamp() * 1000)
+
+
+def _filter_candles_from_session_start(
+    candles: list[dict[str, Any]],
+    session_start_ms: Optional[int],
+) -> list[dict[str, Any]]:
+    if session_start_ms is None:
+        return candles
+    out: list[dict[str, Any]] = []
+    for c in candles:
+        t0 = c.get("t")
+        if t0 is None:
+            continue
+        try:
+            tk = int(t0)
+        except (TypeError, ValueError):
+            continue
+        if tk >= session_start_ms:
+            out.append(c)
+    return out
+
+
+def _sum_histogram_levels_volume(hist: list[dict[str, Any]]) -> float:
+    s = 0.0
+    for x in hist:
+        if not isinstance(x, dict):
+            continue
+        v = x.get("volume")
+        if v is None:
+            continue
+        try:
+            s += float(v)
+        except (TypeError, ValueError):
+            continue
+    return s
 
 
 def load_coinmap_json_file(path: str | Path) -> dict[str, Any]:
@@ -617,11 +671,15 @@ def _session_profile_for_tf(
     total_volume = int(sum(b["vol"] for b in acc.values())) if acc else 0
     price_levels = len(hist)
     poc, vah, val = _poc_vah_val_from_acc(acc, target_frac=target_frac)
+    hv_sum = _sum_histogram_levels_volume(hist)
+    hist_vol_out = int(hv_sum) if hv_sum == int(hv_sum) else hv_sum
     return {
         "poc": poc,
         "vah": vah,
         "val": val,
         "total_volume": total_volume,
+        "histogram_volume_sum": hist_vol_out,
+        "histogram_truncated": False,
         "price_levels": price_levels,
         "interval": interval,
         "histogram": hist,
@@ -765,7 +823,11 @@ def _compact_session_histogram_simple(
     """If histogram is long, keep full poc/vah/val + 40 around POC + 20 near val + 20 near vah (plan §15)."""
     hist = sp.get("histogram")
     if not isinstance(hist, list) or len(hist) <= options.histogram_max:
-        return dict(sp)
+        s0 = dict(sp)
+        hv0 = _sum_histogram_levels_volume(hist if isinstance(hist, list) else [])
+        s0["histogram_volume_sum"] = int(hv0) if hv0 == int(hv0) else hv0
+        s0["histogram_truncated"] = False
+        return s0
     by_p: list[tuple[float, dict[str, Any]]] = []
     for x in hist:
         if isinstance(x, dict) and "price" in x:
@@ -774,7 +836,10 @@ def _compact_session_histogram_simple(
             except (TypeError, ValueError):
                 continue
     if not by_p:
-        return dict(sp)
+        s0 = dict(sp)
+        s0["histogram_volume_sum"] = 0
+        s0["histogram_truncated"] = False
+        return s0
     by_p.sort(key=lambda t: t[0])
     keys = [p for p, _ in by_p]
     m = {p: d for p, d in by_p}
@@ -805,14 +870,30 @@ def _compact_session_histogram_simple(
     s2 = dict(sp)
     s2["histogram"] = new_hist
     s2["price_levels"] = len(new_hist)
+    hv2 = _sum_histogram_levels_volume(new_hist)
+    s2["histogram_volume_sum"] = int(hv2) if hv2 == int(hv2) else hv2
+    s2["histogram_truncated"] = len(new_hist) < len(hist)
     return s2
 
 
-def build_session_master(raw_bundle: dict[str, Any]) -> dict[str, Any]:
+def build_session_master(
+    raw_bundle: dict[str, Any],
+    *,
+    filter_session_profile_by_session_start: bool = True,
+) -> dict[str, Any]:
     """
     Full structure for inspection (per plan §12): metadata, ``meta_by_tf``,
     one shared ``session_profile`` (histogram/POC/VAH/VAL from the **smallest**
     timeframe only), and ``frames`` with per-TF summary, candles, recent slices.
+
+    When ``filter_session_profile_by_session_start`` is True (default), candles on
+    the smallest TF are filtered to ``t >= session_start`` before aggregating the
+    session footprint profile (matches typical session VP on Coinmap).
+
+    ``session_profile`` includes ``histogram_volume_sum`` (sum of ``histogram[].volume``
+    in that object) and ``histogram_truncated`` (False in master; may become True
+    in :func:`build_analysis_payload` when the histogram is trimmed for size).
+    ``total_volume`` is always the full footprint sum used to compute POC/VAH/VAL.
     """
     tfs: list[str] = list(raw_bundle.get("timeframes") or [])
     symbol = (raw_bundle.get("symbol") or "UNKNOWN").strip() or "UNKNOWN"
@@ -824,6 +905,9 @@ def build_session_master(raw_bundle: dict[str, Any]) -> dict[str, Any]:
         cdl_by_iv[iv] = _build_normalized_candles_for_tf(iv, raw_bundle)
     smallest = _smallest_timeframe(tfs)
     fine_candles = cdl_by_iv.get(smallest, []) if smallest else []
+    if filter_session_profile_by_session_start:
+        ss_ms = _session_start_epoch_ms(st)
+        fine_candles = _filter_candles_from_session_start(fine_candles, ss_ms)
     global_sp = _session_profile_for_tf(smallest or "?", fine_candles)
     frames: dict[str, Any] = {}
     for iv in tfs:
@@ -870,7 +954,9 @@ def build_analysis_payload(
     sp_out: Any = sp_top
     if isinstance(sp_top, dict):
         iv0 = str(sp_top.get("interval") or "")
-        sp_out = _compact_session_histogram_simple({**sp_top, "interval": iv0}, options=opt)
+        sp_out = _compact_session_histogram_simple(
+            {**sp_top, "interval": iv0}, options=opt
+        )
     for iv, fr in m_frames.items():
         if not isinstance(fr, dict):
             continue
@@ -920,8 +1006,12 @@ def build_merged_analysis_from_files(
         session_timezone=session_timezone,
         session_start_hour=session_start_hour,
     )
-    master = build_session_master(raw)
-    return build_analysis_payload(master, options=options)
+    opt = options or AnalysisPayloadOptions()
+    master = build_session_master(
+        raw,
+        filter_session_profile_by_session_start=opt.filter_session_profile_by_session_start,
+    )
+    return build_analysis_payload(master, options=opt)
 
 
 if __name__ == "__main__":

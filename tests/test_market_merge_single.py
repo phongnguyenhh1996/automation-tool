@@ -12,11 +12,17 @@ from automation_tool.coinmap_merged import (
     write_coinmap_merged_json,
     write_openai_coinmap_merged_from_raw_export,
 )
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from automation_tool.market_merge_single import (
+    AnalysisPayloadOptions,
+    build_analysis_payload,
     build_merged_analysis_from_files,
     build_raw_bundle,
     build_session_master,
     compute_footprint_summary,
+    _session_profile_for_tf,
     _smallest_timeframe,
 )
 
@@ -181,6 +187,103 @@ def test_validate_merged_5m_only_single_raw(tmp_path: Path) -> None:
     ok, rea = validate_coinmap_merged_payload(data)
     assert ok, rea
     assert list((data.get("frames") or {}).keys()) == ["5m"]
+
+
+def test_master_session_profile_histogram_volume_sum_matches_total(tmp_path: Path) -> None:
+    t0 = 1_770_000_000_000
+    f = tmp_path / "hist_sum.json"
+    f.write_text(
+        json.dumps(
+            {
+                "generated_at": "2026-01-01T00:00:00+00:00",
+                "symbol": "Z",
+                "interval": "5m",
+                "getcandlehistory": [_minimal_bar(t0)],
+                "getorderflowhistory": [_of_bar(t0)],
+            }
+        ),
+        encoding="utf-8",
+    )
+    raw = build_raw_bundle([f])
+    m = build_session_master(raw, filter_session_profile_by_session_start=False)
+    sp = m["session_profile"]
+    hist = sp["histogram"]
+    summed = sum(int(x["volume"]) for x in hist)
+    assert sp["total_volume"] == summed
+    assert sp["histogram_volume_sum"] == summed
+    assert sp["histogram_truncated"] is False
+
+
+def test_analysis_payload_truncated_histogram_meta() -> None:
+    candles = [
+        {
+            "t": 1,
+            "footprint": [
+                {"price": float(i), "volume": 10, "buy_volume": 5, "sell_volume": 5}
+                for i in range(130)
+            ],
+        }
+    ]
+    sp = _session_profile_for_tf("5m", candles)
+    assert sp["histogram_truncated"] is False
+    assert sp["histogram_volume_sum"] == sp["total_volume"] == 1300
+    master = {"session_profile": sp, "frames": {}, "symbol": "T"}
+    out = build_analysis_payload(
+        master, options=AnalysisPayloadOptions(histogram_max=50)
+    )
+    sp2 = out["session_profile"]
+    assert sp2["histogram_truncated"] is True
+    assert sp2["poc"] == sp["poc"]
+    assert sp2["total_volume"] == 1300
+    assert float(sp2["histogram_volume_sum"]) < 1300
+    assert len(sp2["histogram"]) < 130
+
+
+def test_session_start_filter_changes_session_profile(tmp_path: Path) -> None:
+    anchor = datetime(2026, 6, 15, 5, 0, 0, tzinfo=ZoneInfo("Asia/Ho_Chi_Minh"))
+    ms = int(anchor.timestamp() * 1000)
+    t_early = ms - 600_000
+    t_late = ms + 600_000
+    f = tmp_path / "sess_filter.json"
+    f.write_text(
+        json.dumps(
+            {
+                "generated_at": "2026-06-15T08:00:00+00:00",
+                "symbol": "Z2",
+                "interval": "5m",
+                "getcandlehistory": [
+                    {
+                        **_minimal_bar(t_early),
+                        "o": 1.0,
+                        "h": 1.0,
+                        "l": 1.0,
+                        "c": 1.0,
+                        "v": 999,
+                    },
+                    {
+                        **_minimal_bar(t_late),
+                        "o": 2.0,
+                        "h": 2.0,
+                        "l": 2.0,
+                        "c": 2.0,
+                        "v": 50,
+                    },
+                ],
+                "getorderflowhistory": [
+                    {"t": t_early, "aggs": [{"tp": 100.0, "v": 999, "bv": 500, "sv": 499}]},
+                    {"t": t_late, "aggs": [{"tp": 200.0, "v": 50, "bv": 25, "sv": 25}]},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    raw = build_raw_bundle(
+        [f], session_start="2026-06-15T05:00:00+07:00", session_timezone="Asia/Ho_Chi_Minh"
+    )
+    m_filtered = build_session_master(raw, filter_session_profile_by_session_start=True)
+    m_all = build_session_master(raw, filter_session_profile_by_session_start=False)
+    assert m_filtered["session_profile"]["poc"] == 200.0
+    assert m_all["session_profile"]["poc"] == 100.0
 
 
 def test_merged_from_files_end_to_end(tmp_path: Path) -> None:
