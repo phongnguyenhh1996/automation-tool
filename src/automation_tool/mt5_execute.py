@@ -23,6 +23,8 @@ from automation_tool.mt5_openai_parse import ParsedTrade, normalize_broker_xau_s
 # Vào lệnh: nếu mt5.initialize (login/IPC) lỗi — chờ rồi thử lại trước khi bỏ cuộc.
 _MT5_INIT_MAX_ATTEMPTS = 3
 _MT5_INIT_RETRY_DELAY_SEC = 3.0
+_MT5_ORDER_SEND_MAX_ATTEMPTS = 3
+_MT5_ORDER_SEND_RETRY_DELAY_MS = 200
 
 
 @dataclass
@@ -266,6 +268,19 @@ def _trade_retcode_hint(mt5: Any, retcode: Optional[int]) -> str:
             "kiểm tra leverage & margin trong MT5 (Symbol properties), nạp thêm balance, "
             "hoặc đóng lệnh/vị thế đang chiếm margin."
         )
+    rq = getattr(mt5, "TRADE_RETCODE_REQUOTE", None)
+    pc = getattr(mt5, "TRADE_RETCODE_PRICE_CHANGED", None)
+    po = getattr(mt5, "TRADE_RETCODE_PRICE_OFF", None)
+    if (
+        (rq is not None and rc == int(rq))
+        or (pc is not None and rc == int(pc))
+        or (po is not None and rc == int(po))
+        or rc in (10004, 10020, 10021)
+    ):
+        return (
+            " | Gợi ý: giá biến động nhanh (requote/price changed). "
+            "Tăng deviation hoặc bật retry order_send với giá tick mới."
+        )
     if rc == 10019:
         return " | Gợi ý: retcode 10019 = không đủ margin/free margin cho yêu cầu này."
     return ""
@@ -409,6 +424,59 @@ def _symbol_candidates(symbol: str) -> list[str]:
             seen.add(c)
             uniq.append(c)
     return uniq
+
+
+def _is_retryable_order_send_retcode(mt5: Any, retcode: Optional[int]) -> bool:
+    if retcode is None:
+        return False
+    try:
+        rc = int(retcode)
+    except (TypeError, ValueError):
+        return False
+    rq = getattr(mt5, "TRADE_RETCODE_REQUOTE", None)
+    pc = getattr(mt5, "TRADE_RETCODE_PRICE_CHANGED", None)
+    po = getattr(mt5, "TRADE_RETCODE_PRICE_OFF", None)
+    if rq is not None and rc == int(rq):
+        return True
+    if pc is not None and rc == int(pc):
+        return True
+    if po is not None and rc == int(po):
+        return True
+    return rc in (10004, 10020, 10021)
+
+
+def _refresh_market_order_price(mt5: Any, request: dict[str, Any]) -> tuple[bool, str]:
+    """
+    Với lệnh market (DEAL), cập nhật ``request['price']`` theo tick mới nhất.
+    Trả về (đã cập nhật hay không, ghi chú).
+    """
+    action = request.get("action")
+    if action != mt5.TRADE_ACTION_DEAL:
+        return False, "not DEAL action"
+    symbol = str(request.get("symbol") or "").strip()
+    if not symbol:
+        return False, "missing symbol in request"
+    order_type = request.get("type")
+    tick = mt5.symbol_info_tick(symbol)
+    if tick is None:
+        return False, f"symbol_info_tick({symbol!r}) trả về None"
+    if order_type == mt5.ORDER_TYPE_BUY:
+        new_price = getattr(tick, "ask", None)
+        leg = "ask"
+    elif order_type == mt5.ORDER_TYPE_SELL:
+        new_price = getattr(tick, "bid", None)
+        leg = "bid"
+    else:
+        return False, f"not market BUY/SELL type={order_type!r}"
+    try:
+        p = float(new_price)
+    except (TypeError, ValueError):
+        return False, f"tick.{leg} không hợp lệ: {new_price!r}"
+    if p <= 0.0:
+        return False, f"tick.{leg} <= 0: {p}"
+    old = request.get("price")
+    request["price"] = p
+    return True, f"refresh price {old!r} -> {p!r} ({leg})"
 
 
 def _ensure_symbol(mt5: Any, symbol: str) -> tuple[Optional[str], Optional[str]]:
@@ -598,6 +666,8 @@ def execute_trade(
     lot_override: Optional[float] = None,
     account_id: Optional[str] = None,
     account_symbol_map: Optional[dict[str, str]] = None,
+    order_send_max_attempts: Optional[int] = None,
+    order_send_retry_delay_ms: Optional[int] = None,
 ) -> MT5ExecutionResult:
     """
     Gửi lệnh qua MetaTrader5. MT5 chỉ có một TP trên lệnh; TP2 được in ra nếu có.
@@ -625,6 +695,18 @@ def execute_trade(
     password_s = password if password is not None else (os.getenv("MT5_PASSWORD") or "")
     server_s = server if server is not None else (os.getenv("MT5_SERVER") or "")
     mag = magic if magic is not None else _env_int("MT5_MAGIC", 2222222)
+    send_max_attempts_raw = (
+        int(order_send_max_attempts)
+        if order_send_max_attempts is not None
+        else _env_int("MT5_ORDER_SEND_MAX_ATTEMPTS", _MT5_ORDER_SEND_MAX_ATTEMPTS)
+    )
+    send_max_attempts = max(1, send_max_attempts_raw)
+    send_retry_delay_raw = (
+        int(order_send_retry_delay_ms)
+        if order_send_retry_delay_ms is not None
+        else _env_int("MT5_ORDER_SEND_RETRY_DELAY_MS", _MT5_ORDER_SEND_RETRY_DELAY_MS)
+    )
+    send_retry_delay_sec = max(0.0, float(send_retry_delay_raw) / 1000.0)
 
     extra = ""
     if trade.tp2 is not None and log_tp2:
@@ -726,27 +808,52 @@ def execute_trade(
                 request=request,
                 resolved_symbol=str(request.get("symbol") or trade.symbol),
             )
-        ret = mt5.order_send(request)
-        if ret is None:
-            le = _last_error_tuple(mt5)
-            return MT5ExecutionResult(
-                ok=False,
-                message=f"order_send trả về None. {format_last_error(mt5)}",
-                account_id=account_id,
-                last_error=le,
-                request=request,
-                resolved_symbol=str(request.get("symbol") or trade.symbol),
+        send_attempt = 1
+        send_notes: list[str] = []
+        ret = None
+        while True:
+            ret = mt5.order_send(request)
+            if ret is None:
+                le = _last_error_tuple(mt5)
+                return MT5ExecutionResult(
+                    ok=False,
+                    message=f"order_send trả về None. {format_last_error(mt5)}",
+                    account_id=account_id,
+                    last_error=le,
+                    request=request,
+                    resolved_symbol=str(request.get("symbol") or trade.symbol),
+                )
+            rc_try = getattr(ret, "retcode", None)
+            if _is_mt5_trade_success_retcode(mt5, rc_try):
+                break
+            if (
+                send_attempt >= send_max_attempts
+                or not _is_retryable_order_send_retcode(mt5, rc_try)
+            ):
+                break
+            refreshed, note = _refresh_market_order_price(mt5, request)
+            if not refreshed:
+                send_notes.append(
+                    f"retry stop at attempt={send_attempt}: {note}",
+                )
+                break
+            send_notes.append(
+                f"retry {send_attempt + 1}/{send_max_attempts} after {_retcode_label(mt5, rc_try)}; {note}",
             )
+            send_attempt += 1
+            if send_retry_delay_sec > 0.0:
+                time.sleep(send_retry_delay_sec)
         rc = getattr(ret, "retcode", None)
         rd = _trade_result_dict(ret)
         if not _is_mt5_trade_success_retcode(mt5, rc):
             le = _last_error_tuple(mt5)
             hint = _trade_retcode_hint(mt5, rc)
+            retry_txt = f" retries={send_attempt}/{send_max_attempts}; notes={send_notes}" if send_attempt > 1 or send_notes else ""
             return MT5ExecutionResult(
                 ok=False,
                 message=(
                     f"order_send thất bại: retcode={_retcode_label(mt5, rc)} "
-                    f"trade_result={rd!r} {format_last_error(mt5)}{hint}{extra}"
+                    f"trade_result={rd!r}{retry_txt} {format_last_error(mt5)}{hint}{extra}"
                 ),
                 account_id=account_id,
                 retcode=int(rc) if rc is not None else None,
@@ -760,7 +867,8 @@ def execute_trade(
             ok=True,
             message=(
                 f"OK: {_retcode_label(mt5, rc)} order={getattr(ret, 'order', None)} "
-                f"deal={getattr(ret, 'deal', None)} trade_result={rd!r}{extra}"
+                f"deal={getattr(ret, 'deal', None)} trade_result={rd!r}"
+                f"{' retries=' + str(send_attempt) if send_attempt > 1 else ''}{extra}"
             ),
             account_id=account_id,
             retcode=rc_int,
