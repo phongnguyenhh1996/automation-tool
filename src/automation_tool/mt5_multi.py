@@ -10,6 +10,7 @@ from typing import Optional
 from automation_tool.mt5_accounts import (
     MT5AccountEntry,
     LotRuleFixed,
+    LotRuleFromTrade,
     LotRuleMaxNotionalUsd,
     compute_lot_override,
     compute_volume_for_max_notional_live,
@@ -49,6 +50,8 @@ def _lot_override_for_entry(
     rule = acc.lot
     if isinstance(rule, LotRuleFixed):
         return float(rule.volume), None
+    if isinstance(rule, LotRuleFromTrade):
+        return None, None
     if isinstance(rule, LotRuleMaxNotionalUsd):
         if dry_run:
             vol, hint = compute_lot_override(

@@ -34,11 +34,13 @@ def test_slim_trims_candles_and_orderflow(monkeypatch: pytest.MonkeyPatch) -> No
         "symbol": "X",
         "interval": "15m",
         "getcandlehistory": [{"i": "15m", "t": i} for i in range(100, 0, -1)],
+        "getcandlehistorycvd": [{"i": "15m", "t": i} for i in range(100, 0, -1)],
         "getorderflowhistory": [{"i": "15m", "t": i} for i in range(50, 0, -1)],
         "getindicatorsvwap": [{"i": "15m", "t": 100, "data": {}}],
     }
     out = slim_coinmap_export_for_openai(data)
     assert len(out["getcandlehistory"]) == 60
+    assert len(out["getcandlehistorycvd"]) == 60
     assert len(out["getorderflowhistory"]) == 11
     assert out["getindicatorsvwap"][0]["t"] == 100
 

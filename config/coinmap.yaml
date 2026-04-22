@@ -125,7 +125,7 @@ chart_download:
   # mode: bearer_request (mặc định trong code nếu không khai báo) | network_capture (bắt response khi chart load) | request (Bearer tĩnh trong request_headers).
   # network_capture: merge_repeated_endpoint_responses / network_capture_* áp dụng khi mode: network_capture.
   # bearer_skip_chart_ui: true = không mở sidebar multi-shot Coinmap; chỉ trigger + Bearer + JSON. false = UI đầy đủ + Bearer sau mỗi bước.
-  # bearer_http_parallel: true = httpx song song 3 endpoint; bearer_parallel_max_concurrency: 0 = không giới hạn shot API-only.
+  # bearer_http_parallel: true = httpx song song các endpoint cm-api (getcandlehistory + CVD + orderflow + vwap); bearer_parallel_max_concurrency: 0 = không giới hạn shot API-only.
   api_data_export:
     enabled: true
     mode: bearer_request
@@ -137,13 +137,20 @@ chart_download:
     bearer_capture_url_substrings: []
     send_m_affiliate: true
     m_affiliate: "CM"
+    # {from_ms}/{to_ms}: mặc định vn_session — từ 05:00 giờ VN (Asia/Ho_Chi_Minh) đến hiện tại UTC.
+    # Đổi vn_session_start_hour / vn_session_timezone nếu cần. auto_from_to_mode: countback → công thức cũ (auto_countback × độ dài nến).
+    auto_from_to_mode: vn_session
+    vn_session_timezone: Asia/Ho_Chi_Minh
+    vn_session_start_hour: 5
     auto_countback: 1000
     auto_time_padding_ms: 0
     # Gộp response khi mode: network_capture (kéo chart → API gọi lại).
     merge_repeated_endpoint_responses: true
     network_capture_max_responses_per_endpoint: 0
     relax_symbol_filter_if_empty: true
-    slim_export_on_disk: true
+    # Merged OpenAI JSON (``*_merged.json``) needs full per-TF exports; no on-disk slim.
+    use_merged_coinmap_for_openai: true
+    slim_export_on_disk: false
     network_capture_wait_ms: 12000
     network_capture_poll_ms: 300
     fail_on_api_error: false
@@ -154,6 +161,7 @@ chart_download:
       getcandlehistory: "https://gw.coinmap.tech/cm-api/api/v1/getcandlehistory"
       getorderflowhistory: "https://gw.coinmap.tech/cm-api/api/v1/getorderflowhistory"
       getindicatorsvwap: "https://gw.coinmap.tech/cm-api/api/v1/getindicatorsvwap"
+      getcandlehistorycvd: "https://gw.coinmap.tech/cm-api/api/v1/getcandlehistorycvd"
     query_template:
       asset: ""
       typedata: dly

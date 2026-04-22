@@ -10,6 +10,7 @@ import pytest
 
 from automation_tool.mt5_accounts import (
     LotRuleFixed,
+    LotRuleFromTrade,
     LotRuleMaxNotionalUsd,
     load_mt5_accounts_from_path,
 )
@@ -19,6 +20,54 @@ from automation_tool.mt5_openai_parse import ParsedTrade
 
 def _write_accounts(path: Path, data: list | dict) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def test_omitted_lot_uses_from_trade() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "accounts.json"
+        _write_accounts(
+            p,
+            [
+                {
+                    "id": "a",
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                },
+                {
+                    "id": "b",
+                    "login": 2,
+                    "password": "y",
+                    "server": "S",
+                    "primary": False,
+                    "lot": {"mode": "from_trade"},
+                },
+            ],
+        )
+        accs = load_mt5_accounts_from_path(p)
+        assert isinstance(accs[0].lot, LotRuleFromTrade)
+        assert isinstance(accs[1].lot, LotRuleFromTrade)
+
+
+def test_null_lot_uses_from_trade() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "accounts.json"
+        _write_accounts(
+            p,
+            [
+                {
+                    "id": "a",
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                    "lot": None,
+                },
+            ],
+        )
+        accs = load_mt5_accounts_from_path(p)
+        assert isinstance(accs[0].lot, LotRuleFromTrade)
 
 
 def test_load_valid_two_accounts_one_primary() -> None:

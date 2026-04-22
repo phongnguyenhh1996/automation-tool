@@ -1615,10 +1615,22 @@ def _resolved_analysis_prompt(args: argparse.Namespace, charts_dir: Path) -> str
 def _warn_if_incomplete_chart_payloads(
     charts_dir: Path, payloads: list[ChartOpenAIPayload]
 ) -> None:
+    st = latest_chart_stamp(charts_dir)
+    if not st:
+        return
+    from automation_tool.images import (
+        coinmap_merged_openai_files,
+        read_main_chart_symbol,
+    )
+
+    main_sym = read_main_chart_symbol(charts_dir)
+    _dxy, main_m = coinmap_merged_openai_files(charts_dir, st, main_sym)
     expected = len(effective_chart_image_order(charts_dir))
+    if main_m is not None:
+        expected -= 1
     if len(payloads) < expected:
         print(
-            f"Warning: expected {expected} chart slots in fixed order, found {len(payloads)} file(s) on disk.",
+            f"Warning: expected {expected} chart slot(s) in fixed order, found {len(payloads)} file(s) on disk.",
             file=sys.stderr,
         )
 
@@ -2344,23 +2356,40 @@ def cmd_update(args: argparse.Namespace) -> None:
     stamp = stamp_from_capture_paths(paths)
     m5 = coinmap_main_pair_interval_json_path(charts_dir, "5m", stamp=stamp)
     m15 = coinmap_main_pair_interval_json_path(charts_dir, "15m", stamp=stamp)
+    from automation_tool.images import coinmap_merged_openai_files, read_main_chart_symbol
+
+    main_s = read_main_chart_symbol(charts_dir)
+    _dxy_m, main_m = coinmap_merged_openai_files(
+        charts_dir, stamp, main_s
+    ) if stamp else (None, None)
     _log.info(
-        "update: capture xong | %s file(s) | stamp=%s | M15=%s | M5=%s",
+        "update: capture xong | %s file(s) | stamp=%s | M15=%s | M5=%s | main_merged=%s",
         len(paths),
         stamp,
         m15,
         m5,
+        main_m,
     )
-    if m5 is None:
-        raise SystemExit(
-            f"No XAUUSD 5m Coinmap JSON under {charts_dir} after capture (stamp={stamp!r}). "
-            "Check coinmap_update.yaml capture_plan and api_data_export."
+    coinmap_paths: list[Path]
+    if main_m is not None and main_m.is_file():
+        coinmap_paths = [main_m]
+    else:
+        if m5 is None:
+            raise SystemExit(
+                f"No 5m Coinmap JSON under {charts_dir} after capture (stamp={stamp!r}). "
+                "Check coinmap_update.yaml capture_plan and api_data_export, or merged export."
+            )
+        if m15 is None:
+            raise SystemExit(
+                f"No 15m Coinmap JSON under {charts_dir} after capture (stamp={stamp!r}). "
+                "Check coinmap_update.yaml capture_plan includes 15m."
+            )
+        print(
+            f"Warning: {charts_dir} has no {stamp}_coinmap_{main_s}_merged.json; "
+            "using raw 15m + 5m JSON (legacy).",
+            file=sys.stderr,
         )
-    if m15 is None:
-        raise SystemExit(
-            f"No XAUUSD 15m Coinmap JSON under {charts_dir} after capture (stamp={stamp!r}). "
-            "Check coinmap_update.yaml capture_plan includes 15m."
-        )
+        coinmap_paths = [m15, m5]
 
     require_openai(s)
 
@@ -2388,7 +2417,7 @@ def cmd_update(args: argparse.Namespace) -> None:
             prompt_version=s.openai_prompt_version,
             user_text=user_msg,
             morning_snapshot_path=morning_snapshot,
-            coinmap_json_paths=[m15, m5],
+            coinmap_json_paths=coinmap_paths,
             previous_response_id=prev_for_openai,
             vector_store_ids=s.openai_vector_store_ids,
             store=s.openai_responses_store,

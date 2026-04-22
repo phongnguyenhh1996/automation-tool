@@ -66,7 +66,8 @@ def slim_coinmap_export_for_openai(
 ) -> dict[str, Any]:
     """
     Return a shallow-safe copy of ``data`` with trimmed ``getcandlehistory``,
-    ``getorderflowhistory``, and filtered ``getindicatorsvwap``. Other intervals unchanged.
+    ``getcandlehistorycvd`` (same bar cap as candles), ``getorderflowhistory``, and filtered
+    ``getindicatorsvwap``. Other intervals unchanged.
     """
     if not isinstance(data, dict):
         return data
@@ -86,6 +87,12 @@ def slim_coinmap_export_for_openai(
         out["getcandlehistory"] = ch[:n_candles]
     else:
         out["getcandlehistory"] = ch
+
+    cvd = data.get("getcandlehistorycvd")
+    if isinstance(cvd, list):
+        out["getcandlehistorycvd"] = cvd[:n_candles]
+    else:
+        out["getcandlehistorycvd"] = cvd
 
     of = data.get("getorderflowhistory")
     if isinstance(of, list):
@@ -112,4 +119,6 @@ def slim_coinmap_export_for_openai(
 
 
 def should_slim_coinmap_json_path(path: Path) -> bool:
+    if path.suffix.lower() == ".json" and path.name.endswith("_merged.json"):
+        return False
     return path.suffix.lower() == ".json" and "_coinmap_" in path.name

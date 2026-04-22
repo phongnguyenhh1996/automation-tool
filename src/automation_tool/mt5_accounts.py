@@ -3,6 +3,9 @@ Cấu hình nhiều tài khoản MT5 từ ``accounts.json`` (mảng object).
 
 Đường dẫn mặc định: biến môi trường ``MT5_ACCOUNTS_JSON`` hoặc tham số CLI ``--mt5-accounts-json``.
 
+**Lot:** bỏ key ``lot`` hoặc ``"lot": null`` → dùng khối lượng đã parse từ ``trade_line`` (cùng
+hành vi ``mode: from_trade``). Có ``lot`` thì ``fixed`` / ``max_notional_usd`` như cũ.
+
 **Bảo mật:** không commit file chứa mật khẩu; hạn chế quyền đọc (ví dụ ``chmod 600``).
 """
 
@@ -17,7 +20,7 @@ from typing import Any, Literal, Optional, Union
 
 from automation_tool.mt5_openai_parse import ParsedTrade
 
-LotMode = Literal["fixed", "max_notional_usd"]
+LotMode = Literal["fixed", "max_notional_usd", "from_trade"]
 
 
 @dataclass(frozen=True)
@@ -32,7 +35,14 @@ class LotRuleMaxNotionalUsd:
     max_usd: float = 100.0
 
 
-LotRule = Union[LotRuleFixed, LotRuleMaxNotionalUsd]
+@dataclass(frozen=True)
+class LotRuleFromTrade:
+    """Dùng ``ParsedTrade.lot`` từ trade_line; không ghi đè trong ``execute_trade``."""
+
+    mode: Literal["from_trade"] = "from_trade"
+
+
+LotRule = Union[LotRuleFixed, LotRuleMaxNotionalUsd, LotRuleFromTrade]
 
 
 @dataclass(frozen=True)
@@ -80,6 +90,8 @@ def _parse_lot(d: Any) -> LotRule:
         if m is None:
             raise ValueError("lot.mode=max_notional_usd cần max_usd")
         return LotRuleMaxNotionalUsd(max_usd=float(m))
+    if mode == "from_trade":
+        return LotRuleFromTrade()
     raise ValueError(f"lot.mode không hỗ trợ: {mode!r}")
 
 
@@ -99,7 +111,11 @@ def _parse_one(obj: Any, index: int) -> MT5AccountEntry:
     if not server:
         raise ValueError(f"accounts[{index}].server bắt buộc")
     primary = bool(obj.get("primary", False))
-    lot = _parse_lot(obj.get("lot") or {"mode": "fixed", "volume": 0.01})
+    lot_raw = obj.get("lot")
+    if lot_raw is None:
+        lot: LotRule = LotRuleFromTrade()
+    else:
+        lot = _parse_lot(lot_raw)
     sym_map = _parse_symbol_map(obj.get("symbol_map"), index)
     return MT5AccountEntry(
         id=acc_id,
@@ -213,6 +229,9 @@ def compute_lot_override(
     """
     if isinstance(rule, LotRuleFixed):
         return float(rule.volume), None
+
+    if isinstance(rule, LotRuleFromTrade):
+        return float(trade.lot), None
 
     if not isinstance(rule, LotRuleMaxNotionalUsd):
         return float(trade.lot), f"lot rule không rõ: {rule!r}"

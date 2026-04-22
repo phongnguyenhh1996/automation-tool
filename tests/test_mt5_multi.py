@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from automation_tool.mt5_accounts import MT5AccountEntry, LotRuleFixed
+from automation_tool.mt5_accounts import MT5AccountEntry, LotRuleFixed, LotRuleFromTrade
 from automation_tool.mt5_execute import MT5ExecutionResult
 from automation_tool.mt5_multi import execute_trade_all_accounts
 from automation_tool.mt5_openai_parse import parse_openai_output_md
@@ -72,3 +72,47 @@ def test_execute_trade_all_accounts_one_call_per_account(
     assert summ.tickets_by_account_id["acc_a"] == 1001
     assert summ.tickets_by_account_id["acc_b"] == 1002
     assert summ.primary_ticket(accounts) == 1001
+
+
+def test_execute_trade_all_accounts_from_trade_uses_trade_lot(
+    sample_trade, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert sample_trade.lot == 0.02
+    accounts = [
+        MT5AccountEntry(
+            id="acc_a",
+            login=1,
+            password="p",
+            server="srv",
+            primary=True,
+            lot=LotRuleFromTrade(),
+        ),
+        MT5AccountEntry(
+            id="acc_b",
+            login=2,
+            password="p",
+            server="srv",
+            primary=False,
+            lot=LotRuleFixed(volume=0.05),
+        ),
+    ]
+    seen: list[tuple[str | None, float | None]] = []
+
+    def fake_execute_trade(trade, **kwargs):
+        aid = kwargs.get("account_id")
+        lot_ov = kwargs.get("lot_override")
+        seen.append((aid, lot_ov))
+        assert trade.lot == 0.02
+        oid = 2000 + len(seen)
+        return MT5ExecutionResult(
+            ok=True,
+            message=f"mock {aid}",
+            order=oid,
+            account_id=aid,
+        )
+
+    monkeypatch.setattr("automation_tool.mt5_multi.execute_trade", fake_execute_trade)
+
+    summ = execute_trade_all_accounts(sample_trade, accounts, dry_run=True)
+    assert summ.ok_all
+    assert seen == [("acc_a", None), ("acc_b", 0.05)]

@@ -231,6 +231,20 @@ def coinmap_xauusd_5m_json_path(
     return coinmap_main_pair_5m_json_path(charts_dir, stamp=stamp)
 
 
+def coinmap_merged_openai_files(
+    charts_dir: Path, stamp: str, main_sym: str
+) -> tuple[Optional[Path], Optional[Path]]:
+    """
+    If present, paths to DXY and main-pair ``*_coinmap_*_merged.json`` (``coinmap_merged``).
+    """
+    m = (main_sym or "").strip() or DEFAULT_MAIN_CHART_SYMBOL
+    dxy = charts_dir / f"{stamp}_coinmap_DXY_merged.json"
+    mainp = charts_dir / f"{stamp}_coinmap_{m}_merged.json"
+    d_ok = dxy if dxy.is_file() else None
+    m_ok = mainp if mainp.is_file() else None
+    return d_ok, m_ok
+
+
 def ordered_chart_openai_payloads(
     charts_dir: Path, *, stamp: Optional[str] = None
 ) -> list[ChartOpenAIPayload]:
@@ -240,16 +254,29 @@ def ordered_chart_openai_payloads(
     * **TradingView** — prefer ``.json`` (tvdatafeed OHLC) else ``.url`` (snapshot) else ``.png``.
     * **Coinmap** — prefer ``.json`` (API export) over ``.png`` so analysis can run
       without screenshots while keeping the same ordering as when images were used.
+    * When **merged** files exist (see :func:`coinmap_merged_openai_files`), DXY 15m uses
+      ``DXY_merged.json``; main M15 + M5 collapse to a single ``{MAIN}_merged.json`` attachment
+      (9 total payloads with both merges vs 10 with raw per-TF).
     """
     if not charts_dir.is_dir():
         return []
     st = stamp or latest_chart_stamp(charts_dir)
     if not st:
         return []
+    main_sym = read_main_chart_symbol(charts_dir)
+    dxy_merged, main_merged = coinmap_merged_openai_files(charts_dir, st, main_sym)
     order = effective_chart_image_order(charts_dir)
     out: list[ChartOpenAIPayload] = []
     for src, sym, iv in order:
         if src == "coinmap":
+            if dxy_merged is not None and sym == "DXY" and iv == "15m":
+                out.append(("json", dxy_merged))
+                continue
+            if main_merged is not None and sym == main_sym and iv == "15m":
+                out.append(("json", main_merged))
+                continue
+            if main_merged is not None and sym == main_sym and iv == "5m":
+                continue
             jp = charts_dir / f"{st}_coinmap_{sym}_{iv}.json"
             pp = charts_dir / f"{st}_coinmap_{sym}_{iv}.png"
             if jp.is_file():

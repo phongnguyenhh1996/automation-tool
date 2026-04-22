@@ -13,7 +13,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-from automation_tool.images import effective_chart_image_order
+from automation_tool.coinmap_merged import validate_coinmap_merged_payload
+from automation_tool.images import (
+    coinmap_merged_openai_files,
+    effective_chart_image_order,
+    read_main_chart_symbol,
+)
 
 COINMAP_OPENAI_KEYS: tuple[str, ...] = (
     "getcandlehistory",
@@ -75,10 +80,19 @@ def list_invalid_chart_slots_for_stamp(
     """
     if not stamp or not charts_dir.is_dir():
         return []
+    main_sym = read_main_chart_symbol(charts_dir)
+    dxy_m, main_m = coinmap_merged_openai_files(charts_dir, stamp, main_sym)
     order = effective_chart_image_order(charts_dir)
     issues: list[ChartSlotIssue] = []
     for src, sym, iv in order:
-        jp = charts_dir / f"{stamp}_{src}_{sym}_{iv}.json"
+        if src == "coinmap" and dxy_m is not None and sym == "DXY" and iv == "15m":
+            jp = dxy_m
+        elif src == "coinmap" and main_m is not None and sym == main_sym and iv == "15m":
+            jp = main_m
+        elif src == "coinmap" and main_m is not None and sym == main_sym and iv == "5m":
+            continue
+        else:
+            jp = charts_dir / f"{stamp}_{src}_{sym}_{iv}.json"
         if not jp.is_file():
             issues.append(
                 ChartSlotIssue(
@@ -102,7 +116,19 @@ def list_invalid_chart_slots_for_stamp(
                 )
             )
             continue
-        if src == "coinmap":
+        if src == "coinmap" and jp.name.endswith("_merged.json"):
+            ok, r = validate_coinmap_merged_payload(data or {})
+            if not ok:
+                issues.append(
+                    ChartSlotIssue(
+                        source=src,
+                        symbol=sym,
+                        interval=iv,
+                        expected_path=jp,
+                        reason=r,
+                    )
+                )
+        elif src == "coinmap":
             ok, r = validate_coinmap_export_payload(data or {})
             if not ok:
                 issues.append(

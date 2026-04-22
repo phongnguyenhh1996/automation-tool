@@ -8,7 +8,8 @@ import logging
 import os
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -117,9 +118,18 @@ _DEFAULT_COINMAP_GW_ENDPOINTS: dict[str, str] = {
     "getcandlehistory": "https://gw.coinmap.tech/cm-api/api/v1/getcandlehistory",
     "getorderflowhistory": "https://gw.coinmap.tech/cm-api/api/v1/getorderflowhistory",
     "getindicatorsvwap": "https://gw.coinmap.tech/cm-api/api/v1/getindicatorsvwap",
+    "getcandlehistorycvd": "https://gw.coinmap.tech/cm-api/api/v1/getcandlehistorycvd",
 }
 
 _COINMAP_API_KEYS: tuple[str, ...] = (
+    "getcandlehistory",
+    "getorderflowhistory",
+    "getindicatorsvwap",
+    "getcandlehistorycvd",
+)
+
+# Chart UI rarely calls CVD; network_capture must not block waiting for it.
+_COINMAP_NETWORK_CAPTURE_WAIT_KEYS: tuple[str, ...] = (
     "getcandlehistory",
     "getorderflowhistory",
     "getindicatorsvwap",
@@ -141,7 +151,8 @@ def _coinmap_endpoint_key_from_response_url(url: str) -> Optional[str]:
     except Exception:
         return None
     path = path.rstrip("/")
-    for key in _COINMAP_API_KEYS:
+    # Longer path suffixes first so ``getcandlehistorycvd`` wins over ``getcandlehistory``.
+    for key in sorted(_COINMAP_API_KEYS, key=len, reverse=True):
         if path.endswith(key) or path.endswith("/" + key):
             return key
     return None
@@ -312,7 +323,7 @@ class CoinmapNetworkCapture:
     def _shot_has_all_keys(self, start_index: int) -> bool:
         slice_ = self._records[start_index:]
         seen = {r["key"] for r in slice_}
-        return all(k in seen for k in _COINMAP_API_KEYS)
+        return all(k in seen for k in _COINMAP_NETWORK_CAPTURE_WAIT_KEYS)
 
     def _last_body_per_key(
         self,
@@ -591,18 +602,56 @@ def _coinmap_interval_to_resolution_num(interval: str) -> str:
     return str(_coinmap_interval_minutes(interval))
 
 
+def _vn_session_anchor_utc_ms(
+    now_utc: datetime,
+    *,
+    tz_name: str,
+    start_hour: int,
+) -> int:
+    """
+    Epoch milliseconds of the most recent *session open* at ``start_hour`` in ``tz_name``
+    that is not after ``now_utc`` (same instant). Used for Coinmap ``from`` in local
+    trading-day style windows (default: 05:00 Vietnam time → converted to UTC).
+    """
+    try:
+        tz = ZoneInfo((tz_name or "").strip() or "Asia/Ho_Chi_Minh")
+    except Exception:
+        tz = ZoneInfo("Asia/Ho_Chi_Minh")
+    vn = now_utc.astimezone(tz)
+    h = max(0, min(23, int(start_hour)))
+    anchor = vn.replace(hour=h, minute=0, second=0, microsecond=0)
+    if vn < anchor:
+        anchor = anchor - timedelta(days=1)
+    return int(anchor.astimezone(timezone.utc).timestamp() * 1000)
+
+
 def _coinmap_auto_from_to_ms(api_cd: dict[str, Any], step: dict[str, Any]) -> tuple[int, int]:
     """
-    ``to`` = UTC now (ms); ``from`` = ``to - countback * bar_duration`` so the window
-    fits ~countback bars at the step interval.
+    Default (``auto_from_to_mode`` unset or ``vn_session``): ``to`` = UTC now (ms);
+    ``from`` = same clock instant as 05:00 (configurable) in Vietnam timezone
+    (``Asia/Ho_Chi_Minh``), i.e. the start of the current local session through now.
+
+    Legacy: ``auto_from_to_mode: countback`` keeps ``from = to - countback * bar_ms``.
     """
-    countback = max(1, int(api_cd.get("auto_countback") or 1000))
-    iv = str(step.get("interval") or "")
-    bar_ms = _coinmap_interval_minutes(iv) * 60 * 1000
     to_ms = int(time.time() * 1000)
-    span = countback * bar_ms
-    pad = int(api_cd.get("auto_time_padding_ms") or 0)
-    from_ms = to_ms - span - max(0, pad)
+    now_utc = datetime.fromtimestamp(to_ms / 1000.0, tz=timezone.utc)
+    mode = str(api_cd.get("auto_from_to_mode") or "vn_session").strip().lower()
+    if mode in ("countback", "legacy"):
+        countback = max(1, int(api_cd.get("auto_countback") or 1000))
+        iv = str(step.get("interval") or "")
+        bar_ms = _coinmap_interval_minutes(iv) * 60 * 1000
+        span = countback * bar_ms
+        pad = int(api_cd.get("auto_time_padding_ms") or 0)
+        from_ms = to_ms - span - max(0, pad)
+        return from_ms, to_ms
+
+    tz_name = str(api_cd.get("vn_session_timezone") or "Asia/Ho_Chi_Minh").strip()
+    start_hour = int(api_cd.get("vn_session_start_hour") or 5)
+    from_ms = _vn_session_anchor_utc_ms(
+        now_utc, tz_name=tz_name or "Asia/Ho_Chi_Minh", start_hour=start_hour
+    )
+    if from_ms > to_ms:
+        from_ms = to_ms - 60_000
     return from_ms, to_ms
 
 
@@ -661,6 +710,62 @@ def _merge_api_query_params(api_cd: dict[str, Any], step: dict[str, Any]) -> dic
         else:
             out[key] = _format_api_query_placeholders(str(v), step, api_cd)
     return out
+
+
+def _apply_endpoint_query_overrides(
+    out: dict[str, str],
+    api_cd: dict[str, Any],
+    step: dict[str, Any],
+    endpoint_key: str,
+) -> dict[str, str]:
+    """Merge ``api_data_export.endpoint_query.<endpoint_key>`` (omit_keys + params)."""
+    eq = api_cd.get("endpoint_query")
+    if not isinstance(eq, dict):
+        return out
+    spec = eq.get(endpoint_key)
+    if not isinstance(spec, dict) or not spec:
+        return out
+    omit = spec.get("omit_keys")
+    if isinstance(omit, (list, tuple)):
+        for k in omit:
+            out.pop(str(k), None)
+    for k, v in spec.items():
+        if k == "omit_keys":
+            continue
+        key = str(k)
+        if v is None:
+            out.pop(key, None)
+        elif isinstance(v, bool):
+            out[key] = "true" if v else "false"
+        elif isinstance(v, (int, float)):
+            out[key] = str(v)
+        elif isinstance(v, str):
+            out[key] = _format_api_query_placeholders(v, step, api_cd)
+        else:
+            out[key] = _format_api_query_placeholders(str(v), step, api_cd)
+    return out
+
+
+def _merge_api_query_params_for_endpoint(
+    api_cd: dict[str, Any], step: dict[str, Any], endpoint_key: str
+) -> dict[str, str]:
+    """
+    Query string per cm-api endpoint.
+
+    ``getcandlehistorycvd`` uses ``cvd`` (from ``period`` when present) and drops
+    ``period`` / ``source`` / ``bandsmultiplier`` which the CVD route does not use.
+    Optional ``api_data_export.endpoint_query.<key>`` adds overrides (see
+    ``_apply_endpoint_query_overrides``).
+    """
+    base = _merge_api_query_params(api_cd, step)
+    out = dict(base)
+    if endpoint_key == "getcandlehistorycvd":
+        period_val = out.pop("period", None)
+        out.pop("source", None)
+        out.pop("bandsmultiplier", None)
+        if "cvd" not in out:
+            out["cvd"] = str(period_val if period_val is not None else "day")
+    return _apply_endpoint_query_overrides(out, api_cd, step, endpoint_key)
 
 
 def _merged_coinmap_api_endpoints(api_cd: dict[str, Any]) -> dict[str, str]:
@@ -772,7 +877,6 @@ async def _coinmap_collect_one_shot_api_data_httpx_async(
     bearer_authorization: Optional[str] = None,
 ) -> dict[str, Any]:
     endpoints = _merged_coinmap_api_endpoints(api_cd)
-    q = _merge_api_query_params(api_cd, step)
     method = str(api_cd.get("http_method") or "GET")
     headers = _coinmap_build_api_request_headers(
         api_cd, bearer_authorization=bearer_authorization
@@ -799,6 +903,7 @@ async def _coinmap_collect_one_shot_api_data_httpx_async(
                     "body": "missing endpoint in api_data_export.endpoints",
                 },
             )
+        q = _merge_api_query_params_for_endpoint(api_cd, step, key)
         res = await _coinmap_api_request_httpx_async(
             client,
             url=url,
@@ -825,7 +930,7 @@ def _coinmap_collect_one_shot_api_data_httpx(
     *,
     bearer_authorization: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Sync: three cm-api GETs in parallel via httpx (no Playwright)."""
+    """Sync: cm-api GETs in parallel via httpx (no Playwright)."""
 
     async def _run() -> dict[str, Any]:
         timeout = httpx.Timeout(_COINMAP_HTTP_TIMEOUT_S)
@@ -845,7 +950,7 @@ async def _coinmap_api_only_plan_gather_shots(
     plan: list[dict[str, Any]],
     bearer_authorization: str,
 ) -> list[dict[str, Any]]:
-    """Parallel plan steps; each step runs three endpoint GETs in parallel. No Playwright."""
+    """Parallel plan steps; each step runs all configured cm-api GETs in parallel. No Playwright."""
     max_raw = api_cd.get("bearer_parallel_max_concurrency")
     max_c = int(max_raw) if isinstance(max_raw, int) and max_raw > 0 else 0
     timeout = httpx.Timeout(_COINMAP_HTTP_TIMEOUT_S)
@@ -905,7 +1010,6 @@ def _coinmap_collect_one_shot_api_data(
 ) -> dict[str, Any]:
     context = page.context
     endpoints = _merged_coinmap_api_endpoints(api_cd)
-    q = _merge_api_query_params(api_cd, step)
     method = str(api_cd.get("http_method") or "GET")
     headers = _coinmap_build_api_request_headers(
         api_cd, bearer_authorization=bearer_authorization
@@ -925,6 +1029,7 @@ def _coinmap_collect_one_shot_api_data(
         if not url:
             out[key] = {"ok": False, "status": 0, "body": "missing endpoint in api_data_export.endpoints"}
             continue
+        q = _merge_api_query_params_for_endpoint(api_cd, step, key)
         res = _coinmap_api_request_one(
             context,
             url=url,
@@ -993,6 +1098,8 @@ def _api_export_slim_disk_enabled(api_cd: Optional[dict[str, Any]]) -> bool:
     """When true, trim 5m/15m arrays before writing JSON (see coinmap_openai_slim)."""
     if api_cd is None:
         return True
+    if api_cd.get("use_merged_coinmap_for_openai") is True:
+        return False
     return bool(api_cd.get("slim_export_on_disk", True))
 
 
@@ -2900,6 +3007,16 @@ def _capture_charts_in_context(
             page.close()
         except Exception:
             pass
+
+    if isinstance(cd, dict) and cd.get("enabled", False) and _api_export_config(cd) is not None:
+        try:
+            from automation_tool.coinmap_merged import run_coinmap_merged_writes
+
+            merged_paths = run_coinmap_merged_writes(charts_dir, stamp)
+            for p in merged_paths.values():
+                written.append(p)
+        except Exception as e:
+            logging.getLogger(__name__).warning("coinmap_merged_after_capture: %s", e)
 
     return written
 
