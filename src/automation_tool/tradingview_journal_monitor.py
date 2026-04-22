@@ -22,7 +22,7 @@ from automation_tool.coinmap import (
     load_coinmap_yaml,
 )
 from automation_tool.coinmap_merged import write_openai_coinmap_merged_from_raw_export
-from automation_tool.config import Settings, resolved_model_for_intraday_alert
+from automation_tool.config import Settings
 from automation_tool.images import (
     DEFAULT_MAIN_CHART_SYMBOL,
     coinmap_main_pair_interval_json_path,
@@ -571,8 +571,7 @@ def _run_intraday_touch_loop(
                 vector_store_ids=settings.openai_vector_store_ids,
                 store=settings.openai_responses_store,
                 include=settings.openai_responses_include,
-                model=resolved_model_for_intraday_alert(settings, params.openai_model_cli),
-                reasoning_effort="high",
+                reasoning_summary=None,
             )
         except Exception as e:
             re_raise_unless_openai(e)

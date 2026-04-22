@@ -13,7 +13,7 @@ from typing import Any, Literal, Optional
 from playwright.sync_api import BrowserContext, Page
 
 from automation_tool.coinmap import capture_charts
-from automation_tool.config import Settings, resolved_model_for_intraday_alert
+from automation_tool.config import Settings
 from automation_tool.images import coinmap_xauusd_5m_json_path, read_main_chart_symbol
 from automation_tool.mt5_accounts import (
     load_mt5_accounts_for_cli,
@@ -259,10 +259,7 @@ def _run_tp1_openai_and_act(
         vector_store_ids=settings.openai_vector_store_ids,
         store=settings.openai_responses_store,
         include=settings.openai_responses_include,
-        model=resolved_model_for_intraday_alert(
-            settings, getattr(params, "openai_model_cli", None)
-        ),
-        reasoning_effort="high",
+        reasoning_summary=None,
     )
     update_plan_tp1_followup_done(label, True, path=last_alert_path)
     _log_tp1.info(

@@ -30,7 +30,7 @@ from automation_tool.coinmap import (
 )
 from automation_tool.coinmap import _tradingview_ensure_watchlist_open  # reuse internal helper
 from automation_tool.coinmap_merged import write_openai_coinmap_merged_from_raw_export
-from automation_tool.config import Settings, resolved_model_for_intraday_alert
+from automation_tool.config import Settings
 from automation_tool.images import (
     DEFAULT_MAIN_CHART_SYMBOL,
     coinmap_main_pair_interval_json_path,
@@ -969,8 +969,7 @@ def _tp1_followup_job(
             vector_store_ids=settings.openai_vector_store_ids,
             store=settings.openai_responses_store,
             include=settings.openai_responses_include,
-            model=resolved_model_for_intraday_alert(settings, params.openai_model_cli),
-            reasoning_effort="high",
+            reasoning_summary=None,
         )
         _openai_followup_persist_new_id(params, new_id)
         if not params.no_telegram:
@@ -1353,8 +1352,7 @@ def _r1_followup_job(
             vector_store_ids=settings.openai_vector_store_ids,
             store=settings.openai_responses_store,
             include=settings.openai_responses_include,
-            model=resolved_model_for_intraday_alert(settings, params.openai_model_cli),
-            reasoning_effort="high",
+            reasoning_summary=None,
         )
         _openai_followup_persist_new_id(params, new_id)
         if not params.no_telegram:
@@ -1936,8 +1934,7 @@ def _zone_touch_job(
             vector_store_ids=settings.openai_vector_store_ids,
             store=settings.openai_responses_store,
             include=settings.openai_responses_include,
-            model=resolved_model_for_intraday_alert(settings, params.openai_model_cli),
-            reasoning_effort="high",
+            reasoning_summary=None,
         )
         if _should_write_intraday_alert_anchor(params):
             _openai_followup_persist_new_id(params, new_id)
