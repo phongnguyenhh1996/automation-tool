@@ -12,7 +12,7 @@ from datetime import datetime, time as dt_time, timedelta, timezone
 from zoneinfo import ZoneInfo
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from playwright.sync_api import sync_playwright
 
@@ -37,7 +37,7 @@ from automation_tool.images import (
     get_active_main_symbol,
     read_main_chart_symbol,
 )
-from automation_tool.mt5_accounts import load_mt5_accounts_for_cli, primary_account
+from automation_tool.mt5_accounts import MT5AccountEntry, load_mt5_accounts_for_cli, primary_account
 from automation_tool.mt5_execute import (
     DaemonPlanMt5PriceSession,
     execute_trade,
@@ -310,17 +310,40 @@ def _daemon_plan_collect_ticket_account_pairs(zone: Zone) -> list[tuple[Optional
     return out
 
 
-def _daemon_plan_unique_tickets(zones: list[Zone]) -> list[int]:
-    """Các ``mt5_ticket`` duy nhất trong state — kiểm tra trên acc đang login trong terminal."""
-    seen: set[int] = set()
-    out: list[int] = []
+def _daemon_plan_unique_ticket_account_pairs(zones: list[Zone]) -> list[tuple[Optional[str], int]]:
+    """Các cặp (account_id, ticket) duy nhất trong state (``mt5_tickets_by_account`` hoặc legacy ``mt5_ticket``)."""
+    seen: set[tuple[Optional[str], int]] = set()
+    out: list[tuple[Optional[str], int]] = []
     for z in zones:
-        for _acc_id, tk in _daemon_plan_collect_ticket_account_pairs(z):
-            if tk in seen:
+        for acc_id, tk in _daemon_plan_collect_ticket_account_pairs(z):
+            key = (acc_id, tk)
+            if key in seen:
                 continue
-            seen.add(tk)
-            out.append(tk)
+            seen.add(key)
+            out.append(key)
     return out
+
+
+def _daemon_plan_cutoff_resolve_mt5_account(
+    acc_id: Optional[str],
+    accounts: Optional[list[MT5AccountEntry]],
+) -> tuple[Literal["terminal", "api", "missing", "no_accounts_file"], Optional[MT5AccountEntry]]:
+    """
+    ``terminal``: chỉ có ``mt5_ticket`` đơn — dùng phiên MT5 đang mở.
+
+    ``api``: có ``acc_id`` trong ``accounts.json`` — đăng nhập API theo từng acc.
+
+    ``no_accounts_file`` / ``missing``: map đa acc trong state nhưng thiếu file hoặc thiếu id.
+    """
+    if acc_id is None:
+        return "terminal", None
+    if not accounts:
+        return "no_accounts_file", None
+    by_id = {a.id: a for a in accounts}
+    acc = by_id.get(acc_id)
+    if acc is None:
+        return "missing", None
+    return "api", acc
 
 
 def daemon_plan_resolve_cutoff_mt5(
@@ -335,43 +358,93 @@ def daemon_plan_resolve_cutoff_mt5(
     Quá giờ cắt: **lệnh chờ** → huỷ rồi tiếp tục; **position đã khớp** → chặn thoát (chờ đóng);
     ticket đã đóng / không còn trên MT5 → không chặn.
 
-    Chỉ xét **tài khoản đang login sẵn** trong terminal (không duyệt ``accounts.json`` / đổi acc).
-    ``accounts_json`` giữ trong chữ ký để tương thích caller; không dùng.
+    - State có ``mt5_tickets_by_account``: load ``accounts.json`` (CLI / env), huỷ/kiểm tra **từng** acc.
+    - Chỉ ``mt5_ticket`` (legacy): như cũ — **phiên terminal** đang login (``initialize()`` không đối số).
 
-    Trả ``(True, ...)`` nếu cần chờ thêm (còn position) hoặc lỗi MT5; ``(False, ...)`` khi có thể kết thúc.
+    Trả ``(True, ...)`` nếu cần chờ thêm (còn position) hoặc lỗi MT5 / thiếu cấu hình; ``(False, ...)`` khi có thể kết thúc.
     """
     if dry_run:
         return False, "[daemon-plan] mt5_dry_run — bỏ qua cutoff MT5"
-    _ = accounts_json
-    tickets = _daemon_plan_unique_tickets(zones)
-    if not tickets:
+    pairs = _daemon_plan_unique_ticket_account_pairs(zones)
+    if not pairs:
         return False, "no mt5_ticket in state"
 
-    for ticket in tickets:
-        st, msg = mt5_ticket_status_for_cutoff(ticket, dry_run=False)
+    accounts = load_mt5_accounts_for_cli(accounts_json)
+
+    def _status(
+        acc_id: Optional[str], ticket: int
+    ) -> tuple[Literal["pending", "position", "none", "error"], str]:
+        mode, acc = _daemon_plan_cutoff_resolve_mt5_account(acc_id, accounts)
+        if mode == "api":
+            assert acc is not None
+            return mt5_ticket_status_for_cutoff(
+                ticket,
+                dry_run=False,
+                login=acc.login,
+                password=acc.password,
+                server=acc.server,
+            )
+        return mt5_ticket_status_for_cutoff(ticket, dry_run=False)
+
+    for acc_id, ticket in pairs:
+        mode, acc = _daemon_plan_cutoff_resolve_mt5_account(acc_id, accounts)
+        if mode == "no_accounts_file":
+            return True, (
+                "state có mt5_tickets_by_account nhưng không tìm thấy accounts.json "
+                "(CLI --mt5-accounts-json hoặc MT5_ACCOUNTS_JSON) — không huỷ được theo acc"
+            )
+        if mode == "missing":
+            return True, f"account id={acc_id!r} không có trong accounts.json — không huỷ được"
+
+        st, msg = _status(acc_id, ticket)
         if st == "error":
             return True, msg
         if st != "pending":
             continue
-        r = mt5_cancel_pending_order(
-            ticket,
-            dry_run=False,
-            terminal_session_only=True,
-            shutdown_after=False,
-        )
+
+        if mode == "api":
+            assert acc is not None
+            r = mt5_cancel_pending_order(
+                ticket,
+                dry_run=False,
+                login=acc.login,
+                password=acc.password,
+                server=acc.server,
+                terminal_session_only=False,
+                shutdown_after=True,
+            )
+            log_extra = f"acc={acc_id} | {r.message}"
+        else:
+            r = mt5_cancel_pending_order(
+                ticket,
+                dry_run=False,
+                terminal_session_only=True,
+                shutdown_after=False,
+            )
+            log_extra = r.message
         if not r.ok:
             return True, f"huỷ pending ticket={ticket}: {r.message}"
         _send_log(
             settings,
-            f"[daemon-plan] quá giờ cắt — đã huỷ lệnh chờ | shard={shard_tag} | {r.message}",
+            f"[daemon-plan] quá giờ cắt — đã huỷ lệnh chờ | shard={shard_tag} | {log_extra}",
         )
 
-    for ticket in tickets:
-        st, msg = mt5_ticket_status_for_cutoff(ticket, dry_run=False)
+    for acc_id, ticket in pairs:
+        mode, acc = _daemon_plan_cutoff_resolve_mt5_account(acc_id, accounts)
+        if mode == "no_accounts_file":
+            return True, (
+                "state có mt5_tickets_by_account nhưng không tìm thấy accounts.json "
+                "(CLI --mt5-accounts-json hoặc MT5_ACCOUNTS_JSON) — không kiểm tra được position"
+            )
+        if mode == "missing":
+            return True, f"account id={acc_id!r} không có trong accounts.json"
+
+        st, msg = _status(acc_id, ticket)
         if st == "error":
             return True, msg
         if st == "position":
-            return True, f"ticket={ticket} còn position ({msg}) — chờ đóng lệnh"
+            who = acc_id or "terminal"
+            return True, f"ticket={ticket} acc={who} còn position ({msg}) — chờ đóng lệnh"
     return False, "cutoff: không còn pending/position theo ticket trong state"
 
 
@@ -389,26 +462,50 @@ def daemon_plan_should_exit_if_mt5_tickets_closed(
 
     Còn pending hoặc position trên bất kỳ ticket nào → tiếp tục. Lỗi kết nối MT5 → không thoát (thử lại sau).
 
-    Chỉ kiểm tra trên **acc đang login** trong terminal; ``accounts_json`` không dùng.
+    Map đa acc: cần ``accounts.json`` để kiểm tra từng acc; legacy ``mt5_ticket``: phiên terminal đang mở.
     """
     if dry_run:
         return False, "[daemon-plan] mt5_dry_run — bỏ qua kiểm tra ticket đã đóng"
-    _ = accounts_json
-    tickets = _daemon_plan_unique_tickets(zones)
-    if not tickets:
+    pairs = _daemon_plan_unique_ticket_account_pairs(zones)
+    if not pairs:
         return False, "no mt5_ticket in state"
 
-    for ticket in tickets:
-        st, msg = mt5_ticket_status_for_cutoff(ticket, dry_run=False)
+    accounts = load_mt5_accounts_for_cli(accounts_json)
+
+    def _status(
+        acc_id: Optional[str], ticket: int
+    ) -> tuple[Literal["pending", "position", "none", "error"], str]:
+        mode, acc = _daemon_plan_cutoff_resolve_mt5_account(acc_id, accounts)
+        if mode == "api":
+            assert acc is not None
+            return mt5_ticket_status_for_cutoff(
+                ticket,
+                dry_run=False,
+                login=acc.login,
+                password=acc.password,
+                server=acc.server,
+            )
+        return mt5_ticket_status_for_cutoff(ticket, dry_run=False)
+
+    for acc_id, ticket in pairs:
+        mode, _acc = _daemon_plan_cutoff_resolve_mt5_account(acc_id, accounts)
+        if mode == "no_accounts_file":
+            return False, (
+                "state có mt5_tickets_by_account nhưng không có accounts.json — không xác nhận ticket đã đóng"
+            )
+        if mode == "missing":
+            return False, f"account id={acc_id!r} không có trong accounts.json"
+
+        st, msg = _status(acc_id, ticket)
         if st == "error":
             return False, msg
         if st in ("pending", "position"):
             return False, f"ticket={ticket} còn ({st})"
 
-    tickets_desc = ", ".join(f"{t}" for t in tickets)
+    tickets_desc = ", ".join(f"{aid or 'terminal'}:{t}" for aid, t in pairs)
     _send_log(
         settings,
-        f"[daemon-plan] ticket MT5 đã đóng trên terminal — dừng | shard={shard_tag} | tickets=[{tickets_desc}]",
+        f"[daemon-plan] ticket MT5 đã đóng — dừng | shard={shard_tag} | tickets=[{tickets_desc}]",
     )
     return True, f"mọi ticket đã đóng trên MT5: {tickets_desc}"
 

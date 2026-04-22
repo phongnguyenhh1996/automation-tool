@@ -15,8 +15,10 @@ from automation_tool.mt5_execute import (
     execution_price_from_tick,
 )
 from automation_tool.tv_watchlist_daemon import _daemon_gia_same_bid
+from automation_tool.mt5_accounts import LotRuleFixed, MT5AccountEntry
 from automation_tool.tv_watchlist_daemon import (
     compute_daemon_plan_stop_deadline_local,
+    daemon_plan_resolve_cutoff_mt5,
     daemon_plan_should_exit_if_mt5_tickets_closed,
 )
 from automation_tool.zones_state import Zone
@@ -181,3 +183,85 @@ def test_daemon_plan_ticket_closed_no_ticket_in_state() -> None:
         shard_tag="shard",
     )
     assert ok is False
+
+
+def test_daemon_plan_cutoff_multi_account_uses_api_per_acc(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """``mt5_tickets_by_account`` + accounts.json → status/cancel dùng login từng acc (không chỉ terminal)."""
+    acc_a = MT5AccountEntry(
+        id="a",
+        login=111001,
+        password="p1",
+        server="srv1",
+        primary=True,
+        lot=LotRuleFixed(volume=0.01),
+    )
+    acc_b = MT5AccountEntry(
+        id="b",
+        login=222002,
+        password="p2",
+        server="srv2",
+        primary=False,
+        lot=LotRuleFixed(volume=0.01),
+    )
+    monkeypatch.setattr(
+        "automation_tool.tv_watchlist_daemon.load_mt5_accounts_for_cli",
+        lambda _p: [acc_a, acc_b],
+    )
+    calls: list[tuple[int, object]] = []
+
+    def fake_status(
+        ticket: int,
+        *,
+        dry_run: bool = False,
+        login: int | None = None,
+        password: str | None = None,
+        server: str | None = None,
+    ):
+        calls.append((int(ticket), login))
+        # ticket 10 on acc a: pending once then closed
+        if int(ticket) == 10 and login == 111001:
+            n = sum(1 for t, lg in calls if t == 10 and lg == 111001)
+            if n == 1:
+                return ("pending", "pending")
+            return ("none", "ok")
+        if int(ticket) == 20 and login == 222002:
+            return ("none", "ok")
+        raise AssertionError(f"unexpected status ticket={ticket} login={login}")
+
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon.mt5_ticket_status_for_cutoff", fake_status)
+
+    cancel_meta: list[tuple[int, bool, object]] = []
+
+    def fake_cancel(
+        ticket: int,
+        *,
+        dry_run: bool = False,
+        terminal_session_only: bool = False,
+        login: int | None = None,
+        **kwargs: object,
+    ):
+        cancel_meta.append((int(ticket), terminal_session_only, login))
+        return MagicMock(ok=True, message="ok")
+
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon.mt5_cancel_pending_order", fake_cancel)
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon._send_log", lambda *a, **k: None)
+
+    z = Zone(
+        id="z1",
+        label="L1",
+        vung_cho="2600-2700",
+        side="BUY",
+        mt5_tickets_by_account={"a": 10, "b": 20},
+    )
+    settings = MagicMock()
+    blocking, _detail = daemon_plan_resolve_cutoff_mt5(
+        [z],
+        dry_run=False,
+        accounts_json=tmp_path / "accounts.json",
+        settings=settings,
+        shard_tag="shard",
+    )
+    assert blocking is False
+    assert cancel_meta == [(10, False, 111001)]
+    assert 111001 in [lg for _t, lg in calls if lg is not None]
+    assert 222002 in [lg for _t, lg in calls if lg is not None]
