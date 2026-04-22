@@ -2370,8 +2370,9 @@ def cmd_update(args: argparse.Namespace) -> None:
         m5,
         main_m,
     )
+    use_merged_coinmap = main_m is not None and main_m.is_file()
     coinmap_paths: list[Path]
-    if main_m is not None and main_m.is_file():
+    if use_merged_coinmap:
         coinmap_paths = [main_m]
     else:
         if m5 is None:
@@ -2408,7 +2409,10 @@ def cmd_update(args: argparse.Namespace) -> None:
         morning_snapshot = None
         prev_for_openai = cur
 
-    user_msg = build_intraday_update_user_text(first_after_all=first_after_all)
+    user_msg = build_intraday_update_user_text(
+        first_after_all=first_after_all,
+        coinmap_attachment_mode="merged" if use_merged_coinmap else "legacy",
+    )
 
     try:
         out_text, new_id = run_single_followup_responses(

@@ -451,7 +451,7 @@ def run_prompt_two_step_flow(
 
 DEFAULT_UPDATE_PROMPT_TEMPLATE = (
     "[INTRADAY_UPDATE]\n"
-    "Cập nhật intraday: lần đầu sau [FULL_ANALYSIS] kèm morning_full_analysis.json + M15 + M5.\n"
+    "Cập nhật intraday: lần đầu sau [FULL_ANALYSIS] kèm morning_full_analysis.json + Coinmap merged (M15+M5).\n"
 )
 
 
@@ -471,21 +471,48 @@ def is_first_intraday_update_after_all(
     return c == a
 
 
-def build_intraday_update_user_text(*, first_after_all: bool = False) -> str:
+def build_intraday_update_user_text(
+    *,
+    first_after_all: bool = False,
+    coinmap_attachment_mode: str = "merged",
+) -> str:
     """
     User message for ``coinmap-automation update``: thời gian + nhiệm vụ (không nhúng baseline vùng chờ).
 
-    * ``first_after_all=True``: đính kèm morning JSON + M15 + M5; không nối thread ``all``.
-    * ``first_after_all=False``: chỉ M15 + M5; context trước trong chuỗi ``[INTRADAY_UPDATE]``.
+    * ``coinmap_attachment_mode="merged"`` (default): một file ``*_coinmap_<MAIN>_merged.json``
+      (schema ``coinmap_merged``: ``frames`` 15m + 5m, ``session_profile`` chung).
+    * ``coinmap_attachment_mode="legacy"``: như trước — file M15 và M5 tách riêng.
+
+    * ``first_after_all=True``: morning JSON + Coinmap (merged hoặc hai file raw).
+    * ``first_after_all=False``: chỉ Coinmap (merged hoặc M15+M5); nối chuỗi ``[INTRADAY_UPDATE]``.
     """
     time_line = format_intraday_update_time_line()
+    merged = str(coinmap_attachment_mode or "merged").strip().lower() != "legacy"
+
     if first_after_all:
+        if merged:
+            return (
+                "[INTRADAY_UPDATE]\n"
+                f"{time_line}"
+                "Phân tích buổi sáng (Schema A) nằm trong file **morning_full_analysis.json** đính kèm đầu tiên.\n"
+                "Đính kèm **hai** file JSON theo thứ tự: **(1)** morning_full_analysis.json, **(2)** một file "
+                "**Coinmap merged** cho cặp chính (cùng schema ``coinmap_merged``: khung 15m và 5m trong ``frames``, "
+                "footprint và summary theo từng khung).\n"
+            )
         return (
             "[INTRADAY_UPDATE]\n"
             f"{time_line}"
             "Phân tích buổi sáng (Schema A) nằm trong file **morning_full_analysis.json** đính kèm đầu tiên.\n"
             "Đính kèm **ba** file JSON theo thứ tự: **(1)** morning_full_analysis.json, **(2)** M15, **(3)** M5 "
             "(footprint cặp chính).\n"
+        )
+
+    if merged:
+        return (
+            "[INTRADAY_UPDATE]\n"
+            f"{time_line}"
+            "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước; plan sáng đã được đưa vào thread ở lần cập nhật đầu tiên.\n"
+            "Đính kèm **một** file JSON: **Coinmap merged** cho cặp chính (15m và 5m trong cùng file, ``source: coinmap_merged``).\n"
         )
     return (
         "[INTRADAY_UPDATE]\n"

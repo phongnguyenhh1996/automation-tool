@@ -54,20 +54,35 @@ def test_format_zones_snapshot_grouped() -> None:
     assert "status=vung_cho" in s and "status=loai" in s and "status=cham" in s
 
 
-def test_build_intraday_update_user_text_followup_contains_tasks() -> None:
-    t = build_intraday_update_user_text(first_after_all=False)
+def test_build_intraday_update_user_text_followup_merged_mode() -> None:
+    t = build_intraday_update_user_text(first_after_all=False, coinmap_attachment_mode="merged")
     assert "[INTRADAY_UPDATE]" in t
     assert "Thời gian hiện tại" in t
-    assert "hai" in t and "M15" in t and "M5" in t
+    assert "một" in t
+    assert "merged" in t.lower()
     assert "chuỗi phản hồi" in t
     assert "morning_full_analysis" not in t
     assert "Trạng thái các vùng" not in t
 
 
-def test_build_intraday_update_user_text_first_after_all_contains_three_files() -> None:
-    t = build_intraday_update_user_text(first_after_all=True)
+def test_build_intraday_update_user_text_followup_legacy_split_files() -> None:
+    t = build_intraday_update_user_text(first_after_all=False, coinmap_attachment_mode="legacy")
+    assert "[INTRADAY_UPDATE]" in t
+    assert "hai" in t and "M15" in t and "M5" in t
+
+
+def test_build_intraday_update_user_text_first_after_all_merged() -> None:
+    t = build_intraday_update_user_text(first_after_all=True, coinmap_attachment_mode="merged")
     assert "[INTRADAY_UPDATE]" in t
     assert "Thời gian hiện tại" in t
+    assert "hai" in t
+    assert "merged" in t.lower()
+    assert "morning_full_analysis" in t
+
+
+def test_build_intraday_update_user_text_first_after_all_legacy_three_files() -> None:
+    t = build_intraday_update_user_text(first_after_all=True, coinmap_attachment_mode="legacy")
+    assert "[INTRADAY_UPDATE]" in t
     assert "ba" in t
     assert "morning_full_analysis" in t
     assert "M15" in t and "M5" in t

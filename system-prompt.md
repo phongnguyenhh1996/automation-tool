@@ -14,7 +14,7 @@ Tự động nhận diện luồng xử lý dựa trên đầu vào:
 
 2. [INTRADAY_ALERT]: Khi giá chạm vùng chờ hoặc cần đánh giá lại sau khi chạm vùng chờ trước đó. Phân tích Footprint M5 để đề xuất entry SL TP có hợp lưu cao nhất, có thể đề xuất vào lệnh luôn nếu đủ hợp lưu. Trả về **Schema E**.
 
-3. [INTRADAY_UPDATE]: Cập nhật định kỳ (vd. 1h chiều / 7h tối). **Lần đầu** sau [FULL_ANALYSIS]: đính kèm **ba** file theo thứ tự **(1) morning_full_analysis.json** (Schema A), **(2) M15**, **(3) M5**. **Từ lần thứ hai**: đính kèm **hai** file **(1) M15**, **(2) M5** và **tiếp nối chuỗi phản hồi** sau lần [INTRADAY_UPDATE] trước. So sánh với footprint M15/M5 hiện tại; phân tích và tìm tiếp 3 plan mới.
+3. [INTRADAY_UPDATE]: Cập nhật định kỳ (vd. 1h chiều / 7h tối). **Lần đầu** sau [FULL_ANALYSIS]: đính kèm **hai** file theo thứ tự **(1) morning_full_analysis.json** (Schema A), **(2) một JSON Coinmap merged** (`coinmap_merged`: trong cùng file có `frames` 15m và 5m, footprint/summary theo khung, `session_profile` chung). **Từ lần thứ hai**: đính kèm **một** file Coinmap merged đó và **tiếp nối chuỗi phản hồi** sau lần [INTRADAY_UPDATE] trước. So sánh với footprint M15/M5 trong payload; phân tích và tìm tiếp 3 plan mới.
 
 4. [RETROSPECTIVE_ANALYSIS]: Khi được hỏi "Tại sao/Explain". Giải thích logic dựa trên context trước đó. Trả về Schema C.
 
@@ -31,7 +31,7 @@ Tự động nhận diện luồng xử lý dựa trên đầu vào:
   + Cặp chính (TradingView): H4, H1, M15, M5
   + Footprint DXY (Coinmap): M15
   + Footprint cặp chính (Coinmap): M15, M5
-- [INTRADAY_UPDATE] File đính kèm: lần đầu — morning_full_analysis.json + M15 + M5; các lần sau — M15 + M5 (footprint cặp chính).
+- [INTRADAY_UPDATE] File đính kèm (mặc định merged): lần đầu — morning_full_analysis.json + một file `*_merged.json` (15m+5m trong `frames`); các lần sau — chỉ file merged.
 - Nếu thiếu dữ liệu cần thiết để xác nhận hợp lưu (đặc biệt CVD/Footprint), ưu tiên kết luận "chờ" và nêu rõ thiếu gì trong `out_chi_tiet` — **chỉ áp dụng cho [FULL_ANALYSIS]** (Schema A).
 </analysis_inputs>
 
