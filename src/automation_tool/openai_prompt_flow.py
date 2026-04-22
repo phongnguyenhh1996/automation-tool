@@ -120,8 +120,7 @@ def _json_file_header_and_body(path: Path, *, max_chars: int) -> tuple[str, str]
     try:
         data = json.loads(raw)
         if (
-            not path.name.endswith("_merged.json")
-            and _coinmap_openai_slim_enabled()
+            _coinmap_openai_slim_enabled()
             and isinstance(data, dict)
             and should_slim_coinmap_json_path(path)
         ):
@@ -133,6 +132,8 @@ def _json_file_header_and_body(path: Path, *, max_chars: int) -> tuple[str, str]
         header = f"[FULL_ANALYSIS snapshot — file: {path.name}]\n"
     elif "_tradingview_" in path.name:
         header = f"[TradingView OHLC (tvdatafeed) — file: {path.name}]\n"
+    elif "_openai_coinmap_merged" in path.name or path.name.endswith("_merged.json"):
+        header = f"[Coinmap merged analysis — file: {path.name}]\n"
     else:
         header = f"[Coinmap API export — file: {path.name}]\n"
     body = compact
@@ -512,7 +513,7 @@ def build_intraday_update_user_text(
             "[INTRADAY_UPDATE]\n"
             f"{time_line}"
             "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước; plan sáng đã được đưa vào thread ở lần cập nhật đầu tiên.\n"
-            "Đính kèm **một** file JSON: **Coinmap merged** cho cặp chính (15m và 5m trong cùng file, ``source: coinmap_merged``).\n"
+            "Đính kèm **một** file JSON: **Coinmap merged** cho cặp chính (15m và 5m trong cùng file).\n"
         )
     return (
         "[INTRADAY_UPDATE]\n"
@@ -521,18 +522,18 @@ def build_intraday_update_user_text(
         "Đính kèm **hai** file JSON theo thứ tự: **(1) M15**, **(2) M5** (footprint cặp chính).\n"
     )
 
-# TradingView tab Nhật ký: giá chạm → Coinmap M5 + OpenAI (intraday).
+# TradingView tab Nhật ký: giá chạm → Coinmap compact ``coinmap_merged`` (từ raw M5/M1) + OpenAI (intraday).
 # Trả về Schema E: chỉ ``phan_tich_alert`` + ``intraday_hanh_dong``; nếu VÀO LỆNH, tool lấy trade_line từ baseline vùng.
 JOURNAL_INTRADAY_FIRST_USER_TEMPLATE = (
     "[INTRADAY_ALERT]\n"
     "Cảnh báo TradingView đã kích hoạt tại mức giá {touched_price}.\n"
-    "Đính kèm footprint Coinmap XAUUSD M5 mới nhất.\n"
+    "Đính kèm một file JSON **coinmap_merged** (footprint/summary theo khung M5 hoặc M1).\n"
 )
 
 JOURNAL_INTRADAY_RETRY_USER_TEMPLATE = (
     "[INTRADAY_ALERT]\n"
     "Tiếp tục đánh giá sau {wait_minutes} phút; vẫn theo dõi mức đã chạm {touched_price}.\n"
-    "Đính kèm footprint Coinmap XAUUSD M5 mới.\n"
+    "Đính kèm bản **coinmap_merged** mới (cùng định dạng).\n"
 )
 
 # Sau khi giá last realtime chạm TP1 (vùng đang ``cho_tp1``).

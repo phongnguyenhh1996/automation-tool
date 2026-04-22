@@ -2,7 +2,7 @@
 Merge multiple Coinmap per-timeframe JSON exports into one analysis-ready structure.
 
 Compatible with current exports (candle + orderflow; optional vwap, cvd) and future
-fields. See project plan: ``coinmap_merged`` OpenAI payload (``source: coinmap_merged``).
+fields. See project plan: ``coinmap_merged`` OpenAI payload.
 """
 
 from __future__ import annotations
@@ -88,6 +88,8 @@ def _recent_n_for_interval(iv: str, opt: AnalysisPayloadOptions) -> int:
     if pr and iv in pr:
         return max(0, int(pr[iv]))
     if iv == "5m":
+        return opt.recent_5m
+    if iv == "1m":
         return opt.recent_5m
     if iv == "15m":
         return opt.recent_15m
@@ -827,11 +829,10 @@ def build_session_master(raw_bundle: dict[str, Any]) -> dict[str, Any]:
     for iv in tfs:
         cdl = cdl_by_iv[iv]
         su = _summary_for_tf(iv, cdl, global_sp)
-        n_lat = (
-            DEFAULT_RECENT_5M
-            if iv == "5m"
-            else DEFAULT_RECENT_15M
-        )
+        if iv == "5m" or iv == "1m":
+            n_lat = DEFAULT_RECENT_5M
+        else:
+            n_lat = DEFAULT_RECENT_15M
         rc = _recent_candles_slice(cdl, n_lat)
         rf = _recent_footprint_candles(cdl, DEFAULT_RECENT_FOOTPRINT)
         frames[iv] = {

@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from automation_tool.coinmap_openai_slim import (
+    should_slim_coinmap_json_path,
     slim_coinmap_export_for_openai,
     slim_limits_for_interval,
 )
@@ -55,3 +56,14 @@ def test_interval_from_filename(monkeypatch: pytest.MonkeyPatch) -> None:
     out2 = slim_coinmap_export_for_openai(data2, path=p)
     # Default cap is 60 bars; only 50 supplied → all kept
     assert len(out2["getcandlehistory"]) == 50
+
+
+def test_should_slim_skips_merged_outputs() -> None:
+    assert should_slim_coinmap_json_path(Path("s_coinmap_DXY_merged.json")) is False
+    assert (
+        should_slim_coinmap_json_path(
+            Path("20260101_120000_coinmap_XAUUSD_5m_openai_coinmap_merged.json")
+        )
+        is False
+    )
+    assert should_slim_coinmap_json_path(Path("20260101_120000_coinmap_XAUUSD_5m.json")) is True

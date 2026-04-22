@@ -10,6 +10,7 @@ import pytest
 from automation_tool.coinmap_merged import (
     validate_coinmap_merged_payload,
     write_coinmap_merged_json,
+    write_openai_coinmap_merged_from_raw_export,
 )
 from automation_tool.market_merge_single import (
     build_merged_analysis_from_files,
@@ -157,6 +158,29 @@ def test_validate_merged_dxy_and_main(tmp_path: Path) -> None:
     assert ok, rea
     assert data["source"] == "coinmap_merged"
     assert list((data.get("frames") or {}).keys()) == ["15m"]
+
+
+def test_validate_merged_5m_only_single_raw(tmp_path: Path) -> None:
+    """INTRADAY-style: one M5 export → merged payload with only ``5m`` frame."""
+    t0 = 1_770_000_000_000
+    raw = tmp_path / "touch_coinmap_XAUUSD_5m.json"
+    raw.write_text(
+        json.dumps(
+            {
+                "symbol": "XAUUSD",
+                "interval": "5m",
+                "getcandlehistory": [_minimal_bar(t0)],
+                "getorderflowhistory": [_of_bar(t0)],
+            }
+        ),
+        encoding="utf-8",
+    )
+    out = write_openai_coinmap_merged_from_raw_export(raw)
+    assert out.name == "touch_coinmap_XAUUSD_5m_openai_coinmap_merged.json"
+    data = json.loads(out.read_text(encoding="utf-8"))
+    ok, rea = validate_coinmap_merged_payload(data)
+    assert ok, rea
+    assert list((data.get("frames") or {}).keys()) == ["5m"]
 
 
 def test_merged_from_files_end_to_end(tmp_path: Path) -> None:

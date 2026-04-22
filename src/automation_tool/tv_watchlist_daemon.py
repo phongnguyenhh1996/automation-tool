@@ -29,6 +29,7 @@ from automation_tool.coinmap import (
     load_coinmap_yaml,
 )
 from automation_tool.coinmap import _tradingview_ensure_watchlist_open  # reuse internal helper
+from automation_tool.coinmap_merged import write_openai_coinmap_merged_from_raw_export
 from automation_tool.config import Settings, resolved_model_for_intraday_alert
 from automation_tool.images import (
     DEFAULT_MAIN_CHART_SYMBOL,
@@ -671,6 +672,7 @@ def _touch_prompt(
     thêm dòng ngữ cảnh cho model.
     """
     cm_tf = "M1" if _is_scalp_zone(zone) else "M5"
+    iv_key = "1m" if _is_scalp_zone(zone) else "5m"
     lead = (
         "Đánh giá sau khi đã chạm vùng trước đó.\n"
         if after_retry_wait
@@ -681,7 +683,7 @@ def _touch_prompt(
         f"{lead}"
         f"Vùng chờ {zone.vung_cho}.\n"
         f"Giá hiện tại (MT5): {last_price}.\n"
-        f"Footprint Coinmap {cm_tf} JSON đính kèm.\n"
+        f"Một file JSON **coinmap_merged** từ Coinmap {cm_tf} đính kèm (``frames['{iv_key}']``, ``session_profile`` chung).\n"
     )
 
 
@@ -1910,7 +1912,11 @@ def _zone_touch_job(
                 f"zone-touch: no main {_cm_iv} Coinmap JSON under {params.charts_dir}"
             )
 
-        _send_log(settings, f"[zone-touch] coinmap_{_cm_iv}_json={json_path}")
+        openai_merged = write_openai_coinmap_merged_from_raw_export(json_path)
+        _send_log(
+            settings,
+            f"[zone-touch] coinmap_{_cm_iv}_raw={json_path} | openai_merged={openai_merged}",
+        )
 
         prev = _openai_followup_prev_response_id(params)
         user_text = _touch_prompt(
@@ -1923,7 +1929,7 @@ def _zone_touch_job(
             prompt_id=settings.openai_prompt_id,
             prompt_version=settings.openai_prompt_version,
             user_text=user_text,
-            coinmap_json_paths=[json_path],
+            coinmap_json_paths=[openai_merged],
             previous_response_id=prev or "",
             vector_store_ids=settings.openai_vector_store_ids,
             store=settings.openai_responses_store,

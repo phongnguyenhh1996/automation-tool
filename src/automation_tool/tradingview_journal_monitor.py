@@ -21,6 +21,7 @@ from automation_tool.coinmap import (
     capture_charts,
     load_coinmap_yaml,
 )
+from automation_tool.coinmap_merged import write_openai_coinmap_merged_from_raw_export
 from automation_tool.config import Settings, resolved_model_for_intraday_alert
 from automation_tool.images import (
     DEFAULT_MAIN_CHART_SYMBOL,
@@ -534,8 +535,9 @@ def _run_intraday_touch_loop(
                 f"(expected stamp coinmap_{read_main_chart_symbol(params.charts_dir)}_{_exp}). "
                 "Check coinmap_update.yaml capture_plan and api_data_export."
             )
+        openai_merged = write_openai_coinmap_merged_from_raw_export(json_path)
         _json_tf = "M1" if touched_label.strip().lower() == "scalp" else "M5"
-        _journal_log(tz, f"JSON {_json_tf} {read_main_chart_symbol(params.charts_dir)}: {json_path}")
+        _journal_log(tz, f"JSON {_json_tf} raw={json_path} | openai_merged={openai_merged}")
 
         if first:
             user_msg = JOURNAL_INTRADAY_FIRST_USER_TEMPLATE.format(
@@ -564,7 +566,7 @@ def _run_intraday_touch_loop(
                 prompt_id=settings.openai_prompt_id,
                 prompt_version=settings.openai_prompt_version,
                 user_text=user_msg,
-                coinmap_json_paths=[json_path],
+                coinmap_json_paths=[openai_merged],
                 previous_response_id=prev_id,
                 vector_store_ids=settings.openai_vector_store_ids,
                 store=settings.openai_responses_store,

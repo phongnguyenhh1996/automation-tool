@@ -24,6 +24,7 @@ from playwright.sync_api import BrowserContext, Page
 from zoneinfo import ZoneInfo
 
 from automation_tool.coinmap import capture_charts
+from automation_tool.coinmap_merged import write_openai_coinmap_merged_from_raw_export
 from automation_tool.config import Settings, resolved_model_for_intraday_alert
 from automation_tool.first_response_trade import apply_first_response_vao_lenh
 from automation_tool.images import (
@@ -435,6 +436,7 @@ def run_intraday_touch_flow(
                 f"No main-pair {_exp} Coinmap JSON under {params.charts_dir} "
                 f"(expected stamp coinmap_{read_main_chart_symbol(params.charts_dir)}_{_exp})."
             )
+        openai_merged = write_openai_coinmap_merged_from_raw_export(json_path)
 
         # OpenAI follow-up message (kept compatible with existing prompt templates)
         if first:
@@ -460,7 +462,7 @@ def run_intraday_touch_flow(
                     prompt_id=settings.openai_prompt_id,
                     prompt_version=settings.openai_prompt_version,
                     user_text=user_msg,
-                    coinmap_json_paths=[json_path],
+                    coinmap_json_paths=[openai_merged],
                     previous_response_id=prev_id,
                     vector_store_ids=settings.openai_vector_store_ids,
                     store=settings.openai_responses_store,

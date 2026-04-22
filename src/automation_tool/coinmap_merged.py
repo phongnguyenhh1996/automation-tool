@@ -81,6 +81,32 @@ def write_merged_for_dxy(
     )
 
 
+def write_openai_coinmap_merged_from_raw_export(
+    raw_coinmap_export_path: str | Path,
+    *,
+    session_timezone: str = DEFAULT_SESSION_TZ,
+    out_path: Path | None = None,
+) -> Path:
+    """
+    Build compact ``coinmap_merged`` analysis JSON from one raw Coinmap API export
+    (e.g. M5-only or M1-only for [INTRADAY_ALERT] / journal touch).
+
+    Writes next to the raw file unless ``out_path`` is given:
+    ``{stem}_openai_coinmap_merged.json``.
+    """
+    raw = Path(raw_coinmap_export_path)
+    if not raw.is_file():
+        raise FileNotFoundError(f"raw Coinmap export not found: {raw}")
+    dest = out_path if out_path is not None else raw.parent / f"{raw.stem}_openai_coinmap_merged.json"
+    payload = build_merged_analysis_from_files([raw], session_timezone=session_timezone)
+    dest.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    _log.info("openai coinmap merged (from raw) written: %s", dest.resolve())
+    return dest
+
+
 def run_coinmap_merged_writes(charts_dir: Path, stamp: str) -> dict[str, Path]:
     """
     After capture: write DXY and main ``*_merged.json`` if raw inputs exist.
@@ -115,13 +141,22 @@ def validate_coinmap_merged_payload(data: dict[str, Any]) -> tuple[bool, str]:
     if not isinstance(fr, dict) or not fr:
         return False, "frames missing or empty"
     tks = set(fr.keys())
-    if "15m" not in tks:
-        return False, "frames must include 15m"
+    allowed_iv = {
+        "1m",
+        "3m",
+        "5m",
+        "15m",
+        "30m",
+        "45m",
+        "1h",
+        "2h",
+        "3h",
+        "4h",
+        "1d",
+    }
+    if not tks.issubset(allowed_iv):
+        return False, f"unexpected frames keys: {sorted(tks)}"
     for k, v in fr.items():
         if not isinstance(v, dict) or "summary" not in v:
             return False, f"frames[{k!r}] missing summary"
-    if tks == {"15m"}:
-        return True, ""
-    if tks >= {"15m", "5m"} and tks.issubset({"15m", "5m"}):
-        return True, ""
-    return False, f"unexpected frames keys: {sorted(tks)}"
+    return True, ""

@@ -119,6 +119,9 @@ def slim_coinmap_export_for_openai(
 
 
 def should_slim_coinmap_json_path(path: Path) -> bool:
-    if path.suffix.lower() == ".json" and path.name.endswith("_merged.json"):
+    n = path.name.lower()
+    if path.suffix.lower() == ".json" and (
+        n.endswith("_merged.json") or n.endswith("_openai_coinmap_merged.json")
+    ):
         return False
     return path.suffix.lower() == ".json" and "_coinmap_" in path.name
