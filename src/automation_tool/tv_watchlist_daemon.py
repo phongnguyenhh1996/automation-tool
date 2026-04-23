@@ -692,7 +692,6 @@ def _touch_prompt(
         "[INTRADAY_ALERT]\n"
         f"{lead}"
         f"Vùng chờ {side_s}{zone.vung_cho}.\n"
-        f"Giá hiện tại (MT5): {last_price}.\n"
         f"Một file JSON **coinmap_merged** từ Coinmap {cm_tf} đính kèm (``frames['{iv_key}']``, ``session_profile`` chung).\n"
     )
 
