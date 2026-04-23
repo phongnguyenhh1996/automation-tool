@@ -21,8 +21,6 @@
   - quản lý SL/TP/RR,
   - trạng thái trend M15 hiện tại,
   - đang thuận trend hay ngược trend.
-- Trước khi chốt entry hay plan phải ghi rõ:
-  - **✅ ĐÃ CHECK QUY TẮC**
 
 ### 0.2. Điều kiện tổng hợp để được vào lệnh
 Chỉ được phép vào lệnh khi tối thiểu có đủ 3 lớp xác nhận:
@@ -45,8 +43,8 @@ Công thức lõi:
 
 ### 0.4. Ngưỡng hành động theo điểm số
 - **< 70 điểm** → Không đủ hợp lưu / chỉ backup / đứng ngoài
-- **70–84 điểm** → Vùng chờ, chấp nhận được nhưng chưa đẹp
-- **≥ 85 điểm** → Hợp lưu mạnh, có thể limit ngay
+- **70–89 điểm** → Vùng chờ, chấp nhận được nhưng chưa đẹp
+- **≥ 90 điểm** → Hợp lưu mạnh, có thể limit ngay
 - **100/100** → Chuẩn tuyệt đối, lệnh đẹp nhất
 
 ### 0.5. Quy tắc ra quyết định chung
@@ -829,17 +827,6 @@ Nhưng theo memory mới phải linh hoạt hơn:
 
 ## 9. APPENDIX – CÂU MẪU OUTPUT NÊN GIỮ CỐ ĐỊNH
 
-### 9.1. Cuối [FULL_ANALYSIS]
-- Bias H1:
-- Trend M15:
-- DXY:
-- Main Plan:
-- Backup Plan:
-- Scalp / Plan phụ:
-- Điểm số:
-- Kết luận:
-- EA Mode:
-
 ### 9.2. Cuối [INTRADAY_ALERT]
 - Vùng chờ:
 - Footprint M5:
@@ -856,7 +843,110 @@ Nhưng theo memory mới phải linh hoạt hơn:
 - EA Mode:
 - Kết luận:
 
+### 9.4. Cuối [TRADE_MANAGEMENT]
+- Lệnh khỏe / yếu:
+- CVD:
+- VWAP / POC:
+- stacked / absorption:
+- Hành động:
+- TP / SL update:
 ---
+
+
+### 9.5. TEMPLATE OUTPUT TÍCH HỢP (HỢP NHẤT TỪ output.md)
+
+> Phần này được hợp nhất từ `output.md` để hệ thống chỉ cần đọc **1 file duy nhất**.  
+> **Chỉ dùng cho [FULL_ANALYSIS] / Schema A** để sinh `out_chi_tiet` và `output_ngan_gon`.  
+> Với `[INTRADAY_ALERT]`, `[INTRADAY_UPDATE]`, `[TRADE_MANAGEMENT]` **không dùng template dưới đây**, chỉ dùng schema JSON tương ứng.
+
+[MASTER_OUTPUT_CONTEXT]
+- Toàn bộ nội dung template dưới đây phải được generate dựa trên chính `master_trading_playbook.md`.
+- Logic phân tích, checklist, filter, bài học, rule entry/quản lý → lấy từ các section chính của file này.
+- Template bên dưới chỉ là **khung câu chữ cố định** cho `out_chi_tiet` và `output_ngan_gon` ở `[FULL_ANALYSIS]`.
+- Nếu thiếu dữ liệu xác nhận quan trọng, đặc biệt footprint / CVD / reclaim VWAP / trend bias → không được ép ra entry.
+- Nếu logic giao dịch và template có xung đột, ưu tiên **logic giao dịch trong master file**, nhưng vẫn phải giữ đúng cấu trúc nội dung của template.
+
+[OUTPUT_CHI_TIET]
+🔥 PHÂN TÍCH {symbol} – FULL QUY TRÌNH
+
+——————————
+🧭 1. BỐI CẢNH VĨ MÔ (DXY)
+
+👉 KẾT LUẬN DXY:
+
+————————————-
+🧭 2. CẤU TRÚC {symbol}
+🔴 H4
+
+🔴 H1
+
+🔴 M15
+
+🧭 4. ORDER FLOW (CVD)
+M15:
+
+M5:
+
+🚨 KẾT LUẬN CHÍNH
+👉 Bias ngày:
+
+👉 Trạng thái hiện tại: (ngắn gọn)
+
+📍 PLAN CHÍNH
+
+📊 CHẤM ĐIỂM PLAN CHÍNH: thang điểm 100 (chỉ chấm điểm không phân tích)
+
+⚡️ PLAN PHỤ
+
+📊 CHẤM ĐIỂM PLAN PHỤ: thang điểm 100 (chỉ chấm điểm không phân tích)
+
+📊 SCALP:
+
+📊 CHẤM ĐIỂM SCALP: thang điểm 100 (chỉ chấm điểm không phân tích)
+
+🤖 EA GRID PLAN:
+
+[OUTPUT_NGAN_GON]
+👉 BỐI CẢNH VĨ MÔ:
+Trend DXY:
+Trend {symbol} H1 - M15:
+Bias chính:
+
+📍 PLAN CHÍNH VÙNG CHỜ:
+📍 PLAN PHỤ VÙNG CHỜ:
+⚡️ SCALP VÙNG:
+
+### 9.5.1. Quy tắc dùng template
+- `out_chi_tiet` phải bám đúng phần sau marker `[OUTPUT_CHI_TIET]` và không in marker.
+- `output_ngan_gon` phải bám đúng phần sau marker `[OUTPUT_NGAN_GON]` và không in marker.
+- Trong `[OUTPUT_NGAN_GON]`, với từng plan bắt buộc có đủ:
+  - `trade_line` tham khảo
+  - `hop_luu`
+  - `điều kiện vào lệnh`
+- Nếu thiếu một trong ba mục trên thì output ngắn gọn được xem là chưa đạt chuẩn.
+
+### 9.5.2. Placeholder convention
+- `{symbol}` phải được thay bằng cặp đang phân tích trong lần gọi hiện tại. Ví dụ: `EURUSD`, `USDJPY`, `XAUUSD`.
+
+### 9.5.3. Quy tắc bỏ qua mục khi không phải XAUUSD
+Nếu `{symbol}` **không phải `XAUUSD`** thì trong `out_chi_tiet` phải **bỏ qua / không được sinh** các mục sau:
+- `🧭 1. BỐI CẢNH VĨ MÔ (DXY)`
+- `👉 KẾT LUẬN DXY:`
+- `🧭 2. CẤU TRÚC {symbol}` với các mục con `🔴 H4 / 🔴 H1 / 🔴 M15`
+- `🧭 4. ORDER FLOW (CVD)` gồm `M15 / M5`
+- `📊 SCALP:`
+- `🤖 EA GRID PLAN:`
+
+### 9.5.4. Mối quan hệ giữa template và schema
+- Phần template này chỉ phục vụ nội dung text của **Schema A**:
+  - `out_chi_tiet`
+  - `output_ngan_gon`
+- Không dùng template này cho:
+  - `Schema B / [INTRADAY_UPDATE]`
+  - `Schema D / [TRADE_MANAGEMENT]`
+  - `Schema E / [INTRADAY_ALERT]`
+- Các mode intraday và trade management chỉ được trả đúng field JSON riêng theo system prompt, không được kéo văn bản dài từ template này vào.
+
 
 ## 10. KẾT LUẬN CHUẨN CỦA TOÀN HỆ THỐNG
 
