@@ -279,7 +279,7 @@ Trong **2–3 pip / giá trước entry**, phải kiểm lại:
 Chỉ giữ limit nguyên ngày nếu:
 - H1 chưa BOS ngược
 - M15 chưa CHoCH ngược
-- POC/VWAP không dịch > 3–5 pip khỏi vùng plan
+- POC/VWAP không dịch > 30–55 pip khỏi vùng plan
 - CVD không đảo chiều ≥ 3 nến ngược bias
 
 Vi phạm **1 điều kiện** → **HUỶ LIMIT**
@@ -453,7 +453,7 @@ Loại bỏ ngay nếu:
 - chỉ có trap nhỏ nhưng không có follow-through
 - vào sát mở phiên Âu/Mỹ mà chưa có volume xác nhận
 - M5 đã BOS / CHoCH ngược ngay trước touch
-- POC/VWAP đã dịch ngược > 3–5 pip
+- POC/VWAP đã dịch ngược > 10–20 pip
 - tin đỏ gần kề
 
 ### 2.5. Trường hợp không có stacked
