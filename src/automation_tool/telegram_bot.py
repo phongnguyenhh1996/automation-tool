@@ -27,6 +27,11 @@ _MT5_NGAN_GON_MESSAGES = (
     "Tín hiệu gọi tên, lệnh lên nòng – Tiền vào túi là chuyện sớm muộn! 💎📞📈🔥",
     "Market rung lắc kệ Market – Tool đã vào lệnh, ngồi mát ăn bát vàng thôi! 🌊🧘‍♂️💎💵",
     "Vít ga vào lệnh, chốt lãi xuyên màn đêm – Đẳng cấp công nghệ là đây! 🏎️💨💰🔥",
+    "Cú click như sấm nổ – MT5 khớp lệnh gọn lẹ, chờ ăn ngon ngủ kỹ! ⚡️🖱️📈💰",
+    "Kèo ngon đã chốt, máy chạy không trượt – Lúa về đều tay, khỏi cần cầu may! 🤖✅💵🔥",
+    "Lệnh đã cắm cờ, stop đặt gọn gàng – Chỉ việc ngồi chill xem PnL xanh! 🏁🛡️📊💚",
+    "Thị trường có thể gió mùa, nhưng Tool thì luôn lạnh lùng – vào là chuẩn! 🌪️🧊🎯💸",
+    "MT5 bật chế độ sát phạt – vào nhanh, quản trị chặt, chốt lời đẹp! 🐯⚔️🧠💰",
 )
 
 # Canonical zone keys (openai_analysis_json.ZONE_LABELS_ORDER) → hiển thị trong tin MT5.
