@@ -969,7 +969,10 @@ def _tp1_followup_job(
             vector_store_ids=settings.openai_vector_store_ids,
             store=settings.openai_responses_store,
             include=settings.openai_responses_include,
-            reasoning_summary=None,
+            # Force config for [TRADE_MANAGEMENT]
+            model="gpt-5.4-mini",
+            reasoning_summary="auto",
+            reasoning_effort="high",
         )
         _openai_followup_persist_new_id(params, new_id)
         if not params.no_telegram:
@@ -1352,7 +1355,10 @@ def _r1_followup_job(
             vector_store_ids=settings.openai_vector_store_ids,
             store=settings.openai_responses_store,
             include=settings.openai_responses_include,
-            reasoning_summary=None,
+            # Force config for [TRADE_MANAGEMENT]
+            model="gpt-5.4-mini",
+            reasoning_summary="auto",
+            reasoning_effort="high",
         )
         _openai_followup_persist_new_id(params, new_id)
         if not params.no_telegram:
@@ -1934,7 +1940,10 @@ def _zone_touch_job(
             vector_store_ids=settings.openai_vector_store_ids,
             store=settings.openai_responses_store,
             include=settings.openai_responses_include,
-            reasoning_summary=None,
+            # Force config for [INTRADAY_ALERT]
+            model="gpt-5.4-mini",
+            reasoning_summary="auto",
+            reasoning_effort="high",
         )
         if _should_write_intraday_alert_anchor(params):
             _openai_followup_persist_new_id(params, new_id)

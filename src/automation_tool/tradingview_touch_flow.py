@@ -467,7 +467,10 @@ def run_intraday_touch_flow(
                     vector_store_ids=settings.openai_vector_store_ids,
                     store=settings.openai_responses_store,
                     include=settings.openai_responses_include,
-                    reasoning_summary=None,
+                    # Force config for [INTRADAY_ALERT]
+                    model="gpt-5.4-mini",
+                    reasoning_summary="auto",
+                    reasoning_effort="high",
                 ),
                 poll_abort=lambda: _poll_abort_during_long_ops(phase="waiting_openai"),
                 poll_interval_s=0.75,

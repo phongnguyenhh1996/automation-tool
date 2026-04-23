@@ -259,7 +259,10 @@ def _run_tp1_openai_and_act(
         vector_store_ids=settings.openai_vector_store_ids,
         store=settings.openai_responses_store,
         include=settings.openai_responses_include,
-        reasoning_summary=None,
+        # Force config for [TRADE_MANAGEMENT]
+        model="gpt-5.4-mini",
+        reasoning_summary="auto",
+        reasoning_effort="high",
     )
     update_plan_tp1_followup_done(label, True, path=last_alert_path)
     _log_tp1.info(

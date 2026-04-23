@@ -610,33 +610,46 @@ Nếu mất nhiều xác nhận:
 - 2 nến đầu đi ngang hoặc hồi > 50% nến breakout
 
 ### 4.5. Quy tắc dời SL / chốt lời
-Theo framework cũ có thể dùng:
-- +5 giá → BE entry 1
-- +10 giá → BE cả cụm
-- +15–20 giá → kéo SL theo HL/VWAP
+**Quản lý SL theo cấu trúc (không dùng mốc giá cố định)**
 
-Nhưng theo memory mới phải linh hoạt hơn:
-- ưu tiên dời theo cấu trúc và footprint thực tế
-- không dời máy móc nếu giá mới chỉ sweep / retest hợp lệ
-- khi chạy khoảng **70% tới TP** mà CVD yếu đi hoặc đổi hướng:
-  - dời BE
-  - hoặc chốt sớm
-- gần TP mà rơi vào:
-  - HVN
-  - POC
-  - HL mạnh
-  - đầu phiên Mỹ  
-  → ưu tiên chốt nhanh / chốt phần lớn
+1. Giữ SL gốc (anti-sweep) cho tới khi thị trường xác nhận vùng bảo vệ mới.
+
+2. Chỉ dời SL khi có ít nhất 1 trong các điều kiện:
+   - Xuất hiện HL/LH mới rõ trên M5/M15.
+   - Giá reclaim và giữ VWAP kèm follow-through.
+   - Xuất hiện defended zone (stacked BID/ASK hoặc absorption rõ tại HL/VWAP).
+
+3. SL được dời theo vùng:
+   - **BUY**: đặt dưới HL mới nhất + buffer 2–3 giá.
+   - **SELL**: đặt trên LH mới nhất + buffer 2–3 giá.
+
+4. Chỉ đưa SL về BE khi:
+   - Giá đã chạy qua vùng TP1 tiềm năng.
+   - Hoặc có ít nhất 2 nhịp HL/LH cùng hướng.
+   - Hoặc CVD đồng thuận ≥ 3 nến sau entry.
+
+5. Không dời SL chỉ vì đạt số giá lợi nhuận.
 
 ### 4.6. Quy tắc TP
-- TP1:
-  - dễ đạt
-  - tại VWAP / HL gần nhất / volume trống
-  - RR tối thiểu ≥ 1:1.6
-- TP2:
-  - xa hơn tại premium/discount HTF hoặc OB/FVG lớn
-- Tránh đặt TP ngay HVN/POC nếu dễ bị bật ngược
-- Tốt hơn nên đặt TP ở vùng volume trống / trước vùng mạnh một chút
+**Quản lý TP theo vùng thị trường**
+
+TP1 (50% khối lượng):
+- VWAP / HL/LH gần nhất / LVN gần nhất.
+- Mục tiêu: dễ đạt, RR ≥ 1:1.6.
+
+TP2 (30% khối lượng):
+- POC / VAH / VAL / OB/FVG đối diện.
+- Mục tiêu: vùng phản ứng mạnh.
+
+Runner (20% khối lượng):
+- Giữ theo cấu trúc nếu:
+  - CVD chưa đảo chiều.
+  - Giá chưa mất VWAP.
+  - Chưa xuất hiện trap ngược rõ.
+
+Lưu ý:
+- Nếu gần TP1 mà CVD yếu dần → chốt phần lớn sớm.
+- Nếu TP rơi vào HVN/POC → ưu tiên chốt nhanh, không tham.
 
 ### 4.7. Quản lý limit cũ trong ngày
 - Nếu POC/VWAP intraday dịch xa hơn **> 3–5 pip** so với plan đầu ngày → cập nhật POI
@@ -957,7 +970,38 @@ Nếu `{symbol}` **không phải `XAUUSD`** thì trong `out_chi_tiet` phải **b
 - **H1 BOS ngược hoặc M15 CHoCH ngược hoặc CVD đảo chiều ≥ 3 nến hoặc VWAP/POC dịch ngược > 3–5 pip hoặc footprint mất xác nhận → HUỶ LIMIT / ĐỨNG NGOÀI**
 
 ### 10.3. Công thức quản lý lệnh
-- **Sau entry phải giữ được ít nhất 3/4 yếu tố: CVD, VWAP, stacked/absorption, HL/LH cấu trúc. Mất xác nhận → giảm / BE / thoát nhanh**
+- **Nguyên tắc quản lý lệnh (ưu tiên cấu trúc, không dùng mốc giá cố định)**
+  1. KHÔNG sử dụng BE theo số giá cố định (5 giá, 10 giá...).
+  2. SL chỉ được dời khi thị trường tạo vùng bảo vệ mới:
+     - HL/LH rõ ràng.
+     - Hoặc reclaim VWAP + giữ được.
+     - Hoặc có defended zone (stacked/absorption).
+  3. SL phải đặt theo vùng:
+     - **BUY**: dưới HL mới + buffer 2–3 giá.
+     - **SELL**: trên LH mới + buffer 2–3 giá.
+  4. CHO PHÉP giá quét lại:
+     - VWAP
+     - POC intraday
+     - HL/LH mới
+     - Edge of Value Area
+     
+     MIỄN LÀ:
+     - CVD chưa đảo chiều ≥ 3 nến.
+     - Chưa phá cấu trúc.
+     - Chưa có trap ngược rõ.
+  5. CHỈ THOÁT LỆNH KHI:
+     - Phá HL/LH bảo vệ gần nhất.
+     - CVD đảo chiều ≥ 3 nến.
+     - Mất VWAP và không reclaim.
+     - Có trap ngược + volume spike + follow-through.
+  6. QUẢN LÝ KHỐI LƯỢNG:
+     - TP1: 50%
+     - TP2: 30%
+     - Runner: 20%
+  7. MỤC TIÊU:
+     - Tránh bị quét SL sớm.
+     - Giữ được lệnh trend mạnh.
+     - Vẫn đảm bảo an toàn vốn.
 
 ### 10.4. Tư duy cuối cùng
 - Không thiếu dữ liệu thì mới ra lệnh đẹp

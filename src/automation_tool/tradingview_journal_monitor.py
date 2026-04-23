@@ -571,7 +571,10 @@ def _run_intraday_touch_loop(
                 vector_store_ids=settings.openai_vector_store_ids,
                 store=settings.openai_responses_store,
                 include=settings.openai_responses_include,
-                reasoning_summary=None,
+                # Force config for [INTRADAY_ALERT]
+                model="gpt-5.4-mini",
+                reasoning_summary="auto",
+                reasoning_effort="high",
             )
         except Exception as e:
             re_raise_unless_openai(e)
