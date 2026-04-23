@@ -2516,6 +2516,27 @@ def _tradingview_select_interval(
     page.wait_for_timeout(int(tv.get("after_interval_select_ms", settle_ms)))
 
 
+def _tradingview_reset_chart_position(page, tv: dict[str, Any]) -> None:
+    """
+    Reset chart position before capturing screenshots.
+
+    Default shortcut: Alt+R (user workflow). Can override via
+    ``tradingview_reset_shortcut`` (e.g. "Alt+R") and wait via
+    ``after_tradingview_reset_ms``.
+    """
+    shortcut = (tv.get("tradingview_reset_shortcut") or "Alt+R").strip()
+    wait_ms = int(tv.get("after_tradingview_reset_ms", 400))
+    if not shortcut:
+        return
+    try:
+        page.keyboard.press(shortcut)
+        if wait_ms > 0:
+            page.wait_for_timeout(wait_ms)
+    except Exception:
+        # Best-effort: reset is helpful but should not fail capture.
+        pass
+
+
 def _tradingview_snapshot_url_capture(
     page,
     tv: dict[str, Any],
@@ -2652,6 +2673,7 @@ def _run_tradingview_multi_shot_flow(
         for aria in intervals:
             slug = _tradingview_interval_slug(aria, tv)
             _tradingview_select_interval(page, toolbar, tv, aria, settle_ms)
+            _tradingview_reset_chart_position(page, tv)
             path = _tradingview_capture_one_chart_frame(
                 page, tv, charts_dir, stamp, sym_key, slug
             )
@@ -2734,6 +2756,7 @@ def _run_tradingview_screenshot_flow(
     legacy_png = charts_dir / f"{stamp}_tradingview_fullscreen.png"
     legacy_url = charts_dir / f"{stamp}_tradingview_fullscreen.url"
     if bool(tv.get("tradingview_snapshot_url_flow", True)):
+        _tradingview_reset_chart_position(page, tv)
         dest = _tradingview_capture_one_chart_frame(
             page,
             tv,
@@ -2744,6 +2767,7 @@ def _run_tradingview_screenshot_flow(
             dest_url_path=legacy_url,
         )
     else:
+        _tradingview_reset_chart_position(page, tv)
         dest = _tradingview_capture_one_chart_frame(
             page,
             tv,
