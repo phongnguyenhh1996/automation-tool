@@ -1,8 +1,10 @@
 """
-Validate on-disk chart JSON for the OpenAI multimodal slot order (10 slots).
+Validate on-disk chart artifacts for the OpenAI multimodal slot order (10 slots).
 
 Coinmap exports must have non-empty lists for getcandlehistory, getorderflowhistory,
-getindicatorsvwap. TradingView tvdatafeed exports must have a non-empty ``bars`` array.
+getindicatorsvwap (or merged JSON where used). TradingView: if ``.json`` exists it must
+be valid tvdatafeed (non-empty ``bars``); otherwise a snapshot ``.url`` (https first line)
+or ``.png`` satisfies the slot (same rules as ``ordered_chart_openai_payloads``).
 """
 
 from __future__ import annotations
@@ -68,15 +70,86 @@ class ChartSlotIssue:
     reason: str
 
 
+def _tradingview_slot_validation_issue(
+    charts_dir: Path,
+    stamp: str,
+    sym: str,
+    iv: str,
+) -> Optional[ChartSlotIssue]:
+    """
+    None if the slot has a valid OpenAI artifact (tvdatafeed JSON, https snapshot URL, or PNG).
+    """
+    jp = charts_dir / f"{stamp}_tradingview_{sym}_{iv}.json"
+    up = charts_dir / f"{stamp}_tradingview_{sym}_{iv}.url"
+    pp = charts_dir / f"{stamp}_tradingview_{sym}_{iv}.png"
+
+    if jp.is_file():
+        data, err = _load_json(jp)
+        if err:
+            return ChartSlotIssue(
+                source="tradingview",
+                symbol=sym,
+                interval=iv,
+                expected_path=jp,
+                reason=err,
+            )
+        ok, r = validate_tradingview_tvdatafeed_payload(data or {})
+        if not ok:
+            return ChartSlotIssue(
+                source="tradingview",
+                symbol=sym,
+                interval=iv,
+                expected_path=jp,
+                reason=r,
+            )
+        return None
+
+    if up.is_file():
+        try:
+            raw = up.read_text(encoding="utf-8").strip().splitlines()
+        except OSError as e:
+            return ChartSlotIssue(
+                source="tradingview",
+                symbol=sym,
+                interval=iv,
+                expected_path=up,
+                reason=f"read error: {e}",
+            )
+        line = (raw[0] if raw else "").strip()
+        if line.startswith("http://") or line.startswith("https://"):
+            return None
+        if pp.is_file():
+            return None
+        return ChartSlotIssue(
+            source="tradingview",
+            symbol=sym,
+            interval=iv,
+            expected_path=up,
+            reason=".url first line is not http(s) and no fallback .png",
+        )
+
+    if pp.is_file():
+        return None
+
+    return ChartSlotIssue(
+        source="tradingview",
+        symbol=sym,
+        interval=iv,
+        expected_path=jp,
+        reason="missing TradingView chart (.json, .url with https, or .png)",
+    )
+
+
 def list_invalid_chart_slots_for_stamp(
     charts_dir: Path,
     stamp: str,
 ) -> list[ChartSlotIssue]:
     """
-    Check each of the 10 ``effective_chart_image_order`` slots: require the same
-    artifact as ``ordered_chart_openai_payloads`` (``.json`` preferred).
+    Check each of the 10 ``effective_chart_image_order`` slots against what
+    ``ordered_chart_openai_payloads`` would attach.
 
-    Missing ``.json`` or invalid payload → issue (PNG/.url alone is invalid).
+    Coinmap slots require ``.json`` (or merged paths) with valid payload.
+    TradingView accepts ``.json`` (validated), else ``.url`` (https) or ``.png``.
     """
     if not stamp or not charts_dir.is_dir():
         return []
@@ -90,6 +163,11 @@ def list_invalid_chart_slots_for_stamp(
         elif src == "coinmap" and main_m is not None and sym == main_sym and iv == "15m":
             jp = main_m
         elif src == "coinmap" and main_m is not None and sym == main_sym and iv == "5m":
+            continue
+        elif src == "tradingview":
+            tv_issue = _tradingview_slot_validation_issue(charts_dir, stamp, sym, iv)
+            if tv_issue is not None:
+                issues.append(tv_issue)
             continue
         else:
             jp = charts_dir / f"{stamp}_{src}_{sym}_{iv}.json"
@@ -128,20 +206,8 @@ def list_invalid_chart_slots_for_stamp(
                         reason=r,
                     )
                 )
-        elif src == "coinmap":
-            ok, r = validate_coinmap_export_payload(data or {})
-            if not ok:
-                issues.append(
-                    ChartSlotIssue(
-                        source=src,
-                        symbol=sym,
-                        interval=iv,
-                        expected_path=jp,
-                        reason=r,
-                    )
-                )
         else:
-            ok, r = validate_tradingview_tvdatafeed_payload(data or {})
+            ok, r = validate_coinmap_export_payload(data or {})
             if not ok:
                 issues.append(
                     ChartSlotIssue(

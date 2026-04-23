@@ -77,6 +77,48 @@ def test_list_invalid_slots_missing_json(tmp_path: Path) -> None:
     assert all("missing" in x.reason.lower() for x in bad)
 
 
+def test_tradingview_slots_skip_json_when_https_url(tmp_path: Path) -> None:
+    write_main_chart_symbol_marker(tmp_path, "XAUUSD")
+    stamp = "20260101_120000"
+    for sym in ("DXY", "XAUUSD"):
+        intervals = ("4h", "1h", "15m", "5m") if sym == "XAUUSD" else ("4h", "1h", "15m")
+        for iv in intervals:
+            p = tmp_path / f"{stamp}_tradingview_{sym}_{iv}.url"
+            p.write_text("https://example.invalid/snap\n", encoding="utf-8")
+    bad = list_invalid_chart_slots_for_stamp(tmp_path, stamp)
+    assert len(bad) == 3
+    assert all(x.source == "coinmap" for x in bad)
+
+
+def test_tradingview_slots_skip_json_when_png_only(tmp_path: Path) -> None:
+    write_main_chart_symbol_marker(tmp_path, "XAUUSD")
+    stamp = "20260101_120000"
+    for sym, iv in (
+        ("DXY", "4h"),
+        ("DXY", "1h"),
+        ("DXY", "15m"),
+        ("XAUUSD", "4h"),
+        ("XAUUSD", "1h"),
+        ("XAUUSD", "15m"),
+        ("XAUUSD", "5m"),
+    ):
+        (tmp_path / f"{stamp}_tradingview_{sym}_{iv}.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    bad = list_invalid_chart_slots_for_stamp(tmp_path, stamp)
+    assert len(bad) == 3
+    assert all(x.source == "coinmap" for x in bad)
+
+
+def test_tradingview_json_still_validated_when_present(tmp_path: Path) -> None:
+    write_main_chart_symbol_marker(tmp_path, "XAUUSD")
+    stamp = "20260101_120000"
+    p = tmp_path / f"{stamp}_tradingview_DXY_4h.json"
+    p.write_text(json.dumps({"bars": []}), encoding="utf-8")
+    bad = list_invalid_chart_slots_for_stamp(tmp_path, stamp)
+    tv_bad = [x for x in bad if x.source == "tradingview" and x.expected_path == p]
+    assert len(tv_bad) == 1
+    assert "bars" in tv_bad[0].reason
+
+
 def test_list_invalid_slots_coinmap_empty_arrays(tmp_path: Path) -> None:
     write_main_chart_symbol_marker(tmp_path, "XAUUSD")
     stamp = "20260101_120000"
