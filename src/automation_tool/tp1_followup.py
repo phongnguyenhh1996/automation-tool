@@ -243,11 +243,14 @@ def _run_tp1_openai_and_act(
         raise SystemExit(f"tp1-followup: no main 5m Coinmap JSON under {charts_dir}")
     _log_tp1.info("tp1-followup Coinmap M5 JSON: %s", json_path)
 
+    tl0 = (trade_line or "").strip()
+    snip = (tl0[:200] + "…") if len(tl0) > 200 else tl0
     user_msg = TP1_POST_TOUCH_USER_TEMPLATE.format(
         plan_label=label,
         trade_line=trade_line,
         last_price=p_last,
         tp1_price=parsed.tp1,
+        trade_line_snip=snip,
     )
     out_text, new_id = run_single_followup_responses(
         api_key=settings.openai_api_key,

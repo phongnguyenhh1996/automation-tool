@@ -533,6 +533,7 @@ TP1_POST_TOUCH_USER_TEMPLATE = (
     "Giá đã chạm mức TP1 của lệnh đang theo dõi; đánh giá Footprint M5 đính kèm (giữ hay thoát / chỉnh dòng lệnh).\n"
     "Vùng (label): {plan_label}\n"
     "Mức TP1 từ trade_line: {tp1_price}\n\n"
+    "trade_line đã vào MT5: {trade_line_snip}\n\n"
 )
 
 # Daemon zones: giá đạt +1R (lợi nhuận bằng khoảng |Entry−SL|) khi đang ``cho_tp1`` (sau arm TP1).

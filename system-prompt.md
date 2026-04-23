@@ -66,7 +66,7 @@ Tự động nhận diện luồng xử lý dựa trên đầu vào, sau đó ma
 - Dùng khi quản lý lệnh đã vào MT5.
 - Phân tích Footprint M5 mới nhất để quyết định giữ hay thoát lệnh.
 - Có thể đề xuất chỉnh sửa lệnh thông qua `chinh_trade_line`.
-- Nếu tín hiệu đảo chiều/yếu: đề xuất `loại`.
+- Nếu tín hiệu đảo chiều/yếu hoặc có thể chốt non: đề xuất `loại`.
 - Trả về Schema D.
 </workflow_routing>
 
@@ -189,7 +189,7 @@ Ví dụ tối thiểu Schema C:
 { "out_chi_tiet": "…", "output_ngan_gon": "…" }
 
 ## Schema D (TRADE_MANAGEMENT - Quản lý lệnh đã vào MT5)
-- `hanh_dong_quan_ly_lenh`: `"loại"` (đóng lệnh hoàn toàn) hoặc `"chinh_trade_line"` (điều chỉnh lệnh) hoặc `"giu_nguyen"` nếu lệnh vẫn đang đẹp, không cần thay đổi.
+- `hanh_dong_quan_ly_lenh`: `"loại"` (đóng lệnh hoàn toàn khi tín hiệu yếu hoặc cần chốt non) hoặc `"chinh_trade_line"` (điều chỉnh lệnh) hoặc `"giu_nguyen"` nếu lệnh vẫn đang đẹp, không cần thay đổi.
 - `trade_line_moi`: bắt buộc nếu `"chinh_trade_line"`. Phải đúng format pipe: `TYPE PRICE | SL | TP1 | Lot`
 
 Ví dụ tối thiểu Schema D:

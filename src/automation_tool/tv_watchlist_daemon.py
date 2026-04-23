@@ -953,11 +953,14 @@ def _tp1_followup_job(
             raise SystemExit(f"tp1-followup: no main 5m Coinmap JSON under {params.charts_dir}")
 
         prev = _openai_followup_prev_response_id(params)
+        tl0 = (z0.trade_line or "").strip()
+        snip = (tl0[:200] + "…") if len(tl0) > 200 else tl0
         user_text = TP1_POST_TOUCH_USER_TEMPLATE.format(
             plan_label=z0.label,
             trade_line=z0.trade_line,
             last_price=p_last,
             tp1_price=getattr(parsed, "tp1", ""),
+            trade_line_snip=snip,
         )
         out_text, new_id = run_single_followup_responses(
             api_key=settings.openai_api_key,
