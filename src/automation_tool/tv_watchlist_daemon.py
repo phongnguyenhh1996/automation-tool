@@ -673,6 +673,16 @@ def _touch_prompt(
     """
     cm_tf = "M1" if _is_scalp_zone(zone) else "M5"
     iv_key = "1m" if _is_scalp_zone(zone) else "5m"
+    side_s = ""
+    tl = (zone.trade_line or "").strip()
+    tl_snip = ""
+    if tl:
+        tl_snip = (tl[:200] + "…") if len(tl) > 200 else tl
+        parsed, err = _parse_trade_from_zone_trade_line(tl, symbol_override=None)
+        if not err and parsed is not None:
+            side = (getattr(parsed, "side", "") or "").strip().upper()
+            if side in ("BUY", "SELL"):
+                side_s = f"{side} "
     lead = (
         "Đánh giá sau khi đã chạm vùng trước đó.\n"
         if after_retry_wait
@@ -681,7 +691,7 @@ def _touch_prompt(
     return (
         "[INTRADAY_ALERT]\n"
         f"{lead}"
-        f"Vùng chờ {zone.vung_cho}.\n"
+        f"Vùng chờ {side_s}{zone.vung_cho}.\n"
         f"Giá hiện tại (MT5): {last_price}.\n"
         f"Một file JSON **coinmap_merged** từ Coinmap {cm_tf} đính kèm (``frames['{iv_key}']``, ``session_profile`` chung).\n"
     )
