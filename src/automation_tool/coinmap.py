@@ -633,8 +633,17 @@ def _coinmap_auto_from_to_ms(api_cd: dict[str, Any], step: dict[str, Any]) -> tu
 
     Legacy: ``auto_from_to_mode: countback`` keeps ``from = to - countback * bar_ms``.
     """
-    to_ms = int(time.time() * 1000)
-    now_utc = datetime.fromtimestamp(to_ms / 1000.0, tz=timezone.utc)
+    # Compute "now" in VN local time first, then convert to UTC epoch ms.
+    # (Epoch time is invariant, but this keeps the logic aligned with the vn_session windowing config.)
+    tz_name = str(api_cd.get("vn_session_timezone") or "Asia/Ho_Chi_Minh").strip() or "Asia/Ho_Chi_Minh"
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz_name = "Asia/Ho_Chi_Minh"
+        tz = ZoneInfo(tz_name)
+    now_local = datetime.now(tz=tz)
+    now_utc = now_local.astimezone(timezone.utc)
+    to_ms = int(now_utc.timestamp() * 1000)
     mode = str(api_cd.get("auto_from_to_mode") or "vn_session").strip().lower()
     if mode in ("countback", "legacy"):
         countback = max(1, int(api_cd.get("auto_countback") or 1000))
@@ -645,7 +654,6 @@ def _coinmap_auto_from_to_ms(api_cd: dict[str, Any], step: dict[str, Any]) -> tu
         from_ms = to_ms - span - max(0, pad)
         return from_ms, to_ms
 
-    tz_name = str(api_cd.get("vn_session_timezone") or "Asia/Ho_Chi_Minh").strip()
     start_hour = int(api_cd.get("vn_session_start_hour") or 5)
     from_ms = _vn_session_anchor_utc_ms(
         now_utc, tz_name=tz_name or "Asia/Ho_Chi_Minh", start_hour=start_hour
