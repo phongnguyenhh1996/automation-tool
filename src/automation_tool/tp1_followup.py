@@ -101,15 +101,32 @@ def _extract_tp1_json(text: str) -> Optional[dict[str, Any]]:
     t = (text or "").strip()
     if not t:
         return None
-    for m in re.finditer(r"\{[\s\S]*\}", t):
-        try:
-            d = json.loads(m.group(0))
-        except json.JSONDecodeError:
-            continue
-        if isinstance(d, dict) and (
-            "hanh_dong_quan_ly_lenh" in d or "sau_tp1_hanh_dong" in d
-        ):
-            return d
+
+    # If OpenAI output was split into several batches, it may emit multiple JSON objects
+    # separated by "\n\n---\n\n". Merge in order so later keys can refine earlier ones.
+    segments = [s.strip() for s in t.split("\n\n---\n\n") if s.strip()]
+
+    merged: dict[str, Any] = {}
+    found_any = False
+
+    def _maybe_merge_from_blob(blob: str) -> None:
+        nonlocal merged, found_any
+        for m in re.finditer(r"\{[\s\S]*\}", blob):
+            try:
+                d = json.loads(m.group(0))
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(d, dict):
+                continue
+            if "hanh_dong_quan_ly_lenh" in d or "sau_tp1_hanh_dong" in d:
+                merged.update(d)
+                found_any = True
+
+    for seg in segments:
+        _maybe_merge_from_blob(seg)
+
+    if found_any:
+        return merged
     return None
 
 
