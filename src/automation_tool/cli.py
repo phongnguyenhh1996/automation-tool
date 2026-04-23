@@ -296,7 +296,10 @@ def _parser() -> argparse.ArgumentParser:
 
     tcj = sub.add_parser(
         "test-cloudinary-json",
-        help="Upload mọi file *.json trong charts-dir lên Cloudinary (raw) — kiểm tra CLOUDINARY_*",
+        help=(
+            "Preview OpenAI Responses input cho các file *.json trong charts-dir "
+            "(Coinmap JSON = base64 input_file.file_data; JSON khác = input_text)."
+        ),
     )
     tcj.add_argument(
         "--charts-dir",
@@ -309,11 +312,6 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         metavar="SYM",
         help="Ghi data/.main_chart_symbol và chọn data/{{SYM}}/charts khi --charts-dir không set",
-    )
-    tcj.add_argument(
-        "--purge-first",
-        action="store_true",
-        help="Trước khi upload: xóa raw trong CLOUDINARY_JSON_FOLDER (giống purge khi analyze)",
     )
     tcj.set_defaults(func=cmd_test_cloudinary_json)
 
@@ -1640,10 +1638,12 @@ def _warn_if_incomplete_chart_payloads(
 
 
 def cmd_test_cloudinary_json(args: argparse.Namespace) -> None:
-    """Upload every ``*.json`` in charts-dir to Cloudinary raw (same path as OpenAI ``file_url``)."""
-    from automation_tool.cloudinary_json import purge_json_attachment_folder, upload_json_bytes_for_responses
+    """Preview OpenAI Responses `input` for JSON files under charts-dir."""
     from automation_tool.images import set_active_main_symbol_file
-    from automation_tool.openai_prompt_flow import _default_max_coinmap_json_chars, _json_file_header_and_body
+    from automation_tool.openai_prompt_flow import (
+        _build_mixed_chart_user_content,
+        _default_max_coinmap_json_chars,
+    )
 
     if getattr(args, "main_symbol", None):
         set_active_main_symbol_file(args.main_symbol)
@@ -1653,36 +1653,24 @@ def cmd_test_cloudinary_json(args: argparse.Namespace) -> None:
     paths = sorted(charts_dir.glob("*.json"))
     if not paths:
         raise SystemExit(f"No .json files under {charts_dir}")
-    if args.purge_first:
-        n = purge_json_attachment_folder()
-        print(f"purge-first: removed {n} raw object(s) under CLOUDINARY_JSON_FOLDER prefix", flush=True)
     _log.info(
-        "test-cloudinary-json: charts_dir=%s files=%d purge_first=%s",
+        "test-cloudinary-json: charts_dir=%s files=%d",
         charts_dir,
         len(paths),
-        args.purge_first,
     )
-    urls: list[str] = []
-    for p in paths:
-        body = p.read_bytes()
-        try:
-            url = upload_json_bytes_for_responses(body, p.name)
-        except Exception as e:
-            raise SystemExit(f"{p.name}: upload failed: {e}") from e
-        urls.append(url)
-        print(f"{p.name}\t{url}", flush=True)
-    print(f"OK: {len(paths)} file(s)", flush=True)
 
     mx = _default_max_coinmap_json_chars()
     preview_prompt = (
         "[test-cloudinary-json] Preview: chỉ các file *.json trong thư mục (thứ tự sort), "
-        "không gồm ảnh. Lệnh analyze thật dùng prompt đầy đủ + chart theo ordered_chart_openai_payloads.\n"
+        "không gồm ảnh. Coinmap JSON sẽ đính kèm dạng `input_file.file_data` base64; "
+        "JSON khác sẽ nằm trong `input_text`.\n"
     )
-    content: list[dict[str, str]] = [{"type": "input_text", "text": preview_prompt}]
-    for p, u in zip(paths, urls):
-        header, _body_ignored = _json_file_header_and_body(p, max_chars=mx)
-        content.append({"type": "input_text", "text": header})
-        content.append({"type": "input_file", "file_url": u})
+    payloads = [("json", p) for p in paths]
+    content = _build_mixed_chart_user_content(
+        preview_prompt,
+        payloads,
+        max_json_chars=mx,
+    )
     openai_preview = {
         "note": (
             "Mẫu `input` cho Responses API: một user message với `content` như dưới "

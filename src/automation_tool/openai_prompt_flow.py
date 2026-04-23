@@ -10,14 +10,13 @@ prompt in sync with ``system-prompt.md`` at the repo root. Do not duplicate sche
 import json
 import logging
 import os
+import base64
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, NamedTuple, Optional
 
 from openai import OpenAI
-
-from automation_tool.cloudinary_json import purge_json_attachment_folder, upload_json_bytes_for_responses
 
 from automation_tool.coinmap_openai_slim import (
     should_slim_coinmap_json_path,
@@ -142,31 +141,32 @@ def _json_file_header_and_body(path: Path, *, max_chars: int) -> tuple[str, str]
     return header, body
 
 
-def _upload_user_data_json_cloudinary(path: Path, body: str) -> str:
-    """Upload JSON body to Cloudinary raw; return ``secure_url`` for ``input_file`` ``file_url``."""
+def _json_text_to_base64_data_url(body: str) -> str:
+    """
+    Convert a JSON string (already compacted/truncated) to a base64 data URL suitable for
+    OpenAI Responses ``input_file.file_data``.
+    """
     raw = body.encode("utf-8")
-    return upload_json_bytes_for_responses(raw, path.name)
+    b64 = base64.b64encode(raw).decode("ascii")
+    return f"data:application/json;base64,{b64}"
 
 
-def _json_paths_to_headers_and_urls(
+def _prepare_json_headers_bodies(
     paths: list[Path],
     *,
     max_json_chars: int,
 ) -> list[tuple[str, str]]:
-    """``(header, file_url)`` per path, same order as ``paths``."""
+    """Return ``(header, body)`` per path, same order as ``paths``."""
     if not paths:
         return []
-    n = len(paths)
-    if n > 1:
-        _log.info("[cloudinary] uploading %d JSON file(s) in parallel → raw storage", n)
-    if n == 1:
+    if len(paths) == 1:
         p0 = paths[0]
         mx0 = _max_json_chars_for_path(p0, default_max=max_json_chars)
-        h, b = _json_file_header_and_body(p0, max_chars=mx0)
-        return [(h, _upload_user_data_json_cloudinary(p0, b))]
+        return [_json_file_header_and_body(p0, max_chars=mx0)]
+    n = len(paths)
     workers = min(n, max(4, (os.cpu_count() or 2) * 2))
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        prepared = list(
+        return list(
             ex.map(
                 lambda pp: _json_file_header_and_body(
                     pp,
@@ -175,14 +175,6 @@ def _json_paths_to_headers_and_urls(
                 paths,
             )
         )
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        urls = list(
-            ex.map(
-                lambda t: _upload_user_data_json_cloudinary(t[0], t[1][1]),
-                zip(paths, prepared),
-            )
-        )
-    return [(h, u) for (h, _), u in zip(prepared, urls)]
 
 
 def _filter_valid_chart_payloads(
@@ -224,18 +216,27 @@ def _build_mixed_chart_user_content(
     max_json_chars: int,
 ) -> list[dict[str, Any]]:
     json_paths = [p for k, p in payloads if k == "json" and isinstance(p, Path)]
-    json_queue = iter(
-        _json_paths_to_headers_and_urls(json_paths, max_json_chars=max_json_chars)
-    )
+    json_queue = iter(_prepare_json_headers_bodies(json_paths, max_json_chars=max_json_chars))
     parts: list[dict[str, Any]] = [{"type": "input_text", "text": prompt}]
     image_paths = [p for k, p in payloads if k == "image" and isinstance(p, Path)]
     data_urls = _image_paths_to_data_urls(image_paths)
     for kind, p in payloads:
         if kind == "json":
             assert isinstance(p, Path)
-            h, file_url = next(json_queue)
+            h, body = next(json_queue)
             parts.append({"type": "input_text", "text": h})
-            parts.append({"type": "input_file", "file_url": file_url})
+            if should_slim_coinmap_json_path(p):
+                parts.append(
+                    {
+                        "type": "input_file",
+                        "filename": p.name,
+                        "file_data": _json_text_to_base64_data_url(body),
+                    }
+                )
+            else:
+                # Keep TradingView JSON as plain text to avoid external storage dependencies.
+                # (Coinmap JSON is attached as a file; non-Coinmap JSON stays inline.)
+                parts.append({"type": "input_text", "text": body})
         elif kind == "image_url":
             parts.append(
                 {
@@ -297,19 +298,12 @@ def run_analysis_responses_flow(
     ``on_first_model_text`` (tuỳ chọn): gọi với text assistant của **batch đầu tiên**
     (khi có multimodal); dùng cho VÀO LỆNH + MT5 / cập nhật ``last_alert_prices``.
 
-    ``purge_json_attachment_storage``: nếu True và payload có block JSON, xóa raw assets
-    Cloudinary dưới ``CLOUDINARY_JSON_FOLDER`` trước khi upload JSON mới.
-
-    ``purge_openai_user_data_files``: tên cũ; nếu khác ``None`` thì ghi đè
-    ``purge_json_attachment_storage`` (tương thích ngược).
+    ``purge_json_attachment_storage`` / ``purge_openai_user_data_files``: legacy flags from the
+    former Cloudinary-based JSON attachment path. JSON is now attached inline (text) or as
+    base64 ``input_file.file_data`` (Coinmap), so these are effectively no-ops.
     """
     if not (analysis_prompt or "").strip():
         analysis_prompt = default_analysis_prompt(read_main_chart_symbol(charts_dir))
-    purge = (
-        bool(purge_openai_user_data_files)
-        if purge_openai_user_data_files is not None
-        else purge_json_attachment_storage
-    )
     client = OpenAI(api_key=api_key)
     prompt = _prompt_dict(prompt_id, prompt_version)
     tools: list[dict[str, Any]] = []
@@ -345,9 +339,6 @@ def run_analysis_responses_flow(
         payloads = [("image", p) for p in chart_paths if p.is_file()]
     else:
         payloads = ordered_chart_openai_payloads(charts_dir)
-
-    if purge and any(k == "json" for k, _ in payloads):
-        purge_json_attachment_folder()
 
     if not payloads:
         r = client.responses.create(**common, input=analysis_prompt.strip())
@@ -575,7 +566,7 @@ def run_single_followup_responses(
 ) -> tuple[str, str]:
     """
     One multimodal user turn: optional ``morning_snapshot_path`` + Coinmap JSON paths, uploaded in order
-    (Cloudinary raw + ``input_file`` ``file_url``).
+    (Coinmap: base64 ``input_file.file_data``; other JSON: inline text).
 
     If ``previous_response_id`` is ``None``, starts a **new** Responses thread (no chain).
     Otherwise chains to that id (intraday alert, TP1, etc.).
