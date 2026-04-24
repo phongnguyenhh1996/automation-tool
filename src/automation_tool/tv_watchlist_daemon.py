@@ -91,9 +91,10 @@ from automation_tool.daemon_launcher import (
     register_stop_daemon_plans_on_exit,
 )
 from automation_tool.last_price_ipc import (
-    open_writer_shared_memory,
     read_last_price_for_daemon_plan,
-    write_last_price_shared,
+    open_writer_shared_memory_v2,
+    read_last_prices_for_daemon_plan,
+    write_last_prices_shared,
 )
 from automation_tool.zones_paths import (
     SessionSlot,
@@ -2233,7 +2234,7 @@ def _tv_watchlist_price_only_loop(
 ) -> None:
     """Daemon giá: poll giá (MT5 bid hoặc title TV) → shared memory (optional mirror ``last.txt``)."""
     last_path = params.last_price_path or default_last_price_path(sym)
-    shm = open_writer_shared_memory(sym)
+    shm = open_writer_shared_memory_v2(sym)
     zones_dir = default_zones_dir(sym)
     prev_manifest_slot: Optional[SessionSlot] = None
     reconciled_after_first_last = False
@@ -2244,6 +2245,7 @@ def _tv_watchlist_price_only_loop(
     stale_s = float(mt5_stale_reconnect_s or 0.0)
     last_stale_bid: Optional[float] = None
     last_stale_change_mono = time.monotonic()
+    last_prices: list[float] = []
     try:
         while True:
             try:
@@ -2301,9 +2303,14 @@ def _tv_watchlist_price_only_loop(
                             )
                             last_stale_change_mono = time.monotonic()
             if p_last is not None:
-                write_last_price_shared(shm, float(p_last))
+                plf = float(p_last)
+                if not last_prices or plf != float(last_prices[-1]):
+                    last_prices.append(plf)
+                    if len(last_prices) > 15:
+                        last_prices.pop(0)
+                    write_last_prices_shared(shm, list(last_prices))
                 if params.mirror_last_price_file:
-                    write_last_price_file(float(p_last), last_path)
+                    write_last_price_file(plf, last_path)
                 if not reconciled_after_first_last:
                     try:
                         n = reconcile_daemon_plans_at_boot(zones_dir)
@@ -2326,12 +2333,13 @@ def _tv_watchlist_price_only_loop(
                     mirror = f" mirror={last_path}" if params.mirror_last_price_file else ""
                     _send_log(
                         settings,
-                        f"[daemon-gia] last (shared memory) <- {p_last} | symbol={sym} | source={price_log_source}{mirror}",
+                        f"[daemon-gia] last_prices(<=15) <- {plf} | n={len(last_prices)} | symbol={sym} | source={price_log_source}{mirror}",
                     )
                 _poll_terminal.info(
-                    "tv-watchlist-daemon (gia) | symbol=%s | last=%s | source=%s",
+                    "tv-watchlist-daemon (gia) | symbol=%s | last=%s | n=%s | source=%s",
                     sym,
-                    p_last,
+                    plf,
+                    len(last_prices),
                     price_log_source,
                 )
             else:
@@ -2495,7 +2503,8 @@ def _daemon_plan_main_loop(
             #     )
             #     return
 
-            p_last = read_last_price_for_daemon_plan(sym, last_price_file)
+            _seq, prices = read_last_prices_for_daemon_plan(sym, last_price_file)
+            p_last = float(prices[-1]) if prices else None
             now_plan_tg = time.monotonic()
             if (now_plan_tg - last_plan_tg_at) >= telegram_plan_interval_s:
                 last_plan_tg_at = now_plan_tg
@@ -2507,7 +2516,7 @@ def _daemon_plan_main_loop(
                         p_last=p_last,
                     ),
                 )
-            if p_last is None:
+            if p_last is None or not prices:
                 _poll_terminal.info(
                     "daemon-plan | tick | sym=%s | zone_id=%s | last=(none) | file=%s",
                     sym,
@@ -2517,206 +2526,209 @@ def _daemon_plan_main_loop(
                 time.sleep(poll_s)
                 continue
 
-            _poll_terminal.info(
-                "daemon-plan | tick | sym=%s | zone_id=%s | last=%s | vung_cho=%s | trade_line=%s",
-                sym,
-                z0.id,
-                p_last,
-                (z0.vung_cho or "").strip(),
-                (z0.trade_line or "").strip(),
-            )
+            # Always scan the whole shared window (<=15) to avoid missing fast moves between polls.
+            # IMPORTANT: newest -> oldest (reverse order).
+            for p_last in reversed(prices):
 
-            try:
-                now_mono = time.monotonic()
-                if (now_mono - last_heartbeat_at) >= heartbeat_s:
-                    last_heartbeat_at = now_mono
-            except Exception:
-                pass
+                _poll_terminal.info(
+                    "daemon-plan | tick | sym=%s | zone_id=%s | last=%s | vung_cho=%s | trade_line=%s",
+                    sym,
+                    z0.id,
+                    p_last,
+                    (z0.vung_cho or "").strip(),
+                    (z0.trade_line or "").strip(),
+                )
 
-            # vung_cho / cham / vao_lenh / cho_tp1: SL hit (theo trade_line) → loại
-            sl_invalidated = False
-            for z in st.zones:
-                if z.status not in _DAEMON_PLAN_SL_LOAI_STATUSES:
-                    continue
-                if _maybe_loai_zone_if_last_hit_sl(z, float(p_last), settings=settings, params=params):
-                    sl_invalidated = True
-            if sl_invalidated:
-                _state_write(params, st)
+                try:
+                    now_mono = time.monotonic()
+                    if (now_mono - last_heartbeat_at) >= heartbeat_s:
+                        last_heartbeat_at = now_mono
+                except Exception:
+                    pass
 
-            st_auto = _state_read(params)
-            if st_auto is not None:
-                for z in st_auto.zones:
-                    if z.status not in ("vung_cho", "cham"):
+                # vung_cho / cham / vao_lenh / cho_tp1: SL hit (theo trade_line) → loại
+                sl_invalidated = False
+                for z in st.zones:
+                    if z.status not in _DAEMON_PLAN_SL_LOAI_STATUSES:
                         continue
-                    if z.mt5_ticket is not None and int(z.mt5_ticket or 0) > 0:
-                        continue
-                    if not z.trade_line:
-                        continue
-                    if z.hop_luu is None:
-                        continue
-                    thr = int(auto_mt5_hop_luu_threshold_for_label(z.label))
-                    if int(z.hop_luu) < thr:
-                        continue
-                    if getattr(z, "auto_entry_mt5_failed", False):
-                        continue
-                    aer = (getattr(z, "auto_entry_retry_after", "") or "").strip()
-                    if aer and not _is_retry_due(aer):
-                        continue
-                    z.status = "dang_vao_lenh"
-                    z.auto_entry_retry_after = ""
-                    _state_write(params, st_auto)
-                    _send_log(
-                        settings,
-                        f"[auto-entry] dispatch | zone_id={z.id} label={z.label} hop_luu={z.hop_luu} thr(>=)={thr}",
-                    )
-                    _auto_entry_job(settings=settings, params=params, zone_id=z.id)
+                    if _maybe_loai_zone_if_last_hit_sl(z, float(p_last), settings=settings, params=params):
+                        sl_invalidated = True
+                if sl_invalidated:
+                    _state_write(params, st)
 
-            st_retry = _state_read(params)
-            if st_retry is not None:
-                for z in st_retry.zones:
-                    if z.status != "cham":
+                st_auto = _state_read(params)
+                if st_auto is not None:
+                    for z in st_auto.zones:
+                        if z.status not in ("vung_cho", "cham"):
+                            continue
+                        if z.mt5_ticket is not None and int(z.mt5_ticket or 0) > 0:
+                            continue
+                        if not z.trade_line:
+                            continue
+                        if z.hop_luu is None:
+                            continue
+                        thr = int(auto_mt5_hop_luu_threshold_for_label(z.label))
+                        if int(z.hop_luu) < thr:
+                            continue
+                        if getattr(z, "auto_entry_mt5_failed", False):
+                            continue
+                        aer = (getattr(z, "auto_entry_retry_after", "") or "").strip()
+                        if aer and not _is_retry_due(aer):
+                            continue
+                        z.status = "dang_vao_lenh"
+                        z.auto_entry_retry_after = ""
+                        _state_write(params, st_auto)
+                        _send_log(
+                            settings,
+                            f"[auto-entry] dispatch | zone_id={z.id} label={z.label} hop_luu={z.hop_luu} thr(>=)={thr}",
+                        )
+                        _auto_entry_job(settings=settings, params=params, zone_id=z.id)
+
+                st_retry = _state_read(params)
+                if st_retry is not None:
+                    for z in st_retry.zones:
+                        if z.status != "cham":
+                            continue
+                        if not _is_retry_due(getattr(z, "retry_at", "")):
+                            continue
+                        z.status = "dang_thuc_thi"
+                        z.retry_at = ""
+                        _state_write(params, st_retry)
+                        _send_log(settings, f"[zone-touch] retry_dispatch | zone_id={z.id} last={p_last}")
+                        _zone_touch_job(
+                            settings=settings,
+                            params=params,
+                            zone_id=z.id,
+                            last_price=float(p_last),
+                            after_retry_wait=True,
+                        )
+
+                st = _state_read(params)
+                if st is None or not st.zones:
+                    break
+
+                matched: list[Zone] = []
+                for z in st.zones:
+                    if z.status != "vung_cho":
                         continue
-                    if not _is_retry_due(getattr(z, "retry_at", "")):
+                    ref = _zone_side_ref_from_vung_cho(z)
+                    if ref is None:
                         continue
-                    z.status = "dang_thuc_thi"
-                    z.retry_at = ""
-                    _state_write(params, st_retry)
-                    _send_log(settings, f"[zone-touch] retry_dispatch | zone_id={z.id} last={p_last}")
+                    try:
+                        p_last_n = _price_round_nearest_int(p_last)
+                        ref_n = _price_round_nearest_int(ref)
+                    except Exception:
+                        p_last_n = float(p_last)
+                        ref_n = float(ref)
+                    if abs(p_last_n - ref_n) <= float(params.eps):
+                        matched.append(z)
+
+                for z in matched:
+                    z.status = "cham"
+                    z.auto_entry_mt5_failed = False
+                    _state_write(params, st)
                     _zone_touch_job(
                         settings=settings,
                         params=params,
                         zone_id=z.id,
                         last_price=float(p_last),
-                        after_retry_wait=True,
                     )
 
-            st = _state_read(params)
-            if st is None or not st.zones:
-                time.sleep(poll_s)
-                continue
-
-            matched: list[Zone] = []
-            for z in st.zones:
-                if z.status != "vung_cho":
-                    continue
-                ref = _zone_side_ref_from_vung_cho(z)
-                if ref is None:
-                    continue
-                try:
-                    p_last_n = _price_round_nearest_int(p_last)
-                    ref_n = _price_round_nearest_int(ref)
-                except Exception:
-                    p_last_n = float(p_last)
-                    ref_n = float(ref)
-                if abs(p_last_n - ref_n) <= float(params.eps):
-                    matched.append(z)
-
-            for z in matched:
-                z.status = "cham"
-                z.auto_entry_mt5_failed = False
-                _state_write(params, st)
-                _zone_touch_job(
-                    settings=settings,
-                    params=params,
-                    zone_id=z.id,
-                    last_price=float(p_last),
-                )
-
-            st_r1 = _state_read(params)
-            if st_r1 is not None:
-                for z in st_r1.zones:
-                    if z.status != "cho_tp1":
-                        continue
-                    if z.r1_followup_done:
-                        continue
-                    if not z.trade_line or not z.mt5_ticket or int(z.mt5_ticket) <= 0:
-                        continue
-                    parsed_r1, err_r1 = _parse_trade_from_zone_trade_line(
-                        z.trade_line, symbol_override=params.mt5_symbol
-                    )
-                    if err_r1 or parsed_r1 is None:
-                        continue
-                    if _tp1_touched(parsed_r1, float(p_last)):
-                        continue
-                    if not one_r_reached(parsed_r1, float(p_last), eps=_TP1_EPS):
-                        continue
-                    tk_r1 = int(z.mt5_ticket or 0)
-                    accs_r1_chk = load_mt5_accounts_for_cli(params.mt5_accounts_json)
-                    prim_r1_chk = primary_account(accs_r1_chk) if accs_r1_chk else None
-                    is_pos_r1, pos_msg_r1 = mt5_ticket_is_open_position(
-                        tk_r1,
-                        dry_run=bool(params.mt5_dry_run),
-                        login=prim_r1_chk.login if prim_r1_chk else None,
-                        password=prim_r1_chk.password if prim_r1_chk else None,
-                        server=prim_r1_chk.server if prim_r1_chk else None,
-                    )
-                    if not is_pos_r1:
-                        _poll_terminal.info(
-                            "daemon-plan | shard=%s | r1 skip (need open position) | zone_id=%s | %s",
-                            shard_tag,
-                            z.id,
-                            pos_msg_r1,
-                        )
-                        continue
-                    prev_status = z.status
-                    z.status = "dang_thuc_thi"
-                    z.r1_followup_done = True
-                    _state_write(params, st_r1)
-                    _send_log(
-                        settings,
-                        f"[r1] dispatch | zone_id={z.id} {prev_status}->dang_thuc_thi last={p_last}",
-                    )
-                    _r1_followup_job(
-                        settings=settings,
-                        params=params,
-                        zone_id=z.id,
-                        prev_status=prev_status,
-                    )
-
-            st_tp1 = _state_read(params)
-            if st_tp1 is not None:
-                changed = False
-                for z in st_tp1.zones:
-                    if z.status != "vao_lenh":
-                        continue
-                    if not z.trade_line or not z.mt5_ticket or int(z.mt5_ticket) <= 0:
-                        continue
-                    if _arm_threshold_met_for_zone(z, float(p_last), symbol_override=params.mt5_symbol):
-                        z.status = "cho_tp1"
-                        z.tp1_followup_done = False
-                        changed = True
-                        _send_log(settings, f"[tp1] arm | zone_id={z.id} vao_lenh->cho_tp1 last={p_last}")
-                        _thr_tp1 = arm_threshold_tp1_for_label(z.label or "")
-                        _send_user_notice(
-                            settings,
-                            f"Giá đã cách entry {_thr_tp1:g} giá — sẽ xử lý khi chạm TP1",
-                            zone=z,
-                            params=params,
-                        )
-                if changed:
-                    _state_write(params, st_tp1)
-
-                st_tp1b = _state_read(params)
-                if st_tp1b is not None:
-                    for z in st_tp1b.zones:
+                st_r1 = _state_read(params)
+                if st_r1 is not None:
+                    for z in st_r1.zones:
                         if z.status != "cho_tp1":
                             continue
-                        if z.tp1_followup_done:
+                        if z.r1_followup_done:
                             continue
                         if not z.trade_line or not z.mt5_ticket or int(z.mt5_ticket) <= 0:
                             continue
-                        parsed, err = _parse_trade_from_zone_trade_line(
+                        parsed_r1, err_r1 = _parse_trade_from_zone_trade_line(
                             z.trade_line, symbol_override=params.mt5_symbol
                         )
-                        if err or parsed is None:
+                        if err_r1 or parsed_r1 is None:
                             continue
-                        if not _tp1_touched(parsed, float(p_last)):
+                        if _tp1_touched(parsed_r1, float(p_last)):
                             continue
+                        if not one_r_reached(parsed_r1, float(p_last), eps=_TP1_EPS):
+                            continue
+                        tk_r1 = int(z.mt5_ticket or 0)
+                        accs_r1_chk = load_mt5_accounts_for_cli(params.mt5_accounts_json)
+                        prim_r1_chk = primary_account(accs_r1_chk) if accs_r1_chk else None
+                        is_pos_r1, pos_msg_r1 = mt5_ticket_is_open_position(
+                            tk_r1,
+                            dry_run=bool(params.mt5_dry_run),
+                            login=prim_r1_chk.login if prim_r1_chk else None,
+                            password=prim_r1_chk.password if prim_r1_chk else None,
+                            server=prim_r1_chk.server if prim_r1_chk else None,
+                        )
+                        if not is_pos_r1:
+                            _poll_terminal.info(
+                                "daemon-plan | shard=%s | r1 skip (need open position) | zone_id=%s | %s",
+                                shard_tag,
+                                z.id,
+                                pos_msg_r1,
+                            )
+                            continue
+                        prev_status = z.status
                         z.status = "dang_thuc_thi"
-                        z.tp1_followup_done = True
-                        _state_write(params, st_tp1b)
-                        _send_log(settings, f"[tp1] touched | zone_id={z.id} -> followup last={p_last}")
-                        _tp1_followup_job(
+                        z.r1_followup_done = True
+                        _state_write(params, st_r1)
+                        _send_log(
+                            settings,
+                            f"[r1] dispatch | zone_id={z.id} {prev_status}->dang_thuc_thi last={p_last}",
+                        )
+                        _r1_followup_job(
+                            settings=settings,
+                            params=params,
+                            zone_id=z.id,
+                            prev_status=prev_status,
+                        )
+
+                st_tp1 = _state_read(params)
+                if st_tp1 is not None:
+                    changed = False
+                    for z in st_tp1.zones:
+                        if z.status != "vao_lenh":
+                            continue
+                        if not z.trade_line or not z.mt5_ticket or int(z.mt5_ticket) <= 0:
+                            continue
+                        if _arm_threshold_met_for_zone(z, float(p_last), symbol_override=params.mt5_symbol):
+                            z.status = "cho_tp1"
+                            z.tp1_followup_done = False
+                            changed = True
+                            _send_log(settings, f"[tp1] arm | zone_id={z.id} vao_lenh->cho_tp1 last={p_last}")
+                            _thr_tp1 = arm_threshold_tp1_for_label(z.label or "")
+                            _send_user_notice(
+                                settings,
+                                f"Giá đã cách entry {_thr_tp1:g} giá — sẽ xử lý khi chạm TP1",
+                                zone=z,
+                                params=params,
+                            )
+                    if changed:
+                        _state_write(params, st_tp1)
+
+                    st_tp1b = _state_read(params)
+                    if st_tp1b is not None:
+                        for z in st_tp1b.zones:
+                            if z.status != "cho_tp1":
+                                continue
+                            if z.tp1_followup_done:
+                                continue
+                            if not z.trade_line or not z.mt5_ticket or int(z.mt5_ticket) <= 0:
+                                continue
+                            parsed, err = _parse_trade_from_zone_trade_line(
+                                z.trade_line, symbol_override=params.mt5_symbol
+                            )
+                            if err or parsed is None:
+                                continue
+                            if not _tp1_touched(parsed, float(p_last)):
+                                continue
+                            z.status = "dang_thuc_thi"
+                            z.tp1_followup_done = True
+                            _state_write(params, st_tp1b)
+                            _send_log(settings, f"[tp1] touched | zone_id={z.id} -> followup last={p_last}")
+                            _tp1_followup_job(
                             settings=settings,
                             params=params,
                             zone_id=z.id,
