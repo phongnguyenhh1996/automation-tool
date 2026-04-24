@@ -520,15 +520,20 @@ Phải trả lời theo logic:
   - EA mode có cần đổi không
 
 ### 3.2. Những gì phải rà ở mỗi lần update
-1. H1 có BOS ngược chưa
-2. M15 có CHoCH ngược chưa
-3. POC/VWAP đã dịch > 3–5 pip chưa
-4. CVD đã đảo chiều ngược bias ≥ 3 nến chưa
-5. giá có đang nằm gần vùng chờ không
-6. footprint M15/M5 đang ủng hộ bias cũ hay không
-7. timing hiện tại có còn đẹp không
-8. có tin tức nào sắp tới không
-9. có dấu hiệu trap ngược bias không
+1. H1 BOS ngược + đóng nến rõ?
+2. M15 CHoCH + giữ cấu trúc mới?
+3. VWAP/POC shift >5 pip + HOLD ≥2 nến?
+4. CVD đảo ≥3 nến LIÊN TIẾP + mạnh?
+5. Giá còn gần vùng chờ (≤10–15 pip)?
+6. Footprint có COMBO (trap + stacked/absorption + follow-through)?
+7. Đúng giờ vàng + có volume?
+8. Không có tin đỏ 30’ tới?
+9. Trap ngược + CD xác nhận + follow-through?
+≤2 điều kiện ngược → GIỮ
+3 điều kiện → THEO DÕI
+≥4 điều kiện → HUỶ / ĐỔI PLAN
+Chỉ tính khi có “GIỮ / FOLLOW-THROUGH”
+Không tính tín hiệu đơn lẻ
 
 ### 3.3. Quy tắc xử lý limit theo update
 #### Giữ limit nếu:
