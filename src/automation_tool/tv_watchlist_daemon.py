@@ -1015,6 +1015,7 @@ def _tp1_followup_job(
         json_path = coinmap_xauusd_5m_json_path(params.charts_dir)
         if json_path is None or not json_path.is_file():
             raise SystemExit(f"tp1-followup: no main 5m Coinmap JSON under {params.charts_dir}")
+        openai_merged = write_openai_coinmap_merged_from_raw_export(json_path)
 
         prev = _openai_followup_prev_response_id(params)
         tl0 = (z0.trade_line or "").strip()
@@ -1031,7 +1032,7 @@ def _tp1_followup_job(
             prompt_id=settings.openai_prompt_id,
             prompt_version=settings.openai_prompt_version,
             user_text=user_text,
-            coinmap_json_paths=[json_path],
+            coinmap_json_paths=[openai_merged],
             previous_response_id=prev or "",
             vector_store_ids=settings.openai_vector_store_ids,
             store=settings.openai_responses_store,
@@ -1400,6 +1401,7 @@ def _r1_followup_job(
         json_path = coinmap_xauusd_5m_json_path(params.charts_dir)
         if json_path is None or not json_path.is_file():
             raise SystemExit(f"r1-followup: no main 5m Coinmap JSON under {params.charts_dir}")
+        openai_merged = write_openai_coinmap_merged_from_raw_export(json_path)
 
         prev = _openai_followup_prev_response_id(params)
         tl0 = (z0.trade_line or "").strip()
@@ -1417,7 +1419,7 @@ def _r1_followup_job(
             prompt_id=settings.openai_prompt_id,
             prompt_version=settings.openai_prompt_version,
             user_text=user_text,
-            coinmap_json_paths=[json_path],
+            coinmap_json_paths=[openai_merged],
             previous_response_id=prev or "",
             vector_store_ids=settings.openai_vector_store_ids,
             store=settings.openai_responses_store,

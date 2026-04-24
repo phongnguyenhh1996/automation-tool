@@ -13,6 +13,7 @@ from typing import Any, Literal, Optional
 from playwright.sync_api import BrowserContext, Page
 
 from automation_tool.coinmap import capture_charts
+from automation_tool.coinmap_merged import write_openai_coinmap_merged_from_raw_export
 from automation_tool.config import Settings
 from automation_tool.images import coinmap_xauusd_5m_json_path, read_main_chart_symbol
 from automation_tool.mt5_accounts import (
@@ -259,6 +260,7 @@ def _run_tp1_openai_and_act(
     if json_path is None or not json_path.is_file():
         raise SystemExit(f"tp1-followup: no main 5m Coinmap JSON under {charts_dir}")
     _log_tp1.info("tp1-followup Coinmap M5 JSON: %s", json_path)
+    openai_merged = write_openai_coinmap_merged_from_raw_export(json_path)
 
     tl0 = (trade_line or "").strip()
     snip = (tl0[:200] + "…") if len(tl0) > 200 else tl0
@@ -274,7 +276,7 @@ def _run_tp1_openai_and_act(
         prompt_id=settings.openai_prompt_id,
         prompt_version=settings.openai_prompt_version,
         user_text=user_msg,
-        coinmap_json_paths=[json_path],
+        coinmap_json_paths=[openai_merged],
         previous_response_id=prev_response_id,
         vector_store_ids=settings.openai_vector_store_ids,
         store=settings.openai_responses_store,
