@@ -629,6 +629,88 @@ def _send_user_notice(
     )
 
 
+def _zone_label_slot_display_vn(zone: Zone) -> str:
+    """Ví dụ: ``Plan chính - Sáng`` hoặc ``Scalp - Chiều`` (không ngoặc)."""
+    lab = mt5_zone_label_display_vn(zone.label) or (zone.label or "").strip()
+    slot = session_slot_display_vn(getattr(zone, "session_slot", None))
+    if lab and slot:
+        return f"{lab} - {slot}"
+    return lab or "(unknown)"
+
+
+def _zone_bounds(zone: Zone) -> Optional[tuple[float, float]]:
+    lo, hi = parse_vung_cho_bounds(zone.vung_cho)
+    if lo is None or hi is None:
+        return None
+    return float(lo), float(hi)
+
+
+def _zone_compare_ref(zone: Zone) -> Optional[float]:
+    """
+    Rule compare:
+    - SELL: dùng hi (upper bound) của vung_cho
+    - BUY: dùng lo (lower bound) của vung_cho
+    """
+    b = _zone_bounds(zone)
+    if b is None:
+        return None
+    lo, hi = b
+    side = (zone.side or "").strip().upper()
+    if side == "SELL":
+        return float(hi)
+    if side == "BUY":
+        return float(lo)
+    return None
+
+
+def _invalidate_same_side_zones_after_touch(
+    st: ZonesState, *, touched_zone: Zone
+) -> list[tuple[Zone, str, float]]:
+    """
+    Khi một zone non-scalp vừa chạm:
+    - cùng side (BUY/SELL), trừ scalp
+    - áp dụng cho status in {"vung_cho", "cham"}
+    - SELL: loại zone có ref(hi) < ref(touched)
+    - BUY:  loại zone có ref(lo) > ref(touched)
+
+    Trả về list (zone_bi_loai, prev_status, ref_value).
+    """
+    if _is_scalp_zone(touched_zone):
+        return []
+    touched_ref = _zone_compare_ref(touched_zone)
+    if touched_ref is None:
+        return []
+    side = (touched_zone.side or "").strip().upper()
+    if side not in ("BUY", "SELL"):
+        return []
+
+    invalidated: list[tuple[Zone, str, float]] = []
+    for z in st.zones:
+        if z.id == touched_zone.id:
+            continue
+        if (z.side or "").strip().upper() != side:
+            continue
+        if _is_scalp_zone(z):
+            continue
+        if z.status not in ("vung_cho", "cham"):
+            continue
+
+        zref = _zone_compare_ref(z)
+        if zref is None:
+            continue
+
+        should_loai = (zref < touched_ref) if side == "SELL" else (zref > touched_ref)
+        if not should_loai:
+            continue
+
+        prev_status = str(z.status)
+        z.status = "loai"
+        z.retry_at = ""
+        invalidated.append((z, prev_status, float(zref)))
+
+    return invalidated
+
+
 def _touch_prompt(
     *,
     zone: Zone,
@@ -2628,6 +2710,28 @@ def _daemon_plan_main_loop(
                 for z in matched:
                     z.status = "cham"
                     z.auto_entry_mt5_failed = False
+                    invalidated = _invalidate_same_side_zones_after_touch(st, touched_zone=z)
+                    if invalidated:
+                        touched_ref = _zone_compare_ref(z)
+                        side = (z.side or "").strip().upper()
+                        huong = "thấp hơn" if side == "SELL" else "cao hơn"
+                        _send_log(
+                            settings,
+                            f"[zone-touch] invalidate_same_side | touched_id={z.id} "
+                            f"label={(z.label or '').strip()} side={side} vung_cho={(z.vung_cho or '').strip()} "
+                            f"ref={touched_ref} | loai={','.join(zz.id for zz, _prev, _ref in invalidated)}",
+                        )
+
+                        # Simple user notice to TELEGRAM_PYTHON_BOT_CHAT_ID.
+                        # Example: "Đã loại những vùng BUY cao hơn: Plan chính - Sáng, Plan phụ - Chiều"
+                        names = ", ".join(_zone_label_slot_display_vn(zz) for zz, _prev, _ref in invalidated)
+                        _send_user_notice(
+                            settings,
+                            f"Đã loại những vùng {side} {huong}: {names}",
+                            "",
+                            zone=z,
+                            params=params,
+                        )
                     _state_write(params, st)
                     _zone_touch_job(
                         settings=settings,

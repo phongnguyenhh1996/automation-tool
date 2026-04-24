@@ -12,6 +12,7 @@ from automation_tool.tv_watchlist_daemon import (
     _DAEMON_PLAN_SL_LOAI_STATUSES,
     _EPS_DEFAULT,
     _arm_threshold_met_for_zone,
+    _invalidate_same_side_zones_after_touch,
     _maybe_loai_zone_if_last_hit_sl,
     WatchlistDaemonParams,
     _daemon_plan_response_id_path,
@@ -19,7 +20,7 @@ from automation_tool.tv_watchlist_daemon import (
     _openai_followup_prev_response_id,
     _should_write_intraday_alert_anchor,
 )
-from automation_tool.zones_state import Zone
+from automation_tool.zones_state import Zone, ZonesState
 
 
 def test_daemon_plan_sidecar_filename_matches_json_stem() -> None:
@@ -210,3 +211,45 @@ def test_maybe_loai_zone_if_sl_hit_applies_to_vao_lenh_cho_tp1(monkeypatch, tmp_
     )
     assert _maybe_loai_zone_if_last_hit_sl(z_tp, 98.9, settings=settings, params=params) is True
     assert z_tp.status == "loai"
+
+
+def test_invalidate_same_side_sell_uses_hi_excludes_scalp_and_non_waiting_statuses() -> None:
+    st = ZonesState(
+        symbol="XAUUSD",
+        zones=[
+            Zone(id="touched", label="plan_chinh", vung_cho="10–12", side="SELL", status="cham"),
+            Zone(id="loai1", label="plan_phu", vung_cho="8–9", side="SELL", status="vung_cho"),
+            Zone(id="keep1", label="plan_phu", vung_cho="12–13", side="SELL", status="vung_cho"),
+            Zone(id="scalp_low", label="scalp", vung_cho="1–2", side="SELL", status="vung_cho"),
+            Zone(id="other_side", label="plan_phu", vung_cho="100–101", side="BUY", status="vung_cho"),
+            Zone(id="post_entry", label="plan_phu", vung_cho="1–3", side="SELL", status="vao_lenh"),
+        ],
+    )
+    touched = st.zones[0]
+    invalidated = _invalidate_same_side_zones_after_touch(st, touched_zone=touched)
+    assert {z.id for z, _prev, _ref in invalidated} == {"loai1"}
+    by_id = {z.id: z for z in st.zones}
+    assert by_id["loai1"].status == "loai"
+    assert by_id["keep1"].status == "vung_cho"
+    assert by_id["scalp_low"].status == "vung_cho"
+    assert by_id["other_side"].status == "vung_cho"
+    assert by_id["post_entry"].status == "vao_lenh"
+
+
+def test_invalidate_same_side_buy_uses_lo_only_waiting_and_touched() -> None:
+    st = ZonesState(
+        symbol="XAUUSD",
+        zones=[
+            Zone(id="touched", label="plan_chinh", vung_cho="10–12", side="BUY", status="cham"),
+            Zone(id="loai1", label="plan_phu", vung_cho="13–14", side="BUY", status="vung_cho"),
+            Zone(id="keep1", label="plan_phu", vung_cho="9–9.5", side="BUY", status="vung_cho"),
+            Zone(id="keep2", label="plan_phu", vung_cho="20–21", side="BUY", status="cho_tp1"),
+        ],
+    )
+    touched = st.zones[0]
+    invalidated = _invalidate_same_side_zones_after_touch(st, touched_zone=touched)
+    assert {z.id for z, _prev, _ref in invalidated} == {"loai1"}
+    by_id = {z.id: z for z in st.zones}
+    assert by_id["loai1"].status == "loai"
+    assert by_id["keep1"].status == "vung_cho"
+    assert by_id["keep2"].status == "cho_tp1"
