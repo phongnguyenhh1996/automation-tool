@@ -48,6 +48,7 @@ from automation_tool.mt5_multi import (
 )
 from automation_tool.mt5_openai_parse import (
     is_last_price_hit_stop_loss,
+    inject_filled_price_into_trade_line,
     parse_journal_intraday_action_from_openai_text,
     parse_openai_output_md,
 )
@@ -2108,6 +2109,26 @@ def _zone_touch_job(
                 dry_run=params.mt5_dry_run,
                 symbol_override=params.mt5_symbol,
             )
+            # MARKET: MT5 trả fill price; chỉ dùng giá từ account primary để update trade_line.
+            try:
+                prim = primary_account(accs_zt)
+                filled_primary: Optional[float] = None
+                for rex in summary_zt.results:
+                    if rex.account_id != prim.id:
+                        continue
+                    tr = rex.trade_result or {}
+                    fp = tr.get("price") if isinstance(tr, dict) else None
+                    try:
+                        fpf = float(fp)  # type: ignore[arg-type]
+                    except (TypeError, ValueError):
+                        fpf = 0.0
+                    if fpf > 0.0:
+                        filled_primary = fpf
+                    break
+                if filled_primary is not None:
+                    z1.trade_line = inject_filled_price_into_trade_line(z1.trade_line, filled_primary)
+            except Exception:
+                pass
             zt_txt = format_mt5_multi_for_telegram(summary_zt)
             if not params.no_telegram:
                 send_mt5_execution_log_to_ngan_gon_chat(
@@ -2135,6 +2156,7 @@ def _zone_touch_job(
                     if z.id == zone_id:
                         z.mt5_ticket = tid
                         z.mt5_tickets_by_account = summary_zt.tickets_by_account_id or None
+                        z.trade_line = (z1.trade_line or "").strip()
                         break
                 _state_write(params, st2)
                 _send_log(settings, f"[zone-touch] mt5_ticket_saved | zone_id={zone_id} ticket={tid}")
@@ -2152,6 +2174,13 @@ def _zone_touch_job(
             dry_run=params.mt5_dry_run,
             symbol_override=params.mt5_symbol,
         )
+        # MARKET: MT5 trả fill price; update trade_line để theo dõi 1R/TP1.
+        try:
+            tr = ex.trade_result or {}
+            fp = tr.get("price") if isinstance(tr, dict) else None
+            z1.trade_line = inject_filled_price_into_trade_line(z1.trade_line, fp)  # type: ignore[arg-type]
+        except Exception:
+            pass
         if not params.no_telegram:
             send_mt5_execution_log_to_ngan_gon_chat(
                 bot_token=settings.telegram_bot_token,
@@ -2179,6 +2208,7 @@ def _zone_touch_job(
                 if z.id == zone_id:
                     z.mt5_ticket = tid
                     z.mt5_tickets_by_account = None
+                    z.trade_line = (z1.trade_line or "").strip()
                     break
             _state_write(params, st2)
             _send_log(settings, f"[zone-touch] mt5_ticket_saved | zone_id={zone_id} ticket={tid}")

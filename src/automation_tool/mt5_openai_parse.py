@@ -39,6 +39,62 @@ _RE_SYMBOL_HEADING = re.compile(
 )
 
 
+def _decimals_from_price_token(token: str) -> int:
+    """
+    Count decimals in a numeric token like '3363.50' -> 2.
+    Returns 0 when token has no decimal point or is empty.
+    """
+    s = (token or "").strip()
+    if not s or "." not in s:
+        return 0
+    return max(0, len(s.split(".", 1)[-1]))
+
+
+def inject_filled_price_into_trade_line(trade_line: str, filled_price: Optional[float]) -> str:
+    """
+    Rewrite MARKET trade_line to include MT5 fill price.
+
+    Input supported:
+    - 'BUY MARKET | SL ... | TP1 ... | Lot ...'  -> inject
+    - 'BUY MARKET <price> | SL ... | TP1 ... | Lot ...' -> unchanged
+    - Other kinds (LIMIT/STOP) -> unchanged
+
+    Output format (chosen by user): 'BUY MARKET <price> | SL ... | TP1 ... | Lot ...'
+    """
+    tl = (trade_line or "").strip()
+    if not tl:
+        return tl
+    try:
+        p = float(filled_price) if filled_price is not None else None
+    except (TypeError, ValueError):
+        p = None
+    if p is None or p <= 0.0:
+        return tl
+
+    # If trade_line already has explicit price after MARKET, leave it as-is.
+    if _RE_TRADE_PIPE.match(tl):
+        return tl
+
+    m = _RE_TRADE_PIPE_MARKET.match(tl)
+    if not m:
+        return tl
+
+    side = (m.group("side") or "").upper()
+    sl_tok = m.group("sl") or ""
+    tp1_tok = m.group("tp1") or ""
+    tp2_tok = m.group("tp2") or ""
+    lot_tok = m.group("lot") or ""
+
+    dec = max(_decimals_from_price_token(sl_tok), _decimals_from_price_token(tp1_tok), 2)
+    price_tok = f"{p:.{dec}f}"
+
+    out = f"{side} MARKET {price_tok} | SL {sl_tok} | TP1 {tp1_tok}"
+    if tp2_tok:
+        out += f" | TP2 {tp2_tok}"
+    out += f" | Lot {lot_tok}"
+    return out
+
+
 def normalize_broker_xau_symbol(symbol: str) -> str:
     """
     Broker MetaTrader thường dùng ``XAUUSDm``; markdown hay ghi ``XAUUSD``.

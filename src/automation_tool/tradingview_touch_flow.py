@@ -37,6 +37,7 @@ from automation_tool.mt5_execute import execute_trade, format_mt5_execution_for_
 from automation_tool.mt5_manage import mt5_latest_position_ticket
 from automation_tool.mt5_multi import execute_trade_all_accounts, format_mt5_multi_for_telegram
 from automation_tool.mt5_openai_parse import (
+    inject_filled_price_into_trade_line,
     is_last_price_hit_stop_loss,
     normalize_broker_xau_symbol,
     parse_journal_intraday_action_from_openai_text,
@@ -606,6 +607,26 @@ def run_intraday_touch_flow(
                         dry_run=params.mt5_dry_run,
                         symbol_override=params.mt5_symbol,
                     )
+                    # MARKET: chỉ dùng fill price từ primary account để cập nhật trade_line.
+                    tl0 = (parsed.raw_line or "").strip()
+                    try:
+                        prim = primary_account(accounts)
+                        filled_primary: Optional[float] = None
+                        for rex in summary.results:
+                            if rex.account_id != prim.id:
+                                continue
+                            tr = rex.trade_result or {}
+                            fp = tr.get("price") if isinstance(tr, dict) else None
+                            try:
+                                fpf = float(fp)  # type: ignore[arg-type]
+                            except (TypeError, ValueError):
+                                fpf = 0.0
+                            if fpf > 0.0:
+                                filled_primary = fpf
+                            break
+                        tl0 = inject_filled_price_into_trade_line(tl0, filled_primary)
+                    except Exception:
+                        pass
                     multi_txt = format_mt5_multi_for_telegram(summary)
                     _ts_log(tz, "tv-touch", multi_txt)
                     if not params.no_telegram:
@@ -617,7 +638,7 @@ def run_intraday_touch_flow(
                             source="tv-touch",
                             text=multi_txt,
                             zone_label=touched_label,
-                            trade_line=(parsed.raw_line or "").strip() or None,
+                            trade_line=tl0 or None,
                             execution_ok=summary.ok_all,
                         )
                     tid = summary.primary_ticket(accounts)
@@ -642,7 +663,7 @@ def run_intraday_touch_flow(
                         try:
                             update_plan_mt5_entry(
                                 touched_label,
-                                trade_line=parsed.raw_line.strip(),
+                                trade_line=tl0,
                                 mt5_ticket=tid,
                                 mt5_tickets_by_account=summary.tickets_by_account_id
                                 or None,
@@ -656,6 +677,14 @@ def run_intraday_touch_flow(
                         dry_run=params.mt5_dry_run,
                         symbol_override=params.mt5_symbol,
                     )
+                    tl0 = (parsed.raw_line or "").strip()
+                    # MARKET: lấy fill price từ account primary (single) để cập nhật trade_line.
+                    try:
+                        tr = ex.trade_result or {}
+                        fp = tr.get("price") if isinstance(tr, dict) else None
+                        tl0 = inject_filled_price_into_trade_line(tl0, fp)  # type: ignore[arg-type]
+                    except Exception:
+                        pass
                     _ts_log(tz, "tv-touch", ex.message)
                     if not params.no_telegram:
                         send_mt5_execution_log_to_ngan_gon_chat(
@@ -666,7 +695,7 @@ def run_intraday_touch_flow(
                             source="tv-touch",
                             text=format_mt5_execution_for_telegram(ex),
                             zone_label=touched_label,
-                            trade_line=(parsed.raw_line or "").strip() or None,
+                            trade_line=tl0 or None,
                             execution_ok=ex.ok,
                         )
                     tid = int(ex.order) if ex.order else 0
@@ -678,7 +707,7 @@ def run_intraday_touch_flow(
                         try:
                             update_plan_mt5_entry(
                                 touched_label,
-                                trade_line=parsed.raw_line.strip(),
+                                trade_line=tl0,
                                 mt5_ticket=tid,
                                 path=last_alert_path,
                             )

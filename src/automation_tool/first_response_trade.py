@@ -11,7 +11,11 @@ from automation_tool.mt5_accounts import load_mt5_accounts_for_cli, primary_acco
 from automation_tool.mt5_execute import execute_trade, format_mt5_execution_for_telegram
 from automation_tool.mt5_manage import mt5_latest_position_ticket
 from automation_tool.mt5_multi import execute_trade_all_accounts, format_mt5_multi_for_telegram
-from automation_tool.mt5_openai_parse import ParsedTrade, parse_openai_output_md
+from automation_tool.mt5_openai_parse import (
+    ParsedTrade,
+    inject_filled_price_into_trade_line,
+    parse_openai_output_md,
+)
 from automation_tool.openai_analysis_json import (
     AUTO_MT5_HOP_LUU_THRESHOLD,
     AUTO_MT5_HOP_LUU_THRESHOLD_SCALP,
@@ -429,18 +433,6 @@ def apply_first_response_vao_lenh(
                 mt5_dry_run,
                 summary.ok_all,
             )
-            if telegram_bot_token:
-                send_mt5_execution_log_to_ngan_gon_chat(
-                    bot_token=telegram_bot_token,
-                    telegram_chat_id=telegram_chat_id,
-                    telegram_python_bot_chat_id=telegram_python_bot_chat_id,
-                    telegram_log_chat_id=telegram_log_chat_id,
-                    source=telegram_source_label,
-                    text=multi_text,
-                    zone_label=label,
-                    trade_line=zone_trade_line,
-                    execution_ok=summary.ok_all,
-                )
             _mt5_lines = [multi_text]
             if mt5_dry_run:
                 _mt5_lines.append("(Chế độ thử — kiểm tra trước khi gửi lệnh thật.)")
@@ -469,11 +461,42 @@ def apply_first_response_vao_lenh(
                 if alt:
                     tid = int(alt)
             tickets_map = summary.tickets_by_account_id
+            # MARKET: chỉ dùng fill price từ primary account để cập nhật trade_line.
+            tl0 = zone_trade_line.strip()
+            try:
+                filled_primary: Optional[float] = None
+                for rex in summary.results:
+                    if rex.account_id != prim.id:
+                        continue
+                    tr = rex.trade_result or {}
+                    fp = tr.get("price") if isinstance(tr, dict) else None
+                    try:
+                        fpf = float(fp)  # type: ignore[arg-type]
+                    except (TypeError, ValueError):
+                        fpf = 0.0
+                    if fpf > 0.0:
+                        filled_primary = fpf
+                    break
+                tl0 = inject_filled_price_into_trade_line(tl0, filled_primary)
+            except Exception:
+                pass
+            if telegram_bot_token:
+                send_mt5_execution_log_to_ngan_gon_chat(
+                    bot_token=telegram_bot_token,
+                    telegram_chat_id=telegram_chat_id,
+                    telegram_python_bot_chat_id=telegram_python_bot_chat_id,
+                    telegram_log_chat_id=telegram_log_chat_id,
+                    source=telegram_source_label,
+                    text=multi_text,
+                    zone_label=label,
+                    trade_line=tl0,
+                    execution_ok=summary.ok_all,
+                )
             if tid > 0:
                 try:
                     update_plan_mt5_entry(
                         label,
-                        trade_line=zone_trade_line.strip(),
+                        trade_line=tl0,
                         mt5_ticket=tid,
                         mt5_tickets_by_account=tickets_map if tickets_map else None,
                         path=last_alert_path,
@@ -494,6 +517,14 @@ def apply_first_response_vao_lenh(
             ex.message,
         )
         if telegram_bot_token:
+            tl0 = zone_trade_line.strip()
+            # MARKET: cập nhật trade_line bằng fill price trả về từ MT5 (single acc).
+            try:
+                tr = ex.trade_result or {}
+                fp = tr.get("price") if isinstance(tr, dict) else None
+                tl0 = inject_filled_price_into_trade_line(tl0, fp)  # type: ignore[arg-type]
+            except Exception:
+                pass
             send_mt5_execution_log_to_ngan_gon_chat(
                 bot_token=telegram_bot_token,
                 telegram_chat_id=telegram_chat_id,
@@ -502,7 +533,7 @@ def apply_first_response_vao_lenh(
                 source=telegram_source_label,
                 text=format_mt5_execution_for_telegram(ex),
                 zone_label=label,
-                trade_line=zone_trade_line,
+                trade_line=tl0,
                 execution_ok=ex.ok,
             )
         _mt5_lines = [ex.message]
@@ -525,7 +556,7 @@ def apply_first_response_vao_lenh(
             try:
                 update_plan_mt5_entry(
                     label,
-                    trade_line=zone_trade_line.strip(),
+                    trade_line=tl0,
                     mt5_ticket=tid,
                     path=last_alert_path,
                 )
