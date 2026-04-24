@@ -15,6 +15,7 @@ from automation_tool.mt5_execute import (
     _order_type_for_pending,
     format_last_error,
     resolve_mt5_trade_symbol,
+    symbol_uses_market_execution,
 )
 from automation_tool.mt5_openai_parse import ParsedTrade
 
@@ -172,19 +173,20 @@ def mt5_close_position(
             otype = mt5.ORDER_TYPE_BUY
             price = float(tick.ask)
 
-        req = {
+        req: dict[str, Any] = {
             "action": mt5.TRADE_ACTION_DEAL,
             "symbol": sym,
             "volume": vol,
             "type": otype,
             "position": int(ticket),
-            "price": price,
             "deviation": 20,
             "magic": int(getattr(pos, "magic", 2222222)),
             "comment": "tp1-review-close",
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": filling,
         }
+        if not symbol_uses_market_execution(mt5, sym):
+            req["price"] = price
         r = mt5.order_send(req)
         if r is None:
             return MT5ManageResult(

@@ -352,6 +352,27 @@ def _filling_for_symbol(mt5: Any, symbol: str) -> int:
     return int(mt5.ORDER_FILLING_RETURN)
 
 
+def symbol_uses_market_execution(mt5: Any, symbol: str) -> bool:
+    """
+    ``True`` khi symbol dùng ``SYMBOL_TRADE_EXECUTION_MARKET``.
+
+    Theo MQL5, với ``TRADE_ACTION_DEAL`` trên kiểu này **không** đặt ``price`` trong
+    request — broker khớp theo thị trường hiện tại.
+    """
+    info = mt5.symbol_info(symbol)
+    if info is None:
+        return False
+    raw = getattr(info, "trade_exemode", None)
+    if raw is None:
+        return False
+    try:
+        exe = int(raw)
+    except (TypeError, ValueError):
+        return False
+    market = int(getattr(mt5, "SYMBOL_TRADE_EXECUTION_MARKET", 2))
+    return exe == market
+
+
 def _order_type_for_pending(trade: ParsedTrade, mt5: Any) -> int:
     side = trade.side
     kind = trade.kind
@@ -447,8 +468,10 @@ def _is_retryable_order_send_retcode(mt5: Any, retcode: Optional[int]) -> bool:
 
 def _refresh_market_order_price(mt5: Any, request: dict[str, Any]) -> tuple[bool, str]:
     """
-    Với lệnh market (DEAL), cập nhật ``request['price']`` theo tick mới nhất.
-    Trả về (đã cập nhật hay không, ghi chú).
+    Với lệnh market (DEAL), cập nhật ``request['price']`` theo tick mới nhất
+    (chỉ khi broker không dùng ``SYMBOL_TRADE_EXECUTION_MARKET`` — khi đó không đặt price).
+
+    Trả về (cho phép tiếp tục retry hay không, ghi chú).
     """
     action = request.get("action")
     if action != mt5.TRADE_ACTION_DEAL:
@@ -456,6 +479,8 @@ def _refresh_market_order_price(mt5: Any, request: dict[str, Any]) -> tuple[bool
     symbol = str(request.get("symbol") or "").strip()
     if not symbol:
         return False, "missing symbol in request"
+    if symbol_uses_market_execution(mt5, symbol):
+        return True, "SYMBOL_TRADE_EXECUTION_MARKET: không đặt price (retry không đổi request)"
     order_type = request.get("type")
     tick = mt5.symbol_info_tick(symbol)
     if tick is None:
@@ -561,28 +586,35 @@ def build_request(
         raise RuntimeError(err or "Không resolve được symbol để trade.")
 
     filling = _filling_for_symbol(mt5, sym)
+    # MT5 chỉ có 1 TP trên 1 lệnh. Nếu có TP2 thì đặt TP=TP2 ngay khi vào lệnh.
+    tp_effective = trade.tp2 if trade.tp2 is not None else trade.tp1
     if trade.kind == "MARKET":
-        tick = mt5.symbol_info_tick(sym)
-        if tick is None:
-            raise RuntimeError(
-                f"symbol_info_tick({sym!r}) trả về None. {format_last_error(mt5)}",
-            )
-        price = tick.ask if trade.side == "BUY" else tick.bid
+        omit_price = symbol_uses_market_execution(mt5, sym)
+        price: Optional[float] = None
+        if not omit_price:
+            tick = mt5.symbol_info_tick(sym)
+            if tick is None:
+                raise RuntimeError(
+                    f"symbol_info_tick({sym!r}) trả về None. {format_last_error(mt5)}",
+                )
+            price = float(tick.ask if trade.side == "BUY" else tick.bid)
         otype = mt5.ORDER_TYPE_BUY if trade.side == "BUY" else mt5.ORDER_TYPE_SELL
-        return {
+        req: dict[str, Any] = {
             "action": mt5.TRADE_ACTION_DEAL,
             "symbol": sym,
             "volume": trade.lot,
             "type": otype,
-            "price": price,
             "sl": trade.sl,
-            "tp": trade.tp1,
+            "tp": tp_effective,
             "deviation": deviation,
             "magic": magic,
             "comment": comment,
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": filling,
         }
+        if not omit_price and price is not None:
+            req["price"] = price
+        return req
 
     if trade.price is None:
         raise RuntimeError("LIMIT/STOP cần giá entry.")
@@ -594,7 +626,7 @@ def build_request(
         "type": otype,
         "price": trade.price,
         "sl": trade.sl,
-        "tp": trade.tp1,
+        "tp": tp_effective,
         "deviation": deviation,
         "magic": magic,
         "comment": comment,
@@ -670,7 +702,7 @@ def execute_trade(
     order_send_retry_delay_ms: Optional[int] = None,
 ) -> MT5ExecutionResult:
     """
-    Gửi lệnh qua MetaTrader5. MT5 chỉ có một TP trên lệnh; TP2 được in ra nếu có.
+    Gửi lệnh qua MetaTrader5. MT5 chỉ có một TP trên lệnh; nếu có TP2 thì đặt TP=TP2.
 
     Credentials: env ``MT5_LOGIN``, ``MT5_PASSWORD``, ``MT5_SERVER`` hoặc tham số.
 
@@ -710,7 +742,7 @@ def execute_trade(
 
     extra = ""
     if trade.tp2 is not None and log_tp2:
-        extra = f" (TP2={trade.tp2} — MT5 chỉ đặt TP1 trên lệnh; đóng một phần tại TP2 thủ công hoặc EA riêng)"
+        extra = f" (TP2={trade.tp2} — sẽ đặt TP2 trên lệnh MT5)"
 
     if dry_run:
         req_preview: dict[str, Any] = {

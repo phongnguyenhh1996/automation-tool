@@ -14,21 +14,15 @@ from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any, Literal, Optional
 
-from playwright.sync_api import sync_playwright
-
-from automation_tool.browser_client import BrowserClient, is_service_responding, try_attach_playwright_via_service
+from automation_tool.browser_client import BrowserClient, is_service_responding
 from automation_tool.browser_protocol import (
     METHOD_CLOSE_TAB,
-    METHOD_EVAL,
+    METHOD_QUERY_TEXT,
     METHOD_TV_WATCHLIST_INIT,
-    METHOD_TV_WATCHLIST_POLL,
 )
 from automation_tool.coinmap import (
-    _maybe_tradingview_dark_mode,
-    _maybe_tradingview_login,
     load_coinmap_yaml,
 )
-from automation_tool.coinmap import _tradingview_ensure_watchlist_open  # reuse internal helper
 from automation_tool.coinmap_merged import write_openai_coinmap_merged_from_raw_export
 from automation_tool.config import Settings
 from automation_tool.images import (
@@ -76,7 +70,6 @@ from automation_tool.zone_one_r import (
     one_r_favorable_price as _zone_one_r_target_price,
     one_r_reached,
 )
-from automation_tool.playwright_browser import close_browser_and_context, launch_chrome_context
 from automation_tool.state_files import read_last_response_id, write_last_response_id
 from automation_tool.telegram_bot import (
     mt5_zone_label_display_vn,
@@ -121,6 +114,7 @@ from automation_tool.zones_state import (
     write_zones_state,
     write_zones_state_to_shard,
 )
+from automation_tool.tradingview_symbol_last import parse_tv_symbol_last_value
 
 _log = logging.getLogger("automation_tool.tv_watchlist_daemon")
 
@@ -175,7 +169,8 @@ def _zone_touch_coinmap_main_json_path(charts_dir: Path, zone: Zone) -> tuple[Op
 _DAEMON_PLAN_SL_LOAI_STATUSES = frozenset({"vung_cho", "cham", "vao_lenh", "cho_tp1"})
 
 
-_TV_TITLE_PRICE_RE = re.compile(r"^\s*(?P<sym>[A-Z0-9:_-]+)\s+(?P<price>\d[\d,]*(?:\.\d+)?)\b")
+# TradingView symbol page Last value.
+_TV_SYMBOL_LAST_SELECTOR = '[data-qa-id="symbol-last-value"]'
 
 
 def _price_round_nearest_int(v: object) -> float:
@@ -2195,14 +2190,16 @@ def _zone_touch_job(
             )
         return
     except Exception as e:
-        # On any error: keep touched state (no revert to vung_cho); daemon will retry using retry_at
+        # On any error: keep touched state (no revert to vung_cho); daemon will retry using retry_at.
+        # IMPORTANT: Do not re-raise here; this job runs inside a long-lived daemon-plan.
         try:
             stx = _state_read(params)
             if stx is not None:
                 for z in stx.zones:
                     if z.id == zone_id:
                         z.status = "cham"
-                        z.retry_at = _retry_at_iso(_zone_touch_retry_wait_minutes(z))
+                        # If zone-touch failed mid-flight, retry soon (1 minute) instead of the normal cadence.
+                        z.retry_at = _retry_at_iso(1)
                         break
                 _state_write(params, stx)
         except Exception:
@@ -2215,7 +2212,12 @@ def _zone_touch_job(
             zone=zone,
             params=params,
         )
-        re_raise_unless_openai(e, exit_on_openai=False, settings=settings)
+        # Only OpenAI errors are "handled" by re_raise_unless_openai (log-and-continue here).
+        # For any other error, swallow to keep daemon-plan alive (state has been reverted to cham above).
+        try:
+            re_raise_unless_openai(e, exit_on_openai=False, settings=settings)
+        except Exception:
+            return
 
 
 def _tv_watchlist_price_only_loop(
@@ -2726,46 +2728,13 @@ def _daemon_plan_main_loop(
         pass
 
 
-def _tv_watchlist_rpc_poll_price(
-    client: BrowserClient,
-    *,
-    tab_id: str,
-    tv: dict[str, Any],
-    sym: str,
-    wms: int,
-) -> Optional[float]:
-    # Backward-compat: old watchlist polling (kept for reference).
-    # The daemon now uses chart tab `document.title` as the source of truth.
-    return None
+ 
 
 
-def _parse_price_from_tv_title(title: str, *, sym: str) -> Optional[float]:
-    """
-    Title example: "XAUUSD 4,755.145 ▼ −0.22% Vô danh"
-    We parse the first number after the symbol.
-    """
-    t = (title or "").strip()
-    if not t:
-        return None
-    m = _TV_TITLE_PRICE_RE.match(t)
-    if not m:
-        return None
-    sym_in_title = str(m.group("sym") or "").strip().upper()
-    if sym_in_title != str(sym or "").strip().upper():
-        return None
-    raw = str(m.group("price") or "").replace(",", "").strip()
-    if not raw:
-        return None
-    try:
-        return float(raw)
-    except ValueError:
-        return None
-
-
-# If ``document.title`` parses to the same price for this long, treat as stale and reload the chart tab.
+# If the parsed TV price stays unchanged for this long, treat as stale and reload the tab.
 # A pure "N polls in a row" rule is too aggressive: TV often updates the tab title slower than the
 # poll interval, so identical parses for a few seconds are normal, not a broken feed.
-_TITLE_PRICE_STALE_MIN_SECONDS = 30.0
+_TITLE_PRICE_STALE_MIN_SECONDS = 15.0
 
 
 def _title_price_should_reload_stale(
@@ -2800,6 +2769,7 @@ def _tv_watchlist_init_request_params(tv: dict[str, Any], settings: Settings) ->
     """Payload for ``METHOD_TV_WATCHLIST_INIT`` (browser service RPC)."""
     return {
         "chart_url": str(tv.get("chart_url")),
+        "symbol_page_url": str(tv.get("symbol_page_url") or ""),
         "tv": tv,
         "email": settings.coinmap_email,
         "password": settings.tradingview_password,
@@ -2807,146 +2777,91 @@ def _tv_watchlist_init_request_params(tv: dict[str, Any], settings: Settings) ->
     }
 
 
-def _prepare_tv_chart_page(page: Any, tv: dict[str, Any], settings: Settings) -> None:
-    """Open chart URL, login, settle, dark mode, watchlist — shared by initial load and stale-title reload."""
-    chart_url = str(tv.get("chart_url") or "").strip()
-    if not chart_url:
-        raise SystemExit("tradingview_capture.chart_url missing in coinmap yaml.")
-    page.goto(chart_url, wait_until="domcontentloaded", timeout=120_000)
-    _maybe_tradingview_login(page, tv, settings.coinmap_email, settings.tradingview_password)
-    page.wait_for_timeout(int(tv.get("initial_settle_ms", 3000)))
-    _maybe_tradingview_dark_mode(page, tv)
-    _tradingview_ensure_watchlist_open(page, tv)
-
-
-def _make_playwright_title_price_getter(
-    page: Any,
-    *,
-    sym: str,
-    tv: dict[str, Any],
-    settings: Settings,
-) -> Callable[[int], Optional[float]]:
+def _resolved_tv_symbol_page_url(tv: dict[str, Any], *, symbol: str) -> str:
     """
-    Poll ``page.title()`` → parse price. If the same value persists for
-    ``_TITLE_PRICE_STALE_MIN_SECONDS``, run ``_prepare_tv_chart_page`` and re-parse.
+    Resolve TradingView symbol page URL.
+
+    If `tradingview_capture.symbol_page_url` is set, it is used as-is.
+    Otherwise, default to vn TradingView: https://vn.tradingview.com/symbols/{SYMBOL}/
     """
-
-    stale_st: dict[str, Any] = {}
-
-    def get_price(_wms: int) -> Optional[float]:
-        p = _parse_price_from_tv_title(page.title(), sym=sym)
-        do_reload, elapsed = _title_price_should_reload_stale(stale_st, p)
-        if not do_reload:
-            return p
-        _log.info(
-            "tv-watchlist-daemon | title price unchanged %s for %.0fs — reloading chart",
-            p,
-            elapsed,
-        )
-        try:
-            _prepare_tv_chart_page(page, tv, settings)
-        except Exception as e:
-            _log.warning("tv-watchlist-daemon | reload chart failed: %s", e)
-        stale_st.clear()
-        p = _parse_price_from_tv_title(page.title(), sym=sym)
-        _title_price_should_reload_stale(stale_st, p)
-        return p
-
-    return get_price
+    s = str(tv.get("symbol_page_url") or "").strip()
+    if s:
+        return s
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        raise SystemExit("Cannot resolve symbol page URL: empty symbol.")
+    return f"https://vn.tradingview.com/symbols/{sym}/"
 
 
-def _tv_rpc_poll_title_price(
+def _tv_rpc_poll_symbol_last_price(
     client: BrowserClient,
     *,
     tab_id: str,
-    sym: str,
     wms: int,
 ) -> Optional[float]:
     timeout_rpc = max(30.0, float(wms) / 1000.0 + 10.0)
     resp = client.request(
-        METHOD_EVAL,
-        {"tab_id": tab_id, "script": "() => document.title", "arg": None},
+        METHOD_QUERY_TEXT,
+        {"tab_id": tab_id, "selector": _TV_SYMBOL_LAST_SELECTOR},
         timeout_s=timeout_rpc,
     )
     if not resp.get("ok"):
-        _log.warning("eval(document.title) RPC failed: %s", resp.get("error"))
+        _log.warning("query_text(%s) RPC failed: %s", _TV_SYMBOL_LAST_SELECTOR, resp.get("error"))
         return None
-    title = (resp.get("result") or {}).get("value")
-    if not isinstance(title, str):
+    text = (resp.get("result") or {}).get("text")
+    if not isinstance(text, str):
         return None
-    return _parse_price_from_tv_title(title, sym=sym)
+    return parse_tv_symbol_last_value(text)
 
 
-def _rpc_replace_chart_tab(
-    client: BrowserClient,
-    *,
-    old_tab_id: str,
-    tv: dict[str, Any],
-    settings: Settings,
-) -> str:
-    """
-    Open a fresh chart via ``tv_watchlist_init``, then close ``old_tab_id``.
-    Creates the new tab first so a failed init leaves the previous tab usable.
-    """
-    init = client.request(
-        METHOD_TV_WATCHLIST_INIT,
-        _tv_watchlist_init_request_params(tv, settings),
-        timeout_s=600.0,
-    )
-    if not init.get("ok"):
-        raise RuntimeError(str(init.get("error") or "tv_watchlist_init failed"))
-    new_id = str((init.get("result") or {}).get("tab_id") or "").strip()
-    if not new_id:
-        raise RuntimeError("tv_watchlist_init: missing tab_id")
-    try:
-        client.request(METHOD_CLOSE_TAB, {"tab_id": old_tab_id}, timeout_s=60.0)
-    except OSError:
-        pass
-    return new_id
-
-
-def _make_rpc_title_price_getter(
+def _make_rpc_symbol_last_price_getter(
     client: BrowserClient,
     tab_id_holder: list[str],
     *,
-    sym: str,
+    symbol_page_url: str,
     tv: dict[str, Any],
     settings: Settings,
 ) -> Callable[[int], Optional[float]]:
     """
-    Same stale-title logic as ``_make_playwright_title_price_getter`` but reloads by RPC:
-    new ``tv_watchlist_init`` tab, then close the old tab.
-    ``tab_id_holder`` is a single-element list updated when the tab is replaced.
+    Poll TV symbol page Last value via RPC query_text.
+    If the same parsed value persists for `_TITLE_PRICE_STALE_MIN_SECONDS`, reload by opening a new init tab.
     """
-
     stale_st: dict[str, Any] = {}
 
     def get_price(wms: int) -> Optional[float]:
         tid = tab_id_holder[0]
-        p = _tv_rpc_poll_title_price(client, tab_id=tid, sym=sym, wms=wms)
+        p = _tv_rpc_poll_symbol_last_price(client, tab_id=tid, wms=wms)
         do_reload, elapsed = _title_price_should_reload_stale(stale_st, p)
         if not do_reload:
             return p
         _log.info(
-            "tv-watchlist-daemon | title price unchanged %s for %.0fs — RPC reload chart (new tab)",
+            "tv-watchlist-daemon | symbol page last unchanged %s for %.0fs — RPC reload (new tab)",
             p,
             elapsed,
         )
         try:
-            tab_id_holder[0] = _rpc_replace_chart_tab(
-                client,
-                old_tab_id=tid,
-                tv=tv,
-                settings=settings,
+            init = client.request(
+                METHOD_TV_WATCHLIST_INIT,
+                {
+                    **_tv_watchlist_init_request_params(tv, settings),
+                    "symbol_page_url": symbol_page_url,
+                },
+                timeout_s=600.0,
             )
+            if init.get("ok"):
+                new_id = str((init.get("result") or {}).get("tab_id") or "").strip()
+                if new_id:
+                    tab_id_holder[0] = new_id
+                    try:
+                        client.request(METHOD_CLOSE_TAB, {"tab_id": tid}, timeout_s=60.0)
+                    except OSError:
+                        pass
         except Exception as e:
-            _log.warning("tv-watchlist-daemon | RPC reload chart failed: %s", e)
+            _log.warning("tv-watchlist-daemon | RPC reload symbol page failed: %s", e)
         stale_st.clear()
-        p = _tv_rpc_poll_title_price(
-            client, tab_id=tab_id_holder[0], sym=sym, wms=wms
-        )
-        _title_price_should_reload_stale(stale_st, p)
-        return p
+        p2 = _tv_rpc_poll_symbol_last_price(client, tab_id=tab_id_holder[0], wms=wms)
+        _title_price_should_reload_stale(stale_st, p2)
+        return p2
 
     return get_price
 
@@ -3010,91 +2925,52 @@ def run_tv_watchlist_daemon(
             mt5_sess.shutdown()
         return "stopped"
 
-    if not tv.get("chart_url"):
-        raise SystemExit(
-            "tradingview_capture.chart_url missing in coinmap yaml "
-            "(bật daemon giá chỉ MT5: mặc định last_price_from_mt5=True; "
-            "hoặc thêm chart_url nếu dùng --tv-title-price)."
-        )
+    # RPC only for TradingView source.
+    if not is_service_responding():
+        raise SystemExit("browser service not responding; run: coinmap-automation browser up")
 
-    # Browser service up: drive TradingView entirely via RPC (no second CDP client in this process).
-    if is_service_responding():
-        c = BrowserClient.from_state_file()
-        if not c:
-            raise SystemExit("browser service state missing; run: coinmap-automation browser up")
-        _log.info("tv-watchlist-daemon mode=rpc | no local Playwright CDP attach")
-        init = c.request(
-            METHOD_TV_WATCHLIST_INIT,
-            _tv_watchlist_init_request_params(tv, settings),
-            timeout_s=600.0,
+    c = BrowserClient.from_state_file()
+    if not c:
+        raise SystemExit("browser service state missing; run: coinmap-automation browser up")
+
+    symbol_page_url = _resolved_tv_symbol_page_url(tv, symbol=sym)
+    _log.info("tv-watchlist-daemon mode=rpc | symbol_page_url=%s", symbol_page_url)
+
+    init = c.request(
+        METHOD_TV_WATCHLIST_INIT,
+        {
+            **_tv_watchlist_init_request_params(tv, settings),
+            "symbol_page_url": symbol_page_url,
+        },
+        timeout_s=600.0,
+    )
+    if not init.get("ok"):
+        raise SystemExit(f"tv_watchlist_init failed: {init.get('error')}")
+    tab_id = str((init.get("result") or {}).get("tab_id") or "").strip()
+    if not tab_id:
+        raise SystemExit("tv_watchlist_init: missing tab_id")
+    tab_holder = [tab_id]
+    get_price = _make_rpc_symbol_last_price_getter(
+        c,
+        tab_holder,
+        symbol_page_url=symbol_page_url,
+        tv=tv,
+        settings=settings,
+    )
+    try:
+        _tv_watchlist_price_only_loop(
+            settings=settings,
+            params=params,
+            sym=sym,
+            poll_s=poll_s,
+            get_price=get_price,
+            price_log_source='TradingView symbol page [data-qa-id="symbol-last-value"] (RPC)',
         )
-        if not init.get("ok"):
-            raise SystemExit(f"tv_watchlist_init failed: {init.get('error')}")
-        tab_id = str((init.get("result") or {}).get("tab_id") or "").strip()
-        if not tab_id:
-            raise SystemExit("tv_watchlist_init: missing tab_id")
-        tab_holder = [tab_id]
-        get_price = _make_rpc_title_price_getter(
-            c, tab_holder, sym=sym, tv=tv, settings=settings
-        )
+    finally:
         try:
-            _tv_watchlist_price_only_loop(
-                settings=settings,
-                params=params,
-                sym=sym,
-                poll_s=poll_s,
-                get_price=get_price,
-                price_log_source="TradingView title (RPC)",
-            )
-        finally:
-            try:
-                c.request(METHOD_CLOSE_TAB, {"tab_id": tab_holder[0]}, timeout_s=60.0)
-            except OSError:
-                pass
-        return "stopped"
-
-    with sync_playwright() as p:
-        _log.info("tv-watchlist-daemon playwright ready | attempting_attach_via_service=true")
-        attached = try_attach_playwright_via_service(p)
-        if attached is not None:
-            browser, context = attached
-            use_browser_service = True
-            _log.info("tv-watchlist-daemon using_browser_service=true (local CDP; rare if service down)")
-        else:
-            _log.info("tv-watchlist-daemon using_browser_service=false | fallback=launch_chrome_context")
-            browser, context = launch_chrome_context(
-                p,
-                headless=params.headless,
-                storage_state_path=params.storage_state_path,
-                viewport_width=int(cfg.get("viewport_width", 1920)),
-                viewport_height=int(cfg.get("viewport_height", 1080)),
-            )
-            use_browser_service = False
-        page = context.new_page()
-        try:
-            _prepare_tv_chart_page(page, tv, settings)
-            get_price = _make_playwright_title_price_getter(page, sym=sym, tv=tv, settings=settings)
-
-            _tv_watchlist_price_only_loop(
-                settings=settings,
-                params=params,
-                sym=sym,
-                poll_s=poll_s,
-                get_price=get_price,
-                price_log_source="TradingView title (Playwright)",
-            )
-        finally:
-            try:
-                page.close()
-            except Exception:
-                pass
-            if use_browser_service:
-                try:
-                    browser.close()
-                except Exception:
-                    pass
-            else:
-                close_browser_and_context(browser, context)
+            c.request(METHOD_CLOSE_TAB, {"tab_id": tab_holder[0]}, timeout_s=60.0)
+        except OSError:
+            pass
     return "stopped"
 
 

@@ -694,7 +694,15 @@ def _parser() -> argparse.ArgumentParser:
     wd.add_argument(
         "--tv-title-price",
         action="store_true",
-        help="Đọc Last từ title TradingView (cũ); mặc định: MT5 bid → shared memory (không cần mở browser)",
+        help=(
+            "DEPRECATED: trước đây đọc Last từ title TradingView. Hiện daemon giá TradingView "
+            "mặc định đọc từ trang symbol (RPC). Flag này giữ lại để tương thích, không còn tác dụng."
+        ),
+    )
+    wd.add_argument(
+        "--mt5-bid-price",
+        action="store_true",
+        help="Đọc Last từ MT5 bid (không cần browser). Nếu không set: mặc định dùng TradingView symbol page (RPC).",
     )
     wd.add_argument(
         "--stop-daemon-plans-on-exit",
@@ -2535,7 +2543,7 @@ def cmd_tv_watchlist_daemon(args: argparse.Namespace) -> None:
         eps=float(args.eps),
         openai_model=resolved_openai_model(s, getattr(args, "model", None)),
         openai_model_cli=getattr(args, "model", None),
-        last_price_from_mt5=not bool(getattr(args, "tv_title_price", False)),
+        last_price_from_mt5=bool(getattr(args, "mt5_bid_price", False)),
         mt5_stale_reconnect_seconds=float(
             getattr(args, "mt5_stale_reconnect_seconds", 60.0) or 0.0
         ),

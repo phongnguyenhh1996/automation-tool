@@ -371,29 +371,31 @@ class BrowserServiceState:
         self,
         *,
         chart_url: str,
+        symbol_page_url: Optional[str],
         tv: dict[str, Any],
         email: Optional[str],
         password: Optional[str],
         initial_settle_ms: int,
     ) -> dict[str, Any]:
         """
-        Open a TradingView tab inside the service browser (single CDP owner): goto, login, dark mode, watchlist.
+        Open a TradingView tab inside the service browser (single CDP owner): goto, settle.
+
+        - If `symbol_page_url` is provided: open symbol page only (no watchlist).
+        - Else: open chart_url and ensure watchlist is open (legacy path).
         """
-        from automation_tool.coinmap_tradingview_async import (
-            maybe_tradingview_dark_mode_async,
-            maybe_tradingview_login_async,
-            tradingview_ensure_watchlist_open_async,
-        )
+        from automation_tool.coinmap_tradingview_async import tradingview_ensure_watchlist_open_async
 
         ctx = self._require_context()
         page = await ctx.new_page()
         tid = str(uuid.uuid4())
         self._tabs[tid] = page
-        await page.goto(chart_url, wait_until="domcontentloaded", timeout=120_000)
-        await maybe_tradingview_login_async(page, tv, email, password)
+        url = (symbol_page_url or "").strip() or str(chart_url or "").strip()
+        if not url:
+            raise ValueError("tv_watchlist_init requires chart_url or symbol_page_url")
+        await page.goto(url, wait_until="domcontentloaded", timeout=120_000)
         await page.wait_for_timeout(max(0, int(initial_settle_ms)))
-        await maybe_tradingview_dark_mode_async(page, tv)
-        await tradingview_ensure_watchlist_open_async(page, tv)
+        if not (symbol_page_url or "").strip():
+            await tradingview_ensure_watchlist_open_async(page, tv)
         return {"tab_id": tid}
 
     async def tv_watchlist_poll(
@@ -474,6 +476,7 @@ async def _handle_one_request(
             raise ValueError("tv_watchlist_init requires params.tv as object")
         r = await st.tv_watchlist_init(
             chart_url=str(params.get("chart_url") or ""),
+            symbol_page_url=(str(params.get("symbol_page_url") or "").strip() or None),
             tv=tv_raw,
             email=str(params["email"]) if params.get("email") else None,
             password=str(params["password"]) if params.get("password") else None,
