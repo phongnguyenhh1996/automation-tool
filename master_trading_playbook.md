@@ -276,11 +276,20 @@ Trong **2–3 pip / giá trước entry**, phải kiểm lại:
 **Thiếu 1/4 → HUỶ LIMIT**
 
 ### 1.7. Filter giữ / hủy limit trong ngày
-Chỉ giữ limit nguyên ngày nếu:
+GIỮ LIMIT khi:
 - H1 chưa BOS ngược
 - M15 chưa CHoCH ngược
-- POC/VWAP không dịch > 30–55 pip khỏi vùng plan
-- CVD không đảo chiều ≥ 3 nến ngược bias
+- CVD không đảo ≥ 3 nến
+- VWAP/POC có dịch nhưng:
+  + Không volume spike
+  + Giá không hold ≥ 2–3 nến
+  + Không có footprint đảo chiều
+
+HUỶ LIMIT khi:
+- H1 BOS hoặc M15 CHoCH ngược
+- CVD đảo ≥ 3 nến mạnh
+- VWAP/POC shift >5 pip + giá hold + footprint đảo chiều
+- Có full combo: trap + stacked + CD đảo + follow-through
 
 Vi phạm **1 điều kiện** → **HUỶ LIMIT**
 
@@ -446,15 +455,16 @@ Sau khi hoàn tất phân tích Hybrid Dual Plan, phải đề xuất:
 - Có nến breakdown xác nhận + volume spike
 
 ### 2.4. Bộ loại bỏ ngay
-Loại bỏ ngay nếu:
-- footprint không có stacked rõ
-- CVD ngược hướng trade
-- giá dưới VWAP/POC mà vẫn muốn BUY, hoặc ngược lại với SELL
-- chỉ có trap nhỏ nhưng không có follow-through
-- vào sát mở phiên Âu/Mỹ mà chưa có volume xác nhận
-- M5 đã BOS / CHoCH ngược ngay trước touch
-- POC/VWAP đã dịch ngược > 10–20 pip
-- tin đỏ gần kề
+LOẠI khi có ≥ 2–3 yếu tố sau:
+
+- Không có stacked + không trap + không absorption
+- CVD ngược ≥ 3 nến + momentum mạnh
+- Giá dưới VWAP/POC + không reclaim (≥ 2 nến + volume)
+- Trap nhỏ + không follow-through + CD không đồng thuận
+- Stacked sai vị trí (không sát HL/VWAP)
+- Gần phiên Âu/Mỹ + không có volume spike
+- M5 CHoCH + follow-through + CD đồng thuận
+- VWAP/POC shift >5 pip + giá hold + footprint đảo chiều
 
 ### 2.5. Trường hợp không có stacked
 Cho phép vào nếu đủ ≥ 3/4:
