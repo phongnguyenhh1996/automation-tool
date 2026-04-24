@@ -10,7 +10,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, time as dt_time, timedelta, timezone
 from zoneinfo import ZoneInfo
-from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any, Literal, Optional
 
@@ -140,7 +139,7 @@ def _poll_terminal_only_logger() -> logging.Logger:
 
 _poll_terminal = _poll_terminal_only_logger()
 
-# After integer rounding of Last vs zone touch ref (from vung_cho + side): touch if abs(diff) <= this (0 = exact match).
+# Zone touch: touch if Last is within vung_cho bounds (inclusive; eps expands bounds).
 _EPS_DEFAULT = 0.0
 _TP1_EPS = 0.01
 # Re-export default cho test (plan_chinh / plan_phu).
@@ -173,29 +172,6 @@ _DAEMON_PLAN_SL_LOAI_STATUSES = frozenset({"vung_cho", "cham", "vao_lenh", "cho_
 
 # TradingView symbol page Last value.
 _TV_SYMBOL_LAST_SELECTOR = '[data-qa-id="symbol-last-value"]'
-
-
-def _price_round_nearest_int(v: object) -> float:
-    """
-    Normalize price by rounding to the nearest whole number (integer), returned as float.
-    Used for zone touch: compare Last vs side ref (BUY=max, SELL=min from ``vung_cho``) after this
-    rounding; touch if ``abs(last_int - ref_int) <= eps`` (default eps=0: exact integer match only).
-    """
-    d = Decimal(str(v)).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
-    return float(d)
-
-
-def _zone_side_ref_from_vung_cho(zone: Zone) -> Optional[float]:
-    """
-    Parse ``zone.vung_cho`` into (lo, hi); BUY uses max(hi), SELL uses min(lo) — same ref for touch and arm.
-    """
-    lo, hi = parse_vung_cho_bounds(zone.vung_cho)
-    if lo is None or hi is None:
-        return None
-    side = (zone.side or "").strip().upper()
-    if side == "SELL":
-        return float(lo)
-    return float(hi)
 
 
 def _now_utc() -> datetime:
@@ -246,7 +222,7 @@ class WatchlistDaemonParams:
     """Also write atomic ``last.txt`` (legacy/debug); primary Last is ``multiprocessing.shared_memory``."""
     stop_daemon_plans_on_exit: bool = False
     """On process exit (Ctrl+C, atexit, Windows console close): SIGTERM tracked ``daemon-plan`` PIDs."""
-    eps: float = _EPS_DEFAULT  # max |Δ| between integer-rounded Last and touch ref (default 0.0)
+    eps: float = _EPS_DEFAULT  # max |Δ| between Last and touch ref (default 0.0)
     openai_model: Optional[str] = None
     openai_model_cli: Optional[str] = None
     mt5_accounts_json: Optional[Path] = None
@@ -1863,11 +1839,11 @@ def _zone_touch_job(
         return
 
     try:
-        ref = _zone_side_ref_from_vung_cho(zone)
+        lo, hi = parse_vung_cho_bounds(zone.vung_cho)
         _send_log(
             settings,
             f"[zone-touch] start | zone_id={zone_id} label={zone.label} "
-            f"vung_cho={zone.vung_cho} ref={ref} last={last_price}",
+            f"vung_cho={zone.vung_cho} bounds={lo}–{hi} last={last_price}",
         )
         side_vn = "mua" if (zone.side or "").strip().upper() == "BUY" else "bán"
         _rw_m = _zone_touch_retry_wait_minutes(zone)
@@ -2641,16 +2617,12 @@ def _daemon_plan_main_loop(
                 for z in st.zones:
                     if z.status != "vung_cho":
                         continue
-                    ref = _zone_side_ref_from_vung_cho(z)
-                    if ref is None:
+                    lo, hi = parse_vung_cho_bounds(z.vung_cho)
+                    if lo is None or hi is None:
                         continue
-                    try:
-                        p_last_n = _price_round_nearest_int(p_last)
-                        ref_n = _price_round_nearest_int(ref)
-                    except Exception:
-                        p_last_n = float(p_last)
-                        ref_n = float(ref)
-                    if abs(p_last_n - ref_n) <= float(params.eps):
+                    p = float(p_last)
+                    eps = float(params.eps)
+                    if (float(lo) - eps) <= p <= (float(hi) + eps):
                         matched.append(z)
 
                 for z in matched:
