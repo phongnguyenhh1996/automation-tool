@@ -309,8 +309,11 @@ void HandleModify(const long primary_login, const long primary_ticket, const lon
       if(slave_ticket <= 0) return;
       if(!OrderSelect((ulong)slave_ticket)) return;
 
-      datetime expiration = (datetime)OrderGetInteger(ORDER_TIME_EXPIRATION);
-      bool ok = g_trade.OrderModify((ulong)slave_ticket, price, sl, tp, (datetime)expiration);
+      // Some MT5 builds don't expose ORDER_TIME_TYPE property; use safe defaults.
+      ENUM_ORDER_TYPE_TIME time_type = ORDER_TIME_GTC;
+      datetime expiration = 0;
+      double stoplimit = 0.0;
+      bool ok = g_trade.OrderModify((ulong)slave_ticket, price, sl, tp, time_type, expiration, stoplimit);
       if(!ok)
          Print("TradeCopier Slave: MODIFY order failed. ticket=", slave_ticket, " err=", GetLastError());
       return;
@@ -326,8 +329,10 @@ void HandleSnapshotOrd(const long primary_login, const long snap_id, const long 
    long slave_ticket = FindMappedTicket(primary_ticket, "ORD");
    if(slave_ticket > 0 && OrderSelect((ulong)slave_ticket))
    {
-      datetime expiration = (datetime)OrderGetInteger(ORDER_TIME_EXPIRATION);
-      g_trade.OrderModify((ulong)slave_ticket, price, sl, tp, expiration);
+      ENUM_ORDER_TYPE_TIME time_type = ORDER_TIME_GTC;
+      datetime expiration = 0;
+      double stoplimit = 0.0;
+      g_trade.OrderModify((ulong)slave_ticket, price, sl, tp, time_type, expiration, stoplimit);
       return;
    }
 
@@ -341,8 +346,10 @@ void HandleSnapshotOrd(const long primary_login, const long snap_id, const long 
       {
          long t = (long)OrderGetInteger(ORDER_TICKET);
          UpsertMappedTicket(primary_ticket, t, "ORD");
-         datetime expiration = (datetime)OrderGetInteger(ORDER_TIME_EXPIRATION);
-         g_trade.OrderModify((ulong)t, price, sl, tp, expiration);
+         ENUM_ORDER_TYPE_TIME time_type = ORDER_TIME_GTC;
+         datetime expiration = 0;
+         double stoplimit = 0.0;
+         g_trade.OrderModify((ulong)t, price, sl, tp, time_type, expiration, stoplimit);
          return;
       }
    }
