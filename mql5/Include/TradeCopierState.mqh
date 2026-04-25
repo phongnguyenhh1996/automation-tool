@@ -1,7 +1,8 @@
 // TradeCopierState.mqh
 // Persist follower state (offset + simple mappings) in Common Files.
 
-#pragma once
+#ifndef TRADE_COPIER_STATE_MQH
+#define TRADE_COPIER_STATE_MQH
 
 struct CopierMappingRow
 {
@@ -115,3 +116,4 @@ void CopierUpsertMapping(CopierMappingRow &rows[], int &rowsCount, const long pr
    rowsCount++;
 }
 
+#endif // TRADE_COPIER_STATE_MQH

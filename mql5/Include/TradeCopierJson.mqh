@@ -2,7 +2,8 @@
 // Minimal JSON helpers for predictable, flat JSON objects.
 // Assumption: each event is a single-line JSON object with primitive values only.
 
-#pragma once
+#ifndef TRADE_COPIER_JSON_MQH
+#define TRADE_COPIER_JSON_MQH
 
 string _JsonTrim(const string s)
 {
@@ -119,3 +120,4 @@ string JsonEscape(const string s)
    return out;
 }
 
+#endif // TRADE_COPIER_JSON_MQH
