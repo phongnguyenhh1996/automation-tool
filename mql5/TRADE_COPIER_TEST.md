@@ -14,7 +14,7 @@ Files:
 Optional symbol mapping on Slave:
 - If broker symbols differ (suffix/prefix), set:
   - `InpSymbolPrefix` / `InpSymbolSuffix`, or
-  - `InpSymbolMapFile` pointing to a Common file like `trade_copier\\default\\symbol_map.csv` with lines: `EURUSD=EURUSD.a`
+  - `InpSymbolMapFile` pointing to a Common file like `trade_copier_default_symbol_map.csv` with lines: `EURUSD=EURUSD.a`
 
 ## 1) Market order copy (OPEN)
 - On primary: place a **BUY market** order.

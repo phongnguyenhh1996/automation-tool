@@ -11,31 +11,20 @@ struct CopierMappingRow
    string kind;         // "POS" or "ORD"
 };
 
-string CopierCommonDir(const string channel)
-{
-   return "trade_copier\\" + channel;
-}
-
 string CopierEventsPath(const string channel)
 {
-   return CopierCommonDir(channel) + "\\events.jsonl";
+   // Write to Common Files root to avoid missing directory issues on some MT5 builds.
+   return "trade_copier_" + channel + "_events.jsonl";
 }
 
 string CopierStatePath(const string channel, const long slave_login)
 {
-   return CopierCommonDir(channel) + "\\slave_" + (string)slave_login + "_state.csv";
+   return "trade_copier_" + channel + "_slave_" + (string)slave_login + "_state.csv";
 }
 
 bool CopierEnsureCommonDir(const string channel)
 {
-   // MQL5 doesn't have mkdir; FileOpen will create file but not directories.
-   // We create a small marker file in nested path; terminals create dirs on demand on Windows,
-   // but on some setups you must pre-create. We'll attempt FileOpen and report error.
-   string marker = CopierCommonDir(channel) + "\\.dir";
-   int h = FileOpen(marker, FILE_WRITE|FILE_TXT|FILE_COMMON);
-   if(h == INVALID_HANDLE) return false;
-   FileWriteString(h, "ok\n");
-   FileClose(h);
+   // Kept for backward compatibility; no directory creation needed.
    return true;
 }
 

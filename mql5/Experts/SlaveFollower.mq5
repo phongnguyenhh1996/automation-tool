@@ -12,6 +12,7 @@ input long   InpMagic   = 9345021;
 input double InpFixedLots = 0.10;
 input int    InpPollMs = 250;
 input int    InpDeviationPoints = 30;
+input bool   InpDebug = false;
 
 // Symbol mapping
 input string InpSymbolPrefix = "";
@@ -41,6 +42,18 @@ static long g_seen_pos_ids[];
 static int  g_seen_pos_count = 0;
 static long g_seen_ord_ids[];
 static int  g_seen_ord_count = 0;
+
+void DebugPrint(const string msg)
+{
+   if(InpDebug)
+      Print(msg);
+}
+
+string Trunc(const string s, const int maxLen)
+{
+   if(StringLen(s) <= maxLen) return s;
+   return StringSubstr(s, 0, maxLen) + "...";
+}
 
 string CopierComment(const long primary_login, const long primary_position_id, const long primary_ticket)
 {
@@ -136,6 +149,12 @@ bool TradeRetryOpenMarket(const string side, const string symbol, const double l
       if(side == "BUY") ok = g_trade.Buy(lots, symbol, 0.0, sl, tp, comment);
       else if(side == "SELL") ok = g_trade.Sell(lots, symbol, 0.0, sl, tp, comment);
       if(ok) return true;
+      if(InpDebug)
+         Print("TradeCopier Slave: market open attempt failed. i=", i, " side=", side, " sym=", symbol,
+               " lots=", DoubleToString(lots,2), " sl=", DoubleToString(sl, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS)),
+               " tp=", DoubleToString(tp, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS)),
+               " retcode=", (int)g_trade.ResultRetcode(), " desc=", g_trade.ResultRetcodeDescription(),
+               " lasterr=", GetLastError());
       Sleep(InpRetrySleepMs);
    }
    return false;
@@ -162,6 +181,13 @@ bool TradeRetryOpenPending(const string order_type, const string side, const str
          ok = false;
       }
       if(ok) return true;
+      if(InpDebug)
+         Print("TradeCopier Slave: pending open attempt failed. i=", i, " type=", order_type, " side=", side, " sym=", symbol,
+               " lots=", DoubleToString(lots,2), " price=", DoubleToString(price, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS)),
+               " sl=", DoubleToString(sl, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS)),
+               " tp=", DoubleToString(tp, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS)),
+               " retcode=", (int)g_trade.ResultRetcode(), " desc=", g_trade.ResultRetcodeDescription(),
+               " lasterr=", GetLastError());
       Sleep(InpRetrySleepMs);
    }
    return false;
@@ -206,6 +232,14 @@ void HandleOpen(const long primary_login, const long primary_ticket, const long 
    }
 
    string comment = CopierComment(primary_login, primary_pos_id, primary_ticket);
+   if(InpDebug)
+      Print("TradeCopier Slave: HandleOpen type=", order_type, " side=", side, " primary_symbol=", symbolPrimary, " -> sym=", sym,
+            " primary_login=", primary_login, " primary_ticket=", primary_ticket, " primary_pos_id=", primary_pos_id,
+            " lots_fixed=", DoubleToString(InpFixedLots,2),
+            " price=", DoubleToString(price, (int)SymbolInfoInteger(sym, SYMBOL_DIGITS)),
+            " sl=", DoubleToString(sl, (int)SymbolInfoInteger(sym, SYMBOL_DIGITS)),
+            " tp=", DoubleToString(tp, (int)SymbolInfoInteger(sym, SYMBOL_DIGITS)),
+            " comment=", comment);
    g_trade.SetDeviationInPoints(InpDeviationPoints);
    g_trade.SetExpertMagicNumber((ulong)InpMagic);
 
@@ -236,7 +270,9 @@ void HandleOpen(const long primary_login, const long primary_ticket, const long 
    bool okp = TradeRetryOpenPending(order_type, side, sym, InpFixedLots, price, sl, tp, comment);
    if(!okp)
    {
-      Print("TradeCopier Slave: OPEN pending failed. sym=", sym, " type=", order_type, " side=", side);
+      Print("TradeCopier Slave: OPEN pending failed. sym=", sym, " type=", order_type, " side=", side,
+            " retcode=", (int)g_trade.ResultRetcode(), " desc=", g_trade.ResultRetcodeDescription(),
+            " lasterr=", GetLastError());
       return;
    }
    // store mapping by primary_ticket (pending order)
@@ -570,7 +606,12 @@ void ProcessEventLine(const string line)
    double sl=0.0, tp=0.0, price=0.0, closed_lots=0.0, remaining_lots=0.0, lots=0.0;
    long snap_id=0;
 
-   if(!JsonTryGetString(line, "event_id", event_id)) return;
+   if(!JsonTryGetString(line, "event_id", event_id))
+   {
+      if(InpDebug)
+         Print("TradeCopier Slave: parse failed (missing/invalid event_id). line=", Trunc(line, 300));
+      return;
+   }
    if(RecentHas(event_id)) return;
    RecentAdd(event_id);
 
@@ -589,6 +630,14 @@ void ProcessEventLine(const string line)
    JsonTryGetDouble(line, "closed_lots", closed_lots);
    JsonTryGetDouble(line, "remaining_lots", remaining_lots);
    JsonTryGetLong(line, "snap_id", snap_id);
+
+   if(InpDebug)
+      Print("TradeCopier Slave: event_id=", event_id, " type=", type, " primary_login=", primary_login,
+            " symbol=", symbol, " side=", side, " order_type=", order_type,
+            " primary_ticket=", primary_ticket, " primary_pos_id=", primary_pos_id,
+            " price=", DoubleToString(price, 8), " sl=", DoubleToString(sl, 8), " tp=", DoubleToString(tp, 8),
+            " lots=", DoubleToString(lots, 2), " closed_lots=", DoubleToString(closed_lots, 2),
+            " remaining_lots=", DoubleToString(remaining_lots, 2), " snap_id=", snap_id);
 
    if(type == "SNAP_BEGIN")
    {
@@ -641,7 +690,12 @@ void PollEvents()
 {
    const string path = CopierEventsPath(InpChannel);
    int h = FileOpen(path, FILE_READ|FILE_TXT|FILE_COMMON);
-   if(h == INVALID_HANDLE) return;
+   if(h == INVALID_HANDLE)
+   {
+      if(InpDebug)
+         Print("TradeCopier Slave: failed to open events file. path=", path, " err=", GetLastError());
+      return;
+   }
 
    // Clamp offset: if file truncated, reset.
    long size = (long)FileSize(h);
