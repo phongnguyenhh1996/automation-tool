@@ -11,8 +11,10 @@ from automation_tool.mt5_accounts import (
     MT5AccountEntry,
     LotRuleFixed,
     LotRuleFromTrade,
+    LotRuleMaxLossUsd,
     LotRuleMaxNotionalUsd,
     compute_lot_override,
+    compute_volume_for_max_loss_live,
     compute_volume_for_max_notional_live,
     primary_account,
 )
@@ -63,6 +65,26 @@ def _lot_override_for_entry(
             )
             return vol, hint
         vol, hint = compute_volume_for_max_notional_live(
+            trade,
+            rule,
+            login=acc.login,
+            password=acc.password,
+            server=acc.server,
+            symbol_override=symbol_override,
+            account_symbol_map=acc.symbol_map or None,
+        )
+        return vol, hint
+    if isinstance(rule, LotRuleMaxLossUsd):
+        if dry_run:
+            vol, hint = compute_lot_override(
+                trade,
+                rule,
+                mt5=None,  # type: ignore[arg-type]
+                resolved_symbol=trade.symbol,
+                dry_run=True,
+            )
+            return vol, hint
+        vol, hint = compute_volume_for_max_loss_live(
             trade,
             rule,
             login=acc.login,

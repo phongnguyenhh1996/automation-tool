@@ -20,7 +20,7 @@ from typing import Any, Literal, Optional, Union
 
 from automation_tool.mt5_openai_parse import ParsedTrade
 
-LotMode = Literal["fixed", "max_notional_usd", "from_trade"]
+LotMode = Literal["fixed", "max_notional_usd", "max_loss_usd", "from_trade"]
 
 
 @dataclass(frozen=True)
@@ -36,13 +36,25 @@ class LotRuleMaxNotionalUsd:
 
 
 @dataclass(frozen=True)
+class LotRuleMaxLossUsd:
+    """
+    Tính volume sao cho thua lỗ tối đa khi chạm SL xấp xỉ ``max_usd``.
+
+    Dựa vào ``mt5.order_calc_profit`` cho 1.0 lot (entry → SL), sau đó scale volume.
+    """
+
+    mode: Literal["max_loss_usd"] = "max_loss_usd"
+    max_usd: float = 100.0
+
+
+@dataclass(frozen=True)
 class LotRuleFromTrade:
     """Dùng ``ParsedTrade.lot`` từ trade_line; không ghi đè trong ``execute_trade``."""
 
     mode: Literal["from_trade"] = "from_trade"
 
 
-LotRule = Union[LotRuleFixed, LotRuleMaxNotionalUsd, LotRuleFromTrade]
+LotRule = Union[LotRuleFixed, LotRuleMaxNotionalUsd, LotRuleMaxLossUsd, LotRuleFromTrade]
 
 
 @dataclass(frozen=True)
@@ -90,6 +102,11 @@ def _parse_lot(d: Any) -> LotRule:
         if m is None:
             raise ValueError("lot.mode=max_notional_usd cần max_usd")
         return LotRuleMaxNotionalUsd(max_usd=float(m))
+    if mode == "max_loss_usd":
+        m = d.get("max_usd")
+        if m is None:
+            raise ValueError("lot.mode=max_loss_usd cần max_usd")
+        return LotRuleMaxLossUsd(max_usd=float(m))
     if mode == "from_trade":
         return LotRuleFromTrade()
     raise ValueError(f"lot.mode không hỗ trợ: {mode!r}")
@@ -210,7 +227,8 @@ def _round_volume_to_step(vol: float, step: float, vol_min: float, vol_max: floa
         out = vol_min
     if out > vol_max + 1e-12:
         out = vol_max
-    return round(out, 8)
+    # Lot chỉ làm tròn tới 2 chữ số thập phân (0.01 lot precision).
+    return round(out, 2)
 
 
 def compute_lot_override(
@@ -226,6 +244,9 @@ def compute_lot_override(
 
     ``max_notional_usd``: ``volume ≈ max_usd / (contract_size * price)`` (ký quỹ kiểu USD
     cho nhiều CFD/metal; broker khác nhau có thể cần chỉnh sau).
+
+    ``max_loss_usd``: ``volume ≈ max_usd / loss_per_1lot`` trong đó ``loss_per_1lot`` lấy từ
+    ``mt5.order_calc_profit`` với volume=1.0 (entry → SL). Thường yêu cầu ``trade.sl``.
     """
     if isinstance(rule, LotRuleFixed):
         return float(rule.volume), None
@@ -233,37 +254,82 @@ def compute_lot_override(
     if isinstance(rule, LotRuleFromTrade):
         return float(trade.lot), None
 
-    if not isinstance(rule, LotRuleMaxNotionalUsd):
-        return float(trade.lot), f"lot rule không rõ: {rule!r}"
+    if isinstance(rule, LotRuleMaxNotionalUsd):
+        if dry_run:
+            # Không có terminal: dùng lot từ trade_line làm mô phỏng
+            return float(trade.lot), "[dry-run] max_notional_usd → dùng lot từ trade_line"
 
-    if dry_run:
-        # Không có terminal: dùng lot từ trade_line làm mô phỏng
-        return float(trade.lot), "[dry-run] max_notional_usd → dùng lot từ trade_line"
+        info = mt5.symbol_info(resolved_symbol)
+        if info is None:
+            return float(trade.lot), f"symbol_info({resolved_symbol!r}) None — dùng lot từ trade_line"
 
-    info = mt5.symbol_info(resolved_symbol)
-    if info is None:
-        return float(trade.lot), f"symbol_info({resolved_symbol!r}) None — dùng lot từ trade_line"
+        cs = float(getattr(info, "trade_contract_size", 0) or 0)
+        if cs <= 0:
+            return float(trade.lot), "trade_contract_size=0 — dùng lot từ trade_line"
 
-    cs = float(getattr(info, "trade_contract_size", 0) or 0)
-    if cs <= 0:
-        return float(trade.lot), "trade_contract_size=0 — dùng lot từ trade_line"
+        px, err = reference_price_for_lot(mt5, resolved_symbol, trade)
+        if err or px <= 0:
+            return float(trade.lot), (err or "price=0") + " — dùng lot từ trade_line"
 
-    px, err = reference_price_for_lot(mt5, resolved_symbol, trade)
-    if err or px <= 0:
-        return float(trade.lot), (err or "price=0") + " — dùng lot từ trade_line"
+        # Notional (quote USD cho đa số symbol USD-denominated) ≈ volume * contract_size * price
+        denom = cs * px
+        if denom <= 0:
+            return float(trade.lot), "denom<=0 — dùng lot từ trade_line"
 
-    # Notional (quote USD cho đa số symbol USD-denominated) ≈ volume * contract_size * price
-    denom = cs * px
-    if denom <= 0:
-        return float(trade.lot), "denom<=0 — dùng lot từ trade_line"
+        raw_vol = float(rule.max_usd) / denom
+        step = float(getattr(info, "volume_step", 0.01) or 0.01)
+        vmin = float(getattr(info, "volume_min", 0.01) or 0.01)
+        vmax = float(getattr(info, "volume_max", 100.0) or 100.0)
+        vol = _round_volume_to_step(raw_vol, step, vmin, vmax)
+        hint = f"max_notional_usd={rule.max_usd} contract={cs} price={px:.5f} → vol={vol}"
+        return vol, hint
 
-    raw_vol = float(rule.max_usd) / denom
-    step = float(getattr(info, "volume_step", 0.01) or 0.01)
-    vmin = float(getattr(info, "volume_min", 0.01) or 0.01)
-    vmax = float(getattr(info, "volume_max", 100.0) or 100.0)
-    vol = _round_volume_to_step(raw_vol, step, vmin, vmax)
-    hint = f"max_notional_usd={rule.max_usd} contract={cs} price={px:.5f} → vol={vol}"
-    return vol, hint
+    if isinstance(rule, LotRuleMaxLossUsd):
+        if dry_run:
+            return float(trade.lot), "[dry-run] max_loss_usd → dùng lot từ trade_line"
+
+        if trade.sl is None:
+            return float(trade.lot), "trade.sl=None — dùng lot từ trade_line"
+
+        info = mt5.symbol_info(resolved_symbol)
+        if info is None:
+            return float(trade.lot), f"symbol_info({resolved_symbol!r}) None — dùng lot từ trade_line"
+
+        entry_px, err = reference_price_for_lot(mt5, resolved_symbol, trade)
+        if err or entry_px <= 0:
+            return float(trade.lot), (err or "price=0") + " — dùng lot từ trade_line"
+
+        try:
+            order_type = mt5.ORDER_TYPE_BUY if trade.side == "BUY" else mt5.ORDER_TYPE_SELL
+        except Exception:
+            order_type = 0
+
+        # Lấy lỗ/lãi cho 1.0 lot từ entry → SL.
+        try:
+            pl_1lot = mt5.order_calc_profit(order_type, resolved_symbol, 1.0, entry_px, float(trade.sl))
+        except Exception as e:
+            return float(trade.lot), f"order_calc_profit lỗi: {e!r} — dùng lot từ trade_line"
+
+        if pl_1lot is None:
+            return float(trade.lot), "order_calc_profit=None — dùng lot từ trade_line"
+
+        loss_1lot = abs(float(pl_1lot))
+        if loss_1lot <= 0:
+            return float(trade.lot), f"loss_1lot<=0 (pl_1lot={pl_1lot}) — dùng lot từ trade_line"
+
+        raw_vol = float(rule.max_usd) / loss_1lot
+        step = float(getattr(info, "volume_step", 0.01) or 0.01)
+        vmin = float(getattr(info, "volume_min", 0.01) or 0.01)
+        vmax = float(getattr(info, "volume_max", 100.0) or 100.0)
+        vol = _round_volume_to_step(raw_vol, step, vmin, vmax)
+        hint = (
+            f"max_loss_usd={rule.max_usd} entry={entry_px:.5f} sl={float(trade.sl):.5f} "
+            f"loss_1lot≈{loss_1lot:.5f} → vol={vol}"
+        )
+        return vol, hint
+
+    return float(trade.lot), f"lot rule không rõ: {rule!r}"
+
 
 
 def compute_volume_for_max_notional_live(
@@ -279,6 +345,54 @@ def compute_volume_for_max_notional_live(
     """
     Một lần ``initialize`` + tính volume (rồi caller gọi ``execute_trade`` sẽ init lại).
     Dùng cho multi-account khi ``mode=max_notional_usd`` và không dry-run.
+    """
+    from automation_tool.mt5_execute import (  # noqa: WPS433 — tránh vòng import tĩnh
+        _load_mt5,
+        format_last_error,
+        resolve_trade_symbol_on_broker,
+    )
+
+    mt5 = _load_mt5()
+    kwargs: dict[str, Any] = {}
+    if login and password and server:
+        kwargs["login"] = login
+        kwargs["password"] = password
+        kwargs["server"] = server
+    if not mt5.initialize(**kwargs):
+        return float(trade.lot), f"mt5.initialize thất bại: {format_last_error(mt5)}"
+    try:
+        rt, err = resolve_trade_symbol_on_broker(
+            mt5,
+            trade,
+            symbol_override,
+            account_symbol_map=account_symbol_map,
+        )
+        if err or rt is None:
+            return float(trade.lot), err
+        return compute_lot_override(
+            rt,
+            rule,
+            mt5=mt5,
+            resolved_symbol=rt.symbol,
+            dry_run=False,
+        )
+    finally:
+        mt5.shutdown()
+
+
+def compute_volume_for_max_loss_live(
+    trade: ParsedTrade,
+    rule: LotRuleMaxLossUsd,
+    *,
+    login: int,
+    password: str,
+    server: str,
+    symbol_override: Optional[str],
+    account_symbol_map: Optional[dict[str, str]] = None,
+) -> tuple[float, Optional[str]]:
+    """
+    Một lần ``initialize`` + tính volume theo max loss (rồi caller gọi ``execute_trade`` sẽ init lại).
+    Dùng cho multi-account khi ``mode=max_loss_usd`` và không dry-run.
     """
     from automation_tool.mt5_execute import (  # noqa: WPS433 — tránh vòng import tĩnh
         _load_mt5,

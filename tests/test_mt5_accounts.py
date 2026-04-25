@@ -11,6 +11,7 @@ import pytest
 from automation_tool.mt5_accounts import (
     LotRuleFixed,
     LotRuleFromTrade,
+    LotRuleMaxLossUsd,
     LotRuleMaxNotionalUsd,
     load_mt5_accounts_from_path,
 )
@@ -101,6 +102,27 @@ def test_load_valid_two_accounts_one_primary() -> None:
         assert accs[0].lot.volume == 0.02
         assert isinstance(accs[1].lot, LotRuleMaxNotionalUsd)
         assert accs[1].lot.max_usd == 50.0
+
+
+def test_load_max_loss_usd_rule() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "accounts.json"
+        _write_accounts(
+            p,
+            [
+                {
+                    "id": "a",
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                    "lot": {"mode": "max_loss_usd", "max_usd": 100},
+                },
+            ],
+        )
+        accs = load_mt5_accounts_from_path(p)
+        assert isinstance(accs[0].lot, LotRuleMaxLossUsd)
+        assert accs[0].lot.max_usd == 100.0
 
 
 def test_rejects_zero_primary() -> None:
