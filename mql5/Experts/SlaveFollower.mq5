@@ -245,7 +245,9 @@ void HandleOpen(const long primary_login, const long primary_ticket, const long 
       // Best-effort: store last order ticket (terminal last order isn't exposed; we'll scan for our comment)
       for(int i=0;i<OrdersTotal();i++)
       {
-         if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
+         ulong ot = OrderGetTicket(i);
+         if(ot == 0) continue;
+         if(!OrderSelect(ot)) continue;
          string cmt = OrderGetString(ORDER_COMMENT);
          if(cmt == comment)
          {
@@ -293,7 +295,9 @@ void HandleModify(const long primary_login, const long primary_ticket, const lon
          string comment = CopierComment(primary_login, 0, primary_ticket);
          for(int i=0;i<OrdersTotal();i++)
          {
-            if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
+            ulong ot = OrderGetTicket(i);
+            if(ot == 0) continue;
+            if(!OrderSelect(ot)) continue;
             if(OrderGetString(ORDER_COMMENT) == comment)
             {
                slave_ticket = (long)OrderGetInteger(ORDER_TICKET);
@@ -330,7 +334,9 @@ void HandleSnapshotOrd(const long primary_login, const long snap_id, const long 
    string comment = CopierComment(primary_login, 0, primary_ticket);
    for(int i=0;i<OrdersTotal();i++)
    {
-      if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
+      ulong ot = OrderGetTicket(i);
+      if(ot == 0) continue;
+      if(!OrderSelect(ot)) continue;
       if(OrderGetString(ORDER_COMMENT) == comment)
       {
          long t = (long)OrderGetInteger(ORDER_TICKET);
@@ -349,7 +355,9 @@ void HandleSnapshotOrd(const long primary_login, const long snap_id, const long 
 
    for(int i=0;i<OrdersTotal();i++)
    {
-      if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
+      ulong ot = OrderGetTicket(i);
+      if(ot == 0) continue;
+      if(!OrderSelect(ot)) continue;
       if(OrderGetString(ORDER_COMMENT) == comment)
       {
          long t = (long)OrderGetInteger(ORDER_TICKET);
@@ -374,7 +382,9 @@ void SnapshotEnd(const long primary_login, const long snap_id)
    // Delete copier pending orders missing from snapshot.
    for(int i=OrdersTotal()-1;i>=0;i--)
    {
-      if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
+      ulong ot_sel = OrderGetTicket(i);
+      if(ot_sel == 0) continue;
+      if(!OrderSelect(ot_sel)) continue;
       string cmt = OrderGetString(ORDER_COMMENT);
       if(!OrderIsOursForPrimary(cmt, primary_login)) continue;
 
@@ -425,7 +435,9 @@ void HandleCancel(const long primary_login, const long primary_ticket, const str
       string comment = CopierComment(primary_login, 0, primary_ticket);
       for(int i=0;i<OrdersTotal();i++)
       {
-         if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
+         ulong ot = OrderGetTicket(i);
+         if(ot == 0) continue;
+         if(!OrderSelect(ot)) continue;
          if(OrderGetString(ORDER_COMMENT) == comment)
          {
             slave_ticket = (long)OrderGetInteger(ORDER_TICKET);

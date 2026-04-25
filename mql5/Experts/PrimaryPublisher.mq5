@@ -130,11 +130,12 @@ void PublishSnapshot()
 
    for(int i=0;i<OrdersTotal();i++)
    {
-      if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
+      ulong ticket = OrderGetTicket(i);
+      if(ticket == 0) continue;
+      if(!OrderSelect(ticket)) continue;
       long state = (long)OrderGetInteger(ORDER_STATE);
       if(state != ORDER_STATE_PLACED && state != ORDER_STATE_PARTIAL) continue;
 
-      ulong ticket = (ulong)OrderGetInteger(ORDER_TICKET);
       string symbol = OrderGetString(ORDER_SYMBOL);
       ENUM_ORDER_TYPE t = (ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
       string orderType = OrderTypeFromOrder(t);
