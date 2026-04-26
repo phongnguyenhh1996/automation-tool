@@ -2453,6 +2453,56 @@ def _tradingview_parse_capture_plan(tv: dict[str, Any]) -> Optional[list[tuple[s
     return out or None
 
 
+def _tradingview_parse_capture_plan_v2(
+    tv: dict[str, Any],
+) -> Optional[list[dict[str, Any]]]:
+    """
+    Browser-only capture plan that can carry per-interval metadata.
+
+    Format:
+      tradingview_capture.capture_plan:
+        - symbol: XAUUSD
+          intervals:
+            - "15 phút"
+            - label: "15 phút"
+              slug: "15m_ict"
+              indicator_profile: "ict_killzones"
+            - "5 phút"
+
+    Backward compatible with the old list-of-strings intervals.
+    """
+    raw = tv.get("capture_plan")
+    if not isinstance(raw, list) or not raw:
+        return None
+    out: list[dict[str, Any]] = []
+    for row in raw:
+        if not isinstance(row, dict):
+            continue
+        sym = str(row.get("symbol") or "").strip()
+        intervals = row.get("intervals") or row.get("intervals_aria")
+        if not sym or not isinstance(intervals, list):
+            continue
+        items: list[dict[str, Any]] = []
+        for it in intervals:
+            if isinstance(it, str) and it.strip():
+                items.append({"label": it.strip()})
+            elif isinstance(it, dict):
+                label = str(it.get("label") or it.get("aria") or it.get("aria_label") or "").strip()
+                if not label:
+                    continue
+                d = {"label": label}
+                slug = str(it.get("slug") or "").strip()
+                prof = str(it.get("indicator_profile") or "").strip()
+                if slug:
+                    d["slug"] = slug
+                if prof:
+                    d["indicator_profile"] = prof
+                items.append(d)
+        if items:
+            out.append({"symbol": sym, "intervals": items})
+    return out or None
+
+
 def _tradingview_default_capture_plan() -> list[tuple[str, list[str]]]:
     return [
         ("DXY", ["4 giờ", "1 giờ", "15 phút"]),
@@ -2467,6 +2517,18 @@ def _tradingview_resolve_capture_plan(tv: dict[str, Any]) -> Optional[list[tuple
     if parsed:
         return parsed
     return _tradingview_default_capture_plan()
+
+
+def _tradingview_resolve_capture_plan_v2(tv: dict[str, Any]) -> Optional[list[dict[str, Any]]]:
+    """Browser-only multi-shot plan (v2)."""
+    if not tv.get("multi_shot_enabled", True):
+        return None
+    parsed = _tradingview_parse_capture_plan_v2(tv)
+    if parsed:
+        return parsed
+    # Fallback: derive from v1 default
+    base = _tradingview_default_capture_plan()
+    return [{"symbol": s, "intervals": [{"label": x} for x in labels]} for s, labels in base]
 
 
 def _tradingview_ensure_watchlist_open(page, tv: dict[str, Any]) -> None:
@@ -2535,6 +2597,236 @@ def _tradingview_reset_chart_position(page, tv: dict[str, Any]) -> None:
     except Exception:
         # Best-effort: reset is helpful but should not fail capture.
         pass
+
+
+def _tv_required_indicator_groups(tv: dict[str, Any]) -> list[list[str]]:
+    """
+    Return required indicator groups (aliases per indicator) to match legend-source-item text.
+
+    Preferred config (extensible):
+      tradingview_capture.required_indicators:
+        - aliases: ["VSA Wyckoff Volume", "VSA Volume"]
+          favorite_name: "VSA Volume"  # optional (used for recovery if favorite_indicator_names omitted)
+        - aliases: ["LuxAlgo - Smart Money Concepts", "Smart Money Concepts (SMC) [LuxAlgo]"]
+          favorite_name: "Smart Money Concepts (SMC) [LuxAlgo]"
+
+    Backward compatible with:
+      tradingview_capture.required_indicators_aliases: {key: [aliases...]}
+    """
+    raw = tv.get("required_indicators")
+    if isinstance(raw, list) and raw:
+        groups: list[list[str]] = []
+        for row in raw:
+            if not isinstance(row, dict):
+                continue
+            aliases = row.get("aliases")
+            if isinstance(aliases, list):
+                names = [str(x).strip() for x in aliases if str(x).strip()]
+            else:
+                names = [str(aliases).strip()] if str(aliases).strip() else []
+            if names:
+                groups.append(names)
+        if groups:
+            return groups
+
+    # Back-compat: dict of key -> aliases
+    raw2 = tv.get("required_indicators_aliases")
+    if isinstance(raw2, dict) and raw2:
+        groups2: list[list[str]] = []
+        for _k, v in raw2.items():
+            if isinstance(v, list):
+                names = [str(x).strip() for x in v if str(x).strip()]
+            else:
+                names = [str(v).strip()] if str(v).strip() else []
+            if names:
+                groups2.append(names)
+        if groups2:
+            return groups2
+
+    return [
+        ["VSA Wyckoff Volume", "VSA Volume"],
+        ["LuxAlgo - Smart Money Concepts", "Smart Money Concepts (SMC) [LuxAlgo]"],
+    ]
+
+
+def _tv_apply_indicator_profile(tv: dict[str, Any], profile: str) -> dict[str, Any]:
+    """
+    Return a shallow-copied tv dict with overrides from `indicator_profiles[profile]`.
+    """
+    p = (profile or "").strip()
+    if not p:
+        return tv
+    profiles = tv.get("indicator_profiles")
+    if not isinstance(profiles, dict):
+        return tv
+    ov = profiles.get(p)
+    if not isinstance(ov, dict) or not ov:
+        return tv
+    merged = dict(tv)
+    merged.update(ov)
+    return merged
+
+
+def _tradingview_list_legend_item_texts(page, tv: dict[str, Any]) -> list[str]:
+    sel = (tv.get("legend_item_selector") or '[data-qa-id="legend-source-item"]').strip()
+    loc = page.locator(sel)
+    n = loc.count()
+    out: list[str] = []
+    for i in range(int(n or 0)):
+        try:
+            t = (loc.nth(i).inner_text(timeout=1500) or "").strip()
+        except Exception:
+            t = ""
+        if t:
+            out.append(t)
+    return out
+
+
+def _tradingview_has_required_indicators(page, tv: dict[str, Any]) -> bool:
+    groups = _tv_required_indicator_groups(tv)
+    texts = _tradingview_list_legend_item_texts(page, tv)
+    hay = "\n".join(texts).lower()
+
+    def _has_any(names: list[str]) -> bool:
+        for nm in names:
+            if nm and nm.lower() in hay:
+                return True
+        return False
+
+    # Require every indicator group to be present.
+    if not groups:
+        return True
+    for g in groups:
+        if not _has_any(list(g or [])):
+            return False
+    return True
+
+
+def _tradingview_chart_center_xy(page, tv: dict[str, Any]) -> tuple[float, float]:
+    """
+    Compute a reliable point near the chart center for context-click.
+    Falls back to viewport center if bounding box is unavailable.
+    """
+    raw = tv.get("chart_center_click_selector")
+    sels: list[str] = []
+    if isinstance(raw, str) and raw.strip():
+        sels.append(raw.strip())
+    elif isinstance(raw, list):
+        sels.extend([str(x).strip() for x in raw if str(x).strip()])
+    # Fallbacks (best-effort; TradingView DOM can vary).
+    sels.extend(
+        [
+            'div[data-name="pane"]',
+            '[data-qa-id="chart-container"]',
+            "div.chart-container",
+            "div.tv-chart",
+        ]
+    )
+    for sel in sels:
+        try:
+            loc = page.locator(sel).first
+            loc.wait_for(state="visible", timeout=1500)
+            bb = loc.bounding_box()
+            if bb and bb.get("width", 0) and bb.get("height", 0):
+                x = float(bb["x"]) + float(bb["width"]) / 2.0
+                y = float(bb["y"]) + float(bb["height"]) / 2.0
+                return x, y
+        except Exception:
+            continue
+    vp = page.viewport_size or {"width": 1600, "height": 900}
+    return float(vp["width"]) / 2.0, float(vp["height"]) / 2.0
+
+
+def _tradingview_open_context_menu_and_clear_indicators(page, tv: dict[str, Any]) -> None:
+    texts = tv.get("context_menu_delete_indicators_texts")
+    if isinstance(texts, list) and texts:
+        candidates = [str(x).strip() for x in texts if str(x).strip()]
+    else:
+        candidates = ["Xóa 1 chỉ báo", "Xóa 2 chỉ báo"]
+
+    x, y = _tradingview_chart_center_xy(page, tv)
+    page.mouse.click(x, y, button="right")
+
+    # Try to click the first visible matching menu item.
+    for t in candidates:
+        try:
+            item = page.locator(
+                'tr[data-role="menuitem"] [data-label="true"]',
+                has_text=t,
+            ).first
+            item.wait_for(state="visible", timeout=1500)
+            item.click(timeout=3000)
+            break
+        except Exception:
+            continue
+
+    page.wait_for_timeout(int(tv.get("after_indicator_clear_ms", 450)))
+
+
+def _tradingview_add_required_indicators_from_favorites(page, tv: dict[str, Any]) -> None:
+    btn_sel = (tv.get("favorite_indicators_button_selector") or 'button[data-name="show-favorite-indicators"]').strip()
+    tpl = (tv.get("favorite_indicator_item_selector_template") or 'div[data-role="menuitem"][aria-label="{name}"]').strip()
+    names = tv.get("favorite_indicator_names")
+    if isinstance(names, list) and names:
+        favs = [str(x).strip() for x in names if str(x).strip()]
+    else:
+        # If favorite_indicator_names isn't configured, infer from required_indicators[].favorite_name.
+        inferred: list[str] = []
+        raw_req = tv.get("required_indicators")
+        if isinstance(raw_req, list):
+            for row in raw_req:
+                if not isinstance(row, dict):
+                    continue
+                fn = str(row.get("favorite_name") or "").strip()
+                if fn:
+                    inferred.append(fn)
+        favs = inferred or ["Smart Money Concepts (SMC) [LuxAlgo]", "VSA Volume"]
+
+    page.locator(btn_sel).first.wait_for(state="visible", timeout=20_000)
+    page.locator(btn_sel).first.click(timeout=10_000)
+
+    after_add = int(tv.get("after_indicator_add_ms", 500))
+    for nm in favs:
+        sel = tpl.format(name=nm)
+        it = page.locator(sel).first
+        it.wait_for(state="visible", timeout=10_000)
+        it.click(timeout=10_000)
+        if after_add > 0:
+            page.wait_for_timeout(after_add)
+
+    # Close menu (best-effort) by clicking the button again.
+    try:
+        page.locator(btn_sel).first.click(timeout=2000)
+    except Exception:
+        pass
+
+
+def _tradingview_ensure_required_indicators(page, tv: dict[str, Any]) -> None:
+    if not bool(tv.get("required_indicators_enabled", False)):
+        return
+
+    verify_timeout_ms = int(tv.get("indicator_verify_timeout_ms", 6000))
+    deadline = time.monotonic() + max(0, verify_timeout_ms) / 1000.0
+    while time.monotonic() < deadline:
+        if _tradingview_has_required_indicators(page, tv):
+            return
+        page.wait_for_timeout(200)
+
+    # Recover: clear, add from favorites, then verify again.
+    _tradingview_open_context_menu_and_clear_indicators(page, tv)
+    _tradingview_add_required_indicators_from_favorites(page, tv)
+
+    deadline2 = time.monotonic() + max(0, verify_timeout_ms) / 1000.0
+    while time.monotonic() < deadline2:
+        if _tradingview_has_required_indicators(page, tv):
+            return
+        page.wait_for_timeout(200)
+
+    got = _tradingview_list_legend_item_texts(page, tv)
+    raise SystemExit(
+        "TradingView required indicators missing after recovery. "
+        f"Expected VSA+SMC, got legend items: {got!r}"
+    )
 
 
 def _tradingview_snapshot_url_capture(
@@ -2674,8 +2966,49 @@ def _run_tradingview_multi_shot_flow(
             slug = _tradingview_interval_slug(aria, tv)
             _tradingview_select_interval(page, toolbar, tv, aria, settle_ms)
             _tradingview_reset_chart_position(page, tv)
+            _tradingview_ensure_required_indicators(page, tv)
             path = _tradingview_capture_one_chart_frame(
                 page, tv, charts_dir, stamp, sym_key, slug
+            )
+            written.append(path)
+    return written
+
+
+def _run_tradingview_multi_shot_flow_v2(
+    page,
+    *,
+    charts_dir: Path,
+    stamp: str,
+    settle_ms: int,
+    tv: dict[str, Any],
+    plan: list[dict[str, Any]],
+) -> list[Path]:
+    intervals_id = (tv.get("intervals_toolbar_id") or "header-toolbar-intervals").strip()
+    toolbar = page.locator(f"#{intervals_id}")
+    written: list[Path] = []
+    for row in plan:
+        symbol = str(row.get("symbol") or "").strip()
+        intervals = row.get("intervals")
+        if not symbol or not isinstance(intervals, list):
+            continue
+        _tradingview_ensure_watchlist_open(page, tv)
+        _tradingview_select_symbol(page, tv, symbol)
+        toolbar.wait_for(state="visible", timeout=60_000)
+        sym_key = re.sub(r"[^\w.-]+", "_", symbol).strip("_")[:40] or "sym"
+        for it in intervals:
+            if not isinstance(it, dict):
+                continue
+            label = str(it.get("label") or "").strip()
+            if not label:
+                continue
+            slug = str(it.get("slug") or "").strip() or _tradingview_interval_slug(label, tv)
+            prof = str(it.get("indicator_profile") or "").strip()
+            tv_eff = _tv_apply_indicator_profile(tv, prof)
+            _tradingview_select_interval(page, toolbar, tv, label, settle_ms)
+            _tradingview_reset_chart_position(page, tv)
+            _tradingview_ensure_required_indicators(page, tv_eff)
+            path = _tradingview_capture_one_chart_frame(
+                page, tv_eff, charts_dir, stamp, sym_key, slug
             )
             written.append(path)
     return written
@@ -2735,15 +3068,15 @@ def _run_tradingview_screenshot_flow(
 
     _maybe_tradingview_dark_mode(page, tv)
 
-    plan = _tradingview_resolve_capture_plan(tv)
-    if plan:
-        return _run_tradingview_multi_shot_flow(
+    plan_v2 = _tradingview_resolve_capture_plan_v2(tv)
+    if plan_v2:
+        return _run_tradingview_multi_shot_flow_v2(
             page,
             charts_dir=charts_dir,
             stamp=stamp,
             settle_ms=settle_ms,
             tv=tv,
-            plan=plan,
+            plan=plan_v2,
         )
 
     interval_aria = (tv.get("interval_button_aria_label") or "15 phút").strip()
@@ -2757,6 +3090,7 @@ def _run_tradingview_screenshot_flow(
     legacy_url = charts_dir / f"{stamp}_tradingview_fullscreen.url"
     if bool(tv.get("tradingview_snapshot_url_flow", True)):
         _tradingview_reset_chart_position(page, tv)
+        _tradingview_ensure_required_indicators(page, tv)
         dest = _tradingview_capture_one_chart_frame(
             page,
             tv,
@@ -2768,6 +3102,7 @@ def _run_tradingview_screenshot_flow(
         )
     else:
         _tradingview_reset_chart_position(page, tv)
+        _tradingview_ensure_required_indicators(page, tv)
         dest = _tradingview_capture_one_chart_frame(
             page,
             tv,

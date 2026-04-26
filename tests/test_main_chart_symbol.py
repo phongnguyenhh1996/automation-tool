@@ -46,7 +46,7 @@ def test_apply_main_chart_symbol_to_config() -> None:
 
 def test_chart_image_order_for_main_symbol() -> None:
     o = chart_image_order_for_main_symbol("EURUSD")
-    assert len(o) == CHART_SLOT_COUNT == 10
+    assert len(o) == CHART_SLOT_COUNT == 11
     assert ("tradingview", "EURUSD", "5m") in o
     assert ("coinmap", "EURUSD", "5m") in o
     assert all("XAUUSD" not in x for x in o)

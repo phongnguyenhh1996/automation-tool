@@ -54,6 +54,8 @@ Use `[class*="…"]`-style class prefixes so CSS-module hashes can change. Set `
 
 When `enabled`, after the Coinmap step the tool opens a new page, loads `chart_url`, sets the interval, clicks `#header-toolbar-fullscreen`, then waits for the fullscreen “panels hidden” notice (`tradingview_fullscreen_notice_selector`, default matches `container-default-*` + `notice-*`) to become **hidden**, then applies `fullscreen_settle_ms` and saves **`{timestamp}_tradingview_fullscreen.png`**. Set `tradingview_fullscreen_notice_wait_disabled: true` to skip that wait. Cookie banners or sign-in may still need manual handling.
 
+If you set `tradingview_capture.required_indicators_enabled: true`, the browser-based TradingView capture will **verify required indicators via legend items** (`[data-qa-id="legend-source-item"]`) before taking each snapshot. If one is missing, it will right-click the chart, click `Xóa 1 chỉ báo`/`Xóa 2 chỉ báo`, then re-add indicators from the “Chỉ báo yêu thích” menu.
+
 ### OpenAI Responses (prompt template)
 
 - Set **`OPENAI_PROMPT_ID`** to your dashboard prompt (required for `analyze` / `all` / `chatgpt-project`).
@@ -84,7 +86,7 @@ coinmap-automation chatgpt-project --no-telegram
 Options:
 
 - `--prompt` — User message before chart images (default: Vietnamese XAUUSD workflow + JSON schema hints).
-- `--max-images-per-call` — Split images across multiple API calls (default `10`, matching `CHART_SLOT_COUNT`).
+- `--max-images-per-call` — Split images across multiple API calls (default `11`, matching `CHART_SLOT_COUNT`).
 - `--no-telegram` — Print only; do not send to Telegram (`analyze`, `all`, `chatgpt-project`).
 - `--no-tradingview` / `--no-tv-journal-monitor` — On **`all`**, skip TradingView alert sync / skip the journal monitor step after sync (see `coinmap-automation all --help`).
 - **`all`** — Before capture, deletes `last_alert_prices.json` for the active symbol (or `--last-alert-json` path) so the run does not inherit yesterday’s statuses / `trade_line` / tickets. Pass **`--no-clear-last-alert`** to keep the existing file and merge as before. On OpenAI success, writes **`last_response_id.txt`** and **`last_all_response_id.txt`** (same response id for intraday routing). On success, if the model output parses as JSON, **`data/{SYMBOL}/morning_full_analysis.json`** is written (exact Schema A object for intraday).

@@ -1,5 +1,5 @@
 """
-Validate on-disk chart artifacts for the OpenAI multimodal slot order (10 slots).
+Validate on-disk chart artifacts for the OpenAI multimodal slot order (fixed slots; see images.py).
 
 Coinmap exports must have non-empty lists for getcandlehistory, getorderflowhistory,
 getindicatorsvwap (or merged JSON where used). TradingView: if ``.json`` exists it must

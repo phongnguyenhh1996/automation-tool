@@ -98,8 +98,8 @@ def chart_image_order_for_main_symbol(main_sym: str) -> tuple[tuple[str, str, st
     Filenames: ``{{stamp}}_tradingview_{{SYMBOL}}_{{interval}}.url`` (https, one line) or ``.png`` / ``coinmap_…``.
     ``main_sym`` replaces the default XAUUSD block (DXY TV block unchanged).
 
-    **10 slots (default full-analysis set):** DXY TV H4/H1/M15 → main TV H4/H1/M15/M5 → Coinmap DXY
-    footprint M15 → Coinmap main M15/M5.
+    **11 slots (default full-analysis set):** DXY TV H4/H1/M15 → main TV H4/H1/M15 → main TV M15 (ICT Killzones)
+    → main TV M5 → Coinmap DXY footprint M15 → Coinmap main M15/M5.
     """
     m = normalize_main_chart_symbol(main_sym)
     return (
@@ -109,6 +109,7 @@ def chart_image_order_for_main_symbol(main_sym: str) -> tuple[tuple[str, str, st
         ("tradingview", m, "4h"),
         ("tradingview", m, "1h"),
         ("tradingview", m, "15m"),
+        ("tradingview", m, "15m_ict"),
         ("tradingview", m, "5m"),
         ("coinmap", "DXY", "15m"),
         ("coinmap", m, "15m"),

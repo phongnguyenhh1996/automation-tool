@@ -68,9 +68,9 @@ def default_analysis_prompt(main_symbol: str | None = None) -> str:
         "[FULL_ANALYSIS]\n"
         f"Cặp chính: {sym}.\n"
         "Đính kèm theo thứ tự (TradingView = JSON; Coinmap = JSON gộp nếu có _merged), "
-        "9–10 dữ liệu: "
+        "10–11 dữ liệu: "
         "TradingView DXY (H4, H1, M15) → "
-        f"TradingView {sym} (H4, H1, M15, M5) → Coinmap DXY (M15) → "
+        f"TradingView {sym} (H4, H1, M15, M15 ICT Killzones, M5) → Coinmap DXY (M15) → "
         f"Coinmap {sym} (M15 + M5 gộp nếu có file merged, hoặc 2 file riêng).\n"
     )
 

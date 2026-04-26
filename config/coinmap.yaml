@@ -256,6 +256,9 @@ tradingview_capture:
         - "4 giờ"
         - "1 giờ"
         - "15 phút"
+        - label: "15 phút"
+          slug: "15m_ict"
+          indicator_profile: "ict_killzones"
         - "5 phút"
   watchlist_button_aria_label: "Danh sách theo dõi, thông tin chi tiết và tin tức"
   # Khi giao diện TradingView tiếng Anh (aria khác); có thể ghi đè
@@ -298,6 +301,42 @@ tradingview_capture:
   after_interval_select_ms: 2000
   fullscreen_settle_ms: 2000
   fullscreen_screenshot_full_page: true
+
+  # Ensure indicators are enabled before capturing any snapshot.
+  required_indicators_enabled: true
+  legend_item_selector: '[data-qa-id="legend-source-item"]'
+  # Right-click center-of-chart selector (fallbacks exist in code).
+  chart_center_click_selector: 'div[data-name="pane"]'
+  context_menu_delete_indicators_texts:
+    - "Xóa 1 chỉ báo"
+    - "Xóa 2 chỉ báo"
+  after_indicator_clear_ms: 450
+  indicator_verify_timeout_ms: 6000
+  favorite_indicators_button_selector: 'button[data-name="show-favorite-indicators"]'
+  favorite_indicator_item_selector_template: 'div[data-role="menuitem"][aria-label="{name}"]'
+  favorite_indicator_names:
+    - "Smart Money Concepts (SMC) [LuxAlgo]"
+    - "VSA Volume"
+  after_indicator_add_ms: 500
+  # Extensible: add more indicators later by appending to this list.
+  # Each entry is one required indicator, matched by any alias in legend item text.
+  required_indicators:
+    - favorite_name: "Smart Money Concepts (SMC) [LuxAlgo]"
+      aliases:
+        - "LuxAlgo - Smart Money Concepts"
+        - "Smart Money Concepts (SMC) [LuxAlgo]"
+    - favorite_name: "VSA Volume"
+      aliases:
+        - "VSA Wyckoff Volume"
+        - "VSA Volume"
+
+  # Optional: per-shot indicator profiles (used by capture_plan interval entries).
+  indicator_profiles:
+    ict_killzones:
+      required_indicators:
+        - favorite_name: "ICT Killzones + Pivots [TFO]"
+          aliases:
+            - "ICT Killzones & Pivots [TFO]"
 
 # If true, still run the legacy canvas screenshot loop after the chart page screenshot
 screenshot_after_chart_download: false
