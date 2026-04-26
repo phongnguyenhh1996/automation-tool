@@ -2766,6 +2766,7 @@ def _tradingview_open_context_menu_and_clear_indicators(page, tv: dict[str, Any]
 def _tradingview_add_required_indicators_from_favorites(page, tv: dict[str, Any]) -> None:
     btn_sel = (tv.get("favorite_indicators_button_selector") or 'button[data-name="show-favorite-indicators"]').strip()
     tpl = (tv.get("favorite_indicator_item_selector_template") or 'div[data-role="menuitem"][aria-label="{name}"]').strip()
+    parent_sel = (tv.get("favorite_indicators_parent_selector") or "").strip()
     names = tv.get("favorite_indicator_names")
     if isinstance(names, list) and names:
         favs = [str(x).strip() for x in names if str(x).strip()]
@@ -2782,7 +2783,15 @@ def _tradingview_add_required_indicators_from_favorites(page, tv: dict[str, Any]
                     inferred.append(fn)
         favs = inferred or ["Smart Money Concepts (SMC) [LuxAlgo]", "VSA Volume"]
 
-    btn = page.locator(btn_sel).first
+    root = page.locator(parent_sel).first if parent_sel else page
+    if parent_sel:
+        try:
+            root.wait_for(state="visible", timeout=20_000)
+        except Exception:
+            # Best-effort: fall back to page scope
+            root = page
+
+    btn = root.locator(btn_sel).first
     # Some TradingView layouts keep the button in DOM but "hidden" (toolbar overflow / responsive).
     # Try a few best-effort click strategies (including clicking inside the button).
     try:

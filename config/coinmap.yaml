@@ -315,6 +315,7 @@ tradingview_capture:
   after_indicator_clear_ms: 450
   indicator_verify_timeout_ms: 6000
   favorite_indicators_button_selector: 'button[data-name="show-favorite-indicators"]'
+  favorite_indicators_parent_selector: "#header-toolbar-indicators"
   favorite_indicator_item_selector_template: 'div[data-role="menuitem"][aria-label="{name}"]'
   favorite_indicator_names:
     - "Smart Money Concepts (SMC) [LuxAlgo]"
