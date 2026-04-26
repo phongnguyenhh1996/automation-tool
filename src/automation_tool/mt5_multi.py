@@ -4,6 +4,7 @@ Orchestration: nhiều tài khoản MT5 tuần tự (``accounts.json``).
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -110,14 +111,15 @@ def execute_trade_all_accounts(
     log_tp2: bool = True,
 ) -> MT5MultiExecutionSummary:
     """
-    Lần lượt đăng nhập từng tài khoản và gửi lệnh (``execute_trade`` đã shutdown sau mỗi lần).
+    Chạy song song tất cả tài khoản và gửi lệnh (``execute_trade`` shutdown sau mỗi lần).
     """
     out = MT5MultiExecutionSummary()
-    for acc in accounts:
+
+    def _run_one(acc: MT5AccountEntry) -> MT5ExecutionResult:
         lot_ov, _hint = _lot_override_for_entry(
             trade, acc, dry_run=dry_run, symbol_override=symbol_override
         )
-        ex = execute_trade(
+        return execute_trade(
             trade,
             terminal_path=acc.terminal_path,
             login=acc.login,
@@ -132,12 +134,19 @@ def execute_trade_all_accounts(
             account_id=acc.id,
             account_symbol_map=acc.symbol_map or None,
         )
+
+    async def _gather() -> list[MT5ExecutionResult]:
+        tasks = [asyncio.to_thread(_run_one, acc) for acc in accounts]
+        return await asyncio.gather(*tasks)
+
+    results = asyncio.run(_gather())
+    for ex in results:
         out.results.append(ex)
         if not ex.ok:
             out.ok_all = False
         tid = int(ex.order) if ex.order else 0
-        if tid > 0:
-            out.tickets_by_account_id[acc.id] = tid
+        if tid > 0 and ex.account_id:
+            out.tickets_by_account_id[str(ex.account_id)] = tid
     return out
 
 
@@ -166,6 +175,8 @@ def mt5_cancel_pending_or_close_all_accounts(
     """Hủy/đóng ticket trên từng acc (theo map đã lưu)."""
     summary = MT5MultiManageSummary()
     by_id = {a.id: a for a in accounts}
+
+    items: list[tuple[str, int, MT5AccountEntry]] = []
     for acc_id, ticket in ticket_by_account_id.items():
         acc = by_id.get(acc_id)
         if acc is None:
@@ -183,6 +194,10 @@ def mt5_cancel_pending_or_close_all_accounts(
             continue
         if int(ticket) <= 0:
             continue
+        items.append((acc_id, int(ticket), acc))
+
+    def _run_one(item: tuple[str, int, MT5AccountEntry]) -> tuple[str, MT5ManageResult]:
+        acc_id, ticket, acc = item
         r = mt5_cancel_pending_or_close_position(
             int(ticket),
             dry_run=dry_run,
@@ -191,6 +206,14 @@ def mt5_cancel_pending_or_close_all_accounts(
             password=acc.password,
             server=acc.server,
         )
+        return acc_id, r
+
+    async def _gather() -> list[tuple[str, MT5ManageResult]]:
+        tasks = [asyncio.to_thread(_run_one, it) for it in items]
+        return await asyncio.gather(*tasks)
+
+    results = asyncio.run(_gather()) if items else []
+    for acc_id, r in results:
         summary.results.append((acc_id, r))
         if not r.ok:
             summary.ok_all = False
@@ -231,6 +254,8 @@ def mt5_chinh_trade_line_all_accounts(
     """
     summary = MT5MultiChinhSummary()
     by_id = {a.id: a for a in accounts}
+
+    items: list[tuple[str, int, MT5AccountEntry]] = []
     for acc_id, ticket in ticket_by_account_id.items():
         acc = by_id.get(acc_id)
         if acc is None:
@@ -259,6 +284,10 @@ def mt5_chinh_trade_line_all_accounts(
             )
             summary.ok_all_inplace = False
             continue
+        items.append((acc_id, int(ticket), acc))
+
+    def _run_one(item: tuple[str, int, MT5AccountEntry]) -> tuple[str, MT5ChinhTradeLineResult]:
+        acc_id, ticket, acc = item
         r = mt5_chinh_trade_line_inplace(
             int(ticket),
             new_parsed,
@@ -270,6 +299,14 @@ def mt5_chinh_trade_line_all_accounts(
             password=acc.password,
             server=acc.server,
         )
+        return acc_id, r
+
+    async def _gather() -> list[tuple[str, MT5ChinhTradeLineResult]]:
+        tasks = [asyncio.to_thread(_run_one, it) for it in items]
+        return await asyncio.gather(*tasks)
+
+    results = asyncio.run(_gather()) if items else []
+    for acc_id, r in results:
         summary.results.append((acc_id, r))
         if not (
             r.ok

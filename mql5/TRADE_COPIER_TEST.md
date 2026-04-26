@@ -69,6 +69,7 @@ Purpose: prove resilience if slave misses events.
   - Any copier orders/positions that **no longer exist** on primary are cleaned up on `SNAP_END`.
 
 ## Notes / common issues
+- Verified (manual): Python MetaTrader5 integration can run **two MT5 terminals in parallel** on the same Windows VPS **when each account uses its own `terminal_path`** (per-account EXE path). This avoids terminals “fighting” over a single session.
 - If primary & slave are **not** on the same machine (no shared Common Files), file-based copier won’t work; switch to TCP/HTTP relay.
 - If broker has different min lot / step, partial-close might need rounding (future enhancement).
 - If symbol doesn’t exist on slave broker, it will log and skip that event.
