@@ -340,6 +340,14 @@ tradingview_capture:
         - favorite_name: "ICT Killzones + Pivots [TFO]"
           aliases:
             - "ICT Killzones & Pivots [TFO]"
+      # If VSA/SMC are present, force clear before re-adding ICT-only.
+      forbidden_indicators:
+        - aliases:
+            - "VSA Wyckoff Volume"
+            - "VSA Volume"
+        - aliases:
+            - "LuxAlgo - Smart Money Concepts"
+            - "Smart Money Concepts (SMC) [LuxAlgo]"
 
 # If true, still run the legacy canvas screenshot loop after the chart page screenshot
 screenshot_after_chart_download: false

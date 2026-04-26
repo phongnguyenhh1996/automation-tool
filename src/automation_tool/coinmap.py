@@ -2649,6 +2649,48 @@ def _tv_required_indicator_groups(tv: dict[str, Any]) -> list[list[str]]:
     ]
 
 
+def _tv_forbidden_indicator_groups(tv: dict[str, Any]) -> list[list[str]]:
+    """
+    Indicators that must NOT be present (matched by alias) for this shot.
+
+    Config:
+      tradingview_capture.forbidden_indicators:
+        - aliases: [...]
+      OR (back-compat):
+      tradingview_capture.forbidden_indicators_aliases: {key: [aliases...]}
+    """
+    raw = tv.get("forbidden_indicators")
+    if isinstance(raw, list) and raw:
+        groups: list[list[str]] = []
+        for row in raw:
+            if not isinstance(row, dict):
+                continue
+            aliases = row.get("aliases")
+            if isinstance(aliases, list):
+                names = [str(x).strip() for x in aliases if str(x).strip()]
+            else:
+                names = [str(aliases).strip()] if str(aliases).strip() else []
+            if names:
+                groups.append(names)
+        if groups:
+            return groups
+
+    raw2 = tv.get("forbidden_indicators_aliases")
+    if isinstance(raw2, dict) and raw2:
+        groups2: list[list[str]] = []
+        for _k, v in raw2.items():
+            if isinstance(v, list):
+                names = [str(x).strip() for x in v if str(x).strip()]
+            else:
+                names = [str(v).strip()] if str(v).strip() else []
+            if names:
+                groups2.append(names)
+        if groups2:
+            return groups2
+
+    return []
+
+
 def _tv_apply_indicator_profile(tv: dict[str, Any], profile: str) -> dict[str, Any]:
     """
     Return a shallow-copied tv dict with overrides from `indicator_profiles[profile]`.
@@ -2684,6 +2726,7 @@ def _tradingview_list_legend_item_texts(page, tv: dict[str, Any]) -> list[str]:
 
 def _tradingview_has_required_indicators(page, tv: dict[str, Any]) -> bool:
     groups = _tv_required_indicator_groups(tv)
+    forbidden = _tv_forbidden_indicator_groups(tv)
     texts = _tradingview_list_legend_item_texts(page, tv)
     # If no legend items are found, we cannot verify. Treat as missing here so the caller
     # can decide whether to run a destructive recovery (clear) or a safe recovery (add-only).
@@ -2700,6 +2743,10 @@ def _tradingview_has_required_indicators(page, tv: dict[str, Any]) -> bool:
     # Require every indicator group to be present.
     if not groups:
         return True
+    # Forbid groups (if any) — if found, force recovery (clear).
+    for fg in forbidden:
+        if _has_any(list(fg or [])):
+            return False
     for g in groups:
         if not _has_any(list(g or [])):
             return False
@@ -2839,10 +2886,16 @@ def _tradingview_ensure_required_indicators(page, tv: dict[str, Any]) -> None:
 
     verify_timeout_ms = int(tv.get("indicator_verify_timeout_ms", 6000))
     groups = _tv_required_indicator_groups(tv)
+    forbidden = _tv_forbidden_indicator_groups(tv)
     logging.getLogger("automation_tool").info(
         "tv: ensure indicators | required=%s",
         [[x for x in g if x] for g in (groups or [])],
     )
+    if forbidden:
+        logging.getLogger("automation_tool").info(
+            "tv: ensure indicators | forbidden=%s",
+            [[x for x in g if x] for g in (forbidden or [])],
+        )
     deadline = time.monotonic() + max(0, verify_timeout_ms) / 1000.0
     while time.monotonic() < deadline:
         if _tradingview_has_required_indicators(page, tv):
