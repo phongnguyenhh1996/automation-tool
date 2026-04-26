@@ -2796,24 +2796,48 @@ def _tradingview_open_context_menu_and_clear_indicators(page, tv: dict[str, Any]
     else:
         candidates = ["Xóa 1 chỉ báo", "Xóa 2 chỉ báo"]
 
-    x, y = _tradingview_chart_center_xy(page, tv)
-    page.mouse.click(x, y, button="right")
+    attempts = int(tv.get("indicator_clear_retry_attempts", 3) or 3)
+    click_timeout_ms = int(tv.get("indicator_clear_click_timeout_ms", 3000) or 3000)
+    visible_timeout_ms = int(tv.get("indicator_clear_visible_timeout_ms", 1500) or 1500)
 
-    # Try to click the first visible matching menu item.
-    for t in candidates:
-        try:
-            item = page.locator(
-                'tr[data-role="menuitem"] [data-label="true"]',
-                has_text=t,
-            ).first
-            item.wait_for(state="visible", timeout=1500)
-            item.click(timeout=3000)
-            logging.getLogger("automation_tool").info("tv: clear indicators | clicked %r", t)
-            break
-        except Exception:
-            continue
+    last_err: Optional[BaseException] = None
+    for i in range(max(1, attempts)):
+        x, y = _tradingview_chart_center_xy(page, tv)
+        page.mouse.click(x, y, button="right")
+        clicked = False
 
-    page.wait_for_timeout(int(tv.get("after_indicator_clear_ms", 450)))
+        # Try to click the first visible matching menu item.
+        for t in candidates:
+            try:
+                item = page.locator(
+                    'tr[data-role="menuitem"] [data-label="true"]',
+                    has_text=t,
+                ).first
+                item.wait_for(state="visible", timeout=visible_timeout_ms)
+                item.click(timeout=click_timeout_ms, force=True)
+                logging.getLogger("automation_tool").info(
+                    "tv: clear indicators | clicked %r (attempt %s/%s)",
+                    t,
+                    i + 1,
+                    attempts,
+                )
+                clicked = True
+                break
+            except Exception as e:
+                last_err = e
+                continue
+
+        if clicked:
+            page.wait_for_timeout(int(tv.get("after_indicator_clear_ms", 450)))
+            return
+
+        # Backoff a bit then retry opening context menu.
+        page.wait_for_timeout(300)
+
+    msg = f"tv: clear indicators failed after {attempts} attempt(s)"
+    if last_err is not None:
+        msg += f" ({last_err})"
+    raise SystemExit(msg)
 
 
 def _tradingview_add_required_indicators_from_favorites(page, tv: dict[str, Any]) -> None:

@@ -336,6 +336,8 @@ tradingview_capture:
   # Optional: per-shot indicator profiles (used by capture_plan interval entries).
   indicator_profiles:
     ict_killzones:
+      favorite_indicator_names:
+        - "ICT Killzones + Pivots [TFO]"
       required_indicators:
         - favorite_name: "ICT Killzones + Pivots [TFO]"
           aliases:
