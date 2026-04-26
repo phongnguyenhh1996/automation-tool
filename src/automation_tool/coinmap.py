@@ -2782,8 +2782,20 @@ def _tradingview_add_required_indicators_from_favorites(page, tv: dict[str, Any]
                     inferred.append(fn)
         favs = inferred or ["Smart Money Concepts (SMC) [LuxAlgo]", "VSA Volume"]
 
-    page.locator(btn_sel).first.wait_for(state="visible", timeout=20_000)
-    page.locator(btn_sel).first.click(timeout=10_000)
+    btn = page.locator(btn_sel).first
+    # Some TradingView layouts keep the button in DOM but "hidden" (toolbar overflow / responsive).
+    # Try a few best-effort click strategies (including clicking inside the button).
+    try:
+        btn.wait_for(state="visible", timeout=4000)
+        btn.click(timeout=10_000)
+    except Exception:
+        try:
+            btn.click(timeout=10_000, force=True)
+        except Exception:
+            # Click a child element inside the button (user reported this can be hit-testable).
+            child = btn.locator(":scope div").first
+            child.wait_for(state="attached", timeout=10_000)
+            child.click(timeout=10_000, force=True)
 
     after_add = int(tv.get("after_indicator_add_ms", 500))
     for nm in favs:
