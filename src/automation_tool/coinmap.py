@@ -2783,6 +2783,8 @@ def _tradingview_add_required_indicators_from_favorites(page, tv: dict[str, Any]
                     inferred.append(fn)
         favs = inferred or ["Smart Money Concepts (SMC) [LuxAlgo]", "VSA Volume"]
 
+    after_add = int(tv.get("after_indicator_add_ms", 500))
+
     root = page.locator(parent_sel).first if parent_sel else page
     if parent_sel:
         try:
@@ -2792,34 +2794,35 @@ def _tradingview_add_required_indicators_from_favorites(page, tv: dict[str, Any]
             root = page
 
     btn = root.locator(btn_sel).first
-    # Some TradingView layouts keep the button in DOM but "hidden" (toolbar overflow / responsive).
-    # Try a few best-effort click strategies (including clicking inside the button).
-    try:
-        btn.wait_for(state="visible", timeout=4000)
-        btn.click(timeout=10_000)
-    except Exception:
+
+    def _open_favorites_menu() -> None:
+        # Some TradingView layouts keep the button in DOM but "hidden" (toolbar overflow / responsive).
+        # Try a few best-effort click strategies (including clicking inside the button).
+        try:
+            btn.wait_for(state="visible", timeout=4000)
+            btn.click(timeout=10_000)
+            return
+        except Exception:
+            pass
         try:
             btn.click(timeout=10_000, force=True)
+            return
         except Exception:
-            # Click a child element inside the button (user reported this can be hit-testable).
-            child = btn.locator(":scope div").first
-            child.wait_for(state="attached", timeout=10_000)
-            child.click(timeout=10_000, force=True)
+            pass
+        # Click a child element inside the button (user reported this can be hit-testable).
+        child = btn.locator(":scope div").first
+        child.wait_for(state="attached", timeout=10_000)
+        child.click(timeout=10_000, force=True)
 
-    after_add = int(tv.get("after_indicator_add_ms", 500))
     for nm in favs:
+        # TradingView closes the favorites menu after adding one indicator; reopen per item.
+        _open_favorites_menu()
         sel = tpl.format(name=nm)
         it = page.locator(sel).first
         it.wait_for(state="visible", timeout=10_000)
         it.click(timeout=10_000)
         if after_add > 0:
             page.wait_for_timeout(after_add)
-
-    # Close menu (best-effort) by clicking the button again.
-    try:
-        page.locator(btn_sel).first.click(timeout=2000)
-    except Exception:
-        pass
 
 
 def _tradingview_ensure_required_indicators(page, tv: dict[str, Any]) -> None:
