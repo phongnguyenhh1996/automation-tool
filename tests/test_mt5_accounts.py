@@ -31,6 +31,7 @@ def test_omitted_lot_uses_from_trade() -> None:
             [
                 {
                     "id": "a",
+                    "terminal_path": "C:/MT5/A/metatrader64.exe",
                     "login": 1,
                     "password": "x",
                     "server": "S",
@@ -38,6 +39,7 @@ def test_omitted_lot_uses_from_trade() -> None:
                 },
                 {
                     "id": "b",
+                    "terminal_path": "C:/MT5/B/metatrader64.exe",
                     "login": 2,
                     "password": "y",
                     "server": "S",
@@ -59,6 +61,7 @@ def test_null_lot_uses_from_trade() -> None:
             [
                 {
                     "id": "a",
+                    "terminal_path": "C:/MT5/A/metatrader64.exe",
                     "login": 1,
                     "password": "x",
                     "server": "S",
@@ -79,6 +82,7 @@ def test_load_valid_two_accounts_one_primary() -> None:
             [
                 {
                     "id": "a",
+                    "terminal_path": "C:/MT5/A/metatrader64.exe",
                     "login": 1,
                     "password": "x",
                     "server": "S",
@@ -87,6 +91,7 @@ def test_load_valid_two_accounts_one_primary() -> None:
                 },
                 {
                     "id": "b",
+                    "terminal_path": "C:/MT5/B/metatrader64.exe",
                     "login": 2,
                     "password": "y",
                     "server": "S",
@@ -112,6 +117,7 @@ def test_load_max_loss_usd_rule() -> None:
             [
                 {
                     "id": "a",
+                    "terminal_path": "C:/MT5/A/metatrader64.exe",
                     "login": 1,
                     "password": "x",
                     "server": "S",
@@ -133,6 +139,7 @@ def test_rejects_zero_primary() -> None:
             [
                 {
                     "id": "a",
+                    "terminal_path": "C:/MT5/A/metatrader64.exe",
                     "login": 1,
                     "password": "x",
                     "server": "S",
@@ -153,6 +160,7 @@ def test_rejects_duplicate_ids() -> None:
             [
                 {
                     "id": "a",
+                    "terminal_path": "C:/MT5/A/metatrader64.exe",
                     "login": 1,
                     "password": "x",
                     "server": "S",
@@ -161,6 +169,7 @@ def test_rejects_duplicate_ids() -> None:
                 },
                 {
                     "id": "a",
+                    "terminal_path": "C:/MT5/B/metatrader64.exe",
                     "login": 2,
                     "password": "y",
                     "server": "S",
@@ -181,6 +190,7 @@ def test_load_symbol_map_optional() -> None:
             [
                 {
                     "id": "micro",
+                    "terminal_path": "C:/MT5/micro/metatrader64.exe",
                     "login": 1,
                     "password": "x",
                     "server": "S",
@@ -190,6 +200,7 @@ def test_load_symbol_map_optional() -> None:
                 },
                 {
                     "id": "std",
+                    "terminal_path": "C:/MT5/std/metatrader64.exe",
                     "login": 2,
                     "password": "y",
                     "server": "S",
@@ -202,6 +213,68 @@ def test_load_symbol_map_optional() -> None:
         accs = load_mt5_accounts_from_path(p)
         assert accs[0].symbol_map["XAUUSD"] == "XAUUSDm"
         assert accs[1].symbol_map["XAUUSD"] == "XAUUSD"
+
+
+def test_rejects_missing_terminal_path() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "accounts.json"
+        _write_accounts(
+            p,
+            [
+                {
+                    "id": "a",
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                    "lot": {"mode": "fixed", "volume": 0.01},
+                },
+            ],
+        )
+        with pytest.raises(ValueError, match=r"terminal_path"):
+            load_mt5_accounts_from_path(p)
+
+
+def test_rejects_empty_terminal_path() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "accounts.json"
+        _write_accounts(
+            p,
+            [
+                {
+                    "id": "a",
+                    "terminal_path": "   ",
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                    "lot": {"mode": "fixed", "volume": 0.01},
+                },
+            ],
+        )
+        with pytest.raises(ValueError, match=r"terminal_path"):
+            load_mt5_accounts_from_path(p)
+
+
+def test_rejects_non_string_terminal_path() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "accounts.json"
+        _write_accounts(
+            p,
+            [
+                {
+                    "id": "a",
+                    "terminal_path": 123,
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                    "lot": {"mode": "fixed", "volume": 0.01},
+                },
+            ],
+        )
+        with pytest.raises(ValueError, match=r"terminal_path"):
+            load_mt5_accounts_from_path(p)
 
 
 def test_resolve_mt5_trade_symbol_uses_per_account_map() -> None:

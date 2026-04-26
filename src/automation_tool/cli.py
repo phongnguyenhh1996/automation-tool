@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import concurrent.futures
 import json
 import logging
@@ -1146,6 +1147,26 @@ def _parser() -> argparse.ArgumentParser:
     mt5l.add_argument("--server", default=None, help="Ghi đè MT5_SERVER")
     mt5l.set_defaults(func=cmd_mt5_login)
 
+    mt5la = sub.add_parser(
+        "mt5-login-all",
+        help="Kết nối tất cả accounts.json song song và in terminal_info()/account_info() cho từng account.",
+    )
+    mt5la.add_argument(
+        "--mt5-accounts-json",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help=_MT5_ACCOUNTS_JSON_HELP,
+    )
+    mt5la.add_argument(
+        "--concurrency",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Số kết nối chạy song song (default: tất cả accounts). Nếu lỗi lặt vặt, thử giảm xuống 1-2.",
+    )
+    mt5la.set_defaults(func=cmd_mt5_login_all_async)
+
     br = sub.add_parser(
         "browser",
         help="Browser worker service: long-lived Playwright + TCP control (see data/browser_service_state.json)",
@@ -1955,6 +1976,84 @@ def cmd_mt5_login(args: argparse.Namespace) -> None:
     )
     print("\n".join(r.lines))
     if not r.ok:
+        raise SystemExit(1)
+
+
+def cmd_mt5_login_all_async(args: argparse.Namespace) -> None:
+    """
+    Kết nối tất cả accounts (accounts.json) song song, log terminal_info() + account_info().
+
+    Lưu ý: MetaTrader5 Python API có thể không thread-safe. Nếu gặp lỗi ngẫu nhiên, giảm --concurrency.
+    """
+
+    accounts = load_mt5_accounts_for_cli(_resolved_mt5_accounts_json(args))
+    if not accounts:
+        raise SystemExit("Không có accounts.json. Dùng --mt5-accounts-json hoặc set MT5_ACCOUNTS_JSON.")
+
+    try:
+        max_conc = int(getattr(args, "concurrency", 0) or 0)
+    except Exception:
+        max_conc = 0
+    if max_conc <= 0:
+        max_conc = len(accounts)
+    max_conc = max(1, min(max_conc, len(accounts)))
+
+    def _probe_one(acc) -> tuple[str, bool, list[str]]:
+        from automation_tool.mt5_execute import _load_mt5, format_last_error
+
+        mt5 = _load_mt5()
+        lines: list[str] = []
+        ok = False
+        try:
+            term_path = str(getattr(acc, "terminal_path", "") or "").strip()
+            if not term_path:
+                return acc.id, False, ["terminal_path rỗng"]
+            if not mt5.initialize(
+                term_path,
+                login=int(acc.login),
+                password=str(acc.password),
+                server=str(acc.server),
+            ):
+                return acc.id, False, [f"mt5.initialize thất bại: {format_last_error(mt5)}"]
+
+            ti = mt5.terminal_info()
+            ai = mt5.account_info()
+            lines.append(f"terminal_path: {term_path}")
+            lines.append(f"terminal_info: {ti}")
+            lines.append(f"account_info: {ai}")
+            if ai is not None:
+                try:
+                    lines.append(f"account.login={ai.login} server={ai.server!r} currency={ai.currency}")
+                except Exception:
+                    pass
+            ok = ti is not None and ai is not None
+            return acc.id, ok, lines
+        finally:
+            try:
+                mt5.shutdown()
+            except Exception:
+                pass
+
+    async def _run() -> list[tuple[str, bool, list[str]]]:
+        sem = asyncio.Semaphore(max_conc)
+
+        async def _one(acc):
+            async with sem:
+                return await asyncio.to_thread(_probe_one, acc)
+
+        tasks = [_one(a) for a in accounts]
+        return await asyncio.gather(*tasks)
+
+    results = asyncio.run(_run())
+    any_fail = False
+    for acc_id, ok, lines in results:
+        print(f"\n[{acc_id}] {'OK' if ok else 'FAIL'}")
+        for ln in lines:
+            print(ln)
+        if not ok:
+            any_fail = True
+
+    if any_fail:
         raise SystemExit(1)
 
 

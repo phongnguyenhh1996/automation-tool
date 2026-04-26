@@ -687,6 +687,7 @@ def resolve_mt5_trade_symbol(
 def execute_trade(
     trade: ParsedTrade,
     *,
+    terminal_path: Optional[str] = None,
     login: Optional[int] = None,
     password: Optional[str] = None,
     server: Optional[str] = None,
@@ -764,6 +765,14 @@ def execute_trade(
         )
 
     mt5 = _load_mt5()
+    term_path = (terminal_path or "").strip()
+    if not term_path:
+        return MT5ExecutionResult(
+            ok=False,
+            message="terminal_path bắt buộc để kết nối MT5 terminal (metatrader64.exe).",
+            account_id=account_id,
+            resolved_symbol=trade.symbol,
+        )
     kwargs: dict[str, Any] = {}
     if login_i and password_s and server_s:
         kwargs["login"] = login_i
@@ -772,7 +781,7 @@ def execute_trade(
 
     le: Optional[tuple[Any, ...]] = None
     for attempt in range(1, _MT5_INIT_MAX_ATTEMPTS + 1):
-        if mt5.initialize(**kwargs):
+        if mt5.initialize(term_path, **kwargs):
             break
         le = _last_error_tuple(mt5)
         if attempt < _MT5_INIT_MAX_ATTEMPTS:

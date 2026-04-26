@@ -28,6 +28,7 @@ class MT5ManageResult:
 
 
 def _mt5_init(
+    terminal_path: Optional[str] = None,
     login: Optional[int] = None,
     password: Optional[str] = None,
     server: Optional[str] = None,
@@ -37,6 +38,9 @@ def _mt5_init(
     không thì đọc ``MT5_*`` từ env (hành vi cũ).
     """
     mt5 = _load_mt5()
+    term_path = (terminal_path or "").strip()
+    if not term_path:
+        return None
     kwargs: dict[str, Any] = {}
     if login is not None and password and server:
         kwargs["login"] = int(login)
@@ -50,7 +54,7 @@ def _mt5_init(
             kwargs["login"] = login_i
             kwargs["password"] = password_s
             kwargs["server"] = server_s
-    if not mt5.initialize(**kwargs):
+    if not mt5.initialize(term_path, **kwargs):
         return None
     return mt5
 
@@ -80,6 +84,7 @@ def mt5_cancel_pending_order(
     ticket: int,
     *,
     dry_run: bool = False,
+    terminal_path: Optional[str] = None,
     login: Optional[int] = None,
     password: Optional[str] = None,
     server: Optional[str] = None,
@@ -101,7 +106,7 @@ def mt5_cancel_pending_order(
     if terminal_session_only:
         mt5 = _mt5_init_current_terminal()
     else:
-        mt5 = _mt5_init(login, password, server)
+        mt5 = _mt5_init(terminal_path, login, password, server)
     if mt5 is None:
         return MT5ManageResult(ok=False, message="mt5.initialize thất bại", kind=None)
     try:
@@ -133,6 +138,7 @@ def mt5_close_position(
     ticket: int,
     *,
     dry_run: bool = False,
+    terminal_path: Optional[str] = None,
     login: Optional[int] = None,
     password: Optional[str] = None,
     server: Optional[str] = None,
@@ -144,7 +150,7 @@ def mt5_close_position(
             message=f"[DRY-RUN] Sẽ đóng position ticket={ticket}",
             kind="position",
         )
-    mt5 = _mt5_init(login, password, server)
+    mt5 = _mt5_init(terminal_path, login, password, server)
     if mt5 is None:
         return MT5ManageResult(ok=False, message="mt5.initialize thất bại", kind=None)
     try:
@@ -359,6 +365,7 @@ def mt5_cancel_pending_or_close_position(
     ticket: int,
     *,
     dry_run: bool = False,
+    terminal_path: Optional[str] = None,
     login: Optional[int] = None,
     password: Optional[str] = None,
     server: Optional[str] = None,
@@ -366,7 +373,7 @@ def mt5_cancel_pending_or_close_position(
     """Thử tìm pending ``ticket``; không có thì đóng position ``ticket``."""
     if dry_run:
         return MT5ManageResult(ok=True, message="[DRY-RUN] cancel/close", kind="none")
-    mt5 = _mt5_init(login, password, server)
+    mt5 = _mt5_init(terminal_path, login, password, server)
     if mt5 is None:
         return MT5ManageResult(ok=False, message="mt5.initialize thất bại", kind=None)
     try:
@@ -376,11 +383,21 @@ def mt5_cancel_pending_or_close_position(
         mt5.shutdown()
     if has_order:
         return mt5_cancel_pending_order(
-            ticket, dry_run=False, login=login, password=password, server=server
+            ticket,
+            dry_run=False,
+            terminal_path=terminal_path,
+            login=login,
+            password=password,
+            server=server,
         )
     if has_pos:
         return mt5_close_position(
-            ticket, dry_run=False, login=login, password=password, server=server
+            ticket,
+            dry_run=False,
+            terminal_path=terminal_path,
+            login=login,
+            password=password,
+            server=server,
         )
     return MT5ManageResult(
         ok=False,
@@ -435,6 +452,7 @@ def mt5_chinh_trade_line_inplace(
     dry_run: bool = False,
     symbol_override: Optional[str] = None,
     account_symbol_map: Optional[dict[str, str]] = None,
+    terminal_path: Optional[str] = None,
     login: Optional[int] = None,
     password: Optional[str] = None,
     server: Optional[str] = None,
@@ -466,7 +484,7 @@ def mt5_chinh_trade_line_inplace(
             outcome="ticket_missing",
         )
 
-    mt5 = _mt5_init(login, password, server)
+    mt5 = _mt5_init(terminal_path, login, password, server)
     if mt5 is None:
         return MT5ChinhTradeLineResult(
             ok=False,

@@ -11,10 +11,32 @@ input string InpChannel = "default";
 input long   InpMagic   = 9345021;
 input int    InpSnapshotSeconds = 10;   // write periodic snapshot events
 input int    InpDebounceMs = 200;        // basic debounce for rapid-fire modify/trailing
+input string InpWriterTag = "PrimaryPublisher@repo"; // helps identify which EA writes the file
 
 static datetime g_last_snapshot = 0;
 static long     g_last_modify_pos_id = 0;
 static long     g_last_modify_ms = 0;
+
+long TsMs()
+{
+   // Avoid implicit datetime arithmetic causing malformed JSON on some builds.
+   return ((long)TimeLocal()) * 1000L;
+}
+
+void PublishHello()
+{
+   // Emit a signature line so we can verify the active .ex5 really matches this source.
+   const string hello = StringFormat(
+      "{\"event_id\":\"%s\",\"ts_ms\":%I64d,\"primary_login\":%I64d,\"type\":\"HELLO\",\"writer_tag\":\"%s\",\"channel\":\"%s\",\"magic\":%I64d}",
+      (NowMsStr()),
+      TsMs(),
+      (long)AccountInfoInteger(ACCOUNT_LOGIN),
+      (InpWriterTag),
+      (InpChannel),
+      (long)InpMagic
+   );
+   AppendEventLine(hello);
+}
 
 string NowMsStr()
 {
@@ -37,16 +59,16 @@ string EventBase(
 )
 {
    const long login = (long)AccountInfoInteger(ACCOUNT_LOGIN);
-   const long ts_ms = (long)(TimeLocal() * 1000);
+   const long ts_ms = TsMs();
 
    string json = "{";
-   json += "\"event_id\":\"" + JsonEscape(NowMsStr()) + "\",";
+   json += "\"event_id\":\"" + NowMsStr() + "\",";
    json += "\"ts_ms\":" + (string)ts_ms + ",";
    json += "\"primary_login\":" + (string)login + ",";
-   json += "\"type\":\"" + JsonEscape(type) + "\",";
-   json += "\"symbol\":\"" + JsonEscape(symbol) + "\",";
-   json += "\"side\":\"" + JsonEscape(side) + "\",";
-   json += "\"order_type\":\"" + JsonEscape(order_type) + "\",";
+   json += "\"type\":\"" + type + "\",";
+   json += "\"symbol\":\"" + symbol + "\",";
+   json += "\"side\":\"" + side + "\",";
+   json += "\"order_type\":\"" + order_type + "\",";
    json += "\"magic\":" + (string)InpMagic + ",";
    json += "\"primary_ticket\":" + (string)primary_ticket + ",";
    json += "\"primary_position_id\":" + (string)primary_position_id;
@@ -95,7 +117,14 @@ void PublishSnapshot()
    // Snapshot is emitted as a bounded sequence to keep parsing simple:
    // SNAP_BEGIN, SNAP_POS (one per position), SNAP_ORD (one per order), SNAP_END
    const long snap_id = (long)GetTickCount64();
-   AppendEventLine("{\"event_id\":\"" + JsonEscape((string)TimeLocal() + "_snap_" + (string)snap_id) + "\",\"ts_ms\":" + (string)(TimeLocal()*1000) + ",\"primary_login\":" + (string)AccountInfoInteger(ACCOUNT_LOGIN) + ",\"type\":\"SNAP_BEGIN\",\"snap_id\":" + (string)snap_id + "}");
+   const string snap_begin = StringFormat(
+      "{\"event_id\":\"%s\",\"ts_ms\":%I64d,\"primary_login\":%I64d,\"type\":\"SNAP_BEGIN\",\"snap_id\":%I64d}",
+      NowMsStr(),
+      TsMs(),
+      (long)AccountInfoInteger(ACCOUNT_LOGIN),
+      snap_id
+   );
+   AppendEventLine(snap_begin);
 
    for(int i=0;i<PositionsTotal();i++)
    {
@@ -111,13 +140,13 @@ void PublishSnapshot()
       string side   = (ptype == POSITION_TYPE_BUY ? "BUY" : "SELL");
 
       string j = "{";
-      j += "\"event_id\":\"" + JsonEscape((string)TimeLocal() + "_snap_pos_" + (string)pos_id) + "\",";
-      j += "\"ts_ms\":" + (string)(TimeLocal()*1000) + ",";
+      j += "\"event_id\":\"" + NowMsStr() + "\",";
+      j += "\"ts_ms\":" + (string)TsMs() + ",";
       j += "\"primary_login\":" + (string)AccountInfoInteger(ACCOUNT_LOGIN) + ",";
       j += "\"type\":\"SNAP_POS\",";
       j += "\"snap_id\":" + (string)snap_id + ",";
-      j += "\"symbol\":\"" + JsonEscape(symbol) + "\",";
-      j += "\"side\":\"" + JsonEscape(side) + "\",";
+      j += "\"symbol\":\"" + symbol + "\",";
+      j += "\"side\":\"" + side + "\",";
       j += "\"lots\":" + DoubleToString(vol, 2) + ",";
       j += "\"price\":" + DoubleToString(price, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS)) + ",";
       j += "\"sl\":" + DoubleToString(sl, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS)) + ",";
@@ -147,14 +176,14 @@ void PublishSnapshot()
       double tp = OrderGetDouble(ORDER_TP);
 
       string j = "{";
-      j += "\"event_id\":\"" + JsonEscape((string)TimeLocal() + "_snap_ord_" + (string)ticket) + "\",";
-      j += "\"ts_ms\":" + (string)(TimeLocal()*1000) + ",";
+      j += "\"event_id\":\"" + NowMsStr() + "\",";
+      j += "\"ts_ms\":" + (string)TsMs() + ",";
       j += "\"primary_login\":" + (string)AccountInfoInteger(ACCOUNT_LOGIN) + ",";
       j += "\"type\":\"SNAP_ORD\",";
       j += "\"snap_id\":" + (string)snap_id + ",";
-      j += "\"symbol\":\"" + JsonEscape(symbol) + "\",";
-      j += "\"side\":\"" + JsonEscape(side) + "\",";
-      j += "\"order_type\":\"" + JsonEscape(orderType) + "\",";
+      j += "\"symbol\":\"" + symbol + "\",";
+      j += "\"side\":\"" + side + "\",";
+      j += "\"order_type\":\"" + orderType + "\",";
       j += "\"lots\":" + DoubleToString(vol, 2) + ",";
       j += "\"price\":" + DoubleToString(price, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS)) + ",";
       j += "\"sl\":" + DoubleToString(sl, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS)) + ",";
@@ -165,7 +194,14 @@ void PublishSnapshot()
       AppendEventLine(j);
    }
 
-   AppendEventLine("{\"event_id\":\"" + JsonEscape((string)TimeLocal() + "_snap_end_" + (string)snap_id) + "\",\"ts_ms\":" + (string)(TimeLocal()*1000) + ",\"primary_login\":" + (string)AccountInfoInteger(ACCOUNT_LOGIN) + ",\"type\":\"SNAP_END\",\"snap_id\":" + (string)snap_id + "}");
+   const string snap_end = StringFormat(
+      "{\"event_id\":\"%s\",\"ts_ms\":%I64d,\"primary_login\":%I64d,\"type\":\"SNAP_END\",\"snap_id\":%I64d}",
+      NowMsStr(),
+      TsMs(),
+      (long)AccountInfoInteger(ACCOUNT_LOGIN),
+      snap_id
+   );
+   AppendEventLine(snap_end);
 }
 
 int OnInit()
@@ -173,6 +209,7 @@ int OnInit()
    CopierEnsureCommonDir(InpChannel);
    if(InpSnapshotSeconds > 0)
       EventSetTimer(1);
+   PublishHello();
    Print("TradeCopier PrimaryPublisher started. channel=", InpChannel, " login=", AccountInfoInteger(ACCOUNT_LOGIN));
    return(INIT_SUCCEEDED);
 }

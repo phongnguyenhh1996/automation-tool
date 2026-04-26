@@ -67,6 +67,7 @@ def _lot_override_for_entry(
         vol, hint = compute_volume_for_max_notional_live(
             trade,
             rule,
+            terminal_path=acc.terminal_path,
             login=acc.login,
             password=acc.password,
             server=acc.server,
@@ -87,6 +88,7 @@ def _lot_override_for_entry(
         vol, hint = compute_volume_for_max_loss_live(
             trade,
             rule,
+            terminal_path=acc.terminal_path,
             login=acc.login,
             password=acc.password,
             server=acc.server,
@@ -117,6 +119,7 @@ def execute_trade_all_accounts(
         )
         ex = execute_trade(
             trade,
+            terminal_path=acc.terminal_path,
             login=acc.login,
             password=acc.password,
             server=acc.server,
@@ -183,6 +186,7 @@ def mt5_cancel_pending_or_close_all_accounts(
         r = mt5_cancel_pending_or_close_position(
             int(ticket),
             dry_run=dry_run,
+            terminal_path=acc.terminal_path,
             login=acc.login,
             password=acc.password,
             server=acc.server,
@@ -261,6 +265,7 @@ def mt5_chinh_trade_line_all_accounts(
             dry_run=dry_run,
             symbol_override=symbol_override,
             account_symbol_map=acc.symbol_map or None,
+            terminal_path=acc.terminal_path,
             login=acc.login,
             password=acc.password,
             server=acc.server,

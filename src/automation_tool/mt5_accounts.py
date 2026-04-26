@@ -62,6 +62,8 @@ class MT5AccountEntry:
     """Một dòng trong ``accounts.json``."""
 
     id: str
+    #: Bắt buộc: đường dẫn metatrader.exe/metatrader64.exe cho account này.
+    terminal_path: str
     login: int
     password: str
     server: str
@@ -118,6 +120,14 @@ def _parse_one(obj: Any, index: int) -> MT5AccountEntry:
     acc_id = str(obj.get("id") or "").strip()
     if not acc_id:
         raise ValueError(f"accounts[{index}].id bắt buộc (chuỗi không rỗng)")
+    terminal_path = obj.get("terminal_path")
+    if terminal_path is None:
+        raise ValueError(f"accounts[{index}].terminal_path bắt buộc")
+    if not isinstance(terminal_path, str):
+        raise ValueError(f"accounts[{index}].terminal_path phải là chuỗi")
+    terminal_path_s = terminal_path.strip()
+    if not terminal_path_s:
+        raise ValueError(f"accounts[{index}].terminal_path không được rỗng")
     login = obj.get("login")
     if login is None:
         raise ValueError(f"accounts[{index}].login bắt buộc")
@@ -136,6 +146,7 @@ def _parse_one(obj: Any, index: int) -> MT5AccountEntry:
     sym_map = _parse_symbol_map(obj.get("symbol_map"), index)
     return MT5AccountEntry(
         id=acc_id,
+        terminal_path=terminal_path_s,
         login=int(login),
         password=str(pw),
         server=server,
@@ -336,6 +347,7 @@ def compute_volume_for_max_notional_live(
     trade: ParsedTrade,
     rule: LotRuleMaxNotionalUsd,
     *,
+    terminal_path: str,
     login: int,
     password: str,
     server: str,
@@ -353,12 +365,15 @@ def compute_volume_for_max_notional_live(
     )
 
     mt5 = _load_mt5()
+    term_path = (terminal_path or "").strip()
+    if not term_path:
+        return float(trade.lot), "terminal_path rỗng — không thể initialize MT5 terminal"
     kwargs: dict[str, Any] = {}
     if login and password and server:
         kwargs["login"] = login
         kwargs["password"] = password
         kwargs["server"] = server
-    if not mt5.initialize(**kwargs):
+    if not mt5.initialize(term_path, **kwargs):
         return float(trade.lot), f"mt5.initialize thất bại: {format_last_error(mt5)}"
     try:
         rt, err = resolve_trade_symbol_on_broker(
@@ -384,6 +399,7 @@ def compute_volume_for_max_loss_live(
     trade: ParsedTrade,
     rule: LotRuleMaxLossUsd,
     *,
+    terminal_path: str,
     login: int,
     password: str,
     server: str,
@@ -401,12 +417,15 @@ def compute_volume_for_max_loss_live(
     )
 
     mt5 = _load_mt5()
+    term_path = (terminal_path or "").strip()
+    if not term_path:
+        return float(trade.lot), "terminal_path rỗng — không thể initialize MT5 terminal"
     kwargs: dict[str, Any] = {}
     if login and password and server:
         kwargs["login"] = login
         kwargs["password"] = password
         kwargs["server"] = server
-    if not mt5.initialize(**kwargs):
+    if not mt5.initialize(term_path, **kwargs):
         return float(trade.lot), f"mt5.initialize thất bại: {format_last_error(mt5)}"
     try:
         rt, err = resolve_trade_symbol_on_broker(
