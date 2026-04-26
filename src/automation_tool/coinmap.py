@@ -2685,6 +2685,10 @@ def _tradingview_list_legend_item_texts(page, tv: dict[str, Any]) -> list[str]:
 def _tradingview_has_required_indicators(page, tv: dict[str, Any]) -> bool:
     groups = _tv_required_indicator_groups(tv)
     texts = _tradingview_list_legend_item_texts(page, tv)
+    # If no legend items are found, we cannot verify. Treat as missing here so the caller
+    # can decide whether to run a destructive recovery (clear) or a safe recovery (add-only).
+    if not texts:
+        return False
     hay = "\n".join(texts).lower()
 
     def _has_any(names: list[str]) -> bool:
@@ -2738,6 +2742,7 @@ def _tradingview_chart_center_xy(page, tv: dict[str, Any]) -> tuple[float, float
 
 
 def _tradingview_open_context_menu_and_clear_indicators(page, tv: dict[str, Any]) -> None:
+    logging.getLogger("automation_tool").info("tv: clear indicators | open context menu")
     texts = tv.get("context_menu_delete_indicators_texts")
     if isinstance(texts, list) and texts:
         candidates = [str(x).strip() for x in texts if str(x).strip()]
@@ -2756,6 +2761,7 @@ def _tradingview_open_context_menu_and_clear_indicators(page, tv: dict[str, Any]
             ).first
             item.wait_for(state="visible", timeout=1500)
             item.click(timeout=3000)
+            logging.getLogger("automation_tool").info("tv: clear indicators | clicked %r", t)
             break
         except Exception:
             continue
@@ -2796,6 +2802,7 @@ def _tradingview_add_required_indicators_from_favorites(page, tv: dict[str, Any]
     btn = root.locator(btn_sel).first
 
     def _open_favorites_menu() -> None:
+        logging.getLogger("automation_tool").info("tv: favorites | open menu")
         # Some TradingView layouts keep the button in DOM but "hidden" (toolbar overflow / responsive).
         # Try a few best-effort click strategies (including clicking inside the button).
         try:
@@ -2817,6 +2824,7 @@ def _tradingview_add_required_indicators_from_favorites(page, tv: dict[str, Any]
     for nm in favs:
         # TradingView closes the favorites menu after adding one indicator; reopen per item.
         _open_favorites_menu()
+        logging.getLogger("automation_tool").info("tv: favorites | add indicator=%r", nm)
         sel = tpl.format(name=nm)
         it = page.locator(sel).first
         it.wait_for(state="visible", timeout=10_000)
@@ -2830,23 +2838,50 @@ def _tradingview_ensure_required_indicators(page, tv: dict[str, Any]) -> None:
         return
 
     verify_timeout_ms = int(tv.get("indicator_verify_timeout_ms", 6000))
+    groups = _tv_required_indicator_groups(tv)
+    logging.getLogger("automation_tool").info(
+        "tv: ensure indicators | required=%s",
+        [[x for x in g if x] for g in (groups or [])],
+    )
     deadline = time.monotonic() + max(0, verify_timeout_ms) / 1000.0
     while time.monotonic() < deadline:
         if _tradingview_has_required_indicators(page, tv):
+            logging.getLogger("automation_tool").info("tv: ensure indicators | ok")
             return
         page.wait_for_timeout(200)
 
-    # Recover: clear, add from favorites, then verify again.
-    _tradingview_open_context_menu_and_clear_indicators(page, tv)
-    _tradingview_add_required_indicators_from_favorites(page, tv)
+    # Recover:
+    # - If legend is not present (no items), avoid destructive clear; just add from favorites.
+    # - Else, clear then add.
+    legend_now = _tradingview_list_legend_item_texts(page, tv)
+    if not legend_now:
+        logging.getLogger("automation_tool").info(
+            "tv: ensure indicators | legend empty -> add-only recover"
+        )
+        _tradingview_add_required_indicators_from_favorites(page, tv)
+    else:
+        logging.getLogger("automation_tool").info("tv: ensure indicators | missing -> recover")
+        _tradingview_open_context_menu_and_clear_indicators(page, tv)
+        _tradingview_add_required_indicators_from_favorites(page, tv)
 
     deadline2 = time.monotonic() + max(0, verify_timeout_ms) / 1000.0
     while time.monotonic() < deadline2:
         if _tradingview_has_required_indicators(page, tv):
+            logging.getLogger("automation_tool").info("tv: ensure indicators | ok after recover")
             return
         page.wait_for_timeout(200)
 
     got = _tradingview_list_legend_item_texts(page, tv)
+    if not got:
+        # Still cannot verify via legend; accept best-effort without failing capture.
+        logging.getLogger("automation_tool").info(
+            "tv: ensure indicators | legend still empty after recover; skip hard-fail"
+        )
+        return
+    logging.getLogger("automation_tool").info(
+        "tv: ensure indicators | failed after recover | legend_items=%r",
+        got,
+    )
     raise SystemExit(
         "TradingView required indicators missing after recovery. "
         f"Expected VSA+SMC, got legend items: {got!r}"
