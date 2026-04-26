@@ -2706,6 +2706,8 @@ def _tv_apply_indicator_profile(tv: dict[str, Any], profile: str) -> dict[str, A
         return tv
     merged = dict(tv)
     merged.update(ov)
+    if "required_indicators" in ov and "favorite_indicator_names" not in ov:
+        merged.pop("favorite_indicator_names", None)
     return merged
 
 
@@ -2806,8 +2808,41 @@ def _tradingview_open_context_menu_and_clear_indicators(page, tv: dict[str, Any]
         page.mouse.click(x, y, button="right")
         clicked = False
 
-        # Try to click the first visible matching menu item.
+        # Click the visible "delete/remove indicator(s)" menu item once, regardless of count.
+        labels = page.locator('tr[data-role="menuitem"] [data-label="true"]')
+        try:
+            n = int(labels.count() or 0)
+        except Exception:
+            n = 0
+        for j in range(n):
+            try:
+                item = labels.nth(j)
+                label = (item.inner_text(timeout=500) or "").strip()
+                label_l = label.lower()
+                is_delete_indicators = (
+                    (("xóa" in label_l or "xoá" in label_l) and "chỉ báo" in label_l)
+                    or ("remove" in label_l and "indicator" in label_l)
+                )
+                if not is_delete_indicators:
+                    continue
+                item.wait_for(state="visible", timeout=visible_timeout_ms)
+                item.click(timeout=click_timeout_ms, force=True)
+                logging.getLogger("automation_tool").info(
+                    "tv: clear indicators | clicked %r (attempt %s/%s)",
+                    label,
+                    i + 1,
+                    attempts,
+                )
+                clicked = True
+                break
+            except Exception as e:
+                last_err = e
+                continue
+
+        # Fallback: try configured exact-ish labels.
         for t in candidates:
+            if clicked:
+                break
             try:
                 item = page.locator(
                     'tr[data-role="menuitem"] [data-label="true"]',
