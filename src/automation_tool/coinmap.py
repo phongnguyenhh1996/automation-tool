@@ -2757,9 +2757,11 @@ def _tradingview_has_required_indicators(page, tv: dict[str, Any]) -> bool:
 
 def _tradingview_chart_center_xy(page, tv: dict[str, Any]) -> tuple[float, float]:
     """
-    Compute a reliable point near the chart center for context-click.
+    Compute a reliable point inside the chart for context-click.
     Falls back to viewport center if bounding box is unavailable.
     """
+    y_ratio = float(tv.get("chart_context_click_y_ratio", 0.10) or 0.10)
+    y_ratio = min(1.0, max(0.0, y_ratio))
     raw = tv.get("chart_center_click_selector")
     sels: list[str] = []
     if isinstance(raw, str) and raw.strip():
@@ -2782,12 +2784,12 @@ def _tradingview_chart_center_xy(page, tv: dict[str, Any]) -> tuple[float, float
             bb = loc.bounding_box()
             if bb and bb.get("width", 0) and bb.get("height", 0):
                 x = float(bb["x"]) + float(bb["width"]) / 2.0
-                y = float(bb["y"]) + float(bb["height"]) / 2.0
+                y = float(bb["y"]) + float(bb["height"]) * y_ratio
                 return x, y
         except Exception:
             continue
     vp = page.viewport_size or {"width": 1600, "height": 900}
-    return float(vp["width"]) / 2.0, float(vp["height"]) / 2.0
+    return float(vp["width"]) / 2.0, float(vp["height"]) * y_ratio
 
 
 def _tradingview_open_context_menu_and_clear_indicators(page, tv: dict[str, Any]) -> None:
