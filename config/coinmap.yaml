@@ -199,6 +199,8 @@ tradingview_capture:
       DXY: CAPITALCOM
       XAUUSD: OANDA
   # Viewport: same as session `viewport_width` / `viewport_height` below (omit per-tab sizes).
+  viewport_width: 1920
+  viewport_height: 1080
   chart_url: "https://vn.tradingview.com/chart/?symbol=OANDA%3AXAUUSD"
   # Uses COINMAP_EMAIL + TRADINGVIEW_PASSWORD (.env). Opens top-left menu; if "Đăng nhập" is visible, logs in.
   login_enabled: true
@@ -346,8 +348,8 @@ chart_selectors:
 # If no elements match, fall back to one full-page screenshot (set false to disable)
 fallback_full_page: true
 # Browser viewport for the whole capture session (Coinmap tab + TradingView tab).
-viewport_width: 1600
-viewport_height: 900
+viewport_width: 1920
+viewport_height: 1080
 
 # Milliseconds to wait after navigation before screenshots
 settle_ms: 2000
