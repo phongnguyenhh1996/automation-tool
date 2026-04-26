@@ -692,8 +692,23 @@ void PollEvents()
    int h = FileOpen(path, FILE_READ|FILE_TXT|FILE_COMMON);
    if(h == INVALID_HANDLE)
    {
+      int err = (int)GetLastError();
       if(InpDebug)
-         Print("TradeCopier Slave: failed to open events file. path=", path, " err=", GetLastError());
+         Print("TradeCopier Slave: failed to open events file. path=", path, " err=", err);
+
+      // 5004 is "file not found" on MT5 builds; create an empty file so we can start tailing.
+      // Important: only do this for "file not found" to avoid truncating a real file.
+      if(err == 5004)
+      {
+         ResetLastError();
+         int hc = FileOpen(path, FILE_READ|FILE_WRITE|FILE_TXT|FILE_COMMON);
+         if(hc != INVALID_HANDLE)
+         {
+            FileClose(hc);
+            if(InpDebug)
+               Print("TradeCopier Slave: created missing events file. path=", path);
+         }
+      }
       return;
    }
 
