@@ -189,6 +189,7 @@ def test_daemon_plan_cutoff_multi_account_uses_api_per_acc(monkeypatch: pytest.M
     """``mt5_tickets_by_account`` + accounts.json → status/cancel dùng login từng acc (không chỉ terminal)."""
     acc_a = MT5AccountEntry(
         id="a",
+        terminal_path="/tmp/mt5-a/terminal64.exe",
         login=111001,
         password="p1",
         server="srv1",
@@ -197,6 +198,7 @@ def test_daemon_plan_cutoff_multi_account_uses_api_per_acc(monkeypatch: pytest.M
     )
     acc_b = MT5AccountEntry(
         id="b",
+        terminal_path="/tmp/mt5-b/terminal64.exe",
         login=222002,
         password="p2",
         server="srv2",

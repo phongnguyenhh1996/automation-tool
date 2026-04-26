@@ -3585,6 +3585,7 @@ def capture_charts(
     require_browser_service: bool = False,
     coinmap_only_retry_paths: Optional[list[Path]] = None,
     coinmap_capture_intervals: Optional[Sequence[str]] = None,
+    tradingview_capture_plan: Optional[Sequence[dict[str, Any]]] = None,
     tradingview_force_screenshot: bool = False,
 ) -> list[Path]:
     """
@@ -3655,6 +3656,12 @@ def capture_charts(
             tv = {}
             cfg["tradingview_capture"] = tv
         tv["enabled"] = bool(enable_tradingview)
+    if tradingview_capture_plan is not None:
+        tv = cfg.get("tradingview_capture")
+        if not isinstance(tv, dict):
+            tv = {}
+            cfg["tradingview_capture"] = tv
+        tv["capture_plan"] = list(tradingview_capture_plan)
 
     has_storage = bool(storage_state_path and storage_state_path.exists())
     if bool(email) != bool(password):

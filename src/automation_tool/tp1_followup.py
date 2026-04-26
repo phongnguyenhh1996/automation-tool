@@ -55,6 +55,7 @@ from automation_tool.state_files import (
 from automation_tool.telegram_bot import (
     send_mt5_execution_log_to_ngan_gon_chat,
     send_openai_output_to_telegram,
+    send_trade_management_reason_notice,
 )
 
 _log = logging.getLogger(__name__)
@@ -71,6 +72,7 @@ _EPS = 0.01
 class TP1FollowupDecision:
     sau_tp1: Literal["loại", "chinh_trade_line", "giu_nguyen"]
     trade_line_moi: str
+    reason: str
     out_chi_tiet: str
     output_ngan_gon: str
 
@@ -148,11 +150,13 @@ def parse_tp1_followup_decision(text: str) -> Optional[TP1FollowupDecision]:
     else:
         return None
     tlm = str(raw.get("trade_line_moi") or "").strip()
+    reason = str(raw.get("reason") or "").strip()
     oct = str(raw.get("out_chi_tiet") or "").strip()
     ogn = str(raw.get("output_ngan_gon") or "").strip()
     return TP1FollowupDecision(
         sau_tp1=sau,
         trade_line_moi=tlm,
+        reason=reason,
         out_chi_tiet=oct,
         output_ngan_gon=ogn,
     )
@@ -317,6 +321,16 @@ def _run_tp1_openai_and_act(
         dry,
         len(dec.trade_line_moi or ""),
     )
+    if settings.telegram_bot_token and not getattr(params, "no_telegram", False):
+        send_trade_management_reason_notice(
+            bot_token=settings.telegram_bot_token,
+            telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
+            zone_label=label,
+            session_slot=None,
+            action=dec.sau_tp1,
+            reason=dec.reason,
+            trade_line=dec.trade_line_moi,
+        )
 
     if dec.sau_tp1 == "loại":
         if exe and tk > 0:

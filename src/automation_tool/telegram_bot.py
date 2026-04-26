@@ -73,6 +73,60 @@ def mt5_zone_entry_line_vn(
     return f'Đã vào lệnh cho "{quoted}".'
 
 
+def _trade_management_action_display_vn(action: Optional[str]) -> str:
+    """Tên hành động Schema D cho tin quản lý lệnh."""
+    key = (action or "").strip().lower()
+    if key in ("loại", "loai"):
+        return "Loại / đóng lệnh"
+    if key in ("chinh_trade_line", "chỉnh_trade_line", "chinh_sua", "chỉnh"):
+        return "Chỉnh trade line"
+    if key in ("giu_nguyen", "giữ_nguyên", "giu nguyen"):
+        return "Giữ nguyên"
+    return "Đã có quyết định"
+
+
+def _trade_management_plan_display_vn(
+    zone_label: Optional[str],
+    session_slot: Optional[str] = None,
+) -> str:
+    lab = mt5_zone_label_display_vn(zone_label) or (zone_label or "").strip()
+    slot_vn = session_slot_display_vn(session_slot) if session_slot else None
+    if lab and slot_vn:
+        return f"{lab} - {slot_vn}"
+    return lab or "Không rõ plan"
+
+
+def send_trade_management_reason_notice(
+    *,
+    bot_token: str,
+    telegram_python_bot_chat_id: Optional[str],
+    zone_label: Optional[str],
+    session_slot: Optional[str] = None,
+    action: Optional[str],
+    reason: str,
+    trade_line: Optional[str] = None,
+) -> None:
+    """
+    [TRADE_MANAGEMENT] / Schema D: gửi lý do AI chọn hành động quản lý lệnh
+    tới ``TELEGRAM_PYTHON_BOT_CHAT_ID``.
+    """
+    body = (reason or "").strip()
+    if not body:
+        return
+    plan = _trade_management_plan_display_vn(zone_label, session_slot=session_slot)
+    action_vn = _trade_management_action_display_vn(action)
+    lines = [body]
+    tl = (trade_line or "").strip()
+    if tl:
+        lines.extend(["", f"trade_line_moi: {tl}"])
+    send_user_friendly_notice(
+        bot_token=bot_token,
+        chat_id=telegram_python_bot_chat_id,
+        title=f"Quản lý lệnh ({plan}): {action_vn}",
+        body="\n".join(lines),
+    )
+
+
 @dataclass(frozen=True)
 class TelegramChunk:
     """One outbound Telegram message parsed from OpenAI JSON output."""

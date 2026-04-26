@@ -555,6 +555,7 @@ def run_single_followup_responses(
     prompt_version: str | None,
     user_text: str,
     coinmap_json_paths: Sequence[Path],
+    extra_chart_payloads: Sequence[ChartOpenAIPayload] | None = None,
     previous_response_id: str | None,
     morning_snapshot_path: Path | None = None,
     vector_store_ids: list[str],
@@ -566,8 +567,9 @@ def run_single_followup_responses(
     model: str | None = None,
 ) -> tuple[str, str]:
     """
-    One multimodal user turn: optional ``morning_snapshot_path`` + Coinmap JSON paths, uploaded in order
-    (Coinmap: base64 ``input_file.file_data``; other JSON: inline text).
+    One multimodal user turn: optional ``morning_snapshot_path`` + Coinmap JSON paths,
+    plus optional chart payloads, uploaded in order (Coinmap: base64
+    ``input_file.file_data``; other JSON: inline text; image payloads as images).
 
     If ``previous_response_id`` is ``None``, starts a **new** Responses thread (no chain).
     Otherwise chains to that id (intraday alert, TP1, etc.).
@@ -583,8 +585,12 @@ def run_single_followup_responses(
             raise FileNotFoundError(f"Morning analysis JSON not found: {morning_snapshot_path}")
         paths.append(mp)
     paths.extend([p for p in coinmap_json_paths if isinstance(p, Path)])
-    if not paths:
-        raise ValueError("Need at least one JSON path (morning_snapshot_path and/or coinmap_json_paths)")
+    extra_payloads = _filter_valid_chart_payloads(list(extra_chart_payloads or []))
+    if not paths and not extra_payloads:
+        raise ValueError(
+            "Need at least one attachment path/payload "
+            "(morning_snapshot_path, coinmap_json_paths, and/or extra_chart_payloads)"
+        )
     for p in paths:
         if not p.is_file():
             raise FileNotFoundError(f"JSON attachment not found: {p}")
@@ -621,10 +627,10 @@ def run_single_followup_responses(
         else _default_max_coinmap_json_chars()
     )
 
-    json_payloads: list[tuple[str, Path]] = [("json", p) for p in paths]
+    json_payloads: list[ChartOpenAIPayload] = [("json", p) for p in paths]
     content = _build_mixed_chart_user_content(
         user_text,
-        json_payloads,
+        json_payloads + extra_payloads,
         max_json_chars=mx_json,
     )
     create_kw: dict[str, Any] = {

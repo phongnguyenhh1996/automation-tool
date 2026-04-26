@@ -1,6 +1,10 @@
-"""MT5 Telegram: zone label → 'Đã vào lệnh cho …' line (suffix after random emoji line)."""
+"""MT5 Telegram: zone label → user-facing Vietnamese lines."""
 
-from automation_tool.telegram_bot import mt5_zone_entry_line_vn, mt5_zone_label_display_vn
+from automation_tool.telegram_bot import (
+    mt5_zone_entry_line_vn,
+    mt5_zone_label_display_vn,
+    send_trade_management_reason_notice,
+)
 
 
 def test_mt5_zone_entry_line_vn_known_labels():
@@ -36,3 +40,26 @@ def test_mt5_zone_label_display_vn_absent_or_unknown():
     assert mt5_zone_label_display_vn(None) is None
     assert mt5_zone_label_display_vn("") is None
     assert mt5_zone_label_display_vn("other") is None
+
+
+def test_send_trade_management_reason_notice_formats_plan_slot(monkeypatch):
+    calls: list[dict] = []
+
+    def fake_send(**kwargs):
+        calls.append(kwargs)
+
+    monkeypatch.setattr("automation_tool.telegram_bot.send_message", fake_send)
+    send_trade_management_reason_notice(
+        bot_token="token",
+        telegram_python_bot_chat_id="123",
+        zone_label="plan_chinh",
+        session_slot="sang",
+        action="chinh_trade_line",
+        reason="Footprint còn thuận hướng nên dời SL về BE.",
+        trade_line="BUY LIMIT 4709.0 | SL 4709.0 | TP1 4740.0 | Lot 0.04",
+    )
+
+    assert len(calls) == 1
+    assert "Quản lý lệnh (Plan chính - Sáng): Chỉnh trade line" in calls[0]["text"]
+    assert "Footprint còn thuận hướng nên dời SL về BE." in calls[0]["text"]
+    assert "trade_line_moi: BUY LIMIT 4709.0" in calls[0]["text"]

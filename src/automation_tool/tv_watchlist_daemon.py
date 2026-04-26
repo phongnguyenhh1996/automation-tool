@@ -77,11 +77,13 @@ from automation_tool.telegram_bot import (
     send_mt5_execution_log_to_ngan_gon_chat,
     send_openai_output_to_telegram,
     send_phan_tich_alert_to_python_bot_if_any,
+    send_trade_management_reason_notice,
     send_user_friendly_notice,
 )
 from automation_tool.openai_analysis_json import (
     ARM_THRESHOLD_TP1_DEFAULT,
     arm_threshold_tp1_for_label,
+    auto_mt5_hop_luu_passes_for_label,
     auto_mt5_hop_luu_threshold_for_label,
     parse_vung_cho_bounds,
 )
@@ -1081,6 +1083,20 @@ def _tp1_followup_job(
         tk = int(z1.mt5_ticket or 0)
         dry = bool(params.mt5_dry_run)
         exe = bool(params.mt5_execute)
+        slot_raw = resolve_session_slot_raw(
+            zone_session_slot=getattr(z1, "session_slot", None),
+            shard_path=params.shard_path,
+        )
+        if not params.no_telegram:
+            send_trade_management_reason_notice(
+                bot_token=settings.telegram_bot_token,
+                telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
+                zone_label=z1.label,
+                session_slot=slot_raw,
+                action=dec.sau_tp1,
+                reason=dec.reason,
+                trade_line=dec.trade_line_moi,
+            )
 
         if dec.sau_tp1 == "giu_nguyen":
             z1.status = "vao_lenh"
@@ -1464,6 +1480,20 @@ def _r1_followup_job(
         tk = int(z1.mt5_ticket or 0)
         dry = bool(params.mt5_dry_run)
         exe = bool(params.mt5_execute)
+        slot_raw = resolve_session_slot_raw(
+            zone_session_slot=getattr(z1, "session_slot", None),
+            shard_path=params.shard_path,
+        )
+        if not params.no_telegram:
+            send_trade_management_reason_notice(
+                bot_token=settings.telegram_bot_token,
+                telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
+                zone_label=z1.label,
+                session_slot=slot_raw,
+                action=dec.sau_tp1,
+                reason=dec.reason,
+                trade_line=dec.trade_line_moi,
+            )
 
         if dec.sau_tp1 == "giu_nguyen":
             z1.status = prev_status  # type: ignore[assignment]
@@ -1731,7 +1761,7 @@ def _auto_entry_job(
             _state_write(params, st0)
             return
         thr = int(auto_mt5_hop_luu_threshold_for_label(z0.label))
-        if int(z0.hop_luu) < thr:
+        if not auto_mt5_hop_luu_passes_for_label(z0.label, int(z0.hop_luu)):
             z0.status = "cham"
             z0.auto_entry_retry_after = ""
             z0.auto_entry_mt5_failed = False
@@ -2658,7 +2688,7 @@ def _daemon_plan_main_loop(
                         if z.hop_luu is None:
                             continue
                         thr = int(auto_mt5_hop_luu_threshold_for_label(z.label))
-                        if int(z.hop_luu) < thr:
+                        if not auto_mt5_hop_luu_passes_for_label(z.label, int(z.hop_luu)):
                             continue
                         if getattr(z, "auto_entry_mt5_failed", False):
                             continue
@@ -2670,7 +2700,7 @@ def _daemon_plan_main_loop(
                         _state_write(params, st_auto)
                         _send_log(
                             settings,
-                            f"[auto-entry] dispatch | zone_id={z.id} label={z.label} hop_luu={z.hop_luu} thr(>=)={thr}",
+                            f"[auto-entry] dispatch | zone_id={z.id} label={z.label} hop_luu={z.hop_luu} thr(>)={thr}",
                         )
                         _auto_entry_job(settings=settings, params=params, zone_id=z.id)
 

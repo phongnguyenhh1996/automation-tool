@@ -34,6 +34,7 @@ def test_execute_trade_all_accounts_one_call_per_account(
     accounts = [
         MT5AccountEntry(
             id="acc_a",
+            terminal_path="/tmp/mt5-acc-a/terminal64.exe",
             login=1,
             password="p",
             server="srv",
@@ -42,6 +43,7 @@ def test_execute_trade_all_accounts_one_call_per_account(
         ),
         MT5AccountEntry(
             id="acc_b",
+            terminal_path="/tmp/mt5-acc-b/terminal64.exe",
             login=2,
             password="p",
             server="srv",
@@ -81,6 +83,7 @@ def test_execute_trade_all_accounts_from_trade_uses_trade_lot(
     accounts = [
         MT5AccountEntry(
             id="acc_a",
+            terminal_path="/tmp/mt5-acc-a/terminal64.exe",
             login=1,
             password="p",
             server="srv",
@@ -89,6 +92,7 @@ def test_execute_trade_all_accounts_from_trade_uses_trade_lot(
         ),
         MT5AccountEntry(
             id="acc_b",
+            terminal_path="/tmp/mt5-acc-b/terminal64.exe",
             login=2,
             password="p",
             server="srv",

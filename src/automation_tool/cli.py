@@ -606,7 +606,7 @@ def _parser() -> argparse.ArgumentParser:
         "--no-mt5-execute",
         action="store_true",
         help=(
-            "Không gọi execute_trade khi follow-up có vùng đủ hop_luu (plan_chinh/plan_phu>=85, scalp>=65) + trade_line (mặc định: gọi; cần Windows + MetaTrader5)"
+            "Không gọi execute_trade khi follow-up có vùng đủ hop_luu (plan_chinh/plan_phu>75, scalp>60) + trade_line (mặc định: gọi; cần Windows + MetaTrader5)"
         ),
     )
     up.add_argument(
@@ -1666,6 +1666,28 @@ def _warn_if_incomplete_chart_payloads(
         )
 
 
+def _tradingview_slot_openai_payload(
+    charts_dir: Path, *, stamp: str, symbol: str, interval_slug: str
+) -> list[ChartOpenAIPayload]:
+    """Return one TradingView slot as the same payload shape used by full analysis."""
+    stem = f"{stamp}_tradingview_{symbol}_{interval_slug}"
+    jp = charts_dir / f"{stem}.json"
+    up = charts_dir / f"{stem}.url"
+    pp = charts_dir / f"{stem}.png"
+    if jp.is_file():
+        return [("json", jp)]
+    if up.is_file():
+        raw = up.read_text(encoding="utf-8").strip().splitlines()
+        line = (raw[0] if raw else "").strip()
+        if line.startswith("http://") or line.startswith("https://"):
+            return [("image_url", line)]
+        if pp.is_file():
+            return [("image", pp)]
+    if pp.is_file():
+        return [("image", pp)]
+    return []
+
+
 def cmd_test_cloudinary_json(args: argparse.Namespace) -> None:
     """Preview OpenAI Responses `input` for JSON files under charts-dir."""
     from automation_tool.images import set_active_main_symbol_file
@@ -2492,6 +2514,57 @@ def cmd_update(args: argparse.Namespace) -> None:
         )
         coinmap_paths = [m15, m5]
 
+    tv_ict_payloads: list[ChartOpenAIPayload] = []
+    if not args.no_tradingview:
+        if not stamp:
+            _log.warning("update: skip TradingView 15m_ict capture because stamp is missing")
+        else:
+            tv_plan = [
+                {
+                    "symbol": main_s,
+                    "intervals": [
+                        {
+                            "label": "15 phút",
+                            "slug": "15m_ict",
+                            "indicator_profile": "ict_killzones",
+                        }
+                    ],
+                }
+            ]
+            tv_paths = capture_charts(
+                coinmap_yaml=cfg_tv,
+                charts_dir=charts_dir,
+                storage_state_path=storage,
+                email=s.coinmap_email,
+                password=s.coinmap_password,
+                tradingview_password=s.tradingview_password,
+                save_storage_state=not args.no_save_storage,
+                headless=not args.headed,
+                reuse_browser_context=None,
+                main_chart_symbol=main_s,
+                enable_coinmap=False,
+                enable_tradingview=True,
+                clear_charts_before_capture=False,
+                stamp_override=stamp,
+                tradingview_capture_plan=tv_plan,
+                tradingview_force_screenshot=True,
+            )
+            paths.extend(tv_paths)
+            tv_ict_payloads = _tradingview_slot_openai_payload(
+                charts_dir, stamp=stamp, symbol=main_s, interval_slug="15m_ict"
+            )
+            _log.info(
+                "update: TradingView 15m_ict capture xong | %s file(s) | payloads=%s",
+                len(tv_paths),
+                len(tv_ict_payloads),
+            )
+            if not tv_ict_payloads:
+                print(
+                    f"Warning: TradingView 15m_ict was not found for OpenAI attachment "
+                    f"(stamp={stamp!r}, symbol={main_s}).",
+                    file=sys.stderr,
+                )
+
     require_openai(s)
 
     morning_snapshot: Path | None = None
@@ -2513,6 +2586,11 @@ def cmd_update(args: argparse.Namespace) -> None:
         first_after_all=first_after_all,
         coinmap_attachment_mode="merged" if use_merged_coinmap else "legacy",
     )
+    if tv_ict_payloads:
+        user_msg += (
+            "\nĐính kèm thêm một ảnh TradingView 15m ICT Killzones của cặp chính "
+            "sau các file JSON Coinmap.\n"
+        )
 
     try:
         out_text, new_id = run_single_followup_responses(
@@ -2522,6 +2600,7 @@ def cmd_update(args: argparse.Namespace) -> None:
             user_text=user_msg,
             morning_snapshot_path=morning_snapshot,
             coinmap_json_paths=coinmap_paths,
+            extra_chart_payloads=tv_ict_payloads,
             previous_response_id=prev_for_openai,
             vector_store_ids=s.openai_vector_store_ids,
             store=s.openai_responses_store,

@@ -12,18 +12,25 @@ OldPlanHanhDong = Literal["chờ", "loại"]
 
 ZONE_LABELS_ORDER = ("plan_chinh", "plan_phu", "scalp")
 
-# Morning auto-MT5: hop_luu >= this value for plan_chinh / plan_phu (đồng bộ system-prompt).
-AUTO_MT5_HOP_LUU_THRESHOLD = 85
-# Scalp: hop_luu >= this value (đồng bộ system-prompt).
-AUTO_MT5_HOP_LUU_THRESHOLD_SCALP = 65
+# Morning auto-MT5: hop_luu must be greater than this value for plan_chinh / plan_phu.
+AUTO_MT5_HOP_LUU_THRESHOLD = 75
+# Scalp: hop_luu must be greater than this value.
+AUTO_MT5_HOP_LUU_THRESHOLD_SCALP = 60
 
 
 def auto_mt5_hop_luu_threshold_for_label(label: str) -> int:
-    """Ngưỡng tối thiểu hop_luu (đủ khi hop_luu >= giá trị này) cho auto-MT5 theo label."""
+    """Ngưỡng hop_luu cho auto-MT5 theo label; đủ điều kiện khi ``hop_luu > ngưỡng``."""
     key = label.strip().lower()
     if key == "scalp":
         return AUTO_MT5_HOP_LUU_THRESHOLD_SCALP
     return AUTO_MT5_HOP_LUU_THRESHOLD
+
+
+def auto_mt5_hop_luu_passes_for_label(label: str, hop_luu: Optional[int]) -> bool:
+    """True khi ``hop_luu`` vượt ngưỡng auto-MT5 của label."""
+    if hop_luu is None:
+        return False
+    return int(hop_luu) > auto_mt5_hop_luu_threshold_for_label(label)
 
 
 # TP1 arm (vao_lenh → cho_tp1): độ rộng dải |last − ref| so với ref vùng (BUY/SELL).
@@ -399,9 +406,9 @@ def select_zone_for_auto_mt5(
     prices: list[PriceZoneEntry],
 ) -> Optional[tuple[str, int, str]]:
     """
-    Chọn một vùng để auto-MT5 sáng: ``hop_luu`` đạt ngưỡng theo vùng
-    (``hop_luu >=`` :data:`AUTO_MT5_HOP_LUU_THRESHOLD` cho plan_chinh/plan_phu,
-    ``hop_luu >=`` :data:`AUTO_MT5_HOP_LUU_THRESHOLD_SCALP` cho scalp), có ``trade_line`` không rỗng.
+    Chọn một vùng để auto-MT5 sáng: ``hop_luu`` vượt ngưỡng theo vùng
+    (``hop_luu >`` :data:`AUTO_MT5_HOP_LUU_THRESHOLD` cho plan_chinh/plan_phu,
+    ``hop_luu >`` :data:`AUTO_MT5_HOP_LUU_THRESHOLD_SCALP` cho scalp), có ``trade_line`` không rỗng.
 
     Nhiều vùng hợp lệ: **điểm cao nhất**; hòa điểm: thứ tự ``plan_chinh`` → ``plan_phu`` → ``scalp``.
 
@@ -414,8 +421,7 @@ def select_zone_for_auto_mt5(
         key = p.label.strip().lower()
         if key not in ZONE_LABELS_ORDER:
             continue
-        thr = auto_mt5_hop_luu_threshold_for_label(key)
-        if p.hop_luu is None or p.hop_luu < thr:
+        if not auto_mt5_hop_luu_passes_for_label(key, p.hop_luu):
             continue
         tl = (p.trade_line or "").strip()
         if not tl:
@@ -444,8 +450,7 @@ def select_zone_for_auto_mt5_for_label(
         key = p.label.strip().lower()
         if key != want:
             continue
-        thr = auto_mt5_hop_luu_threshold_for_label(key)
-        if p.hop_luu is None or p.hop_luu < thr:
+        if not auto_mt5_hop_luu_passes_for_label(key, p.hop_luu):
             return None
         tl = (p.trade_line or "").strip()
         if not tl:
