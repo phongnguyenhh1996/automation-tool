@@ -503,18 +503,18 @@ def build_intraday_update_user_text(
         return (
             "[INTRADAY_UPDATE]\n"
             f"{time_line}"
-            "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước; plan sáng đã được đưa vào thread ở lần cập nhật đầu tiên.\n"
+            "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
             "Đính kèm **một** file JSON: **Coinmap merged** cho cặp chính (15m và 5m trong cùng file).\n"
         )
     return (
         "[INTRADAY_UPDATE]\n"
         f"{time_line}"
-        "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước; plan sáng đã được đưa vào thread ở lần cập nhật đầu tiên.\n"
+        "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
         "Đính kèm **hai** file JSON theo thứ tự: **(1) M15**, **(2) M5** (footprint cặp chính).\n"
     )
 
 # TradingView tab Nhật ký: giá chạm → Coinmap compact ``coinmap_merged`` (từ raw M5/M1) + OpenAI (intraday).
-# Trả về Schema E: chỉ ``phan_tich_alert`` + ``intraday_hanh_dong``; nếu VÀO LỆNH, tool lấy trade_line từ baseline vùng.
+# Trả về Schema E: chỉ ``phan_tich_alert`` + ``intraday_hanh_dong``; nếu VÀO LỆNH, dùng trade_line theo baseline vùng.
 JOURNAL_INTRADAY_FIRST_USER_TEMPLATE = (
     "[INTRADAY_ALERT]\n"
     "Cảnh báo TradingView đã kích hoạt tại mức giá {touched_price}.\n"

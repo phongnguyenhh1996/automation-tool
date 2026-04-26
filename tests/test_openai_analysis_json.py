@@ -187,6 +187,23 @@ def test_schema_e_top_level_vung_cho_parses() -> None:
     assert p.intraday_hanh_dong == "chờ"
 
 
+def test_schema_b_old_prices_parses_actions() -> None:
+    raw = """```json
+{
+  "phan_tich_update": "x",
+  "old_prices": [
+    {"label":"plan_chinh","vung_cho":"4707.0–4709.0","hanh_dong":"chờ"},
+    {"label":"plan_phu","vung_cho":"4696.0–4699.0","hanh_dong":"loại"},
+    {"label":"scalp","vung_cho":"4712.0–4713.0","hanh_dong":"CHO"}
+  ]
+}
+```"""
+    p = parse_analysis_from_openai_text(raw)
+    assert p is not None
+    assert [x.label for x in p.old_prices] == ["plan_chinh", "plan_phu", "scalp"]
+    assert [x.hanh_dong for x in p.old_prices] == ["chờ", "loại", "chờ"]
+
+
 def test_vung_cho_zone_string_should_update_same_numeric() -> None:
     # Reversed order, same en-dash separator — same (min,max) as stored.
     a, can = vung_cho_zone_string_should_update(

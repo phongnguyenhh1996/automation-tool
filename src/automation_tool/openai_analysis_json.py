@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Optional
 
 IntradayHanhDong = Literal["chờ", "loại", "VÀO LỆNH"]
+OldPlanHanhDong = Literal["chờ", "loại"]
 
 ZONE_LABELS_ORDER = ("plan_chinh", "plan_phu", "scalp")
 
@@ -209,6 +210,18 @@ class PriceZoneEntry:
 
 
 @dataclass
+class OldPlanDecision:
+    """
+    [INTRADAY_UPDATE] only: evaluate old plans (Schema B: ``old_prices``).
+    The CLI/daemon uses this to mark matching existing zones as ``loai``.
+    """
+
+    label: str
+    vung_cho: str
+    hanh_dong: OldPlanHanhDong
+
+
+@dataclass
 class AnalysisPayload:
     """Structured analysis JSON (snake_case keys)."""
 
@@ -221,6 +234,8 @@ class AnalysisPayload:
     #: Top-level optional; [INTRADAY_ALERT] no longer applies this to persisted zones (daemon).
     vung_cho: Optional[str] = None
     prices: list[PriceZoneEntry] = field(default_factory=list)
+    #: [INTRADAY_UPDATE] only: old plan decisions (Schema B).
+    old_prices: list[OldPlanDecision] = field(default_factory=list)
     intraday_hanh_dong: Optional[IntradayHanhDong] = None
     trade_line: str = ""
     no_change: Optional[bool] = None
@@ -261,6 +276,34 @@ def _parse_price_entry(d: dict[str, Any]) -> Optional[PriceZoneEntry]:
     )
 
 
+def _normalize_old_plan_action(s: str) -> Optional[OldPlanHanhDong]:
+    t = (s or "").strip()
+    if not t:
+        return None
+    low = t.lower()
+    if low in ("loại", "loai"):
+        return "loại"
+    if low in ("chờ", "cho"):
+        return "chờ"
+    return None
+
+
+def _parse_old_plan_decision(d: dict[str, Any]) -> Optional[OldPlanDecision]:
+    lab = d.get("label")
+    if not isinstance(lab, str) or not lab.strip():
+        return None
+    vc = d.get("vung_cho")
+    if not isinstance(vc, str) or not vc.strip():
+        return None
+    act_raw = d.get("hanh_dong")
+    if not isinstance(act_raw, str):
+        return None
+    act = _normalize_old_plan_action(act_raw)
+    if act is None:
+        return None
+    return OldPlanDecision(label=lab.strip(), vung_cho=vc.strip(), hanh_dong=act)
+
+
 def try_parse_analysis_payload(data: dict[str, Any]) -> Optional[AnalysisPayload]:
     """Best-effort parse; returns None if ``data`` is empty or not a dict with usable keys."""
     if not data:
@@ -287,6 +330,15 @@ def try_parse_analysis_payload(data: dict[str, Any]) -> Optional[AnalysisPayload
                 if pe is not None:
                     prices.append(pe)
 
+    old_raw = data.get("old_prices")
+    old_prices: list[OldPlanDecision] = []
+    if isinstance(old_raw, list):
+        for item in old_raw:
+            if isinstance(item, dict):
+                od = _parse_old_plan_decision(item)
+                if od is not None:
+                    old_prices.append(od)
+
     intra_raw = data.get("intraday_hanh_dong")
     intra: Optional[IntradayHanhDong] = None
     if isinstance(intra_raw, str):
@@ -308,6 +360,7 @@ def try_parse_analysis_payload(data: dict[str, Any]) -> Optional[AnalysisPayload
         and not phan_tich_alert
         and not vung_cho
         and not prices
+        and not old_prices
         and intra is None
         and not trade_line
         and no_change is None
@@ -321,6 +374,7 @@ def try_parse_analysis_payload(data: dict[str, Any]) -> Optional[AnalysisPayload
         phan_tich_alert=phan_tich_alert,
         vung_cho=vung_cho,
         prices=prices,
+        old_prices=old_prices,
         intraday_hanh_dong=intra,
         trade_line=trade_line,
         no_change=no_change,

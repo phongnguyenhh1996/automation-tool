@@ -2561,6 +2561,51 @@ def cmd_update(args: argparse.Namespace) -> None:
             parse_mode=s.telegram_parse_mode,
         )
 
+    # Apply old plan decisions (Schema B: old_prices) to existing zones first.
+    if update_payload is not None and getattr(update_payload, "old_prices", None):
+        try:
+            from automation_tool.zones_state import (
+                ZonesState,
+                read_zones_state,
+                write_zones_state_to_shard,
+            )
+            from automation_tool.zones_paths import shard_path as _zone_shard_path
+
+            st0 = read_zones_state(zones_dir)
+            if st0 is not None and st0.zones:
+                for dec in update_payload.old_prices:
+                    if dec.hanh_dong != "loại":
+                        continue
+                    want_label = (dec.label or "").strip().lower()
+                    want_vc = (dec.vung_cho or "").strip()
+                    if not want_label or not want_vc:
+                        continue
+                    for z in st0.zones:
+                        if (z.label or "").strip().lower() != want_label:
+                            continue
+                        if (z.vung_cho or "").strip() != want_vc:
+                            continue
+                        # Mark exact matching zone as loai (avoid wrong label-only match).
+                        z.status = "loai"  # type: ignore[assignment]
+                        z.retry_at = ""
+                        slot = getattr(z, "session_slot", None)
+                        if isinstance(slot, str) and slot.strip() in ("sang", "chieu", "toi"):
+                            sp = _zone_shard_path(
+                                zones_dir, want_label, slot.strip()  # type: ignore[arg-type]
+                            )
+                            write_zones_state_to_shard(
+                                sp,
+                                ZonesState(
+                                    symbol=st0.symbol,
+                                    zones=[z],
+                                    updated_at=st0.updated_at,
+                                    last_observed=st0.last_observed,
+                                ),
+                            )
+                        break
+        except Exception as e:
+            _log.warning("update: apply old_prices -> loai failed: %s", e)
+
     if update_payload is not None and update_payload.prices:
         from automation_tool.images import get_active_main_symbol
 
