@@ -51,9 +51,9 @@ Tự động nhận diện luồng xử lý dựa trên đầu vào, sau đó ma
 3. [INTRADAY_UPDATE]
 → TRUY XUẤT: `master_trading_playbook.md → ## 3. [INTRADAY_UPDATE]`
 - Dùng khi cập nhật định kỳ (vd. 2h chiều / 9h tối).
-- Lần đầu sau [FULL_ANALYSIS]: đính kèm `morning_full_analysis.json` (Schema A), Coinmap M15/M5 hiện tại (merged hoặc 2 file riêng), và thêm TradingView 15m ICT Killzones của cặp chính.
-- Từ lần thứ hai: đính kèm Coinmap M15/M5 hiện tại (merged hoặc 2 file riêng) và thêm TradingView 15m ICT Killzones của cặp chính; tiếp nối chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.
-- So sánh footprint M15/M5 hiện tại cùng với TradingView 15m ICT Killzones; phân tích và đánh giá 3 plan cũ gần nhất, tìm tiếp 3 plan mới.
+- Lần đầu sau [FULL_ANALYSIS]: đính kèm `morning_full_analysis.json` (Schema A), Coinmap M15/M5 hiện tại (merged hoặc 2 file riêng), và thêm TradingView 15m Session Liquidity Check / ICT Killzones của cặp chính.
+- Từ lần thứ hai: đính kèm Coinmap M15/M5 hiện tại (merged hoặc 2 file riêng) và thêm TradingView 15m Session Liquidity Check / ICT Killzones của cặp chính; tiếp nối chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.
+- So sánh footprint M15/M5 hiện tại cùng với TradingView 15m Session Liquidity Check / ICT Killzones; dùng ảnh này để kiểm tra liquidity pool/sweep của các phiên; phân tích và đánh giá 3 plan cũ gần nhất, tìm tiếp 3 plan mới.
 - Trả về Schema B.
 
 4. [RETROSPECTIVE_ANALYSIS]
@@ -85,13 +85,13 @@ Không được dùng logic của mode khác để trả output cho mode hiện 
 <analysis_inputs>
 - [FULL_ANALYSIS] yêu cầu đủ 11 data (1 cuộc trò chuyện):
   + DXY (TradingView): H4, H1, M15
-  + Cặp chính (TradingView): H4, H1, M15, M15 ICT Killzones, M5
+  + Cặp chính (TradingView): H4, H1, M15, M15 Session Liquidity Check / ICT Killzones, M5
   + Footprint DXY (Coinmap): M15
   + Footprint cặp chính (Coinmap): M15, M5
 - [INTRADAY_UPDATE] file đính kèm:
-  + Lần đầu sau [FULL_ANALYSIS]: `morning_full_analysis.json` + Coinmap M15/M5 của cặp chính (merged hoặc 2 file riêng) + TradingView 15m ICT Killzones.
-  + Các lần sau: Coinmap M15/M5 của cặp chính (merged hoặc 2 file riêng) + TradingView 15m ICT Killzones.
-  + TradingView 15m ICT Killzones là ảnh/chart bổ sung để đối chiếu SMC/time-killzone với footprint; không thay thế Coinmap M15/M5.
+  + Lần đầu sau [FULL_ANALYSIS]: `morning_full_analysis.json` + Coinmap M15/M5 của cặp chính (merged hoặc 2 file riêng) + TradingView 15m Session Liquidity Check / ICT Killzones.
+  + Các lần sau: Coinmap M15/M5 của cặp chính (merged hoặc 2 file riêng) + TradingView 15m Session Liquidity Check / ICT Killzones.
+  + TradingView 15m Session Liquidity Check / ICT Killzones là ảnh/chart bổ sung để kiểm tra liquidity pool/sweep theo từng phiên và đối chiếu SMC/time-killzone với footprint; không thay thế Coinmap M15/M5.
 - [INTRADAY_ALERT] yêu cầu footprint M5 tại vùng chờ hiện tại; nếu có context plan trước đó thì dùng để đối chiếu.
 - [TRADE_MANAGEMENT] dùng footprint M5 mới nhất và context lệnh đang chạy.
 - Nếu thiếu dữ liệu cần thiết để xác nhận hợp lưu (đặc biệt CVD/Footprint), ưu tiên kết luận “chờ” và nêu rõ thiếu gì trong trường text tương ứng của schema.

@@ -70,7 +70,7 @@ def default_analysis_prompt(main_symbol: str | None = None) -> str:
         "Đính kèm theo thứ tự (TradingView = JSON; Coinmap = JSON gộp nếu có _merged), "
         "10–11 dữ liệu: "
         "TradingView DXY (H4, H1, M15) → "
-        f"TradingView {sym} (H4, H1, M15, M15 ICT Killzones, M5) → Coinmap DXY (M15) → "
+        f"TradingView {sym} (H4, H1, M15, M15 Session Liquidity Check / ICT Killzones, M5) → Coinmap DXY (M15) → "
         f"Coinmap {sym} (M15 + M5 gộp nếu có file merged, hoặc 2 file riêng).\n"
     )
 
@@ -130,7 +130,13 @@ def _json_file_header_and_body(path: Path, *, max_chars: int) -> tuple[str, str]
     if path.name == MORNING_FULL_ANALYSIS_FILENAME:
         header = f"[FULL_ANALYSIS snapshot — file: {path.name}]\n"
     elif "_tradingview_" in path.name:
-        header = f"[TradingView OHLC (tvdatafeed) — file: {path.name}]\n"
+        if "_15m_ict" in path.name:
+            header = (
+                "[TradingView M15 Session Liquidity Check / ICT Killzones "
+                f"(use to check session liquidity pools/sweeps) — file: {path.name}]\n"
+            )
+        else:
+            header = f"[TradingView OHLC (tvdatafeed) — file: {path.name}]\n"
     elif "_openai_coinmap_merged" in path.name or path.name.endswith("_merged.json"):
         header = f"[Coinmap merged analysis — file: {path.name}]\n"
     else:

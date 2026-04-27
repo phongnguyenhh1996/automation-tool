@@ -111,7 +111,7 @@ def execute_trade_all_accounts(
     log_tp2: bool = True,
 ) -> MT5MultiExecutionSummary:
     """
-    Chạy song song tất cả tài khoản và gửi lệnh (``execute_trade`` shutdown sau mỗi lần).
+    Gửi lệnh lần lượt qua từng tài khoản (``execute_trade`` shutdown sau mỗi lần).
     """
     out = MT5MultiExecutionSummary()
 
@@ -135,12 +135,8 @@ def execute_trade_all_accounts(
             account_symbol_map=acc.symbol_map or None,
         )
 
-    async def _gather() -> list[MT5ExecutionResult]:
-        tasks = [asyncio.to_thread(_run_one, acc) for acc in accounts]
-        return await asyncio.gather(*tasks)
-
-    results = asyncio.run(_gather())
-    for ex in results:
+    for acc in accounts:
+        ex = _run_one(acc)
         out.results.append(ex)
         if not ex.ok:
             out.ok_all = False

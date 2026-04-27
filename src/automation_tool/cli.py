@@ -2588,8 +2588,9 @@ def cmd_update(args: argparse.Namespace) -> None:
     )
     if tv_ict_payloads:
         user_msg += (
-            "\nĐính kèm thêm một ảnh TradingView 15m ICT Killzones của cặp chính "
-            "sau các file JSON Coinmap.\n"
+            "\nĐính kèm thêm một ảnh TradingView 15m Session Liquidity Check / ICT Killzones "
+            "của cặp chính sau các file JSON Coinmap; dùng để kiểm tra liquidity pool/sweep "
+            "theo phiên.\n"
         )
 
     try:
