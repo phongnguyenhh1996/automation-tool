@@ -92,6 +92,19 @@ def test_parse_update_zone_triple_root_no_change() -> None:
     assert zt is None and err is None and nc is True
 
 
+def test_parse_update_zone_triple_allows_partial_prices() -> None:
+    text = """{
+      "phan_tich_update": "Chỉ có một setup mới đủ chất lượng.",
+      "prices": [
+        {"label": "plan_chinh", "value": 10.0, "vung_cho": "9.0–11.0", "hop_luu": 68, "trade_line": ""}
+      ]
+    }"""
+    zt, err, nc = parse_update_zone_triple(text)
+    assert zt is None
+    assert err is None
+    assert nc is False
+
+
 def test_parse_analysis_phan_tich_update_only() -> None:
     text = '{"phan_tich_update": "M15 xác nhận buy."}'
     p = parse_analysis_from_openai_text(text)

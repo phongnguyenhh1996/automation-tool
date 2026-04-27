@@ -99,7 +99,8 @@ def parse_update_zone_triple(
 ) -> tuple[Optional[tuple[float, float, float]], Optional[str], Optional[bool]]:
     """
     Intraday update (Schema B): lấy ``(plan_chinh, plan_phu, scalp)`` trực tiếp từ ``prices``
-    trong JSON (không merge baseline, không đọc ``no_change`` từng vùng).
+    khi JSON có đủ 3 label. Intraday update được phép trả ít hơn 3 plan mới; trường hợp đó
+    không phải lỗi parse, chỉ là không có triple hoàn chỉnh để ghi ``last_alert_prices``.
     Root ``no_change: true`` vẫn có nghĩa bỏ qua toàn bộ cập nhật (legacy).
     """
     payload = parse_analysis_from_openai_text(text)
@@ -111,11 +112,7 @@ def parse_update_zone_triple(
         return None, "JSON không có prices.", None
     trip = triple_from_zone_prices(payload.prices)
     if trip is None:
-        return (
-            None,
-            "JSON 'prices' thiếu đủ plan_chinh, plan_phu, scalp hoặc value không hợp lệ.",
-            None,
-        )
+        return None, None, False
     return trip, None, False
 
 

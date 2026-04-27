@@ -2720,6 +2720,17 @@ def cmd_update(args: argparse.Namespace) -> None:
             _send_phan_tich_update_if_any()
             _log.info("update: no_change (action line) — không ghi giá mới")
             return
+        if zerr is None and update_payload is not None and update_payload.prices:
+            try:
+                merge_trade_lines_from_openai_analysis_text(out_text, path=lap)
+            except Exception as e:
+                _log.warning("update: merge trade_line từ JSON — %s", e)
+            _send_phan_tich_update_if_any()
+            _log.info(
+                "update: JSON prices có %d plan, chưa đủ triple — bỏ qua ghi last_alert_prices",
+                len(update_payload.prices),
+            )
+            return
         _send_phan_tich_update_if_any()
         raise SystemExit(zerr or "Could not parse three zone prices from model output.")
 
