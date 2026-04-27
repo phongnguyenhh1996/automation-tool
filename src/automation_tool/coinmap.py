@@ -2806,6 +2806,28 @@ def _tradingview_is_delete_indicator_label(label: str) -> bool:
     )
 
 
+def _tradingview_shifted_context_click_xy(
+    page,
+    tv: dict[str, Any],
+    base_x: float,
+    base_y: float,
+    attempt_index: int,
+) -> tuple[float, float]:
+    """
+    Retry right-clicks progressively down-left; clicking another chart object can hide
+    the indicator-delete menu item.
+    """
+    vp = page.viewport_size or {"width": 1600, "height": 900}
+    w = float(vp.get("width") or 1600)
+    h = float(vp.get("height") or 900)
+    step = float(tv.get("indicator_clear_retry_offset_ratio", 0.10) or 0.10)
+    step = min(0.5, max(0.0, step))
+    margin = 8.0
+    x = base_x - (w * step * attempt_index)
+    y = base_y + (h * step * attempt_index)
+    return min(max(x, margin), w - margin), min(max(y, margin), h - margin)
+
+
 def _tradingview_open_context_menu_and_clear_indicators(page, tv: dict[str, Any]) -> None:
     logging.getLogger("automation_tool").info("tv: clear indicators | open context menu")
     texts = tv.get("context_menu_delete_indicators_texts")
@@ -2814,13 +2836,21 @@ def _tradingview_open_context_menu_and_clear_indicators(page, tv: dict[str, Any]
     else:
         candidates = ["Xóa 1 chỉ báo", "Xóa 2 chỉ báo"]
 
-    attempts = int(tv.get("indicator_clear_retry_attempts", 3) or 3)
+    attempts = int(tv.get("indicator_clear_retry_attempts", 8) or 8)
     click_timeout_ms = int(tv.get("indicator_clear_click_timeout_ms", 3000) or 3000)
     visible_timeout_ms = int(tv.get("indicator_clear_visible_timeout_ms", 1500) or 1500)
 
     last_err: Optional[BaseException] = None
+    base_x, base_y = _tradingview_chart_center_xy(page, tv)
     for i in range(max(1, attempts)):
-        x, y = _tradingview_chart_center_xy(page, tv)
+        x, y = _tradingview_shifted_context_click_xy(page, tv, base_x, base_y, i)
+        logging.getLogger("automation_tool").info(
+            "tv: clear indicators | context click attempt %s/%s at x=%.1f y=%.1f",
+            i + 1,
+            attempts,
+            x,
+            y,
+        )
         page.mouse.click(x, y, button="right")
         clicked = False
 
@@ -2877,7 +2907,11 @@ def _tradingview_open_context_menu_and_clear_indicators(page, tv: dict[str, Any]
             page.wait_for_timeout(int(tv.get("after_indicator_clear_ms", 450)))
             return
 
-        # Backoff a bit then retry opening context menu.
+        try:
+            page.keyboard.press("Escape")
+        except Exception:
+            pass
+        # Backoff a bit then retry opening context menu at the next down-left point.
         page.wait_for_timeout(300)
 
     msg = f"tv: clear indicators failed after {attempts} attempt(s)"
