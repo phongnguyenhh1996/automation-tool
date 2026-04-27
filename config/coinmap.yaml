@@ -339,6 +339,7 @@ tradingview_capture:
       required_indicators:
         - favorite_name: "ICT Killzones + Pivots [TFO]"
           aliases:
+            - "ICT Killzones + Pivots [TFO]"
             - "ICT Killzones & Pivots [TFO]"
 
 # If true, still run the legacy canvas screenshot loop after the chart page screenshot

@@ -2792,6 +2792,20 @@ def _tradingview_chart_center_xy(page, tv: dict[str, Any]) -> tuple[float, float
     return float(vp["width"]) / 2.0, float(vp["height"]) * y_ratio
 
 
+def _tradingview_is_delete_indicator_label(label: str) -> bool:
+    label_l = (label or "").strip().lower()
+    if not label_l:
+        return False
+    # Do not click "remove from favorites" entries; they do not clear chart studies
+    # and can remove the indicator from the favorites menu needed for recovery.
+    if "yêu thích" in label_l or "favorite" in label_l:
+        return False
+    return (
+        (("xóa" in label_l or "xoá" in label_l) and "chỉ báo" in label_l)
+        or ("remove" in label_l and "indicator" in label_l)
+    )
+
+
 def _tradingview_open_context_menu_and_clear_indicators(page, tv: dict[str, Any]) -> None:
     logging.getLogger("automation_tool").info("tv: clear indicators | open context menu")
     texts = tv.get("context_menu_delete_indicators_texts")
@@ -2820,12 +2834,7 @@ def _tradingview_open_context_menu_and_clear_indicators(page, tv: dict[str, Any]
             try:
                 item = labels.nth(j)
                 label = (item.inner_text(timeout=500) or "").strip()
-                label_l = label.lower()
-                is_delete_indicators = (
-                    (("xóa" in label_l or "xoá" in label_l) and "chỉ báo" in label_l)
-                    or ("remove" in label_l and "indicator" in label_l)
-                )
-                if not is_delete_indicators:
+                if not _tradingview_is_delete_indicator_label(label):
                     continue
                 item.wait_for(state="visible", timeout=visible_timeout_ms)
                 item.click(timeout=click_timeout_ms, force=True)
