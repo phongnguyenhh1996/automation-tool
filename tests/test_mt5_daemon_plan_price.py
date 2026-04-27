@@ -17,6 +17,8 @@ from automation_tool.mt5_execute import (
 from automation_tool.tv_watchlist_daemon import _daemon_gia_same_bid
 from automation_tool.mt5_accounts import LotRuleFixed, MT5AccountEntry
 from automation_tool.tv_watchlist_daemon import (
+    compute_daemon_plan_auto_stop_deadline_local,
+    compute_daemon_plan_effective_stop_deadline_local,
     compute_daemon_plan_stop_deadline_local,
     daemon_plan_resolve_cutoff_mt5,
     daemon_plan_should_exit_if_mt5_tickets_closed,
@@ -116,6 +118,92 @@ def test_daemon_plan_stop_deadline_midnight_late_same_evening() -> None:
     started = datetime(2026, 4, 18, 23, 45, tzinfo=z)
     d = compute_daemon_plan_stop_deadline_local(started, "Asia/Ho_Chi_Minh", 0, 0)
     assert d == datetime(2026, 4, 19, 0, 0, tzinfo=z)
+
+
+def test_daemon_plan_auto_stop_deadline_offsets_by_slot_and_label() -> None:
+    z = ZoneInfo("Asia/Ho_Chi_Minh")
+    started = datetime(2026, 4, 20, 8, 30, tzinfo=z)
+
+    assert compute_daemon_plan_auto_stop_deadline_local(
+        started,
+        "Asia/Ho_Chi_Minh",
+        shard_path="zones/vung_plan_chinh_sang.json",
+    ) == datetime(2026, 4, 21, 2, 0, tzinfo=z)
+    assert compute_daemon_plan_auto_stop_deadline_local(
+        started,
+        "Asia/Ho_Chi_Minh",
+        shard_path="zones/vung_plan_phu_sang.json",
+    ) == datetime(2026, 4, 21, 2, 1, tzinfo=z)
+    assert compute_daemon_plan_auto_stop_deadline_local(
+        started,
+        "Asia/Ho_Chi_Minh",
+        shard_path="zones/vung_scalp_toi.json",
+    ) == datetime(2026, 4, 21, 2, 8, tzinfo=z)
+
+
+def test_daemon_plan_auto_stop_deadline_friday_uses_next_day_0100_base() -> None:
+    z = ZoneInfo("Asia/Ho_Chi_Minh")
+    started = datetime(2026, 4, 24, 20, 0, tzinfo=z)
+
+    d = compute_daemon_plan_auto_stop_deadline_local(
+        started,
+        "Asia/Ho_Chi_Minh",
+        shard_path="zones/vung_scalp_toi.json",
+    )
+
+    assert d == datetime(2026, 4, 25, 1, 8, tzinfo=z)
+
+
+def test_daemon_plan_auto_stop_deadline_uses_state_updated_at_after_restart() -> None:
+    z = ZoneInfo("Asia/Ho_Chi_Minh")
+    restarted_after_midnight = datetime(2026, 4, 25, 0, 30, tzinfo=z)
+
+    d = compute_daemon_plan_auto_stop_deadline_local(
+        restarted_after_midnight,
+        "Asia/Ho_Chi_Minh",
+        shard_path="zones/vung_plan_chinh_sang.json",
+        state_updated_at="2026-04-24T08:00:00+07:00",
+    )
+
+    assert d == datetime(2026, 4, 25, 1, 0, tzinfo=z)
+
+
+def test_daemon_plan_effective_deadline_manual_override_and_disabled() -> None:
+    z = ZoneInfo("Asia/Ho_Chi_Minh")
+    started = datetime(2026, 4, 20, 8, 30, tzinfo=z)
+
+    manual = compute_daemon_plan_effective_stop_deadline_local(
+        started,
+        "Asia/Ho_Chi_Minh",
+        stop_at_hour=3,
+        stop_at_minute=15,
+        shard_path="zones/vung_scalp_toi.json",
+    )
+    disabled = compute_daemon_plan_effective_stop_deadline_local(
+        started,
+        "Asia/Ho_Chi_Minh",
+        stop_at_hour=-1,
+        stop_at_minute=0,
+        shard_path="zones/vung_scalp_toi.json",
+    )
+
+    assert manual == datetime(2026, 4, 20, 3, 15, tzinfo=z)
+    assert disabled is None
+
+
+def test_daemon_plan_effective_deadline_defaults_to_auto() -> None:
+    z = ZoneInfo("Asia/Ho_Chi_Minh")
+    started = datetime(2026, 4, 20, 8, 30, tzinfo=z)
+
+    d = compute_daemon_plan_effective_stop_deadline_local(
+        started,
+        "Asia/Ho_Chi_Minh",
+        stop_at_hour=None,
+        stop_at_minute=0,
+        shard_path="zones/vung_plan_phu_chieu.json",
+    )
+
+    assert d == datetime(2026, 4, 21, 2, 4, tzinfo=z)
 
 
 def test_daemon_plan_ticket_closed_exits_when_none_on_mt5(monkeypatch: pytest.MonkeyPatch) -> None:

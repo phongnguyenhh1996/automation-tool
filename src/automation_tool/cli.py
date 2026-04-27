@@ -764,7 +764,8 @@ def _parser() -> argparse.ArgumentParser:
         "daemon-plan",
         help=(
             "Một process / file shard: Last từ shared memory / last.txt (MT5 bid do daemon giá ghi); "
-            "cập nhật zone tuần tự; thoát khi done/loại hoặc đến --stop-at-hour (mặc định 0 = 12h đêm): "
+            "cập nhật zone tuần tự; thoát khi done/loại hoặc đến giờ cắt tự động theo shard "
+            "(mặc định: sáng 02:00/02:01/02:02, chiều +3 phút, tối +6 phút; thứ Sáu base 01:00 hôm sau): "
             "lệnh chờ → huỷ; chỉ chờ khi còn position đã khớp. "
             "Chạy ``tv-watchlist-daemon`` (giá) cùng máy; cutoff ticket vẫn cần MT5."
         ),
@@ -797,11 +798,12 @@ def _parser() -> argparse.ArgumentParser:
     dp.add_argument(
         "--stop-at-hour",
         type=int,
-        default=0,
+        default=None,
         metavar="H",
         help=(
-            "Mốc cắt giờ local (kèm --stop-at-minute): 0 = 12h đêm (00:00 ngày kế, tức 24h); "
-            "1-23 = giờ trong ngày; -1 = tắt cắt giờ (chỉ thoát done/loại)."
+            "Override mốc cắt giờ local (kèm --stop-at-minute). "
+            "Mặc định không truyền = auto theo shard; 0 = 12h đêm (00:00 ngày kế, tức 24h); "
+            "1-23 = giờ trong ngày; -1 = tắt cắt giờ."
         ),
     )
     dp.add_argument(
@@ -2784,8 +2786,12 @@ def cmd_daemon_plan(args: argparse.Namespace) -> None:
     charts_dir = args.charts_dir or default_charts_dir()
     storage = args.storage_state or default_storage_state_path()
     shard = args.shard.expanduser().resolve()
-    stop_h = int(getattr(args, "stop_at_hour", 0))
-    stop_at_hour = None if stop_h < 0 else stop_h
+    raw_stop_h = getattr(args, "stop_at_hour", None)
+    if raw_stop_h is None:
+        stop_at_hour = None
+    else:
+        stop_h = int(raw_stop_h)
+        stop_at_hour = -1 if stop_h < 0 else stop_h
     params = WatchlistDaemonParams(
         coinmap_tv_yaml=cfg_tv,
         capture_coinmap_yaml=cfg_cap,

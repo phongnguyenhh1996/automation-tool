@@ -82,6 +82,7 @@ from automation_tool.telegram_bot import (
 )
 from automation_tool.openai_analysis_json import (
     ARM_THRESHOLD_TP1_DEFAULT,
+    ZONE_LABELS_ORDER,
     arm_threshold_tp1_for_label,
     auto_mt5_hop_luu_passes_for_label,
     auto_mt5_hop_luu_threshold_for_label,
@@ -99,6 +100,7 @@ from automation_tool.last_price_ipc import (
     write_last_prices_shared,
 )
 from automation_tool.zones_paths import (
+    SLOTS_ORDER,
     SessionSlot,
     default_last_price_path,
     default_zones_dir,
@@ -106,6 +108,7 @@ from automation_tool.zones_paths import (
     read_last_price_file,
     resolve_session_slot_raw,
     session_slot_display_vn,
+    session_slot_from_shard_path,
     write_last_price_file,
 )
 from automation_tool.zones_state import (
@@ -228,8 +231,8 @@ class WatchlistDaemonParams:
     openai_model: Optional[str] = None
     openai_model_cli: Optional[str] = None
     mt5_accounts_json: Optional[Path] = None
-    stop_at_hour: Optional[int] = 0
-    """0 + phút 0 = 12h đêm (00:00 ngày kế, local); 1-23 = mốc cùng ngày; ``None`` = không cắt giờ."""
+    stop_at_hour: Optional[int] = None
+    """``None`` = auto theo shard; ``-1`` = không cắt giờ; 0 + phút 0 = 00:00 ngày kế; 1-23 = mốc cùng ngày."""
     stop_at_minute: int = 0
     """Phút đi kèm ``stop_at_hour`` (mặc định 0)."""
     last_price_from_mt5: bool = True
@@ -262,6 +265,87 @@ def compute_daemon_plan_stop_deadline_local(
         next_day = s.date() + timedelta(days=1)
         return datetime.combine(next_day, dt_time(0, 0), tzinfo=z)
     return s.replace(hour=sh, minute=sm, second=0, microsecond=0)
+
+
+def _daemon_plan_session_datetime_from_updated_at(
+    state_updated_at: Optional[str],
+    timezone_name: str,
+) -> Optional[datetime]:
+    raw = (state_updated_at or "").strip()
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    z = ZoneInfo(timezone_name)
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=z)
+    return dt.astimezone(z)
+
+
+def compute_daemon_plan_auto_stop_deadline_local(
+    started_at: datetime,
+    timezone_name: str,
+    *,
+    shard_path: Path | str,
+    state_updated_at: Optional[str] = None,
+) -> datetime:
+    """
+    Auto cutoff per zone shard:
+    normal sessions stop from 02:00 next day; Friday sessions stop from 01:00 Saturday.
+    Shards are staggered by one minute in slot/label order.
+    """
+    z = ZoneInfo(timezone_name)
+    started_local = started_at.astimezone(z) if started_at.tzinfo else started_at.replace(tzinfo=z)
+    session_dt = _daemon_plan_session_datetime_from_updated_at(state_updated_at, timezone_name)
+    if session_dt is None:
+        session_dt = started_local
+
+    sp = Path(shard_path)
+    slot = session_slot_from_shard_path(sp)
+    label = label_from_shard_stem(sp.stem)
+    try:
+        slot_index = SLOTS_ORDER.index(slot) if slot is not None else 0
+    except ValueError:
+        slot_index = 0
+    try:
+        label_index = ZONE_LABELS_ORDER.index((label or "").strip().lower())
+    except ValueError:
+        label_index = 0
+
+    offset_minutes = slot_index * len(ZONE_LABELS_ORDER) + label_index
+    base_hour = 1 if session_dt.weekday() == 4 else 2
+    next_day = session_dt.date() + timedelta(days=1)
+    base_deadline = datetime.combine(next_day, dt_time(base_hour, 0), tzinfo=z)
+    return base_deadline + timedelta(minutes=offset_minutes)
+
+
+def compute_daemon_plan_effective_stop_deadline_local(
+    started_at: datetime,
+    timezone_name: str,
+    *,
+    stop_at_hour: Optional[int],
+    stop_at_minute: int = 0,
+    shard_path: Path | str,
+    state_updated_at: Optional[str] = None,
+) -> Optional[datetime]:
+    """Resolve daemon-plan cutoff: ``None`` = auto per shard, ``-1`` = disabled, otherwise manual."""
+    if stop_at_hour is None:
+        return compute_daemon_plan_auto_stop_deadline_local(
+            started_at,
+            timezone_name,
+            shard_path=shard_path,
+            state_updated_at=state_updated_at,
+        )
+    if int(stop_at_hour) < 0:
+        return None
+    return compute_daemon_plan_stop_deadline_local(
+        started_at,
+        timezone_name,
+        int(stop_at_hour),
+        int(stop_at_minute or 0),
+    )
 
 
 def _daemon_plan_collect_ticket_account_pairs(zone: Zone) -> list[tuple[Optional[str], int]]:
@@ -2513,15 +2597,28 @@ def _daemon_plan_main_loop(
     )
     stop_deadline: Optional[datetime] = None
     last_stop_wait_log_at = 0.0
-    if params.stop_at_hour is not None:
-        tz_name = (params.timezone_name or "Asia/Ho_Chi_Minh").strip() or "Asia/Ho_Chi_Minh"
-        sh = int(params.stop_at_hour)
-        sm = int(params.stop_at_minute or 0)
-        started = datetime.now(ZoneInfo(tz_name))
-        stop_deadline = compute_daemon_plan_stop_deadline_local(started, tz_name, sh, sm)
-        if sh == 0 and sm == 0:
+    tz_name = (params.timezone_name or "Asia/Ho_Chi_Minh").strip() or "Asia/Ho_Chi_Minh"
+    started = datetime.now(ZoneInfo(tz_name))
+    initial_state = _state_read(params)
+    stop_deadline = compute_daemon_plan_effective_stop_deadline_local(
+        started,
+        tz_name,
+        stop_at_hour=params.stop_at_hour,
+        stop_at_minute=int(params.stop_at_minute or 0),
+        shard_path=params.shard_path,
+        state_updated_at=initial_state.updated_at if initial_state is not None else None,
+    )
+    if stop_deadline is not None:
+        if params.stop_at_hour is None:
+            cut_desc = (
+                f"auto theo shard (base 02:00, thứ Sáu 01:00; lệch 1 phút/zone, {tz_name}) "
+                f"| mốc={stop_deadline.strftime('%Y-%m-%d %H:%M')}"
+            )
+        elif int(params.stop_at_hour) == 0 and int(params.stop_at_minute or 0) == 0:
             cut_desc = f"12h đêm (00:00 ngày kế, {tz_name}) | mốc={stop_deadline.strftime('%Y-%m-%d %H:%M')}"
         else:
+            sh = int(params.stop_at_hour)
+            sm = int(params.stop_at_minute or 0)
             cut_desc = (
                 f"dừng khi ≥ {sh:02d}:{sm:02d} ({tz_name}) | mốc cùng ngày={stop_deadline.strftime('%Y-%m-%d %H:%M')}"
             )
@@ -2529,12 +2626,13 @@ def _daemon_plan_main_loop(
             settings,
             f"[daemon-plan] cắt giờ | {cut_desc} (pending → huỷ; chỉ chờ khi còn position đã khớp)",
         )
+    else:
+        _send_log(settings, "[daemon-plan] cắt giờ | đã tắt cutoff tự động/thủ công")
     try:
         while True:
             st = _state_read(params)
             if stop_deadline is not None:
-                tz_nm = (params.timezone_name or "Asia/Ho_Chi_Minh").strip() or "Asia/Ho_Chi_Minh"
-                now_local = datetime.now(ZoneInfo(tz_nm))
+                now_local = datetime.now(ZoneInfo(tz_name))
                 if now_local >= stop_deadline:
                     zones_list = list(st.zones) if st is not None and st.zones else []
                     blocking, detail = daemon_plan_resolve_cutoff_mt5(
