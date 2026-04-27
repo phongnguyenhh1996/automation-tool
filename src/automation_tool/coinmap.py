@@ -2839,8 +2839,10 @@ def _tradingview_open_context_menu_and_clear_indicators(page, tv: dict[str, Any]
     attempts = int(tv.get("indicator_clear_retry_attempts", 8) or 8)
     click_timeout_ms = int(tv.get("indicator_clear_click_timeout_ms", 3000) or 3000)
     visible_timeout_ms = int(tv.get("indicator_clear_visible_timeout_ms", 1500) or 1500)
+    menu_settle_ms = int(tv.get("indicator_clear_menu_settle_ms", 150) or 150)
 
     last_err: Optional[BaseException] = None
+    last_legend: list[str] = []
     base_x, base_y = _tradingview_chart_center_xy(page, tv)
     for i in range(max(1, attempts)):
         x, y = _tradingview_shifted_context_click_xy(page, tv, base_x, base_y, i)
@@ -2852,10 +2854,12 @@ def _tradingview_open_context_menu_and_clear_indicators(page, tv: dict[str, Any]
             y,
         )
         page.mouse.click(x, y, button="right")
+        if menu_settle_ms > 0:
+            page.wait_for_timeout(menu_settle_ms)
         clicked = False
 
         # Click the visible "delete/remove indicator(s)" menu item once, regardless of count.
-        labels = page.locator('tr[data-role="menuitem"] [data-label="true"]')
+        labels = page.locator('[data-role="menuitem"] [data-label="true"]')
         try:
             n = int(labels.count() or 0)
         except Exception:
@@ -2867,7 +2871,8 @@ def _tradingview_open_context_menu_and_clear_indicators(page, tv: dict[str, Any]
                 if not _tradingview_is_delete_indicator_label(label):
                     continue
                 item.wait_for(state="visible", timeout=visible_timeout_ms)
-                item.click(timeout=click_timeout_ms, force=True)
+                row = item.locator('xpath=ancestor::*[@data-role="menuitem"][1]')
+                row.click(timeout=click_timeout_ms, force=True)
                 logging.getLogger("automation_tool").info(
                     "tv: clear indicators | clicked %r (attempt %s/%s)",
                     label,
@@ -2886,11 +2891,12 @@ def _tradingview_open_context_menu_and_clear_indicators(page, tv: dict[str, Any]
                 break
             try:
                 item = page.locator(
-                    'tr[data-role="menuitem"] [data-label="true"]',
+                    '[data-role="menuitem"] [data-label="true"]',
                     has_text=t,
                 ).first
                 item.wait_for(state="visible", timeout=visible_timeout_ms)
-                item.click(timeout=click_timeout_ms, force=True)
+                row = item.locator('xpath=ancestor::*[@data-role="menuitem"][1]')
+                row.click(timeout=click_timeout_ms, force=True)
                 logging.getLogger("automation_tool").info(
                     "tv: clear indicators | clicked %r (attempt %s/%s)",
                     t,
@@ -2905,7 +2911,17 @@ def _tradingview_open_context_menu_and_clear_indicators(page, tv: dict[str, Any]
 
         if clicked:
             page.wait_for_timeout(int(tv.get("after_indicator_clear_ms", 450)))
-            return
+            last_legend = _tradingview_list_legend_item_texts(page, tv)
+            if not last_legend:
+                logging.getLogger("automation_tool").info(
+                    "tv: clear indicators | no legend indicators remain"
+                )
+                return
+            logging.getLogger("automation_tool").info(
+                "tv: clear indicators | indicators remain after delete: %r",
+                last_legend,
+            )
+            continue
 
         try:
             page.keyboard.press("Escape")
@@ -2915,6 +2931,8 @@ def _tradingview_open_context_menu_and_clear_indicators(page, tv: dict[str, Any]
         page.wait_for_timeout(300)
 
     msg = f"tv: clear indicators failed after {attempts} attempt(s)"
+    if last_legend:
+        msg += f"; indicators still present: {last_legend!r}"
     if last_err is not None:
         msg += f" ({last_err})"
     raise SystemExit(msg)
