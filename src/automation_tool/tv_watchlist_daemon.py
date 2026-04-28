@@ -715,6 +715,32 @@ def _send_user_notice(
     )
 
 
+def _skip_scalp_r1_followup_if_needed(
+    zone: Zone,
+    *,
+    settings: Settings,
+    params: WatchlistDaemonParams,
+) -> bool:
+    """Scalp chỉ xử lý tại TP1; không hỏi AI khi đạt 1R."""
+    if (zone.label or "").strip().lower() != "scalp":
+        return False
+    if zone.r1_followup_done:
+        return True
+    zone.r1_followup_done = True
+    _send_log(
+        settings,
+        f"[r1] skip scalp | zone_id={zone.id} | không check 1R / không gọi OpenAI",
+    )
+    _send_user_notice(
+        settings,
+        "Scalp: bỏ qua kiểm tra 1R và không hỏi AI.",
+        "Hệ thống chỉ chờ TP1 để huỷ/loại lệnh scalp; TP1 cũng không gửi OpenAI follow-up.",
+        zone=zone,
+        params=params,
+    )
+    return True
+
+
 def _zone_label_slot_display_vn(zone: Zone) -> str:
     """Ví dụ: ``Plan chính - Sáng`` hoặc ``Scalp - Chiều`` (không ngoặc)."""
     lab = mt5_zone_label_display_vn(zone.label) or (zone.label or "").strip()
@@ -1432,6 +1458,10 @@ def _r1_followup_job(
         if z0 is None:
             return
         if z0.status in ("done", "loai"):
+            return
+        if _skip_scalp_r1_followup_if_needed(z0, settings=settings, params=params):
+            z0.status = prev_status  # type: ignore[assignment]
+            _state_write(params, st0)
             return
         if not z0.trade_line or not z0.mt5_ticket:
             z0.status = prev_status
@@ -2876,6 +2906,9 @@ def _daemon_plan_main_loop(
                         if z.status != "cho_tp1":
                             continue
                         if z.r1_followup_done:
+                            continue
+                        if _skip_scalp_r1_followup_if_needed(z, settings=settings, params=params):
+                            _state_write(params, st_r1)
                             continue
                         if not z.trade_line or not z.mt5_ticket or int(z.mt5_ticket) <= 0:
                             continue

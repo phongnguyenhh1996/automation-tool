@@ -14,6 +14,7 @@ from automation_tool.tv_watchlist_daemon import (
     _arm_threshold_met_for_zone,
     _invalidate_same_side_zones_after_touch,
     _maybe_loai_zone_if_last_hit_sl,
+    _skip_scalp_r1_followup_if_needed,
     WatchlistDaemonParams,
     _daemon_plan_response_id_path,
     _openai_followup_persist_new_id,
@@ -167,6 +168,47 @@ def test_arm_scalp_narrower_than_default() -> None:
     ref_s = 4738.0
     assert _arm_threshold_met_for_zone(z2, ref_s - ARM_THRESHOLD_TP1_SCALP) is True
     assert _arm_threshold_met_for_zone(z2, ref_s - ARM_THRESHOLD_TP1_SCALP - 0.25) is False
+
+
+def test_skip_scalp_r1_followup_marks_done_and_notifies(monkeypatch, tmp_path) -> None:
+    notices: list[tuple[str, str, str]] = []
+    logs: list[str] = []
+
+    def fake_notice(settings, title, body="", *, zone=None, params=None, zone_label=None):
+        notices.append((title, body, zone.label if zone is not None else ""))
+
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon._send_user_notice", fake_notice)
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon._send_log", lambda _settings, text: logs.append(text))
+    settings = MagicMock()
+    params = WatchlistDaemonParams(
+        coinmap_tv_yaml=tmp_path / "coinmap_tv.yaml",
+        capture_coinmap_yaml=tmp_path / "cap.yaml",
+        charts_dir=tmp_path / "charts",
+        storage_state_path=None,
+        headless=True,
+        no_save_storage=True,
+        shard_path=tmp_path / "vung_scalp_sang.json",
+    )
+    z = Zone(
+        id="s1",
+        label="scalp",
+        vung_cho="100–101",
+        side="BUY",
+        status="cho_tp1",
+        trade_line="BUY LIMIT 100 | SL 99 | TP1 101 | Lot 0.01",
+        mt5_ticket=123,
+    )
+
+    assert _skip_scalp_r1_followup_if_needed(z, settings=settings, params=params) is True
+    assert z.r1_followup_done is True
+    assert notices == [
+        (
+            "Scalp: bỏ qua kiểm tra 1R và không hỏi AI.",
+            "Hệ thống chỉ chờ TP1 để huỷ/loại lệnh scalp; TP1 cũng không gửi OpenAI follow-up.",
+            "scalp",
+        )
+    ]
+    assert any("skip scalp" in line for line in logs)
 
 
 def test_daemon_plan_sl_loai_includes_post_entry_statuses() -> None:
