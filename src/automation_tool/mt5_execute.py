@@ -11,10 +11,11 @@ Thực thi lệnh qua MetaTrader5 (Python package ``MetaTrader5``).
 from __future__ import annotations
 
 import os
+import random
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Callable, Literal, Optional, Sequence
 
 import automation_tool.config  # noqa: F401 — nạp .env khi import
 
@@ -23,6 +24,7 @@ from automation_tool.mt5_openai_parse import ParsedTrade, normalize_broker_xau_s
 # Vào lệnh: nếu mt5.initialize (login/IPC) lỗi — chờ rồi thử lại trước khi bỏ cuộc.
 _MT5_INIT_MAX_ATTEMPTS = 3
 _MT5_INIT_RETRY_DELAY_SEC = 3.0
+_MT5_SESSION_SWITCH_DELAYS_SEC = (2, 4, 6, 8)
 _MT5_ORDER_SEND_MAX_ATTEMPTS = 3
 _MT5_ORDER_SEND_RETRY_DELAY_MS = 200
 
@@ -79,6 +81,20 @@ class MT5LoginResult:
     lines: list[str]
 
 
+@dataclass
+class MT5SessionResult:
+    """Kết quả đảm bảo MT5 đang trỏ đúng terminal/account cần dùng."""
+
+    ok: bool
+    mt5: Any
+    message: str
+    reused: bool = False
+    initialized: bool = False
+    terminal_info: Any = None
+    account_info: Any = None
+    last_error: Optional[tuple[Any, ...]] = None
+
+
 def check_mt5_login(
     login: Optional[int] = None,
     password: Optional[str] = None,
@@ -109,25 +125,27 @@ def check_mt5_login(
             "Chế độ: initialize() không đối số — dùng phiên MT5 đang mở (đã login trong terminal).",
         )
 
-    if not mt5.initialize(**kwargs):
-        lines.append(f"mt5.initialize thất bại: {format_last_error(mt5)}")
-        return MT5LoginResult(ok=False, lines=lines)
-
-    try:
-        ti = mt5.terminal_info()
+    term_path = (os.getenv("MT5_TERMINAL_PATH") or "").strip()
+    if term_path and login_i and password_s and server_s:
+        session = ensure_mt5_session(
+            terminal_path=term_path,
+            login=login_i,
+            password=password_s,
+            server=server_s,
+            mt5=mt5,
+        )
+        lines.append(f"terminal_path: {term_path}")
+        lines.append(session.message)
+        ti = session.terminal_info
+        ai = session.account_info
+        if not session.ok:
+            lines.append(f"mt5.initialize/verify thất bại: {format_last_error(mt5)}")
+            return MT5LoginResult(ok=False, lines=lines)
         if ti is not None:
             lines.append(
                 f"Terminal: build={getattr(ti, 'build', '?')} "
                 f"name={getattr(ti, 'name', '?')!r}",
             )
-        ai = mt5.account_info()
-        if ai is None:
-            lines.append(
-                f"account_info trả về None — chưa có tài khoản kết nối hoặc lỗi. "
-                f"{format_last_error(mt5)}",
-            )
-            return MT5LoginResult(ok=False, lines=lines)
-
         lines.append("Đăng nhập OK — account_info:")
         lines.append(f"  login:    {ai.login}")
         lines.append(f"  server:   {ai.server}")
@@ -142,8 +160,65 @@ def check_mt5_login(
             lines.append(f"  leverage: 1:{lev}")
         lines.append(f"  trade_allowed: {getattr(ai, 'trade_allowed', '?')}")
         return MT5LoginResult(ok=True, lines=lines)
-    finally:
-        mt5.shutdown()
+
+    ti_current, ai_current = _read_mt5_session_info(mt5)
+    if ai_current is not None and (
+        not login_i
+        or _mt5_account_matches(ai_current, login_i, server_s)
+    ):
+        lines.append("MT5 session hiện tại có account_info phù hợp — reuse.")
+        if ti_current is not None:
+            lines.append(
+                f"Terminal: build={getattr(ti_current, 'build', '?')} "
+                f"name={getattr(ti_current, 'name', '?')!r}",
+            )
+        lines.append("Đăng nhập OK — account_info:")
+        lines.append(f"  login:    {ai_current.login}")
+        lines.append(f"  server:   {ai_current.server}")
+        lines.append(f"  company:  {getattr(ai_current, 'company', '')}")
+        lines.append(f"  name:     {getattr(ai_current, 'name', '')}")
+        lines.append(f"  currency: {ai_current.currency}")
+        lines.append(f"  balance:  {ai_current.balance}")
+        lines.append(f"  equity:   {ai_current.equity}")
+        lines.append(f"  margin:   {getattr(ai_current, 'margin', '')}")
+        lev = getattr(ai_current, "leverage", None)
+        if lev is not None:
+            lines.append(f"  leverage: 1:{lev}")
+        lines.append(f"  trade_allowed: {getattr(ai_current, 'trade_allowed', '?')}")
+        return MT5LoginResult(ok=True, lines=lines)
+
+    if not mt5.initialize(**kwargs):
+        lines.append(f"mt5.initialize thất bại: {format_last_error(mt5)}")
+        return MT5LoginResult(ok=False, lines=lines)
+
+    ti = mt5.terminal_info()
+    if ti is not None:
+        lines.append(
+            f"Terminal: build={getattr(ti, 'build', '?')} "
+            f"name={getattr(ti, 'name', '?')!r}",
+        )
+    ai = mt5.account_info()
+    if ai is None:
+        lines.append(
+            f"account_info trả về None — chưa có tài khoản kết nối hoặc lỗi. "
+            f"{format_last_error(mt5)}",
+        )
+        return MT5LoginResult(ok=False, lines=lines)
+
+    lines.append("Đăng nhập OK — account_info:")
+    lines.append(f"  login:    {ai.login}")
+    lines.append(f"  server:   {ai.server}")
+    lines.append(f"  company:  {getattr(ai, 'company', '')}")
+    lines.append(f"  name:     {getattr(ai, 'name', '')}")
+    lines.append(f"  currency: {ai.currency}")
+    lines.append(f"  balance:  {ai.balance}")
+    lines.append(f"  equity:   {ai.equity}")
+    lines.append(f"  margin:   {getattr(ai, 'margin', '')}")
+    lev = getattr(ai, "leverage", None)
+    if lev is not None:
+        lines.append(f"  leverage: 1:{lev}")
+    lines.append(f"  trade_allowed: {getattr(ai, 'trade_allowed', '?')}")
+    return MT5LoginResult(ok=True, lines=lines)
 
 
 def _load_mt5():
@@ -179,6 +254,175 @@ def format_last_error(mt5: Any) -> str:
         code, msg = t[0], t[1]
         return f"code={code} message={msg!r}"
     return f"last_error={t!r}"
+
+
+def _norm_mt5_path(value: Any) -> str:
+    s = str(value or "").strip().strip('"').strip("'")
+    if not s:
+        return ""
+    return os.path.normcase(os.path.normpath(os.path.expanduser(s)))
+
+
+def _mt5_terminal_path_matches(terminal_info: Any, terminal_path: str) -> bool:
+    required = _norm_mt5_path(terminal_path)
+    if not required:
+        return True
+    if terminal_info is None:
+        return False
+    required_dir = _norm_mt5_path(os.path.dirname(required))
+    candidates = {
+        _norm_mt5_path(getattr(terminal_info, "path", "")),
+        _norm_mt5_path(getattr(terminal_info, "data_path", "")),
+        _norm_mt5_path(getattr(terminal_info, "commondata_path", "")),
+    }
+    candidates.discard("")
+    if required in candidates or required_dir in candidates:
+        return True
+    return any(_norm_mt5_path(os.path.dirname(c)) == required_dir for c in candidates)
+
+
+def _mt5_account_matches(account_info: Any, login: Optional[int], server: Optional[str]) -> bool:
+    if login is None and not server:
+        return account_info is not None
+    if account_info is None:
+        return False
+    if login is not None:
+        try:
+            if int(getattr(account_info, "login")) != int(login):
+                return False
+        except (TypeError, ValueError):
+            return False
+    if server:
+        current_server = str(getattr(account_info, "server", "") or "").strip().lower()
+        required_server = str(server or "").strip().lower()
+        if current_server != required_server:
+            return False
+    return True
+
+
+def _read_mt5_session_info(mt5: Any) -> tuple[Any, Any]:
+    try:
+        terminal_info = mt5.terminal_info()
+    except Exception:
+        terminal_info = None
+    try:
+        account_info = mt5.account_info()
+    except Exception:
+        account_info = None
+    return terminal_info, account_info
+
+
+def _mt5_session_matches(
+    mt5: Any,
+    *,
+    terminal_path: str,
+    login: Optional[int],
+    server: Optional[str],
+) -> tuple[bool, Any, Any]:
+    terminal_info, account_info = _read_mt5_session_info(mt5)
+    return (
+        _mt5_terminal_path_matches(terminal_info, terminal_path)
+        and _mt5_account_matches(account_info, login, server),
+        terminal_info,
+        account_info,
+    )
+
+
+def ensure_mt5_session(
+    *,
+    terminal_path: Optional[str],
+    login: Optional[int] = None,
+    password: Optional[str] = None,
+    server: Optional[str] = None,
+    mt5: Any = None,
+    max_attempts: int = _MT5_INIT_MAX_ATTEMPTS,
+    sleep_fn: Callable[[float], None] = time.sleep,
+    delay_choice_fn: Callable[[Sequence[int]], int] = random.choice,
+) -> MT5SessionResult:
+    """
+    Reuse phiên MT5 hiện tại nếu đã đúng terminal/account; chỉ switch khi thiếu/sai.
+
+    Password không có trong ``account_info()`` nên chỉ dùng khi cần initialize lại.
+    """
+    mt5_mod = mt5 if mt5 is not None else _load_mt5()
+    term_path = (terminal_path or "").strip()
+    if not term_path:
+        return MT5SessionResult(
+            ok=False,
+            mt5=mt5_mod,
+            message="terminal_path bắt buộc để kết nối MT5 terminal (metatrader64.exe).",
+            last_error=_last_error_tuple(mt5_mod),
+        )
+
+    login_i = int(login) if login is not None else None
+    server_s = str(server or "").strip()
+    password_s = str(password or "")
+    matched, terminal_info, account_info = _mt5_session_matches(
+        mt5_mod,
+        terminal_path=term_path,
+        login=login_i,
+        server=server_s,
+    )
+    if matched:
+        return MT5SessionResult(
+            ok=True,
+            mt5=mt5_mod,
+            message="MT5 session hiện tại đúng terminal/account — reuse.",
+            reused=True,
+            terminal_info=terminal_info,
+            account_info=account_info,
+            last_error=_last_error_tuple(mt5_mod),
+        )
+
+    kwargs: dict[str, Any] = {}
+    if login_i is not None and password_s and server_s:
+        kwargs["login"] = login_i
+        kwargs["password"] = password_s
+        kwargs["server"] = server_s
+
+    last_error: Optional[tuple[Any, ...]] = None
+    attempts = max(1, int(max_attempts or 1))
+    for attempt in range(1, attempts + 1):
+        delay = delay_choice_fn(_MT5_SESSION_SWITCH_DELAYS_SEC)
+        sleep_fn(float(delay))
+        try:
+            mt5_mod.shutdown()
+        except Exception:
+            pass
+
+        if not mt5_mod.initialize(term_path, **kwargs):
+            last_error = _last_error_tuple(mt5_mod)
+            continue
+
+        matched, terminal_info, account_info = _mt5_session_matches(
+            mt5_mod,
+            terminal_path=term_path,
+            login=login_i,
+            server=server_s,
+        )
+        if matched:
+            return MT5SessionResult(
+                ok=True,
+                mt5=mt5_mod,
+                message="MT5 initialize OK và verify đúng terminal/account.",
+                initialized=True,
+                terminal_info=terminal_info,
+                account_info=account_info,
+                last_error=_last_error_tuple(mt5_mod),
+            )
+        last_error = _last_error_tuple(mt5_mod)
+
+    return MT5SessionResult(
+        ok=False,
+        mt5=mt5_mod,
+        message=(
+            f"mt5.initialize/verify thất bại sau {attempts} lần: "
+            f"{format_last_error(mt5_mod)}"
+        ),
+        terminal_info=terminal_info,
+        account_info=account_info,
+        last_error=last_error,
+    )
 
 
 def _format_last_error_if_meaningful(mt5: Any) -> str:
@@ -764,43 +1008,21 @@ def execute_trade(
             resolved_symbol=trade.symbol,
         )
 
-    mt5 = _load_mt5()
-    term_path = (terminal_path or "").strip()
-    if not term_path:
+    session = ensure_mt5_session(
+        terminal_path=terminal_path,
+        login=login_i if login_i else None,
+        password=password_s,
+        server=server_s,
+    )
+    mt5 = session.mt5
+    if not session.ok:
         return MT5ExecutionResult(
             ok=False,
-            message="terminal_path bắt buộc để kết nối MT5 terminal (metatrader64.exe).",
+            message=session.message,
             account_id=account_id,
+            last_error=session.last_error,
             resolved_symbol=trade.symbol,
         )
-    kwargs: dict[str, Any] = {}
-    if login_i and password_s and server_s:
-        kwargs["login"] = login_i
-        kwargs["password"] = password_s
-        kwargs["server"] = server_s
-
-    le: Optional[tuple[Any, ...]] = None
-    for attempt in range(1, _MT5_INIT_MAX_ATTEMPTS + 1):
-        if mt5.initialize(term_path, **kwargs):
-            break
-        le = _last_error_tuple(mt5)
-        if attempt < _MT5_INIT_MAX_ATTEMPTS:
-            try:
-                mt5.shutdown()
-            except Exception:
-                pass
-            time.sleep(_MT5_INIT_RETRY_DELAY_SEC)
-        else:
-            return MT5ExecutionResult(
-                ok=False,
-                message=(
-                    f"mt5.initialize thất bại sau {_MT5_INIT_MAX_ATTEMPTS} lần "
-                    f"(cách {_MT5_INIT_RETRY_DELAY_SEC:.0f}s): {format_last_error(mt5)}"
-                ),
-                account_id=account_id,
-                last_error=le,
-                resolved_symbol=trade.symbol,
-            )
 
     try:
         try:
@@ -920,7 +1142,7 @@ def execute_trade(
             resolved_symbol=str(request.get("symbol") or trade.symbol),
         )
     finally:
-        mt5.shutdown()
+        pass
 
 
 def _tick_price_or_none(tick: Any, leg: Literal["ask", "bid"]) -> Optional[float]:
@@ -1013,12 +1235,21 @@ class DaemonPlanMt5PriceSession:
         except SystemExit as e:
             self._last_error = str(e)
             return False
+        ti, ai = _read_mt5_session_info(mt5)
+        if ti is not None and ai is not None:
+            sym, err = _ensure_symbol(mt5, self._symbol_hint)
+            if err or not sym:
+                self._last_error = err or f"symbol_info({self._symbol_hint!r})"
+                return False
+            self._mt5 = mt5
+            self._resolved = sym
+            self._last_error = None
+            return True
         if not mt5.initialize(**kwargs):
             self._last_error = f"mt5.initialize thất bại: {format_last_error(mt5)}"
             return False
         sym, err = _ensure_symbol(mt5, self._symbol_hint)
         if err or not sym:
-            mt5.shutdown()
             self._last_error = err or f"symbol_info({self._symbol_hint!r})"
             return False
         self._mt5 = mt5
@@ -1036,6 +1267,7 @@ class DaemonPlanMt5PriceSession:
         ``shutdown`` Python session rồi kết nối lại MT5 (đăng nhập API nếu có đủ env, không thì phiên terminal).
         Dùng khi bid không đổi trong khoảng thời gian dài (feed có thể kẹt).
         """
+        time.sleep(float(random.choice(_MT5_SESSION_SWITCH_DELAYS_SEC)))
         self.shutdown()
         kwargs = _mt5_initialize_kwargs_from_env()
         return self._connect_with_init_kwargs(kwargs)

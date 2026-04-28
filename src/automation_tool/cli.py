@@ -2023,40 +2023,30 @@ def cmd_mt5_login_all_async(args: argparse.Namespace) -> None:
     max_conc = max(1, min(max_conc, len(accounts)))
 
     def _probe_one(acc) -> tuple[str, bool, list[str]]:
-        from automation_tool.mt5_execute import _load_mt5, format_last_error
+        from automation_tool.mt5_execute import ensure_mt5_session
 
-        mt5 = _load_mt5()
         lines: list[str] = []
-        ok = False
-        try:
-            term_path = str(getattr(acc, "terminal_path", "") or "").strip()
-            if not term_path:
-                return acc.id, False, ["terminal_path rỗng"]
-            if not mt5.initialize(
-                term_path,
-                login=int(acc.login),
-                password=str(acc.password),
-                server=str(acc.server),
-            ):
-                return acc.id, False, [f"mt5.initialize thất bại: {format_last_error(mt5)}"]
-
-            ti = mt5.terminal_info()
-            ai = mt5.account_info()
-            lines.append(f"terminal_path: {term_path}")
-            lines.append(f"terminal_info: {ti}")
-            lines.append(f"account_info: {ai}")
-            if ai is not None:
-                try:
-                    lines.append(f"account.login={ai.login} server={ai.server!r} currency={ai.currency}")
-                except Exception:
-                    pass
-            ok = ti is not None and ai is not None
-            return acc.id, ok, lines
-        finally:
+        term_path = str(getattr(acc, "terminal_path", "") or "").strip()
+        if not term_path:
+            return acc.id, False, ["terminal_path rỗng"]
+        session = ensure_mt5_session(
+            terminal_path=term_path,
+            login=int(acc.login),
+            password=str(acc.password),
+            server=str(acc.server),
+        )
+        lines.append(f"terminal_path: {term_path}")
+        lines.append(f"session: {session.message}")
+        lines.append(f"reused={session.reused} initialized={session.initialized}")
+        lines.append(f"terminal_info: {session.terminal_info}")
+        lines.append(f"account_info: {session.account_info}")
+        ai = session.account_info
+        if ai is not None:
             try:
-                mt5.shutdown()
+                lines.append(f"account.login={ai.login} server={ai.server!r} currency={ai.currency}")
             except Exception:
                 pass
+        return acc.id, session.ok, lines
 
     async def _run() -> list[tuple[str, bool, list[str]]]:
         sem = asyncio.Semaphore(max_conc)

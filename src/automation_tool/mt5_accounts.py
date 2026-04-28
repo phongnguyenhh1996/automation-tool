@@ -355,44 +355,41 @@ def compute_volume_for_max_notional_live(
     account_symbol_map: Optional[dict[str, str]] = None,
 ) -> tuple[float, Optional[str]]:
     """
-    Một lần ``initialize`` + tính volume (rồi caller gọi ``execute_trade`` sẽ init lại).
+    Đảm bảo phiên MT5 đúng terminal/account rồi tính volume, không đóng phiên sau khi đọc.
     Dùng cho multi-account khi ``mode=max_notional_usd`` và không dry-run.
     """
     from automation_tool.mt5_execute import (  # noqa: WPS433 — tránh vòng import tĩnh
-        _load_mt5,
-        format_last_error,
+        ensure_mt5_session,
         resolve_trade_symbol_on_broker,
     )
 
-    mt5 = _load_mt5()
     term_path = (terminal_path or "").strip()
     if not term_path:
         return float(trade.lot), "terminal_path rỗng — không thể initialize MT5 terminal"
-    kwargs: dict[str, Any] = {}
-    if login and password and server:
-        kwargs["login"] = login
-        kwargs["password"] = password
-        kwargs["server"] = server
-    if not mt5.initialize(term_path, **kwargs):
-        return float(trade.lot), f"mt5.initialize thất bại: {format_last_error(mt5)}"
-    try:
-        rt, err = resolve_trade_symbol_on_broker(
-            mt5,
-            trade,
-            symbol_override,
-            account_symbol_map=account_symbol_map,
-        )
-        if err or rt is None:
-            return float(trade.lot), err
-        return compute_lot_override(
-            rt,
-            rule,
-            mt5=mt5,
-            resolved_symbol=rt.symbol,
-            dry_run=False,
-        )
-    finally:
-        mt5.shutdown()
+    session = ensure_mt5_session(
+        terminal_path=term_path,
+        login=login if login else None,
+        password=password,
+        server=server,
+    )
+    if not session.ok:
+        return float(trade.lot), session.message
+    mt5 = session.mt5
+    rt, err = resolve_trade_symbol_on_broker(
+        mt5,
+        trade,
+        symbol_override,
+        account_symbol_map=account_symbol_map,
+    )
+    if err or rt is None:
+        return float(trade.lot), err
+    return compute_lot_override(
+        rt,
+        rule,
+        mt5=mt5,
+        resolved_symbol=rt.symbol,
+        dry_run=False,
+    )
 
 
 def compute_volume_for_max_loss_live(
@@ -407,41 +404,38 @@ def compute_volume_for_max_loss_live(
     account_symbol_map: Optional[dict[str, str]] = None,
 ) -> tuple[float, Optional[str]]:
     """
-    Một lần ``initialize`` + tính volume theo max loss (rồi caller gọi ``execute_trade`` sẽ init lại).
+    Đảm bảo phiên MT5 đúng terminal/account rồi tính volume theo max loss, không đóng phiên sau khi đọc.
     Dùng cho multi-account khi ``mode=max_loss_usd`` và không dry-run.
     """
     from automation_tool.mt5_execute import (  # noqa: WPS433 — tránh vòng import tĩnh
-        _load_mt5,
-        format_last_error,
+        ensure_mt5_session,
         resolve_trade_symbol_on_broker,
     )
 
-    mt5 = _load_mt5()
     term_path = (terminal_path or "").strip()
     if not term_path:
         return float(trade.lot), "terminal_path rỗng — không thể initialize MT5 terminal"
-    kwargs: dict[str, Any] = {}
-    if login and password and server:
-        kwargs["login"] = login
-        kwargs["password"] = password
-        kwargs["server"] = server
-    if not mt5.initialize(term_path, **kwargs):
-        return float(trade.lot), f"mt5.initialize thất bại: {format_last_error(mt5)}"
-    try:
-        rt, err = resolve_trade_symbol_on_broker(
-            mt5,
-            trade,
-            symbol_override,
-            account_symbol_map=account_symbol_map,
-        )
-        if err or rt is None:
-            return float(trade.lot), err
-        return compute_lot_override(
-            rt,
-            rule,
-            mt5=mt5,
-            resolved_symbol=rt.symbol,
-            dry_run=False,
-        )
-    finally:
-        mt5.shutdown()
+    session = ensure_mt5_session(
+        terminal_path=term_path,
+        login=login if login else None,
+        password=password,
+        server=server,
+    )
+    if not session.ok:
+        return float(trade.lot), session.message
+    mt5 = session.mt5
+    rt, err = resolve_trade_symbol_on_broker(
+        mt5,
+        trade,
+        symbol_override,
+        account_symbol_map=account_symbol_map,
+    )
+    if err or rt is None:
+        return float(trade.lot), err
+    return compute_lot_override(
+        rt,
+        rule,
+        mt5=mt5,
+        resolved_symbol=rt.symbol,
+        dry_run=False,
+    )

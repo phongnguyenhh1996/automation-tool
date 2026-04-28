@@ -216,6 +216,7 @@ def _run_tp1_openai_and_act(
         still_open, ticket_msg = mt5_ticket_still_open(
             tk0,
             dry_run=dry,
+            terminal_path=prim0.terminal_path if prim0 else None,
             login=prim0.login if prim0 else None,
             password=prim0.password if prim0 else None,
             server=prim0.server if prim0 else None,
@@ -341,7 +342,15 @@ def _run_tp1_openai_and_act(
                 _log.info("tp1-followup loại multi: %s", log_txt)
                 r_ok = summ.ok_all
             else:
-                r = mt5_cancel_pending_or_close_position(int(tk), dry_run=dry)
+                prim_cancel = primary_account(accounts) if accounts else None
+                r = mt5_cancel_pending_or_close_position(
+                    int(tk),
+                    dry_run=dry,
+                    terminal_path=prim_cancel.terminal_path if prim_cancel else None,
+                    login=prim_cancel.login if prim_cancel else None,
+                    password=prim_cancel.password if prim_cancel else None,
+                    server=prim_cancel.server if prim_cancel else None,
+                )
                 log_txt = r.message
                 _log.info("tp1-followup loại: %s", r.message)
                 r_ok = r.ok
@@ -431,6 +440,7 @@ def _run_tp1_openai_and_act(
                 new_parsed,
                 dry_run=dry,
                 symbol_override=sym_ov,
+                terminal_path=prim.terminal_path if prim else None,
                 login=prim.login if prim else None,
                 password=prim.password if prim else None,
                 server=prim.server if prim else None,
@@ -455,7 +465,14 @@ def _run_tp1_openai_and_act(
                     "tp1-followup: ticket không còn — đặt lệnh mới (không huỷ)",
                 )
             else:
-                r0 = mt5_cancel_pending_or_close_position(int(tk), dry_run=dry)
+                r0 = mt5_cancel_pending_or_close_position(
+                    int(tk),
+                    dry_run=dry,
+                    terminal_path=prim.terminal_path if prim else None,
+                    login=prim.login if prim else None,
+                    password=prim.password if prim else None,
+                    server=prim.server if prim else None,
+                )
                 _log.info("tp1-followup: fallback đóng/huỷ lệnh cũ: %s", r0.message)
 
     if exe and not used_inplace:
@@ -691,7 +708,15 @@ def maybe_post_entry_tp1_tick(
                         msg_sp = format_mt5_multi_manage_for_telegram(summ_sp)
                         r_ok_sp = summ_sp.ok_all
                     else:
-                        r = mt5_cancel_pending_or_close_position(tk_sc, dry_run=dry)
+                        prim_sp = primary_account(accs_sp) if accs_sp else None
+                        r = mt5_cancel_pending_or_close_position(
+                            tk_sc,
+                            dry_run=dry,
+                            terminal_path=prim_sp.terminal_path if prim_sp else None,
+                            login=prim_sp.login if prim_sp else None,
+                            password=prim_sp.password if prim_sp else None,
+                            server=prim_sp.server if prim_sp else None,
+                        )
                         msg_sp = r.message
                         r_ok_sp = r.ok
                     _log.info("tp1: scalp cho_tp1 chạm TP1 — huỷ ticket | %s", msg_sp)

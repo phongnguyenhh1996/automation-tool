@@ -297,24 +297,27 @@ def test_daemon_plan_cutoff_multi_account_uses_api_per_acc(monkeypatch: pytest.M
         "automation_tool.tv_watchlist_daemon.load_mt5_accounts_for_cli",
         lambda _p: [acc_a, acc_b],
     )
-    calls: list[tuple[int, object]] = []
+    calls: list[tuple[int, object, object]] = []
 
     def fake_status(
         ticket: int,
         *,
         dry_run: bool = False,
+        terminal_path: str | None = None,
         login: int | None = None,
         password: str | None = None,
         server: str | None = None,
     ):
-        calls.append((int(ticket), login))
+        calls.append((int(ticket), login, terminal_path))
         # ticket 10 on acc a: pending once then closed
         if int(ticket) == 10 and login == 111001:
-            n = sum(1 for t, lg in calls if t == 10 and lg == 111001)
+            assert terminal_path == "/tmp/mt5-a/terminal64.exe"
+            n = sum(1 for t, lg, _path in calls if t == 10 and lg == 111001)
             if n == 1:
                 return ("pending", "pending")
             return ("none", "ok")
         if int(ticket) == 20 and login == 222002:
+            assert terminal_path == "/tmp/mt5-b/terminal64.exe"
             return ("none", "ok")
         raise AssertionError(f"unexpected status ticket={ticket} login={login}")
 
@@ -353,5 +356,5 @@ def test_daemon_plan_cutoff_multi_account_uses_api_per_acc(monkeypatch: pytest.M
     )
     assert blocking is False
     assert cancel_meta == [(10, False, 111001)]
-    assert 111001 in [lg for _t, lg in calls if lg is not None]
-    assert 222002 in [lg for _t, lg in calls if lg is not None]
+    assert 111001 in [lg for _t, lg, _path in calls if lg is not None]
+    assert 222002 in [lg for _t, lg, _path in calls if lg is not None]

@@ -454,6 +454,7 @@ def apply_first_response_vao_lenh(
             if (not tid or tid <= 0) and not mt5_dry_run and sym0:
                 alt = mt5_latest_position_ticket(
                     sym0,
+                    terminal_path=prim.terminal_path,
                     login=prim.login,
                     password=prim.password,
                     server=prim.server,

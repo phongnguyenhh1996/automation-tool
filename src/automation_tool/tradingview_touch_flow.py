@@ -653,6 +653,7 @@ def run_intraday_touch_flow(
                     if (not tid or tid <= 0) and not params.mt5_dry_run and sym0:
                         alt = mt5_latest_position_ticket(
                             sym0,
+                            terminal_path=prim.terminal_path,
                             login=prim.login,
                             password=prim.password,
                             server=prim.server,

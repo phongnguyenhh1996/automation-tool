@@ -440,6 +440,7 @@ def daemon_plan_resolve_cutoff_mt5(
             return mt5_ticket_status_for_cutoff(
                 ticket,
                 dry_run=False,
+                terminal_path=acc.terminal_path,
                 login=acc.login,
                 password=acc.password,
                 server=acc.server,
@@ -467,6 +468,7 @@ def daemon_plan_resolve_cutoff_mt5(
             r = mt5_cancel_pending_order(
                 ticket,
                 dry_run=False,
+                terminal_path=acc.terminal_path,
                 login=acc.login,
                 password=acc.password,
                 server=acc.server,
@@ -541,6 +543,7 @@ def daemon_plan_should_exit_if_mt5_tickets_closed(
             return mt5_ticket_status_for_cutoff(
                 ticket,
                 dry_run=False,
+                terminal_path=acc.terminal_path,
                 login=acc.login,
                 password=acc.password,
                 server=acc.server,
@@ -1041,6 +1044,7 @@ def _tp1_followup_job(
             still_open, ticket_msg = mt5_ticket_still_open(
                 tk_check,
                 dry_run=dry,
+                terminal_path=prim_chk.terminal_path if prim_chk else None,
                 login=prim_chk.login if prim_chk else None,
                 password=prim_chk.password if prim_chk else None,
                 server=prim_chk.server if prim_chk else None,
@@ -1067,7 +1071,14 @@ def _tp1_followup_job(
         if (z0.label or "").strip().lower() == "scalp":
             tk = tk_check
             if exe and tk > 0:
-                r = mt5_cancel_pending_or_close_position(tk, dry_run=dry)
+                r = mt5_cancel_pending_or_close_position(
+                    tk,
+                    dry_run=dry,
+                    terminal_path=prim_chk.terminal_path if prim_chk else None,
+                    login=prim_chk.login if prim_chk else None,
+                    password=prim_chk.password if prim_chk else None,
+                    server=prim_chk.server if prim_chk else None,
+                )
                 _send_log(settings, f"[tp1] scalp chạm TP1 — mt5_cancel_close: {r.message}".strip())
                 if not params.no_telegram and settings.telegram_bot_token:
                     send_mt5_execution_log_to_ngan_gon_chat(
@@ -1233,7 +1244,15 @@ def _tp1_followup_job(
                         f"[tp1] mt5_cancel_close multi: {format_mt5_multi_manage_for_telegram(summ_lo)}".strip(),
                     )
                 else:
-                    r = mt5_cancel_pending_or_close_position(tk, dry_run=dry)
+                    prim_lo = primary_account(accs_lo) if accs_lo else None
+                    r = mt5_cancel_pending_or_close_position(
+                        tk,
+                        dry_run=dry,
+                        terminal_path=prim_lo.terminal_path if prim_lo else None,
+                        login=prim_lo.login if prim_lo else None,
+                        password=prim_lo.password if prim_lo else None,
+                        server=prim_lo.server if prim_lo else None,
+                    )
                     _send_log(settings, f"[tp1] mt5_cancel_close: {r.message}".strip())
             z1.status = "loai"
             z1.mt5_tickets_by_account = None
@@ -1314,6 +1333,7 @@ def _tp1_followup_job(
                     new_parsed,
                     dry_run=dry,
                     symbol_override=params.mt5_symbol,
+                    terminal_path=prim.terminal_path if prim else None,
                     login=prim.login if prim else None,
                     password=prim.password if prim else None,
                     server=prim.server if prim else None,
@@ -1340,7 +1360,14 @@ def _tp1_followup_job(
                 elif cr.outcome == "ticket_missing":
                     pass
                 else:
-                    r0 = mt5_cancel_pending_or_close_position(tk, dry_run=dry)
+                    r0 = mt5_cancel_pending_or_close_position(
+                        tk,
+                        dry_run=dry,
+                        terminal_path=prim.terminal_path if prim else None,
+                        login=prim.login if prim else None,
+                        password=prim.password if prim else None,
+                        server=prim.server if prim else None,
+                    )
                     _send_log(settings, f"[tp1] mt5_close_old: {r0.message}".strip())
 
         if exe and not used_inplace:
@@ -1485,6 +1512,7 @@ def _r1_followup_job(
             still_open, ticket_msg = mt5_ticket_still_open(
                 tk_check,
                 dry_run=dry,
+                terminal_path=prim_chk.terminal_path if prim_chk else None,
                 login=prim_chk.login if prim_chk else None,
                 password=prim_chk.password if prim_chk else None,
                 server=prim_chk.server if prim_chk else None,
@@ -1634,7 +1662,15 @@ def _r1_followup_job(
                         f"[r1] mt5_cancel_close multi: {format_mt5_multi_manage_for_telegram(summ_lo)}".strip(),
                     )
                 else:
-                    r = mt5_cancel_pending_or_close_position(tk, dry_run=dry)
+                    prim_lo = primary_account(accs_lo) if accs_lo else None
+                    r = mt5_cancel_pending_or_close_position(
+                        tk,
+                        dry_run=dry,
+                        terminal_path=prim_lo.terminal_path if prim_lo else None,
+                        login=prim_lo.login if prim_lo else None,
+                        password=prim_lo.password if prim_lo else None,
+                        server=prim_lo.server if prim_lo else None,
+                    )
                     _send_log(settings, f"[r1] mt5_cancel_close: {r.message}".strip())
             z1.status = "loai"
             z1.mt5_tickets_by_account = None
@@ -1714,6 +1750,7 @@ def _r1_followup_job(
                     new_parsed,
                     dry_run=dry,
                     symbol_override=params.mt5_symbol,
+                    terminal_path=prim_r.terminal_path if prim_r else None,
                     login=prim_r.login if prim_r else None,
                     password=prim_r.password if prim_r else None,
                     server=prim_r.server if prim_r else None,
@@ -1740,7 +1777,14 @@ def _r1_followup_job(
                 elif cr.outcome == "ticket_missing":
                     pass
                 else:
-                    r0 = mt5_cancel_pending_or_close_position(tk, dry_run=dry)
+                    r0 = mt5_cancel_pending_or_close_position(
+                        tk,
+                        dry_run=dry,
+                        terminal_path=prim_r.terminal_path if prim_r else None,
+                        login=prim_r.login if prim_r else None,
+                        password=prim_r.password if prim_r else None,
+                        server=prim_r.server if prim_r else None,
+                    )
                     _send_log(settings, f"[r1] mt5_close_old: {r0.message}".strip())
 
         if exe and not used_inplace_r1:
