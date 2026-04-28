@@ -71,7 +71,7 @@ _log = logging.getLogger("automation_tool.tv_touch")
 _EPS = 0.01
 
 # In the inner loop: only commit LOAI after repeated confirmations.
-LOAI_CONFIRM_ROUNDS = 4
+LOAI_CONFIRM_ROUNDS = 3
 
 
 class _AbortLongOp(RuntimeError):

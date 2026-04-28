@@ -151,6 +151,8 @@ _TP1_EPS = 0.01
 _ARM_THRESHOLD = ARM_THRESHOLD_TP1_DEFAULT
 _RETRY_WAIT_MINUTES = 15
 _RETRY_WAIT_MINUTES_SCALP = 10
+_ZONE_TOUCH_INITIAL_DELAY_MINUTES = 10
+_ZONE_TOUCH_LOAI_CONFIRM_ROUNDS = 3
 
 
 def _is_scalp_zone(zone: Zone) -> bool:
@@ -751,6 +753,73 @@ def _zone_label_slot_display_vn(zone: Zone) -> str:
     if lab and slot:
         return f"{lab} - {slot}"
     return lab or "(unknown)"
+
+
+def _mark_initial_zone_touch_wait(
+    st: ZonesState,
+    *,
+    touched_zone: Zone,
+    last_price: float,
+    settings: Settings,
+    params: WatchlistDaemonParams,
+) -> list[tuple[Zone, str, float]]:
+    """Lần đầu chạm vùng: giữ ``cham`` và hẹn check AI sau 10 phút."""
+    touched_zone.status = "cham"
+    touched_zone.auto_entry_mt5_failed = False
+    touched_zone.retry_at = _retry_at_iso(_ZONE_TOUCH_INITIAL_DELAY_MINUTES)
+
+    invalidated = _invalidate_same_side_zones_after_touch(st, touched_zone=touched_zone)
+    if invalidated:
+        touched_ref = _zone_compare_ref(touched_zone)
+        side = (touched_zone.side or "").strip().upper()
+        huong = "thấp hơn" if side == "SELL" else "cao hơn"
+        _send_log(
+            settings,
+            f"[zone-touch] invalidate_same_side | touched_id={touched_zone.id} "
+            f"label={(touched_zone.label or '').strip()} side={side} "
+            f"vung_cho={(touched_zone.vung_cho or '').strip()} "
+            f"ref={touched_ref} | loai={','.join(zz.id for zz, _prev, _ref in invalidated)}",
+        )
+
+        names = ", ".join(_zone_label_slot_display_vn(zz) for zz, _prev, _ref in invalidated)
+        _send_user_notice(
+            settings,
+            f"Đã loại những vùng {side} {huong}: {names}",
+            "",
+            zone=touched_zone,
+            params=params,
+        )
+
+    _send_log(
+        settings,
+        f"[zone-touch] initial_touch_wait | zone_id={touched_zone.id} "
+        f"last={last_price} -> status=cham retry_at={touched_zone.retry_at}",
+    )
+    _send_user_notice(
+        settings,
+        "Giá đã chạm vùng chờ.",
+        f"Hệ thống sẽ đợi {_ZONE_TOUCH_INITIAL_DELAY_MINUTES} phút rồi kiểm tra lại với AI.",
+        zone=touched_zone,
+        params=params,
+    )
+    return invalidated
+
+
+def _apply_zone_touch_loai_decision(
+    zone: Zone,
+    *,
+    confirm_rounds: int = _ZONE_TOUCH_LOAI_CONFIRM_ROUNDS,
+) -> bool:
+    """Apply one AI ``loại`` confirmation; return True when the zone is terminal."""
+    zone.loai_streak = int(getattr(zone, "loai_streak", 0) or 0) + 1
+    if zone.loai_streak >= int(confirm_rounds):
+        zone.status = "loai"
+        zone.retry_at = ""
+        return True
+
+    zone.status = "cham"
+    zone.retry_at = _retry_at_iso(_zone_touch_retry_wait_minutes(zone))
+    return False
 
 
 def _zone_bounds(zone: Zone) -> Optional[tuple[float, float]]:
@@ -2133,7 +2202,7 @@ def _zone_touch_job(
             params=params,
         )
 
-        loai_confirm_rounds = 6
+        loai_confirm_rounds = _ZONE_TOUCH_LOAI_CONFIRM_ROUNDS
 
         st_check = _state_read(params)
         if st_check is None:
@@ -2245,10 +2314,11 @@ def _zone_touch_job(
         # (chỉ giữ vùng baseline từ plan sáng / [INTRADAY_UPDATE] / seed thủ công).
 
         if act == "loại":
-            z1.loai_streak = int(getattr(z1, "loai_streak", 0) or 0) + 1
-            if z1.loai_streak >= loai_confirm_rounds:
-                z1.status = "loai"
-                z1.retry_at = ""
+            terminal_loai = _apply_zone_touch_loai_decision(
+                z1,
+                confirm_rounds=loai_confirm_rounds,
+            )
+            if terminal_loai:
                 _state_write(params, st1)
                 _send_log(
                     settings,
@@ -2264,8 +2334,6 @@ def _zone_touch_job(
                 )
                 return
             # keep touched state; daemon will re-dispatch after retry_at
-            z1.status = "cham"
-            z1.retry_at = _retry_at_iso(_zone_touch_retry_wait_minutes(z1))
             _state_write(params, st1)
             _send_log(
                 settings,
@@ -2912,37 +2980,14 @@ def _daemon_plan_main_loop(
                         matched.append(z)
 
                 for z in matched:
-                    z.status = "cham"
-                    z.auto_entry_mt5_failed = False
-                    invalidated = _invalidate_same_side_zones_after_touch(st, touched_zone=z)
-                    if invalidated:
-                        touched_ref = _zone_compare_ref(z)
-                        side = (z.side or "").strip().upper()
-                        huong = "thấp hơn" if side == "SELL" else "cao hơn"
-                        _send_log(
-                            settings,
-                            f"[zone-touch] invalidate_same_side | touched_id={z.id} "
-                            f"label={(z.label or '').strip()} side={side} vung_cho={(z.vung_cho or '').strip()} "
-                            f"ref={touched_ref} | loai={','.join(zz.id for zz, _prev, _ref in invalidated)}",
-                        )
-
-                        # Simple user notice to TELEGRAM_PYTHON_BOT_CHAT_ID.
-                        # Example: "Đã loại những vùng BUY cao hơn: Plan chính - Sáng, Plan phụ - Chiều"
-                        names = ", ".join(_zone_label_slot_display_vn(zz) for zz, _prev, _ref in invalidated)
-                        _send_user_notice(
-                            settings,
-                            f"Đã loại những vùng {side} {huong}: {names}",
-                            "",
-                            zone=z,
-                            params=params,
-                        )
-                    _state_write(params, st)
-                    _zone_touch_job(
+                    _mark_initial_zone_touch_wait(
+                        st,
+                        touched_zone=z,
+                        last_price=float(p_last),
                         settings=settings,
                         params=params,
-                        zone_id=z.id,
-                        last_price=float(p_last),
                     )
+                    _state_write(params, st)
 
                 st_r1 = _state_read(params)
                 if st_r1 is not None:

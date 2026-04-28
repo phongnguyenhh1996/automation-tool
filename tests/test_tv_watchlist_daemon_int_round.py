@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
 
 from automation_tool.openai_analysis_json import ARM_THRESHOLD_TP1_SCALP
 from automation_tool.state_files import read_last_response_id, write_last_response_id
+from automation_tool.tradingview_touch_flow import LOAI_CONFIRM_ROUNDS
 from automation_tool.tv_watchlist_daemon import (
     _ARM_THRESHOLD,
     _DAEMON_PLAN_SL_LOAI_STATUSES,
     _EPS_DEFAULT,
+    _ZONE_TOUCH_INITIAL_DELAY_MINUTES,
+    _ZONE_TOUCH_LOAI_CONFIRM_ROUNDS,
+    _apply_zone_touch_loai_decision,
     _arm_threshold_met_for_zone,
     _invalidate_same_side_zones_after_touch,
+    _mark_initial_zone_touch_wait,
     _maybe_loai_zone_if_last_hit_sl,
     _skip_scalp_r1_followup_if_needed,
     WatchlistDaemonParams,
@@ -112,6 +118,87 @@ def test_touch_no_match_when_gap_exceeds_eps() -> None:
     p_last = 2950.4
     alert = 2952.6
     assert abs(float(p_last) - float(alert)) > _EPS_DEFAULT
+
+
+def test_initial_zone_touch_waits_10_minutes_and_notifies(monkeypatch, tmp_path) -> None:
+    notices: list[tuple[str, str, str]] = []
+    logs: list[str] = []
+
+    def fake_notice(settings, title, body="", *, zone=None, params=None, zone_label=None):
+        notices.append((title, body, zone.id if zone is not None else ""))
+
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon._send_user_notice", fake_notice)
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon._send_log", lambda _settings, text: logs.append(text))
+
+    settings = MagicMock()
+    params = WatchlistDaemonParams(
+        coinmap_tv_yaml=tmp_path / "coinmap_tv.yaml",
+        capture_coinmap_yaml=tmp_path / "cap.yaml",
+        charts_dir=tmp_path / "charts",
+        storage_state_path=None,
+        headless=True,
+        no_save_storage=True,
+        shard_path=tmp_path / "vung_plan_chinh_sang.json",
+    )
+    zone = Zone(
+        id="plan_chinh_sang",
+        label="plan_chinh",
+        vung_cho="100–101",
+        side="BUY",
+        status="vung_cho",
+    )
+    st = ZonesState(symbol="XAUUSD", zones=[zone])
+
+    before = datetime.now(timezone.utc) + timedelta(minutes=_ZONE_TOUCH_INITIAL_DELAY_MINUTES)
+    invalidated = _mark_initial_zone_touch_wait(
+        st,
+        touched_zone=zone,
+        last_price=100.5,
+        settings=settings,
+        params=params,
+    )
+    after = datetime.now(timezone.utc) + timedelta(minutes=_ZONE_TOUCH_INITIAL_DELAY_MINUTES)
+
+    retry_at = datetime.fromisoformat(zone.retry_at)
+    assert invalidated == []
+    assert zone.status == "cham"
+    assert before <= retry_at <= after
+    assert notices == [
+        (
+            "Giá đã chạm vùng chờ.",
+            "Hệ thống sẽ đợi 10 phút rồi kiểm tra lại với AI.",
+            "plan_chinh_sang",
+        )
+    ]
+    assert any("initial_touch_wait" in line for line in logs)
+
+
+def test_zone_touch_loai_decision_requires_three_confirmations() -> None:
+    assert _ZONE_TOUCH_LOAI_CONFIRM_ROUNDS == 3
+    assert LOAI_CONFIRM_ROUNDS == 3
+
+    zone = Zone(
+        id="plan_chinh_sang",
+        label="plan_chinh",
+        vung_cho="100–101",
+        side="BUY",
+        status="cham",
+    )
+
+    assert _apply_zone_touch_loai_decision(zone) is False
+    assert zone.status == "cham"
+    assert zone.loai_streak == 1
+    assert zone.retry_at
+
+    assert _apply_zone_touch_loai_decision(zone) is False
+    assert zone.status == "cham"
+    assert zone.loai_streak == 2
+    assert zone.retry_at
+
+    assert _apply_zone_touch_loai_decision(zone) is True
+    assert zone.status == "loai"
+    assert zone.loai_streak == 3
+    assert zone.retry_at == ""
 
 
 def test_arm_uses_trade_line_ref() -> None:
