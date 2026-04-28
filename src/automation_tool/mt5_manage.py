@@ -439,6 +439,11 @@ class MT5ChinhTradeLineResult:
     outcome: ChinhOutcome
 
 
+def _management_tp_price(trade: ParsedTrade) -> float:
+    """Khi quản lý/chỉnh lệnh, ưu tiên TP2 làm TP runner nếu model trả về TP2."""
+    return float(trade.tp2) if trade.tp2 is not None else float(trade.tp1)
+
+
 def _order_price_open_py(o: Any) -> float:
     v = getattr(o, "price_open", None)
     if v is not None:
@@ -485,9 +490,10 @@ def mt5_chinh_trade_line_inplace(
     )
 
     if dry_run:
+        tp_manage = _management_tp_price(nt)
         return MT5ChinhTradeLineResult(
             ok=True,
-            message=f"[DRY-RUN] Sẽ SLTP/modify ticket={ticket} theo trade_line mới (SL={nt.sl} TP={nt.tp1})",
+            message=f"[DRY-RUN] Sẽ SLTP/modify ticket={ticket} theo trade_line mới (SL={nt.sl} TP={tp_manage})",
             outcome="dry_run",
         )
 
@@ -541,7 +547,7 @@ def mt5_chinh_trade_line_inplace(
                 "symbol": sym2,
                 "position": int(ticket),
                 "sl": float(nt.sl),
-                "tp": float(nt.tp1),
+                "tp": _management_tp_price(nt),
             }
             r = mt5.order_send(req)
             if r is None:
@@ -558,7 +564,7 @@ def mt5_chinh_trade_line_inplace(
                 )
             return MT5ChinhTradeLineResult(
                 ok=True,
-                message=f"Đã sửa SL/TP position ticket={ticket} symbol={sym2} SL={nt.sl} TP={nt.tp1}",
+                message=f"Đã sửa SL/TP position ticket={ticket} symbol={sym2} SL={nt.sl} TP={_management_tp_price(nt)}",
                 outcome="modified_sltp",
             )
 
@@ -612,7 +618,7 @@ def mt5_chinh_trade_line_inplace(
             "symbol": sym2,
             "price": price_mod,
             "sl": float(nt.sl),
-            "tp": float(nt.tp1),
+            "tp": _management_tp_price(nt),
         }
         if vol_o > 0 and abs(float(nt.lot) - vol_o) > 1e-9:
             req_m["volume"] = float(nt.lot)
@@ -634,7 +640,7 @@ def mt5_chinh_trade_line_inplace(
             ok=True,
             message=(
                 f"Đã modify pending ticket={ticket} symbol={sym2} "
-                f"price={price_mod} SL={nt.sl} TP={nt.tp1}"
+                f"price={price_mod} SL={nt.sl} TP={_management_tp_price(nt)}"
             ),
             outcome="modified_pending",
         )
