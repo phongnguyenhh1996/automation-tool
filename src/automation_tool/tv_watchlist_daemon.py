@@ -1235,15 +1235,7 @@ def _tp1_followup_job(
             reasoning_effort="high",
         )
         _openai_followup_persist_new_id(params, new_id)
-        if not params.no_telegram:
-            send_openai_output_to_telegram(
-                bot_token=settings.telegram_bot_token,
-                chat_id=settings.telegram_chat_id,
-                raw=out_text,
-                default_parse_mode=settings.telegram_parse_mode,
-                summary_chat_id=settings.telegram_output_ngan_gon_chat_id,
-            )
-        _send_log(settings, f"[tp1] openai_output_raw:\n{out_text}".strip())
+        _send_log(settings, "[tp1] OpenAI TRADE_MANAGEMENT xong (ẩn raw JSON).")
 
         dec = parse_tp1_followup_decision(out_text)
         st1 = _state_read(params)
@@ -1380,20 +1372,16 @@ def _tp1_followup_job(
                             zone_label=z1.label,
                             trade_line=dec.trade_line_moi.strip(),
                             execution_ok=True,
+                            action="chinh_trade_line",
                             session_slot=resolve_session_slot_raw(
                                 zone_session_slot=getattr(z1, "session_slot", None),
                                 shard_path=params.shard_path,
                             ),
                         )
-                elif ch_s.all_ticket_missing():
-                    pass
                 else:
-                    r0m = mt5_cancel_pending_or_close_all_accounts(
-                        tmap_old, accs_mt5, dry_run=dry
-                    )
                     _send_log(
                         settings,
-                        f"[tp1] mt5_close_old multi: {format_mt5_multi_manage_for_telegram(r0m)}".strip(),
+                        f"[tp1] chinh_trade_line failed multi; giữ nguyên lệnh cũ, không đặt mới: {ch_txt}".strip(),
                     )
             else:
                 prim = primary_account(accs_mt5) if accs_mt5 else None
@@ -1421,96 +1409,30 @@ def _tp1_followup_job(
                             zone_label=z1.label,
                             trade_line=dec.trade_line_moi.strip(),
                             execution_ok=True,
+                            action="chinh_trade_line",
                             session_slot=resolve_session_slot_raw(
                                 zone_session_slot=getattr(z1, "session_slot", None),
                                 shard_path=params.shard_path,
                             ),
                         )
-                elif cr.outcome == "ticket_missing":
-                    pass
                 else:
-                    r0 = mt5_cancel_pending_or_close_position(
-                        tk,
-                        dry_run=dry,
-                        terminal_path=prim.terminal_path if prim else None,
-                        login=prim.login if prim else None,
-                        password=prim.password if prim else None,
-                        server=prim.server if prim else None,
+                    _send_log(
+                        settings,
+                        f"[tp1] chinh_trade_line failed; giữ nguyên lệnh cũ, không đặt mới: {cr.message}".strip(),
                     )
-                    _send_log(settings, f"[tp1] mt5_close_old: {r0.message}".strip())
 
         if exe and not used_inplace:
-            if accs_mt5:
-                summary = execute_trade_all_accounts(
-                    new_parsed,
-                    accs_mt5,
-                    dry_run=dry,
-                    symbol_override=params.mt5_symbol,
-                )
-                multi_txt = format_mt5_multi_for_telegram(summary)
-                if not params.no_telegram:
-                    send_mt5_execution_log_to_ngan_gon_chat(
-                        bot_token=settings.telegram_bot_token,
-                        telegram_chat_id=settings.telegram_chat_id,
-                        telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
-                        telegram_log_chat_id=settings.telegram_log_chat_id,
-                        source="tp1-followup",
-                        text=multi_txt,
-                        zone_label=z1.label,
-                        trade_line=dec.trade_line_moi.strip(),
-                        execution_ok=summary.ok_all,
-                        session_slot=resolve_session_slot_raw(
-                            zone_session_slot=getattr(z1, "session_slot", None),
-                            shard_path=params.shard_path,
-                        ),
-                    )
-                _send_log(settings, f"[tp1] mt5_execute_trade multi: {multi_txt[:500]}".strip())
-                tid = summary.primary_ticket(accs_mt5)
-                if tid > 0:
-                    z1.mt5_ticket = tid
-                    z1.mt5_tickets_by_account = summary.tickets_by_account_id or None
-                _tp1_lines = [multi_txt]
-                if dry:
-                    _tp1_lines.append("(Chế độ thử.)")
-            else:
-                ex = execute_trade(
-                    new_parsed,
-                    dry_run=dry,
-                    symbol_override=params.mt5_symbol,
-                )
-                if not params.no_telegram:
-                    send_mt5_execution_log_to_ngan_gon_chat(
-                        bot_token=settings.telegram_bot_token,
-                        telegram_chat_id=settings.telegram_chat_id,
-                        telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
-                        telegram_log_chat_id=settings.telegram_log_chat_id,
-                        source="tp1-followup",
-                        text=format_mt5_execution_for_telegram(ex),
-                        zone_label=z1.label,
-                        trade_line=dec.trade_line_moi.strip(),
-                        execution_ok=ex.ok,
-                        session_slot=resolve_session_slot_raw(
-                            zone_session_slot=getattr(z1, "session_slot", None),
-                            shard_path=params.shard_path,
-                        ),
-                    )
-                _send_log(settings, f"[tp1] mt5_execute_trade: {ex.message}".strip())
-                tid = int(ex.order) if ex.order else 0
-                if ex.ok and tid > 0:
-                    z1.mt5_ticket = tid
-                z1.mt5_tickets_by_account = None
-                _tp1_lines = [ex.message]
-                if ex.order:
-                    _tp1_lines.append(f"Mã lệnh: {ex.order}")
-                if dry:
-                    _tp1_lines.append("(Chế độ thử.)")
+            z1.tp1_followup_done = False
+            z1.r1_followup_done = False
+            _state_write(params, st1)
             _send_user_notice(
                 settings,
-                "Sau TP1: đã đặt lệnh mới theo trade line cập nhật.",
-                "\n".join(_tp1_lines),
+                "Sau TP1: chỉnh lệnh không thành công.",
+                "Giữ nguyên lệnh/ticket cũ; hệ thống không đóng, không huỷ và không đặt lệnh mới.",
                 zone=z1,
                 params=params,
             )
+            return
         elif exe and used_inplace:
             _send_user_notice(
                 settings,
@@ -1520,7 +1442,6 @@ def _tp1_followup_job(
                 params=params,
             )
         z1.trade_line = dec.trade_line_moi.strip()
-        z1.status = "vao_lenh"
         z1.tp1_followup_done = False
         z1.r1_followup_done = False
         _state_write(params, st1)
@@ -1657,15 +1578,7 @@ def _r1_followup_job(
             reasoning_effort="high",
         )
         _openai_followup_persist_new_id(params, new_id)
-        if not params.no_telegram:
-            send_openai_output_to_telegram(
-                bot_token=settings.telegram_bot_token,
-                chat_id=settings.telegram_chat_id,
-                raw=out_text,
-                default_parse_mode=settings.telegram_parse_mode,
-                summary_chat_id=settings.telegram_output_ngan_gon_chat_id,
-            )
-        _send_log(settings, f"[r1] openai_output_raw:\n{out_text}".strip())
+        _send_log(settings, "[r1] OpenAI TRADE_MANAGEMENT xong (ẩn raw JSON).")
 
         dec = parse_tp1_followup_decision(out_text)
         st1 = _state_read(params)
@@ -1797,20 +1710,16 @@ def _r1_followup_job(
                             zone_label=z1.label,
                             trade_line=dec.trade_line_moi.strip(),
                             execution_ok=True,
+                            action="chinh_trade_line",
                             session_slot=resolve_session_slot_raw(
                                 zone_session_slot=getattr(z1, "session_slot", None),
                                 shard_path=params.shard_path,
                             ),
                         )
-                elif ch_s.all_ticket_missing():
-                    pass
                 else:
-                    r0m = mt5_cancel_pending_or_close_all_accounts(
-                        tmap_r1, accs_r1, dry_run=dry
-                    )
                     _send_log(
                         settings,
-                        f"[r1] mt5_close_old multi: {format_mt5_multi_manage_for_telegram(r0m)}".strip(),
+                        f"[r1] chinh_trade_line failed multi; giữ nguyên lệnh cũ, không đặt mới: {ch_txt}".strip(),
                     )
             else:
                 prim_r = primary_account(accs_r1) if accs_r1 else None
@@ -1838,96 +1747,29 @@ def _r1_followup_job(
                             zone_label=z1.label,
                             trade_line=dec.trade_line_moi.strip(),
                             execution_ok=True,
+                            action="chinh_trade_line",
                             session_slot=resolve_session_slot_raw(
                                 zone_session_slot=getattr(z1, "session_slot", None),
                                 shard_path=params.shard_path,
                             ),
                         )
-                elif cr.outcome == "ticket_missing":
-                    pass
                 else:
-                    r0 = mt5_cancel_pending_or_close_position(
-                        tk,
-                        dry_run=dry,
-                        terminal_path=prim_r.terminal_path if prim_r else None,
-                        login=prim_r.login if prim_r else None,
-                        password=prim_r.password if prim_r else None,
-                        server=prim_r.server if prim_r else None,
+                    _send_log(
+                        settings,
+                        f"[r1] chinh_trade_line failed; giữ nguyên lệnh cũ, không đặt mới: {cr.message}".strip(),
                     )
-                    _send_log(settings, f"[r1] mt5_close_old: {r0.message}".strip())
 
         if exe and not used_inplace_r1:
-            if accs_r1:
-                summary = execute_trade_all_accounts(
-                    new_parsed,
-                    accs_r1,
-                    dry_run=dry,
-                    symbol_override=params.mt5_symbol,
-                )
-                multi_txt = format_mt5_multi_for_telegram(summary)
-                if not params.no_telegram:
-                    send_mt5_execution_log_to_ngan_gon_chat(
-                        bot_token=settings.telegram_bot_token,
-                        telegram_chat_id=settings.telegram_chat_id,
-                        telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
-                        telegram_log_chat_id=settings.telegram_log_chat_id,
-                        source="r1-followup",
-                        text=multi_txt,
-                        zone_label=z1.label,
-                        trade_line=dec.trade_line_moi.strip(),
-                        execution_ok=summary.ok_all,
-                        session_slot=resolve_session_slot_raw(
-                            zone_session_slot=getattr(z1, "session_slot", None),
-                            shard_path=params.shard_path,
-                        ),
-                    )
-                _send_log(settings, f"[r1] mt5_execute_trade multi: {multi_txt[:500]}".strip())
-                tid = summary.primary_ticket(accs_r1)
-                if tid > 0:
-                    z1.mt5_ticket = tid
-                    z1.mt5_tickets_by_account = summary.tickets_by_account_id or None
-                _r1_lines = [multi_txt]
-                if dry:
-                    _r1_lines.append("(Chế độ thử.)")
-            else:
-                ex = execute_trade(
-                    new_parsed,
-                    dry_run=dry,
-                    symbol_override=params.mt5_symbol,
-                )
-                if not params.no_telegram:
-                    send_mt5_execution_log_to_ngan_gon_chat(
-                        bot_token=settings.telegram_bot_token,
-                        telegram_chat_id=settings.telegram_chat_id,
-                        telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
-                        telegram_log_chat_id=settings.telegram_log_chat_id,
-                        source="r1-followup",
-                        text=format_mt5_execution_for_telegram(ex),
-                        zone_label=z1.label,
-                        trade_line=dec.trade_line_moi.strip(),
-                        execution_ok=ex.ok,
-                        session_slot=resolve_session_slot_raw(
-                            zone_session_slot=getattr(z1, "session_slot", None),
-                            shard_path=params.shard_path,
-                        ),
-                    )
-                _send_log(settings, f"[r1] mt5_execute_trade: {ex.message}".strip())
-                tid = int(ex.order) if ex.order else 0
-                if ex.ok and tid > 0:
-                    z1.mt5_ticket = tid
-                z1.mt5_tickets_by_account = None
-                _r1_lines = [ex.message]
-                if ex.order:
-                    _r1_lines.append(f"Mã lệnh: {ex.order}")
-                if dry:
-                    _r1_lines.append("(Chế độ thử.)")
+            z1.r1_followup_done = False
+            _state_write(params, st1)
             _send_user_notice(
                 settings,
-                "Tại 1R: đã đặt lệnh mới theo trade line cập nhật.",
-                "\n".join(_r1_lines),
+                "Tại 1R: chỉnh lệnh không thành công.",
+                "Giữ nguyên lệnh/ticket cũ; hệ thống không đóng, không huỷ và không đặt lệnh mới.",
                 zone=z1,
                 params=params,
             )
+            return
         elif exe and used_inplace_r1:
             _send_user_notice(
                 settings,
@@ -1937,7 +1779,6 @@ def _r1_followup_job(
                 params=params,
             )
         z1.trade_line = dec.trade_line_moi.strip()
-        z1.status = "vao_lenh"
         z1.tp1_followup_done = False
         z1.r1_followup_done = False
         _state_write(params, st1)

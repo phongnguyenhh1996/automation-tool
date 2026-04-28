@@ -73,6 +73,22 @@ def mt5_zone_entry_line_vn(
     return f'Đã vào lệnh cho "{quoted}".'
 
 
+def mt5_zone_chinh_line_vn(
+    zone_label: Optional[str],
+    session_slot: Optional[str] = None,
+) -> Optional[str]:
+    """Một dòng cho thao tác chỉnh lệnh, không gợi ý đây là entry mới."""
+    if not zone_label or not str(zone_label).strip():
+        return None
+    key = str(zone_label).strip().lower()
+    display = _MT5_ZONE_LABEL_DISPLAY_VN.get(key)
+    if not display:
+        return None
+    slot_vn = session_slot_display_vn(session_slot) if session_slot else None
+    quoted = f"{display} - {slot_vn}" if slot_vn else display
+    return f'Đã chỉnh lệnh cho "{quoted}".'
+
+
 def _trade_management_action_display_vn(action: Optional[str]) -> str:
     """Tên hành động Schema D cho tin quản lý lệnh."""
     key = (action or "").strip().lower()
@@ -637,6 +653,7 @@ def send_mt5_execution_log_to_ngan_gon_chat(
     zone_label: Optional[str] = None,
     trade_line: Optional[str] = None,
     session_slot: Optional[str] = None,
+    action: Optional[str] = None,
 ) -> None:
     """
     Gửi thông báo sau thực thi MT5 (sau ``execute_trade`` / huỷ ticket).
@@ -707,8 +724,14 @@ def send_mt5_execution_log_to_ngan_gon_chat(
     if not main:
         return
 
-    out = random.choice(_MT5_NGAN_GON_MESSAGES)
-    zone_line = mt5_zone_entry_line_vn(zone_label, session_slot=session_slot)
+    action_key = (action or "").strip().lower()
+    is_chinh_trade_line = action_key in ("chinh_trade_line", "chỉnh_trade_line", "chinh_sua", "chỉnh")
+    if is_chinh_trade_line:
+        out = "MT5 đã cập nhật lệnh theo quyết định quản lý lệnh."
+        zone_line = mt5_zone_chinh_line_vn(zone_label, session_slot=session_slot)
+    else:
+        out = random.choice(_MT5_NGAN_GON_MESSAGES)
+        zone_line = mt5_zone_entry_line_vn(zone_label, session_slot=session_slot)
     if zone_line:
         out = f"{out}\n\n{zone_line}"
     tl_ok = (trade_line or "").strip()
