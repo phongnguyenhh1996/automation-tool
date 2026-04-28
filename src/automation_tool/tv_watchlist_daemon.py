@@ -238,14 +238,44 @@ class WatchlistDaemonParams:
     stop_at_minute: int = 0
     """Phút đi kèm ``stop_at_hour`` (mặc định 0)."""
     last_price_from_mt5: bool = True
-    """Daemon giá: ``True`` = đọc MT5 bid → shared memory; ``False`` = title TradingView (legacy)."""
-    mt5_stale_reconnect_seconds: float = 60.0
-    """Bid không đổi trong khoảng này (giây) thì ``shutdown``/``initialize`` lại MT5; ``0`` = tắt."""
+    """Daemon giá: ``True`` = đọc MT5 bid → shared memory; ``False`` = TradingView symbol page (legacy)."""
+    mt5_stale_reconnect_seconds: float = 10.0
+    """Bid không đổi trong khoảng này (giây) thì gọi lại ``ensure_mt5_session``; ``0`` = tắt."""
 
 
 def _daemon_gia_same_bid(a: float, b: float) -> bool:
     """So sánh bid liên tiếp (tránh float noise)."""
     return abs(float(a) - float(b)) <= 1e-5
+
+
+def _daemon_gia_stale_reensure_due(
+    state: dict[str, Any],
+    p_last: Optional[float],
+    *,
+    stale_s: float,
+    now_m: float,
+) -> bool:
+    """Return True once when bid is unchanged for ``stale_s`` seconds."""
+    if stale_s <= 0:
+        return False
+    if p_last is None:
+        state.clear()
+        return False
+    pl = float(p_last)
+    prev = state.get("bid")
+    if prev is None:
+        state["bid"] = pl
+        state["changed_at"] = float(now_m)
+        return False
+    if not _daemon_gia_same_bid(pl, float(prev)):
+        state["bid"] = pl
+        state["changed_at"] = float(now_m)
+        return False
+    changed_at = float(state.get("changed_at", now_m))
+    if (float(now_m) - changed_at) < float(stale_s):
+        return False
+    state["changed_at"] = float(now_m)
+    return True
 
 
 def compute_daemon_plan_stop_deadline_local(
@@ -2430,8 +2460,7 @@ def _tv_watchlist_price_only_loop(
     telegram_log_interval_s = 60.0
     last_telegram_log_at = 0.0
     stale_s = float(mt5_stale_reconnect_s or 0.0)
-    last_stale_bid: Optional[float] = None
-    last_stale_change_mono = time.monotonic()
+    stale_state: dict[str, Any] = {}
     last_prices: list[float] = []
     try:
         while True:
@@ -2461,34 +2490,23 @@ def _tv_watchlist_price_only_loop(
 
             wms = min(15_000, max(2_000, int(poll_s * 1000)))
             p_last = get_price(wms)
-            if stale_s > 0 and mt5_sess is not None:
-                if p_last is None:
-                    last_stale_bid = None
+            if stale_s > 0 and mt5_sess is not None and _daemon_gia_stale_reensure_due(
+                stale_state,
+                p_last,
+                stale_s=stale_s,
+                now_m=time.monotonic(),
+            ):
+                _log.warning(
+                    "tv-watchlist-daemon (gia) | bid unchanged for >= %.0fs — MT5 re-ensure primary",
+                    stale_s,
+                )
+                if mt5_sess.reensure_primary_session():
+                    p_last = get_price(wms)
                 else:
-                    now_m = time.monotonic()
-                    pl = float(p_last)
-                    if last_stale_bid is None:
-                        last_stale_bid = pl
-                        last_stale_change_mono = now_m
-                    elif not _daemon_gia_same_bid(pl, last_stale_bid):
-                        last_stale_bid = pl
-                        last_stale_change_mono = now_m
-                    elif (now_m - last_stale_change_mono) >= stale_s:
-                        _log.warning(
-                            "tv-watchlist-daemon (gia) | bid %.5f unchanged for >= %.0fs — MT5 reconnect",
-                            last_stale_bid,
-                            stale_s,
-                        )
-                        if mt5_sess.reconnect():
-                            last_stale_change_mono = time.monotonic()
-                            last_stale_bid = None
-                            p_last = get_price(wms)
-                        else:
-                            _log.warning(
-                                "tv-watchlist-daemon (gia) | MT5 reconnect failed: %s",
-                                mt5_sess.last_error,
-                            )
-                            last_stale_change_mono = time.monotonic()
+                    _log.warning(
+                        "tv-watchlist-daemon (gia) | MT5 re-ensure primary failed: %s",
+                        mt5_sess.last_error,
+                    )
             if p_last is not None:
                 plf = float(p_last)
                 if not last_prices or plf != float(last_prices[-1]):
@@ -3115,25 +3133,23 @@ def run_tv_watchlist_daemon(
             symbol_hint=sym,
             symbol_override=params.mt5_symbol,
             dry_run=bool(params.mt5_dry_run),
+            accounts_json=params.mt5_accounts_json,
         )
-        try:
 
-            def get_price(_wms: int) -> Optional[float]:
-                p, _err = mt5_sess.read_bid_price()
-                return p
+        def get_price(_wms: int) -> Optional[float]:
+            p, _err = mt5_sess.read_bid_price()
+            return p
 
-            _tv_watchlist_price_only_loop(
-                settings=settings,
-                params=params,
-                sym=sym,
-                poll_s=poll_s,
-                get_price=get_price,
-                price_log_source="MT5 bid",
-                mt5_stale_reconnect_s=float(params.mt5_stale_reconnect_seconds or 0.0),
-                mt5_sess=mt5_sess,
-            )
-        finally:
-            mt5_sess.shutdown()
+        _tv_watchlist_price_only_loop(
+            settings=settings,
+            params=params,
+            sym=sym,
+            poll_s=poll_s,
+            get_price=get_price,
+            price_log_source="MT5 bid",
+            mt5_stale_reconnect_s=float(params.mt5_stale_reconnect_seconds or 0.0),
+            mt5_sess=mt5_sess,
+        )
         return "stopped"
 
     # RPC only for TradingView source.

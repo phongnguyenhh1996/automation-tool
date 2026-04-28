@@ -19,6 +19,7 @@ from typing import Any, Callable, Literal, Optional, Sequence
 
 import automation_tool.config  # noqa: F401 — nạp .env khi import
 
+from automation_tool.mt5_accounts import load_mt5_accounts_for_cli, primary_account
 from automation_tool.mt5_openai_parse import ParsedTrade, normalize_broker_xau_symbol
 
 # Vào lệnh: nếu mt5.initialize (login/IPC) lỗi — chờ rồi thử lại trước khi bỏ cuộc.
@@ -1196,12 +1197,12 @@ class DaemonPlanMt5PriceSession:
     """
     Một phiên ``initialize`` + ``symbol_select``; gọi ``symbol_info_tick`` (daemon giá: :meth:`read_bid_price`).
 
-    **Không** truyền ``login``/``password``/``server`` vào ``initialize``: chỉ đọc giá theo symbol,
-    bám phiên MT5 đang mở (``initialize()`` không đối số). Tránh đăng nhập lại account primary
-    và làm đổi phiên khi luồng khác đang gửi lệnh multi-account (account phụ).
+    Nếu có ``accounts.json`` / ``MT5_ACCOUNTS_JSON`` thì dùng tài khoản ``primary`` qua
+    :func:`ensure_mt5_session`; nếu không có cấu hình account thì fallback bám phiên MT5 đang mở
+    (``initialize()`` không đối số) để tương thích môi trường single-terminal.
 
-    :meth:`reconnect` (dùng khi giá bid “đứng” quá lâu) gọi ``shutdown`` rồi ``initialize`` lại;
-    nếu env có đủ ``MT5_*`` thì ưu tiên đăng nhập qua API, không thì bám terminal như lần đầu.
+    Khi giá bid “đứng” quá lâu, daemon giá gọi :meth:`reensure_primary_session` để chạy lại
+    ``ensure_mt5_session`` cho primary account; không shutdown khi daemon thoát.
 
     ``daemon-plan`` không dùng class này nữa — đọc Last đã ghi shared memory; giữ :meth:`read_execution_price`
     cho tương thích / test.
@@ -1213,18 +1214,44 @@ class DaemonPlanMt5PriceSession:
         symbol_hint: str,
         symbol_override: Optional[str],
         dry_run: bool,
+        accounts_json: Optional[Path] = None,
     ) -> None:
         ovr = _normalize_symbol_str(symbol_override)
         base = ovr if ovr else (symbol_hint or "").strip()
         self._symbol_hint = normalize_broker_xau_symbol(base or "XAUUSD")
         self._dry_run = bool(dry_run)
+        self._accounts_json = accounts_json
         self._mt5: Any = None
         self._resolved: Optional[str] = None
         self._last_error: Optional[str] = None
 
     def _build_init_kwargs(self) -> dict[str, Any]:
-        # Giá bid/ask theo symbol không phụ thuộc account đang active; không ép login.
+        # Fallback legacy khi không có accounts.json: bám phiên terminal hiện tại.
         return {}
+
+    def _connect_primary_account(self, mt5: Any) -> Optional[bool]:
+        accounts = load_mt5_accounts_for_cli(self._accounts_json)
+        if not accounts:
+            return None
+        acc = primary_account(accounts)
+        session = ensure_mt5_session(
+            terminal_path=acc.terminal_path,
+            login=acc.login,
+            password=acc.password,
+            server=acc.server,
+            mt5=mt5,
+        )
+        if not session.ok:
+            self._last_error = session.message
+            return False
+        sym, err = _ensure_symbol(session.mt5, self._symbol_hint)
+        if err or not sym:
+            self._last_error = err or f"symbol_info({self._symbol_hint!r})"
+            return False
+        self._mt5 = session.mt5
+        self._resolved = sym
+        self._last_error = None
+        return True
 
     def _connect_with_init_kwargs(self, kwargs: dict[str, Any]) -> bool:
         if self._dry_run:
@@ -1235,6 +1262,9 @@ class DaemonPlanMt5PriceSession:
         except SystemExit as e:
             self._last_error = str(e)
             return False
+        primary_ok = self._connect_primary_account(mt5)
+        if primary_ok is not None:
+            return primary_ok
         ti, ai = _read_mt5_session_info(mt5)
         if ti is not None and ai is not None:
             sym, err = _ensure_symbol(mt5, self._symbol_hint)
@@ -1271,6 +1301,29 @@ class DaemonPlanMt5PriceSession:
         self.shutdown()
         kwargs = _mt5_initialize_kwargs_from_env()
         return self._connect_with_init_kwargs(kwargs)
+
+    def reensure_primary_session(self) -> bool:
+        """Re-run ``ensure_mt5_session`` for primary account, without per-poll reconnects."""
+        if self._dry_run:
+            self._last_error = "mt5_dry_run"
+            return False
+        try:
+            mt5 = _load_mt5()
+        except SystemExit as e:
+            self._last_error = str(e)
+            return False
+        primary_ok = self._connect_primary_account(mt5)
+        if primary_ok is not None:
+            return primary_ok
+        if self._mt5 is None:
+            return self._ensure_connected()
+        sym, err = _ensure_symbol(self._mt5, self._symbol_hint)
+        if err or not sym:
+            self._last_error = err or f"symbol_info({self._symbol_hint!r})"
+            return False
+        self._resolved = sym
+        self._last_error = None
+        return True
 
     @property
     def last_error(self) -> Optional[str]:

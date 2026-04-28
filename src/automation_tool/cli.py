@@ -641,7 +641,7 @@ def _parser() -> argparse.ArgumentParser:
         "tv-watchlist-daemon",
         help=(
             "Daemon giá: mặc định đọc MT5 bid → shared memory / optional last.txt; "
-            "``--tv-title-price`` = đọc Last từ title tab TradingView (cần chart_url). "
+            "``--tv-symbol-price`` = đọc Last từ TradingView symbol page (legacy, cần browser). "
             "``daemon-plan`` đọc Last đó (IPC). Sau Last đầu tiên: reconcile-daemon-plans."
         ),
     )
@@ -666,11 +666,11 @@ def _parser() -> argparse.ArgumentParser:
     wd.add_argument(
         "--mt5-stale-reconnect-seconds",
         type=float,
-        default=60.0,
+        default=10.0,
         metavar="SEC",
         help=(
-            "Daemon giá (MT5 bid): nếu bid không đổi trong SEC giây thì reconnect MT5 "
-            "(shutdown + initialize; ưu tiên MT5_* env nếu có). 0 = tắt. Mặc định 60."
+            "Daemon giá (MT5 bid): nếu bid không đổi trong SEC giây thì gọi lại "
+            "ensure_mt5_session() để re-ensure primary. 0 = tắt. Mặc định 10."
         ),
     )
     wd.add_argument(
@@ -703,7 +703,12 @@ def _parser() -> argparse.ArgumentParser:
     wd.add_argument(
         "--mt5-bid-price",
         action="store_true",
-        help="Đọc Last từ MT5 bid (không cần browser). Nếu không set: mặc định dùng TradingView symbol page (RPC).",
+        help="DEPRECATED/no-op: MT5 bid đã là mặc định.",
+    )
+    wd.add_argument(
+        "--tv-symbol-price",
+        action="store_true",
+        help="Legacy opt-in: đọc Last từ TradingView symbol page qua browser RPC thay vì MT5 bid.",
     )
     wd.add_argument(
         "--stop-daemon-plans-on-exit",
@@ -789,7 +794,7 @@ def _parser() -> argparse.ArgumentParser:
     dp.add_argument("--no-save-storage", action="store_true")
     dp.add_argument("--headed", action="store_true")
     dp.add_argument("--no-telegram", action="store_true")
-    dp.add_argument("--poll-seconds", type=float, default=1.0)
+    dp.add_argument("--poll-seconds", type=float, default=5.0)
     dp.add_argument(
         "--timezone",
         default="Asia/Ho_Chi_Minh",
@@ -2773,9 +2778,9 @@ def cmd_tv_watchlist_daemon(args: argparse.Namespace) -> None:
         eps=float(args.eps),
         openai_model=resolved_openai_model(s, getattr(args, "model", None)),
         openai_model_cli=getattr(args, "model", None),
-        last_price_from_mt5=bool(getattr(args, "mt5_bid_price", False)),
+        last_price_from_mt5=not bool(getattr(args, "tv_symbol_price", False)),
         mt5_stale_reconnect_seconds=float(
-            getattr(args, "mt5_stale_reconnect_seconds", 60.0) or 0.0
+            getattr(args, "mt5_stale_reconnect_seconds", 10.0) or 0.0
         ),
     )
     outcome = run_tv_watchlist_daemon(settings=s, params=params)

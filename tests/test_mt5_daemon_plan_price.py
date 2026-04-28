@@ -10,18 +10,22 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from automation_tool.mt5_execute import (
+    DaemonPlanMt5PriceSession,
+    MT5SessionResult,
     _mt5_initialize_kwargs_from_env,
     bid_price_from_tick,
     execution_price_from_tick,
 )
-from automation_tool.tv_watchlist_daemon import _daemon_gia_same_bid
+from automation_tool.tv_watchlist_daemon import _daemon_gia_same_bid, _daemon_gia_stale_reensure_due
 from automation_tool.mt5_accounts import LotRuleFixed, MT5AccountEntry
 from automation_tool.tv_watchlist_daemon import (
+    WatchlistDaemonParams,
     compute_daemon_plan_auto_stop_deadline_local,
     compute_daemon_plan_effective_stop_deadline_local,
     compute_daemon_plan_stop_deadline_local,
     daemon_plan_resolve_cutoff_mt5,
     daemon_plan_should_exit_if_mt5_tickets_closed,
+    run_tv_watchlist_daemon,
 )
 from automation_tool.zones_state import Zone
 
@@ -30,6 +34,26 @@ from automation_tool.zones_state import Zone
 class _FakeTick:
     bid: float | None
     ask: float | None
+
+
+class _FakePriceMT5:
+    def __init__(self, bids: list[float]) -> None:
+        self.bids = list(bids)
+        self.tick_calls = 0
+
+    def terminal_info(self):
+        return MagicMock(connected=True)
+
+    def symbol_info(self, _symbol: str):
+        return MagicMock()
+
+    def symbol_select(self, _symbol: str, _enable: bool) -> bool:
+        return True
+
+    def symbol_info_tick(self, _symbol: str):
+        idx = min(self.tick_calls, len(self.bids) - 1)
+        self.tick_calls += 1
+        return _FakeTick(bid=self.bids[idx], ask=self.bids[idx] + 0.2)
 
 
 def test_execution_price_from_tick_buy_uses_ask() -> None:
@@ -70,6 +94,94 @@ def test_bid_price_from_tick_falls_back_to_ask_if_bid_missing() -> None:
 def test_daemon_gia_same_bid_treats_micro_float_as_unchanged() -> None:
     assert _daemon_gia_same_bid(2650.12345, 2650.123451)
     assert not _daemon_gia_same_bid(2650.12, 2650.13)
+
+
+def test_daemon_gia_stale_reensure_due_only_after_unchanged_threshold() -> None:
+    state: dict[str, object] = {}
+
+    assert _daemon_gia_stale_reensure_due(state, 2650.1, stale_s=10.0, now_m=0.0) is False
+    assert _daemon_gia_stale_reensure_due(state, 2650.2, stale_s=10.0, now_m=5.0) is False
+    assert _daemon_gia_stale_reensure_due(state, 2650.2, stale_s=10.0, now_m=14.9) is False
+    assert _daemon_gia_stale_reensure_due(state, 2650.2, stale_s=10.0, now_m=15.0) is True
+    assert _daemon_gia_stale_reensure_due(state, 2650.2, stale_s=10.0, now_m=16.0) is False
+
+
+def test_daemon_price_session_ensures_primary_once_for_normal_price_reads(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    fake_mt5 = _FakePriceMT5([2650.1, 2650.2])
+    account = MT5AccountEntry(
+        id="primary",
+        terminal_path="/tmp/mt5-primary/terminal64.exe",
+        login=111001,
+        password="secret",
+        server="broker",
+        primary=True,
+        lot=LotRuleFixed(volume=0.01),
+    )
+    ensure_calls: list[tuple[object, object, object, object]] = []
+
+    monkeypatch.setattr("automation_tool.mt5_execute._load_mt5", lambda: fake_mt5)
+    monkeypatch.setattr("automation_tool.mt5_execute.load_mt5_accounts_for_cli", lambda _path: [account])
+
+    def fake_ensure(*, terminal_path, login=None, password=None, server=None, mt5=None, **_kwargs):
+        ensure_calls.append((terminal_path, login, password, server))
+        return MT5SessionResult(ok=True, mt5=mt5, message="ok", reused=True)
+
+    monkeypatch.setattr("automation_tool.mt5_execute.ensure_mt5_session", fake_ensure)
+
+    session = DaemonPlanMt5PriceSession(
+        symbol_hint="XAUUSD",
+        symbol_override=None,
+        dry_run=False,
+        accounts_json=tmp_path / "accounts.json",
+    )
+
+    assert session.read_bid_price() == (2650.1, None)
+    assert session.read_bid_price() == (2650.2, None)
+    assert ensure_calls == [("/tmp/mt5-primary/terminal64.exe", 111001, "secret", "broker")]
+    assert fake_mt5.tick_calls == 2
+
+
+def test_tv_watchlist_daemon_mt5_exit_does_not_shutdown_session(monkeypatch, tmp_path) -> None:
+    shutdown_calls = 0
+
+    class FakePriceSession:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def read_bid_price(self):
+            return 2650.1, None
+
+        def shutdown(self) -> None:
+            nonlocal shutdown_calls
+            shutdown_calls += 1
+
+    def fake_loop(**_kwargs):
+        raise RuntimeError("stop")
+
+    monkeypatch.setattr(
+        "automation_tool.tv_watchlist_daemon.load_coinmap_yaml",
+        lambda _path: {"tradingview_capture": {"watchlist_symbol_short": "XAUUSD"}},
+    )
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon.DaemonPlanMt5PriceSession", FakePriceSession)
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon._tv_watchlist_price_only_loop", fake_loop)
+
+    params = WatchlistDaemonParams(
+        coinmap_tv_yaml=tmp_path / "coinmap.yaml",
+        capture_coinmap_yaml=tmp_path / "cap.yaml",
+        charts_dir=tmp_path / "charts",
+        storage_state_path=None,
+        headless=True,
+        no_save_storage=True,
+        last_price_from_mt5=True,
+    )
+
+    with pytest.raises(RuntimeError, match="stop"):
+        run_tv_watchlist_daemon(settings=MagicMock(), params=params)
+
+    assert shutdown_calls == 0
 
 
 def test_mt5_initialize_kwargs_from_env_empty_without_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
