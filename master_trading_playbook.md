@@ -982,7 +982,12 @@ Nếu `{symbol}` **không phải `XAUUSD`** thì trong `out_chi_tiet` phải **b
 - **Trend H1 rõ + M15 đúng POI + M5 confirm + CVD đồng thuận ≥ 3 nến + trap/stacked/absorption đúng vị trí + reclaim VWAP/POC rõ + Re-check Before Touch đạt chuẩn → MỚI VÀO**
 
 ### 10.2. Công thức hủy lệnh
-- **H1 BOS ngược hoặc M15 CHoCH ngược hoặc CVD đảo chiều ≥ 3 nến hoặc VWAP/POC dịch ngược > 3–5 pip hoặc footprint mất xác nhận → HUỶ LIMIT / ĐỨNG NGOÀI**
+LOẠI khi có ≥ 2–3 yếu tố sau:
+- H1 BOS hoặc M15 CHoCH ngược
+- CVD đảo ≥ 3 nến mạnh
+- VWAP/POC shift >5 pip + giá hold + footprint đảo chiều
+- Có full combo: trap + stacked + CD đảo + follow-through
+→ HUỶ LIMIT / ĐỨNG NGOÀI
 
 ### 10.3. Công thức quản lý lệnh
 - **Nguyên tắc quản lý lệnh (ưu tiên cấu trúc, không dùng mốc giá cố định)**
