@@ -53,7 +53,7 @@ Tự động nhận diện luồng xử lý dựa trên đầu vào, sau đó ma
 - Dùng khi cập nhật định kỳ (vd. 2h chiều / 9h tối).
 - Lần đầu sau [FULL_ANALYSIS]: đính kèm `morning_full_analysis.json` (Schema A), Coinmap M15/M5 hiện tại (merged hoặc 2 file riêng), và thêm TradingView 15m Session Liquidity Check / ICT Killzones của cặp chính.
 - Từ lần thứ hai: đính kèm Coinmap M15/M5 hiện tại (merged hoặc 2 file riêng) và thêm TradingView 15m Session Liquidity Check / ICT Killzones của cặp chính; tiếp nối chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.
-- So sánh footprint M15/M5 hiện tại cùng với TradingView 15m Session Liquidity Check / ICT Killzones; dùng ảnh này để kiểm tra liquidity pool/sweep của các phiên; phân tích và đánh giá các plan cũ gần nhất, chỉ đề xuất plan mới khi setup đủ chất lượng (không bắt buộc phải tạo đủ 3 plan mới).
+- So sánh footprint M15/M5 hiện tại cùng với TradingView 15m Session Liquidity Check / ICT Killzones; dùng ảnh này để kiểm tra liquidity pool/sweep của các phiên; phân tích và đánh giá các plan cũ gần nhất, chủ động tìm plan mới/cập nhật nếu có setup đủ chất lượng. Có thể đề xuất 1 hoặc 2 plan mới/cập nhật trong `prices`; không bắt buộc phải tạo đủ 3 plan mới.
 - Trả về Schema B.
 
 4. [RETROSPECTIVE_ANALYSIS]
@@ -177,7 +177,7 @@ Ví dụ Schema E (vào lệnh — có `trade_line` mới):
     - `label` (string): `plan_chinh` | `plan_phu` | `scalp`
     - `vung_cho` (string): vùng giá đúng format `"a–b"` (en dash)
     - `hanh_dong` (enum): `"chờ"` nếu plan **vẫn còn hiệu lực**; `"loại"` nếu plan **không còn hiệu lực**.
-- `prices` (array, tuỳ chọn): danh sách plan mới/cập nhật sau intraday, **không bắt buộc đủ 3**. Có thể trả `[]` hoặc bỏ key nếu không có setup mới đủ chất lượng. Nếu có phần tử, ưu tiên dùng label ổn định (`plan_chinh`, `plan_phu`, `scalp`) và mỗi phần tử gồm: `label`, `value`, `vung_cho`, `hop_luu`, `trade_line`.
+- `prices` (array, tuỳ chọn): danh sách plan mới/cập nhật sau intraday, **không bắt buộc đủ 3**. Nếu chỉ có 1 hoặc 2 setup đủ chất lượng thì trả đúng 1 hoặc 2 phần tử; không được cố bịa thêm plan thứ 3. Có thể trả `[]` hoặc bỏ key nếu thật sự không có setup mới đủ chất lượng. Nếu có phần tử, ưu tiên dùng label ổn định (`plan_chinh`, `plan_phu`, `scalp`) và mỗi phần tử gồm: `label`, `value`, `vung_cho`, `hop_luu`, `trade_line`.
 
 Ví dụ tối thiểu Schema B:
 {

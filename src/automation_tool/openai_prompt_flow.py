@@ -452,6 +452,11 @@ DEFAULT_UPDATE_PROMPT_TEMPLATE = (
     "Cập nhật intraday: lần đầu sau [FULL_ANALYSIS] kèm morning_full_analysis.json + Coinmap merged (M15+M5).\n"
 )
 
+_INTRADAY_UPDATE_PLAN_HINT = (
+    "Chủ động tìm setup mới/cập nhật sau khi so sánh với plan cũ; nếu chỉ có 1 hoặc 2 plan đủ chất lượng "
+    "thì trả đúng 1 hoặc 2 phần tử trong `prices`, không cần cố tạo đủ 3 plan mới.\n"
+)
+
 
 def is_first_intraday_update_after_all(
     *,
@@ -496,6 +501,7 @@ def build_intraday_update_user_text(
                 "Đính kèm **hai** file JSON theo thứ tự: **(1)** morning_full_analysis.json, **(2)** một file "
                 "**Coinmap merged** cho cặp chính (cùng schema ``coinmap_merged``: khung 15m và 5m trong ``frames``, "
                 "footprint và summary theo từng khung).\n"
+                f"{_INTRADAY_UPDATE_PLAN_HINT}"
             )
         return (
             "[INTRADAY_UPDATE]\n"
@@ -503,6 +509,7 @@ def build_intraday_update_user_text(
             "Phân tích buổi sáng (Schema A) nằm trong file **morning_full_analysis.json** đính kèm đầu tiên.\n"
             "Đính kèm **ba** file JSON theo thứ tự: **(1)** morning_full_analysis.json, **(2)** M15, **(3)** M5 "
             "(footprint cặp chính).\n"
+            f"{_INTRADAY_UPDATE_PLAN_HINT}"
         )
 
     if merged:
@@ -511,12 +518,14 @@ def build_intraday_update_user_text(
             f"{time_line}"
             "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
             "Đính kèm **một** file JSON: **Coinmap merged** cho cặp chính (15m và 5m trong cùng file).\n"
+            f"{_INTRADAY_UPDATE_PLAN_HINT}"
         )
     return (
         "[INTRADAY_UPDATE]\n"
         f"{time_line}"
         "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
         "Đính kèm **hai** file JSON theo thứ tự: **(1) M15**, **(2) M5** (footprint cặp chính).\n"
+        f"{_INTRADAY_UPDATE_PLAN_HINT}"
     )
 
 # TradingView tab Nhật ký: giá chạm → Coinmap compact ``coinmap_merged`` (từ raw M5/M1) + OpenAI (intraday).

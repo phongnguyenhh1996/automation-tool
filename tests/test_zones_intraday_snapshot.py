@@ -63,6 +63,8 @@ def test_build_intraday_update_user_text_followup_merged_mode() -> None:
     assert "chuỗi phản hồi" in t
     assert "morning_full_analysis" not in t
     assert "Trạng thái các vùng" not in t
+    assert "1 hoặc 2 plan đủ chất lượng" in t
+    assert "không cần cố tạo đủ 3 plan mới" in t
 
 
 def test_build_intraday_update_user_text_followup_legacy_split_files() -> None:
