@@ -46,6 +46,11 @@ ZoneStatus = Literal[
     "done",
 ]
 
+
+def can_apply_old_price_loai(status: ZoneStatus) -> bool:
+    """Schema B ``old_prices`` chỉ được loại zone còn đang chờ/chạm."""
+    return status in ("vung_cho", "cham")
+
 # Separator for persisted vung_cho strings (Unicode en dash, same as model / system prompt).
 _VUNG_CHO_SEP = "–"
 

@@ -224,7 +224,7 @@ def mt5_latest_position_ticket(
     server: Optional[str] = None,
 ) -> Optional[int]:
     """Ticket position mới nhất cho ``symbol`` (lọc magic nếu có)."""
-    mt5 = _mt5_init(login, password, server)
+    mt5 = _mt5_init(login=login, password=password, server=server)
     if mt5 is None:
         return None
     try:
@@ -265,7 +265,7 @@ def mt5_ticket_still_open(
         return True, "[DRY-RUN] bỏ qua kiểm tra ticket"
     if ticket <= 0:
         return False, f"ticket không hợp lệ: {ticket}"
-    mt5 = _mt5_init(login, password, server)
+    mt5 = _mt5_init(login=login, password=password, server=server)
     if mt5 is None:
         return True, "mt5.initialize thất bại — tiếp tục follow-up (không xác nhận được ticket)"
     try:
@@ -301,7 +301,7 @@ def mt5_ticket_is_open_position(
         return True, "[DRY-RUN] bỏ qua kiểm tra position"
     if ticket <= 0:
         return False, f"ticket không hợp lệ: {ticket}"
-    mt5 = _mt5_init(login, password, server)
+    mt5 = _mt5_init(login=login, password=password, server=server)
     if mt5 is None:
         return True, "mt5.initialize thất bại — tiếp tục (không xác nhận position)"
     try:
@@ -340,7 +340,7 @@ def mt5_ticket_status_for_cutoff(
         return "none", f"ticket không hợp lệ: {ticket}"
     use_api = login is not None and bool(password) and bool(server)
     if use_api:
-        mt5 = _mt5_init(login, password, server)
+        mt5 = _mt5_init(login=login, password=password, server=server)
         if mt5 is None:
             return "error", "mt5.initialize thất bại"
         try:

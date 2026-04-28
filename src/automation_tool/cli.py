@@ -2648,6 +2648,7 @@ def cmd_update(args: argparse.Namespace) -> None:
         try:
             from automation_tool.zones_state import (
                 ZonesState,
+                can_apply_old_price_loai,
                 read_zones_state,
                 write_zones_state_to_shard,
             )
@@ -2667,7 +2668,9 @@ def cmd_update(args: argparse.Namespace) -> None:
                             continue
                         if (z.vung_cho or "").strip() != want_vc:
                             continue
-                        # Mark exact matching zone as loai (avoid wrong label-only match).
+                        if not can_apply_old_price_loai(z.status):
+                            continue
+                        # Mark exact waiting/touched zone as loai (avoid wrong label-only match).
                         z.status = "loai"  # type: ignore[assignment]
                         z.retry_at = ""
                         slot = getattr(z, "session_slot", None)

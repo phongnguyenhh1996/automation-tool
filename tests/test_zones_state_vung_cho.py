@@ -9,6 +9,7 @@ from automation_tool.zones_state import (
     Zone,
     ZonesState,
     _parse_zone,
+    can_apply_old_price_loai,
     read_zones_state,
     remove_zones_state_file,
     zones_from_analysis_payload,
@@ -116,6 +117,14 @@ def test_zones_from_analysis_merged_keeps_zone_when_no_change_true() -> None:
     assert by_label["plan_chinh"].trade_line == "old"
     assert by_label["plan_phu"].vung_cho == "2.0–2.0"
     assert by_label["scalp"].vung_cho == "3.0–3.0"
+
+
+def test_old_prices_loai_only_applies_to_waiting_or_touched_zones() -> None:
+    assert can_apply_old_price_loai("vung_cho")
+    assert can_apply_old_price_loai("cham")
+    assert not can_apply_old_price_loai("vao_lenh")
+    assert not can_apply_old_price_loai("cho_tp1")
+    assert not can_apply_old_price_loai("done")
 
 
 def test_remove_zones_state_file(tmp_path: Path) -> None:
