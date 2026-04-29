@@ -70,6 +70,23 @@ def test_build_request_uses_tp2_when_present_for_pending() -> None:
     assert req["tp"] == 2620.0
 
 
+def test_build_request_can_use_tp1_even_when_tp2_is_present() -> None:
+    mt5 = _FakeMT5()
+    t = ParsedTrade(
+        symbol="XAUUSDm",
+        side="BUY",
+        kind="LIMIT",
+        price=2600.0,
+        sl=2590.0,
+        tp1=2610.0,
+        tp2=2620.0,
+        lot=0.02,
+        raw_line="BUY LIMIT 2600.0 | SL 2590.0 | TP1 2610.0 | TP2 2620.0 | Lot 0.02",
+    )
+    req = build_request(mt5, t, take_profit_target="tp1")
+    assert req["tp"] == 2610.0
+
+
 def test_build_request_falls_back_to_tp1_when_tp2_missing_for_pending() -> None:
     mt5 = _FakeMT5()
     t = ParsedTrade(

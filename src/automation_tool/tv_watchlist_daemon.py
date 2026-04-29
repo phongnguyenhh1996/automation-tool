@@ -155,6 +155,10 @@ _RETRY_WAIT_MINUTES = 15
 _RETRY_WAIT_MINUTES_SCALP = 10
 _ZONE_TOUCH_INITIAL_DELAY_MINUTES = 10
 _ZONE_TOUCH_LOAI_CONFIRM_ROUNDS = 3
+DAEMON_PLAN_AUTO_CUTOFF_HOUR = 0
+DAEMON_PLAN_AUTO_CUTOFF_MINUTE = 0
+DAEMON_PLAN_AUTO_CUTOFF_FRIDAY_HOUR = 0
+DAEMON_PLAN_AUTO_CUTOFF_FRIDAY_MINUTE = 0
 
 
 def _is_scalp_zone(zone: Zone) -> bool:
@@ -327,7 +331,7 @@ def compute_daemon_plan_auto_stop_deadline_local(
 ) -> datetime:
     """
     Auto cutoff per zone shard:
-    normal sessions stop from 02:00 next day; Friday sessions stop from 01:00 Saturday.
+    normal sessions stop from configured next-day cutoff; Friday sessions use their own cutoff.
     Shards are staggered by one minute in slot/label order.
     """
     z = ZoneInfo(timezone_name)
@@ -349,9 +353,14 @@ def compute_daemon_plan_auto_stop_deadline_local(
         label_index = 0
 
     offset_minutes = slot_index * len(ZONE_LABELS_ORDER) + label_index
-    base_hour = 1 if session_dt.weekday() == 4 else 2
+    if session_dt.weekday() == 4:
+        base_hour = DAEMON_PLAN_AUTO_CUTOFF_FRIDAY_HOUR
+        base_minute = DAEMON_PLAN_AUTO_CUTOFF_FRIDAY_MINUTE
+    else:
+        base_hour = DAEMON_PLAN_AUTO_CUTOFF_HOUR
+        base_minute = DAEMON_PLAN_AUTO_CUTOFF_MINUTE
     next_day = session_dt.date() + timedelta(days=1)
-    base_deadline = datetime.combine(next_day, dt_time(base_hour, 0), tzinfo=z)
+    base_deadline = datetime.combine(next_day, dt_time(int(base_hour), int(base_minute)), tzinfo=z)
     return base_deadline + timedelta(minutes=offset_minutes)
 
 

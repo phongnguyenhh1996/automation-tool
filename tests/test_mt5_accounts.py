@@ -215,6 +215,36 @@ def test_load_symbol_map_optional() -> None:
         assert accs[1].symbol_map["XAUUSD"] == "XAUUSD"
 
 
+def test_load_entry_take_profit_per_account_defaults_to_tp2() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "accounts.json"
+        _write_accounts(
+            p,
+            [
+                {
+                    "id": "tp1_runner",
+                    "terminal_path": "C:/MT5/A/metatrader64.exe",
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                    "entry_take_profit": "tp1",
+                },
+                {
+                    "id": "tp2_runner",
+                    "terminal_path": "C:/MT5/B/metatrader64.exe",
+                    "login": 2,
+                    "password": "y",
+                    "server": "S",
+                    "primary": False,
+                },
+            ],
+        )
+        accs = load_mt5_accounts_from_path(p)
+        assert accs[0].entry_take_profit == "tp1"
+        assert accs[1].entry_take_profit == "tp2"
+
+
 def test_rejects_missing_terminal_path() -> None:
     with tempfile.TemporaryDirectory() as td:
         p = Path(td) / "accounts.json"

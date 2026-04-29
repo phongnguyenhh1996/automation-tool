@@ -6,6 +6,9 @@ Cấu hình nhiều tài khoản MT5 từ ``accounts.json`` (mảng object).
 **Lot:** bỏ key ``lot`` hoặc ``"lot": null`` → dùng khối lượng đã parse từ ``trade_line`` (cùng
 hành vi ``mode: from_trade``). Có ``lot`` thì ``fixed`` / ``max_notional_usd`` như cũ.
 
+**Entry TP:** bỏ key ``entry_take_profit`` → giữ hành vi cũ là đặt TP2 nếu trade có TP2;
+đặt ``"entry_take_profit": "tp1"`` để account đó chốt TP ở TP1 ngay khi mở lệnh.
+
 **Bảo mật:** không commit file chứa mật khẩu; hạn chế quyền đọc (ví dụ ``chmod 600``).
 """
 
@@ -21,6 +24,7 @@ from typing import Any, Literal, Optional, Union
 from automation_tool.mt5_openai_parse import ParsedTrade
 
 LotMode = Literal["fixed", "max_notional_usd", "max_loss_usd", "from_trade"]
+EntryTakeProfitTarget = Literal["tp1", "tp2"]
 
 
 @dataclass(frozen=True)
@@ -69,6 +73,8 @@ class MT5AccountEntry:
     server: str
     primary: bool
     lot: LotRule
+    #: TP đặt trên lệnh khi mở qua MT5. MT5 chỉ có 1 TP; mặc định giữ hành vi cũ là TP2.
+    entry_take_profit: EntryTakeProfitTarget = "tp2"
     #: Map symbol logic (XAUUSD, EURUSD, …) → tên đúng trên broker của acc đó (vd. XAUUSD vs XAUUSDm).
     symbol_map: dict[str, str] = field(default_factory=dict)
 
@@ -114,6 +120,13 @@ def _parse_lot(d: Any) -> LotRule:
     raise ValueError(f"lot.mode không hỗ trợ: {mode!r}")
 
 
+def _parse_entry_take_profit(obj: Any, index: int) -> EntryTakeProfitTarget:
+    raw = str(obj or "tp2").strip().lower()
+    if raw in ("tp1", "tp2"):
+        return raw  # type: ignore[return-value]
+    raise ValueError(f"accounts[{index}].entry_take_profit phải là 'tp1' hoặc 'tp2'")
+
+
 def _parse_one(obj: Any, index: int) -> MT5AccountEntry:
     if not isinstance(obj, dict):
         raise ValueError(f"accounts[{index}] phải là object")
@@ -143,6 +156,7 @@ def _parse_one(obj: Any, index: int) -> MT5AccountEntry:
         lot: LotRule = LotRuleFromTrade()
     else:
         lot = _parse_lot(lot_raw)
+    entry_tp = _parse_entry_take_profit(obj.get("entry_take_profit"), index)
     sym_map = _parse_symbol_map(obj.get("symbol_map"), index)
     return MT5AccountEntry(
         id=acc_id,
@@ -152,6 +166,7 @@ def _parse_one(obj: Any, index: int) -> MT5AccountEntry:
         server=server,
         primary=primary,
         lot=lot,
+        entry_take_profit=entry_tp,
         symbol_map=sym_map,
     )
 

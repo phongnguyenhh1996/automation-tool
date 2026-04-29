@@ -178,6 +178,51 @@ def test_execute_trade_all_accounts_from_trade_uses_trade_lot(
     assert seen == [("acc_a", None), ("acc_b", 0.05)]
 
 
+def test_execute_trade_all_accounts_uses_account_entry_take_profit(
+    sample_trade, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    accounts = [
+        MT5AccountEntry(
+            id="acc_tp1",
+            terminal_path="/tmp/mt5-acc-a/terminal64.exe",
+            login=1,
+            password="p",
+            server="srv",
+            primary=True,
+            lot=LotRuleFromTrade(),
+            entry_take_profit="tp1",
+        ),
+        MT5AccountEntry(
+            id="acc_tp2",
+            terminal_path="/tmp/mt5-acc-b/terminal64.exe",
+            login=2,
+            password="p",
+            server="srv",
+            primary=False,
+            lot=LotRuleFromTrade(),
+            entry_take_profit="tp2",
+        ),
+    ]
+    seen: list[tuple[str | None, str | None]] = []
+
+    def fake_execute_trade(trade, **kwargs):
+        aid = kwargs.get("account_id")
+        seen.append((aid, kwargs.get("take_profit_target")))
+        oid = 4000 + len(seen)
+        return MT5ExecutionResult(
+            ok=True,
+            message=f"mock {aid}",
+            order=oid,
+            account_id=aid,
+        )
+
+    monkeypatch.setattr("automation_tool.mt5_multi.execute_trade", fake_execute_trade)
+
+    summ = execute_trade_all_accounts(sample_trade, accounts, dry_run=True)
+    assert summ.ok_all
+    assert seen == [("acc_tp1", "tp1"), ("acc_tp2", "tp2")]
+
+
 def test_partial_close_tp1_all_accounts_uses_account_lot_rules(
     sample_trade, monkeypatch: pytest.MonkeyPatch
 ) -> None:

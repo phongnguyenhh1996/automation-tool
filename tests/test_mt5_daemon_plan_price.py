@@ -266,6 +266,46 @@ def test_daemon_plan_auto_stop_deadline_friday_uses_next_day_0100_base() -> None
     assert d == datetime(2026, 4, 25, 1, 8, tzinfo=z)
 
 
+def test_daemon_plan_auto_stop_deadline_uses_configurable_cutoff_constants(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from automation_tool import tv_watchlist_daemon
+
+    z = ZoneInfo("Asia/Ho_Chi_Minh")
+    started = datetime(2026, 4, 20, 8, 30, tzinfo=z)
+
+    monkeypatch.setattr(tv_watchlist_daemon, "DAEMON_PLAN_AUTO_CUTOFF_HOUR", 3)
+    monkeypatch.setattr(tv_watchlist_daemon, "DAEMON_PLAN_AUTO_CUTOFF_MINUTE", 30)
+
+    d = compute_daemon_plan_auto_stop_deadline_local(
+        started,
+        "Asia/Ho_Chi_Minh",
+        shard_path="zones/vung_plan_phu_chieu.json",
+    )
+
+    assert d == datetime(2026, 4, 21, 3, 34, tzinfo=z)
+
+
+def test_daemon_plan_auto_stop_deadline_uses_configurable_friday_cutoff_constants(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from automation_tool import tv_watchlist_daemon
+
+    z = ZoneInfo("Asia/Ho_Chi_Minh")
+    started = datetime(2026, 4, 24, 20, 0, tzinfo=z)
+
+    monkeypatch.setattr(tv_watchlist_daemon, "DAEMON_PLAN_AUTO_CUTOFF_FRIDAY_HOUR", 0)
+    monkeypatch.setattr(tv_watchlist_daemon, "DAEMON_PLAN_AUTO_CUTOFF_FRIDAY_MINUTE", 45)
+
+    d = compute_daemon_plan_auto_stop_deadline_local(
+        started,
+        "Asia/Ho_Chi_Minh",
+        shard_path="zones/vung_scalp_toi.json",
+    )
+
+    assert d == datetime(2026, 4, 25, 0, 53, tzinfo=z)
+
+
 def test_daemon_plan_auto_stop_deadline_uses_state_updated_at_after_restart() -> None:
     z = ZoneInfo("Asia/Ho_Chi_Minh")
     restarted_after_midnight = datetime(2026, 4, 25, 0, 30, tzinfo=z)

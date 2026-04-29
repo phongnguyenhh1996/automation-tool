@@ -309,9 +309,9 @@ def mt5_close_position_partial(
         )
         if close_vol <= 0:
             return MT5ManageResult(
-                ok=False,
+                ok=True,
                 message=(
-                    f"Volume quá nhỏ để chốt {pct:.0%}: ticket={ticket} "
+                    f"Volume quá nhỏ để chốt {pct:.0%}, bỏ qua partial close: ticket={ticket} "
                     f"volume={vol:g} min={volume_min:g} step={volume_step:g}"
                 ),
                 kind="position",

@@ -19,7 +19,7 @@ from typing import Any, Callable, Literal, Optional, Sequence
 
 import automation_tool.config  # noqa: F401 — nạp .env khi import
 
-from automation_tool.mt5_accounts import load_mt5_accounts_for_cli, primary_account
+from automation_tool.mt5_accounts import EntryTakeProfitTarget, load_mt5_accounts_for_cli, primary_account
 from automation_tool.mt5_openai_parse import ParsedTrade, normalize_broker_xau_symbol
 
 # Vào lệnh: nếu mt5.initialize (login/IPC) lỗi — chờ rồi thử lại trước khi bỏ cuộc.
@@ -825,14 +825,15 @@ def build_request(
     deviation: int = 20,
     magic: int = 2222222,
     comment: str = "openai-auto",
+    take_profit_target: EntryTakeProfitTarget = "tp2",
 ) -> dict[str, Any]:
     sym, err = _ensure_symbol(mt5, trade.symbol)
     if err or not sym:
         raise RuntimeError(err or "Không resolve được symbol để trade.")
 
     filling = _filling_for_symbol(mt5, sym)
-    # MT5 chỉ có 1 TP trên 1 lệnh. Nếu có TP2 thì đặt TP=TP2 ngay khi vào lệnh.
-    tp_effective = trade.tp2 if trade.tp2 is not None else trade.tp1
+    # MT5 chỉ có 1 TP trên 1 lệnh; account có thể chọn TP1 hoặc TP2 khi mở lệnh.
+    tp_effective = trade.tp1 if take_profit_target == "tp1" else (trade.tp2 or trade.tp1)
     if trade.kind == "MARKET":
         omit_price = symbol_uses_market_execution(mt5, sym)
         price: Optional[float] = None
@@ -944,11 +945,13 @@ def execute_trade(
     lot_override: Optional[float] = None,
     account_id: Optional[str] = None,
     account_symbol_map: Optional[dict[str, str]] = None,
+    take_profit_target: EntryTakeProfitTarget = "tp2",
     order_send_max_attempts: Optional[int] = None,
     order_send_retry_delay_ms: Optional[int] = None,
 ) -> MT5ExecutionResult:
     """
-    Gửi lệnh qua MetaTrader5. MT5 chỉ có một TP trên lệnh; nếu có TP2 thì đặt TP=TP2.
+    Gửi lệnh qua MetaTrader5. MT5 chỉ có một TP trên lệnh; mặc định đặt TP2 nếu có,
+    hoặc đặt TP1 khi ``take_profit_target="tp1"``.
 
     Credentials: env ``MT5_LOGIN``, ``MT5_PASSWORD``, ``MT5_SERVER`` hoặc tham số.
 
@@ -987,8 +990,12 @@ def execute_trade(
     send_retry_delay_sec = max(0.0, float(send_retry_delay_raw) / 1000.0)
 
     extra = ""
-    if trade.tp2 is not None and log_tp2:
-        extra = f" (TP2={trade.tp2} — sẽ đặt TP2 trên lệnh MT5)"
+    tp_effective = trade.tp1 if take_profit_target == "tp1" else (trade.tp2 or trade.tp1)
+    if log_tp2:
+        if take_profit_target == "tp1":
+            extra = f" (entry_take_profit=tp1 — sẽ đặt TP1={trade.tp1} trên lệnh MT5)"
+        elif trade.tp2 is not None:
+            extra = f" (TP2={trade.tp2} — sẽ đặt TP2 trên lệnh MT5)"
 
     if dry_run:
         req_preview: dict[str, Any] = {
@@ -999,6 +1006,8 @@ def execute_trade(
             "sl": trade.sl,
             "tp1": trade.tp1,
             "tp2": trade.tp2,
+            "tp": tp_effective,
+            "entry_take_profit": take_profit_target,
             "lot": trade.lot,
         }
         return MT5ExecutionResult(
@@ -1032,6 +1041,7 @@ def execute_trade(
                 trade,
                 deviation=deviation,
                 magic=mag,
+                take_profit_target=take_profit_target,
             )
         except RuntimeError as e:
             le = _last_error_tuple(mt5)

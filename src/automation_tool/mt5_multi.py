@@ -134,6 +134,7 @@ def execute_trade_all_accounts(
             lot_override=lot_ov,
             account_id=acc.id,
             account_symbol_map=acc.symbol_map or None,
+            take_profit_target=acc.entry_take_profit,
         )
 
     for acc in accounts:

@@ -192,3 +192,48 @@ def test_mt5_close_position_partial_skips_when_runner_already_remaining(
     assert result.ok is True
     assert "chốt một phần" in result.message.lower()
     assert fake.requests == []
+
+
+def test_mt5_close_position_partial_skips_when_min_lot_cannot_be_split(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeMT5:
+        TRADE_ACTION_DEAL = 1
+        POSITION_TYPE_BUY = 0
+        ORDER_TYPE_SELL = 1
+        ORDER_TIME_GTC = 0
+        TRADE_RETCODE_DONE = 10009
+
+        def __init__(self) -> None:
+            self.requests: list[dict[str, Any]] = []
+
+        def positions_get(self) -> list[Any]:
+            return [
+                SimpleNamespace(
+                    ticket=123,
+                    symbol="XAUUSDm",
+                    volume=0.01,
+                    type=self.POSITION_TYPE_BUY,
+                    magic=222,
+                )
+            ]
+
+        def symbol_info(self, _symbol: str) -> Any:
+            return SimpleNamespace(volume_min=0.01, volume_step=0.01)
+
+        def order_send(self, request: dict[str, Any]) -> Any:
+            self.requests.append(request)
+            return SimpleNamespace(retcode=self.TRADE_RETCODE_DONE)
+
+    fake = FakeMT5()
+    monkeypatch.setattr(mt5_manage, "_mt5_init", lambda *a, **k: fake)
+
+    result = mt5_manage.mt5_close_position_partial(
+        123,
+        fraction=0.5,
+        terminal_path="/tmp/metatrader64.exe",
+    )
+
+    assert result.ok is True
+    assert "volume quá nhỏ" in result.message.lower()
+    assert fake.requests == []
