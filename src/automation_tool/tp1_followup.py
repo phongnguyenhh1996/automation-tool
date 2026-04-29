@@ -24,6 +24,7 @@ from automation_tool.mt5_accounts import (
 from automation_tool.mt5_manage import (
     mt5_cancel_pending_or_close_position,
     mt5_chinh_trade_line_inplace,
+    mt5_close_position_partial,
     mt5_ticket_still_open,
 )
 from automation_tool.mt5_multi import (
@@ -31,6 +32,7 @@ from automation_tool.mt5_multi import (
     format_mt5_multi_manage_for_telegram,
     mt5_cancel_pending_or_close_all_accounts,
     mt5_chinh_trade_line_all_accounts,
+    mt5_partial_close_tp1_all_accounts,
 )
 from automation_tool.mt5_openai_parse import ParsedTrade, parse_openai_output_md
 from automation_tool.openai_analysis_json import arm_threshold_tp1_for_label
@@ -156,6 +158,78 @@ def parse_tp1_followup_decision(text: str) -> Optional[TP1FollowupDecision]:
         out_chi_tiet=oct,
         output_ngan_gon=ogn,
     )
+
+
+def _partial_close_tp1_runner_before_openai(
+    *,
+    settings: Settings,
+    params: Any,
+    label: str,
+    trade_line: str,
+    parsed: ParsedTrade,
+    ticket: int,
+    ticket_by_account: dict[str, int],
+    accounts: list[Any],
+    symbol_override: Optional[str],
+) -> bool:
+    """Nếu trade có TP2, chốt 50% tại TP1 trước khi hỏi OpenAI quản lý runner."""
+    if parsed.tp2 is None:
+        return True
+
+    dry = bool(getattr(params, "mt5_dry_run", False))
+    exe = getattr(params, "mt5_execute", True)
+    if not exe:
+        _log_tp1.info(
+            "tp1 partial-close: bỏ qua vì mt5_execute=false | label=%s ticket=%s",
+            label,
+            ticket,
+        )
+        return True
+
+    if accounts and ticket_by_account:
+        summ = mt5_partial_close_tp1_all_accounts(
+            ticket_by_account,
+            accounts,
+            parsed,
+            dry_run=dry,
+            symbol_override=symbol_override,
+        )
+        msg = format_mt5_multi_manage_for_telegram(summ)
+        ok = summ.ok_all
+    else:
+        prim = primary_account(accounts) if accounts else None
+        r = mt5_close_position_partial(
+            int(ticket),
+            fraction=0.5,
+            expected_initial_volume=float(parsed.lot),
+            dry_run=dry,
+            terminal_path=prim.terminal_path if prim else None,
+            login=prim.login if prim else None,
+            password=prim.password if prim else None,
+            server=prim.server if prim else None,
+        )
+        msg = r.message
+        ok = r.ok
+
+    _log_tp1.info(
+        "tp1 partial-close trước OpenAI | label=%s ok=%s | %s",
+        label,
+        ok,
+        msg,
+    )
+    if settings.telegram_bot_token and not getattr(params, "no_telegram", False):
+        send_mt5_execution_log_to_ngan_gon_chat(
+            bot_token=settings.telegram_bot_token,
+            telegram_chat_id=settings.telegram_chat_id,
+            telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
+            telegram_log_chat_id=settings.telegram_log_chat_id,
+            source="tp1-partial-close",
+            text=f"{label}: chạm TP1 + có TP2 — chốt 50% trước khi hỏi AI\n{msg}",
+            zone_label=label,
+            trade_line=trade_line,
+            execution_ok=ok,
+        )
+    return ok
 
 
 def _run_tp1_openai_and_act(
@@ -655,6 +729,25 @@ def maybe_post_entry_tp1_tick(
                 update_plan_tp1_followup_done(lab, False, path=last_alert_path)
                 _log_tp1.info(
                     "tp1: %s cho_tp1 chạm TP1 (scalp) — huỷ ticket / loại, không gọi OpenAI",
+                    lab,
+                )
+                return None
+            tmap_tp1 = (st.mt5_tickets_by_label.get(lab) or {}) if st else {}
+            ok_partial = _partial_close_tp1_runner_before_openai(
+                settings=settings,
+                params=params,
+                label=lab,
+                trade_line=tl,
+                parsed=parsed,
+                ticket=int(tk),
+                ticket_by_account=tmap_tp1,
+                accounts=accounts_m,
+                symbol_override=mt5_sym,
+            )
+            if not ok_partial:
+                update_plan_tp1_followup_done(lab, False, path=last_alert_path)
+                _log_tp1.info(
+                    "tp1: %s chạm TP1 nhưng partial close 50%% lỗi — chưa gọi OpenAI",
                     lab,
                 )
                 return None

@@ -25,6 +25,7 @@ from automation_tool.mt5_manage import (
     MT5ManageResult,
     mt5_cancel_pending_or_close_position,
     mt5_chinh_trade_line_inplace,
+    mt5_close_position_partial,
 )
 from automation_tool.mt5_openai_parse import ParsedTrade
 
@@ -221,6 +222,71 @@ def format_mt5_multi_manage_for_telegram(summary: MT5MultiManageSummary) -> str:
     for acc_id, r in summary.results:
         parts.append(f"[{acc_id}] {r.message}")
     return "\n".join(parts)
+
+
+def mt5_partial_close_tp1_all_accounts(
+    ticket_by_account_id: dict[str, int],
+    accounts: list[MT5AccountEntry],
+    trade: ParsedTrade,
+    *,
+    dry_run: bool = False,
+    symbol_override: Optional[str] = None,
+) -> MT5MultiManageSummary:
+    """Chốt một phần 50% trên từng account khi trade có TP2 và đã chạm TP1."""
+    summary = MT5MultiManageSummary()
+    by_id = {a.id: a for a in accounts}
+
+    items: list[tuple[str, int, MT5AccountEntry, Optional[float]]] = []
+    for acc_id, ticket in ticket_by_account_id.items():
+        acc = by_id.get(acc_id)
+        if acc is None:
+            summary.results.append(
+                (
+                    acc_id,
+                    MT5ManageResult(
+                        ok=False,
+                        message=f"Không tìm thấy account id={acc_id!r} trong accounts.json",
+                        kind=None,
+                    ),
+                )
+            )
+            summary.ok_all = False
+            continue
+        if int(ticket) <= 0:
+            continue
+        lot_ov, _hint = _lot_override_for_entry(
+            trade,
+            acc,
+            dry_run=dry_run,
+            symbol_override=symbol_override,
+        )
+        expected = float(lot_ov) if lot_ov is not None else float(trade.lot)
+        items.append((acc_id, int(ticket), acc, expected))
+
+    def _run_one(item: tuple[str, int, MT5AccountEntry, Optional[float]]) -> tuple[str, MT5ManageResult]:
+        acc_id, ticket, acc, expected = item
+        r = mt5_close_position_partial(
+            int(ticket),
+            fraction=0.5,
+            expected_initial_volume=expected,
+            dry_run=dry_run,
+            terminal_path=acc.terminal_path,
+            login=acc.login,
+            password=acc.password,
+            server=acc.server,
+        )
+        return acc_id, r
+
+    async def _gather() -> list[tuple[str, MT5ManageResult]]:
+        tasks = [asyncio.to_thread(_run_one, it) for it in items]
+        return await asyncio.gather(*tasks)
+
+    results = asyncio.run(_gather()) if items else []
+    for acc_id, r in results:
+        summary.results.append((acc_id, r))
+        if not r.ok:
+            summary.ok_all = False
+    return summary
 
 
 @dataclass

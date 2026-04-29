@@ -13,7 +13,11 @@ from automation_tool.state_files import (
     read_last_alert_state,
     write_last_alert_state,
 )
-from automation_tool.tp1_followup import _run_tp1_openai_and_act, parse_tp1_followup_decision
+from automation_tool.tp1_followup import (
+    _partial_close_tp1_runner_before_openai,
+    _run_tp1_openai_and_act,
+    parse_tp1_followup_decision,
+)
 
 
 def test_parse_tp1_followup_decision_includes_reason() -> None:
@@ -30,6 +34,29 @@ def test_parse_tp1_followup_decision_includes_reason() -> None:
     assert dec is not None
     assert dec.sau_tp1 == "giu_nguyen"
     assert dec.reason == "Giá giữ được VWAP và CVD chưa đảo chiều, nên tiếp tục giữ lệnh."
+
+
+def test_partial_close_tp1_runner_requires_tp2(monkeypatch) -> None:
+    calls: list[object] = []
+    monkeypatch.setattr(
+        "automation_tool.tp1_followup.mt5_close_position_partial",
+        lambda *a, **k: calls.append((a, k)),
+    )
+
+    ok = _partial_close_tp1_runner_before_openai(
+        settings=MagicMock(telegram_bot_token=""),
+        params=SimpleNamespace(mt5_execute=True, mt5_dry_run=False, no_telegram=True),
+        label="plan_chinh",
+        trade_line="BUY LIMIT 100 | SL 99 | TP1 101 | Lot 0.02",
+        parsed=SimpleNamespace(tp2=None, lot=0.02),
+        ticket=111,
+        ticket_by_account={},
+        accounts=[],
+        symbol_override="XAUUSD",
+    )
+
+    assert ok is True
+    assert calls == []
 
 
 def test_chinh_trade_line_failure_does_not_create_new_order(monkeypatch, tmp_path) -> None:

@@ -10,7 +10,8 @@ import pytest
 
 from automation_tool.mt5_accounts import MT5AccountEntry, LotRuleFixed, LotRuleFromTrade
 from automation_tool.mt5_execute import MT5ExecutionResult
-from automation_tool.mt5_multi import execute_trade_all_accounts
+from automation_tool.mt5_manage import MT5ManageResult
+from automation_tool.mt5_multi import execute_trade_all_accounts, mt5_partial_close_tp1_all_accounts
 from automation_tool.mt5_openai_parse import parse_openai_output_md
 
 
@@ -175,3 +176,51 @@ def test_execute_trade_all_accounts_from_trade_uses_trade_lot(
     summ = execute_trade_all_accounts(sample_trade, accounts, dry_run=True)
     assert summ.ok_all
     assert seen == [("acc_a", None), ("acc_b", 0.05)]
+
+
+def test_partial_close_tp1_all_accounts_uses_account_lot_rules(
+    sample_trade, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    accounts = [
+        MT5AccountEntry(
+            id="acc_a",
+            terminal_path="/tmp/mt5-acc-a/terminal64.exe",
+            login=1,
+            password="p",
+            server="srv",
+            primary=True,
+            lot=LotRuleFromTrade(),
+        ),
+        MT5AccountEntry(
+            id="acc_b",
+            terminal_path="/tmp/mt5-acc-b/terminal64.exe",
+            login=2,
+            password="p",
+            server="srv",
+            primary=False,
+            lot=LotRuleFixed(volume=0.05),
+        ),
+    ]
+    seen: list[tuple[str, int, float | None]] = []
+
+    def fake_partial(ticket, **kwargs):
+        seen.append(
+            (
+                kwargs["login"],
+                ticket,
+                kwargs.get("expected_initial_volume"),
+            )
+        )
+        return MT5ManageResult(ok=True, message=f"partial {ticket}", kind="position")
+
+    monkeypatch.setattr("automation_tool.mt5_multi.mt5_close_position_partial", fake_partial)
+
+    summary = mt5_partial_close_tp1_all_accounts(
+        {"acc_a": 101, "acc_b": 202},
+        accounts,
+        sample_trade,
+        dry_run=False,
+    )
+
+    assert summary.ok_all
+    assert seen == [(1, 101, 0.02), (2, 202, 0.05)]

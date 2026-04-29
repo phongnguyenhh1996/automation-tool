@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import math
 from dataclasses import dataclass
 from typing import Any, Literal, Optional
 
@@ -215,6 +216,149 @@ def mt5_close_position(
         return MT5ManageResult(
             ok=True,
             message=f"Đã đóng position ticket={ticket} symbol={sym}",
+            kind="position",
+        )
+    finally:
+        pass
+
+
+def _volume_digits(step: float) -> int:
+    text = f"{step:.10f}".rstrip("0").rstrip(".")
+    if "." not in text:
+        return 0
+    return len(text.split(".", 1)[1])
+
+
+def _normalize_close_volume(raw_volume: float, *, volume_min: float, volume_step: float) -> float:
+    step = float(volume_step) if volume_step and volume_step > 0 else 0.01
+    min_vol = float(volume_min) if volume_min and volume_min > 0 else step
+    units = math.floor((float(raw_volume) + 1e-12) / step)
+    vol = units * step
+    if vol < min_vol - 1e-12:
+        return 0.0
+    return round(vol, _volume_digits(step))
+
+
+def mt5_close_position_partial(
+    ticket: int,
+    *,
+    fraction: float = 0.5,
+    expected_initial_volume: Optional[float] = None,
+    dry_run: bool = False,
+    terminal_path: Optional[str] = None,
+    login: Optional[int] = None,
+    password: Optional[str] = None,
+    server: Optional[str] = None,
+) -> MT5ManageResult:
+    """Đóng một phần position ``ticket`` bằng lệnh ngược chiều market.
+
+    ``expected_initial_volume`` giúp idempotent: nếu volume hiện tại đã nhỏ hơn hoặc bằng
+    runner còn lại sau khi đã chốt ``fraction`` thì không gửi thêm lệnh đóng.
+    """
+    pct = max(0.0, min(1.0, float(fraction)))
+    if pct <= 0.0 or pct >= 1.0:
+        return MT5ManageResult(
+            ok=False,
+            message=f"fraction không hợp lệ cho partial close: {fraction}",
+            kind="position",
+        )
+    if dry_run:
+        return MT5ManageResult(
+            ok=True,
+            message=f"[DRY-RUN] Sẽ đóng {pct:.0%} position ticket={ticket}",
+            kind="position",
+        )
+    mt5 = _mt5_init(terminal_path, login, password, server)
+    if mt5 is None:
+        return MT5ManageResult(ok=False, message="mt5.initialize thất bại", kind=None)
+    try:
+        pos = None
+        for p in mt5.positions_get() or []:
+            if int(p.ticket) == int(ticket):
+                pos = p
+                break
+        if pos is None:
+            return MT5ManageResult(
+                ok=False,
+                message=f"Không tìm thấy position ticket={ticket}",
+                kind="none",
+            )
+
+        sym = pos.symbol
+        vol = float(pos.volume)
+        info = mt5.symbol_info(sym)
+        volume_step = float(getattr(info, "volume_step", 0.01) or 0.01) if info is not None else 0.01
+        volume_min = float(getattr(info, "volume_min", volume_step) or volume_step) if info is not None else volume_step
+        if expected_initial_volume is not None and float(expected_initial_volume) > 0:
+            runner_target = float(expected_initial_volume) * (1.0 - pct)
+            tolerance = max(volume_step, 1e-9) / 2.0
+            if vol <= runner_target + tolerance:
+                return MT5ManageResult(
+                    ok=True,
+                    message=(
+                        f"Đã chốt một phần trước đó hoặc chỉ còn runner "
+                        f"ticket={ticket} symbol={sym} volume={vol:g}"
+                    ),
+                    kind="position",
+                )
+
+        close_vol = _normalize_close_volume(
+            vol * pct,
+            volume_min=volume_min,
+            volume_step=volume_step,
+        )
+        if close_vol <= 0:
+            return MT5ManageResult(
+                ok=False,
+                message=(
+                    f"Volume quá nhỏ để chốt {pct:.0%}: ticket={ticket} "
+                    f"volume={vol:g} min={volume_min:g} step={volume_step:g}"
+                ),
+                kind="position",
+            )
+
+        filling = _filling_for_symbol(mt5, sym)
+        tick = mt5.symbol_info_tick(sym)
+        if tick is None:
+            return MT5ManageResult(ok=False, message=f"symbol_info_tick({sym!r}) None", kind="position")
+
+        if int(pos.type) == int(mt5.POSITION_TYPE_BUY):
+            otype = mt5.ORDER_TYPE_SELL
+            price = float(tick.bid)
+        else:
+            otype = mt5.ORDER_TYPE_BUY
+            price = float(tick.ask)
+
+        req: dict[str, Any] = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": sym,
+            "volume": close_vol,
+            "type": otype,
+            "position": int(ticket),
+            "deviation": 20,
+            "magic": int(getattr(pos, "magic", 2222222)),
+            "comment": "tp1-partial-close",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": filling,
+        }
+        if not symbol_uses_market_execution(mt5, sym):
+            req["price"] = price
+        r = mt5.order_send(req)
+        if r is None:
+            return MT5ManageResult(
+                ok=False,
+                message=f"order_send PARTIAL_CLOSE trả None. {format_last_error(mt5)}",
+                kind="position",
+            )
+        if not _is_done(mt5, r):
+            return MT5ManageResult(
+                ok=False,
+                message=f"Chốt một phần thất bại: retcode={getattr(r, 'retcode', None)}",
+                kind="position",
+            )
+        return MT5ManageResult(
+            ok=True,
+            message=f"Đã chốt {pct:.0%} position ticket={ticket} symbol={sym} volume={close_vol:g}",
             kind="position",
         )
     finally:

@@ -44,6 +44,7 @@ from automation_tool.mt5_multi import (
     format_mt5_multi_manage_for_telegram,
     mt5_cancel_pending_or_close_all_accounts,
     mt5_chinh_trade_line_all_accounts,
+    mt5_partial_close_tp1_all_accounts,
 )
 from automation_tool.mt5_openai_parse import (
     is_last_price_hit_stop_loss,
@@ -55,6 +56,7 @@ from automation_tool.mt5_manage import (
     mt5_cancel_pending_or_close_position,
     mt5_cancel_pending_order,
     mt5_chinh_trade_line_inplace,
+    mt5_close_position_partial,
     mt5_ticket_is_open_position,
     mt5_ticket_still_open,
     mt5_ticket_status_for_cutoff,
@@ -1226,6 +1228,73 @@ def _tp1_followup_job(
                 params=params,
             )
             return
+
+        if getattr(parsed, "tp2", None) is not None:
+            ok_partial = True
+            partial_msg = ""
+            if exe:
+                accs_pc = load_mt5_accounts_for_cli(params.mt5_accounts_json)
+                tmap_pc = z0.mt5_tickets_by_account or {}
+                if accs_pc and tmap_pc:
+                    summ_pc = mt5_partial_close_tp1_all_accounts(
+                        tmap_pc,
+                        accs_pc,
+                        parsed,
+                        dry_run=dry,
+                        symbol_override=params.mt5_symbol,
+                    )
+                    partial_msg = format_mt5_multi_manage_for_telegram(summ_pc)
+                    ok_partial = summ_pc.ok_all
+                else:
+                    prim_pc = primary_account(accs_pc) if accs_pc else None
+                    r_pc = mt5_close_position_partial(
+                        tk_check,
+                        fraction=0.5,
+                        expected_initial_volume=float(getattr(parsed, "lot", 0.0) or 0.0),
+                        dry_run=dry,
+                        terminal_path=prim_pc.terminal_path if prim_pc else None,
+                        login=prim_pc.login if prim_pc else None,
+                        password=prim_pc.password if prim_pc else None,
+                        server=prim_pc.server if prim_pc else None,
+                    )
+                    partial_msg = r_pc.message
+                    ok_partial = r_pc.ok
+                _send_log(
+                    settings,
+                    f"[tp1] partial close 50% trước OpenAI | ok={ok_partial} | {partial_msg}".strip(),
+                )
+                if not params.no_telegram and settings.telegram_bot_token:
+                    send_mt5_execution_log_to_ngan_gon_chat(
+                        bot_token=settings.telegram_bot_token,
+                        telegram_chat_id=settings.telegram_chat_id,
+                        telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
+                        telegram_log_chat_id=settings.telegram_log_chat_id,
+                        source="tp1-partial-close",
+                        text=f"{z0.label}: chạm TP1 + có TP2 — chốt 50% trước khi hỏi AI\n{partial_msg}",
+                        zone_label=z0.label,
+                        trade_line=z0.trade_line,
+                        execution_ok=ok_partial,
+                        session_slot=resolve_session_slot_raw(
+                            zone_session_slot=getattr(z0, "session_slot", None),
+                            shard_path=params.shard_path,
+                        ),
+                    )
+            else:
+                _send_log(settings, "[tp1] bỏ qua partial close 50% vì mt5_execute=false")
+
+            if not ok_partial:
+                z0.status = "cho_tp1"
+                z0.tp1_followup_done = False
+                z0.r1_followup_done = False
+                _state_write(params, st0)
+                _send_user_notice(
+                    settings,
+                    "Chạm TP1 nhưng chốt 50% chưa thành công.",
+                    "Chưa gọi AI quản lý lệnh; hệ thống sẽ thử lại ở tick sau.",
+                    zone=z0,
+                    params=params,
+                )
+                return
 
         from automation_tool.coinmap import capture_charts
         from automation_tool.images import coinmap_xauusd_5m_json_path, read_main_chart_symbol
