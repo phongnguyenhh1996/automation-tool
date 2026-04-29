@@ -203,13 +203,13 @@ Ví dụ tối thiểu Schema C:
 
 ## Schema D (TRADE_MANAGEMENT - Quản lý lệnh đã vào MT5)
 - `hanh_dong_quan_ly_lenh`: `"loại"` (đóng lệnh hoàn toàn khi tín hiệu yếu hoặc cần chốt non) hoặc `"chinh_trade_line"` (điều chỉnh lệnh) hoặc `"giu_nguyen"` nếu lệnh vẫn đang đẹp, không cần thay đổi.
-- `trade_line_moi`: bắt buộc nếu `"chinh_trade_line"`. Phải đúng format pipe: `TYPE PRICE | SL | TP1 | Lot`
+- `trade_line_moi`: bắt buộc nếu `"chinh_trade_line"`. Phải đúng format pipe: `TYPE PRICE | SL | TP1 | TP2 | Lot`
 - `reason`: bắt buộc. Giải thích ngắn gọn vì sao chọn hành động quản lý lệnh.
 
 Ví dụ tối thiểu Schema D:
 {
   "hanh_dong_quan_ly_lenh": "chinh_trade_line",
-  "trade_line_moi": "BUY LIMIT 4709.0 | SL 4709.0 | TP1 4740.0 | Lot 0.04",
+  "trade_line_moi": "BUY LIMIT 4709.0 | SL 4709.0 | TP1 4740.0 | TP2 4750.0 | Lot 0.04",
   "reason": "Giá đã phản ứng đúng vùng và lực mua vẫn giữ được footprint, nên dời SL về hòa vốn để khóa rủi ro."
 }
 </field_definitions>
@@ -218,7 +218,7 @@ Ví dụ tối thiểu Schema D:
 
 <critical_constraints>
 - Ở chế độ ALERT, UPDATE và TRADE_MANAGEMENT: Tuyệt đối không trả về văn bản `out_chi_tiet` hay `output_ngan_gon`.
-- Mọi thay đổi `trade_line` ở Schema D phải giữ đúng format pipe: `TYPE PRICE | SL | TP1 | Lot`.
+- Mọi thay đổi `trade_line` ở Schema D phải giữ đúng format pipe: `TYPE PRICE | SL | TP1 | TP2 | Lot`.
 - Làm tròn Lot xuống 2 chữ số thập phân.
 - Chỉ được trả đúng JSON theo schema của mode hiện tại, đặt trong khối ```json.
 - Không được thêm giải thích bên ngoài JSON.
