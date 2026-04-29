@@ -17,6 +17,7 @@ from automation_tool.tv_watchlist_daemon import (
     _ZONE_TOUCH_LOAI_CONFIRM_ROUNDS,
     _apply_zone_touch_loai_decision,
     _arm_threshold_met_for_zone,
+    _daemon_plan_main_loop,
     _invalidate_same_side_zones_after_touch,
     _mark_initial_zone_touch_wait,
     _maybe_loai_zone_if_last_hit_sl,
@@ -27,7 +28,7 @@ from automation_tool.tv_watchlist_daemon import (
     _openai_followup_prev_response_id,
     _should_write_intraday_alert_anchor,
 )
-from automation_tool.zones_state import Zone, ZonesState
+from automation_tool.zones_state import Zone, ZonesState, read_zones_state_from_shard, write_zones_state_to_shard
 
 
 def test_daemon_plan_sidecar_filename_matches_json_stem() -> None:
@@ -106,6 +107,56 @@ def test_daemon_plan_prev_seeds_from_main_when_sidecar_empty(monkeypatch, tmp_pa
     assert _openai_followup_prev_response_id(params) == "seed-from-main"
     assert calls[0] == _daemon_plan_response_id_path(shard)
     assert calls[1] is None
+
+
+def test_daemon_plan_cutoff_marks_zone_loai_before_exit(monkeypatch, tmp_path) -> None:
+    shard = tmp_path / "vung_plan_chinh_sang.json"
+    write_zones_state_to_shard(
+        shard,
+        ZonesState(
+            symbol="XAUUSD",
+            zones=[
+                Zone(
+                    id="plan_chinh_sang",
+                    label="plan_chinh",
+                    vung_cho="100–101",
+                    side="BUY",
+                    status="vung_cho",
+                    retry_at="2026-01-01T00:00:00+00:00",
+                    loai_streak=2,
+                )
+            ],
+        ),
+    )
+    params = WatchlistDaemonParams(
+        coinmap_tv_yaml=tmp_path / "coinmap_tv.yaml",
+        capture_coinmap_yaml=tmp_path / "cap.yaml",
+        charts_dir=tmp_path / "charts",
+        storage_state_path=None,
+        headless=True,
+        no_save_storage=True,
+        shard_path=shard,
+    )
+    past_deadline = datetime.now(timezone.utc) - timedelta(minutes=1)
+
+    monkeypatch.setattr(
+        "automation_tool.tv_watchlist_daemon.compute_daemon_plan_effective_stop_deadline_local",
+        lambda *a, **k: past_deadline,
+    )
+    monkeypatch.setattr(
+        "automation_tool.tv_watchlist_daemon.daemon_plan_resolve_cutoff_mt5",
+        lambda *a, **k: (False, "cutoff: không còn pending/position theo ticket trong state"),
+    )
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon._send_log", lambda *a, **k: None)
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon._send_user_notice", lambda *a, **k: None)
+
+    _daemon_plan_main_loop(settings=MagicMock(), params=params, sym="XAUUSD", poll_s=0.01)
+
+    st = read_zones_state_from_shard(shard)
+    assert st is not None
+    assert st.zones[0].status == "loai"
+    assert st.zones[0].retry_at == ""
+    assert st.zones[0].loai_streak == 0
 
 
 def test_touch_exact_match_when_default_eps_zero() -> None:

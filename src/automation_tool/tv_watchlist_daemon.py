@@ -605,6 +605,24 @@ def daemon_plan_should_exit_if_mt5_tickets_closed(
     return True, f"mọi ticket đã đóng trên MT5: {tickets_desc}"
 
 
+def _mark_daemon_plan_cutoff_loai(state: Optional[ZonesState]) -> Optional[Zone]:
+    """Mark active daemon-plan zones as ``loai`` when cutoff finishes the shard."""
+    if state is None or not state.zones:
+        return None
+    notice_zone: Optional[Zone] = None
+    for zone in state.zones:
+        if zone.status in ("done", "loai"):
+            if notice_zone is None:
+                notice_zone = zone
+            continue
+        zone.status = "loai"
+        zone.retry_at = ""
+        zone.loai_streak = 0
+        if notice_zone is None:
+            notice_zone = zone
+    return notice_zone
+
+
 def _state_read(params: WatchlistDaemonParams) -> Optional[ZonesState]:
     if params.shard_path is not None:
         return read_zones_state_from_shard(params.shard_path)
@@ -2662,11 +2680,14 @@ def _daemon_plan_main_loop(
                         settings,
                         f"[daemon-plan] exit | past_cutoff shard={shard_tag} | {detail}",
                     )
+                    notice_zone = _mark_daemon_plan_cutoff_loai(st)
+                    if st is not None and st.zones:
+                        _state_write(params, st)
                     _send_user_notice(
                         settings,
                         "Đã ngưng theo dõi.",
                         f"Lý do: quá giờ cắt — {detail}",
-                        zone=st.zones[0] if st is not None and st.zones else None,
+                        zone=notice_zone,
                         params=params,
                     )
                     return
