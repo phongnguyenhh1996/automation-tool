@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from automation_tool.state_files import MORNING_FULL_ANALYSIS_FILENAME
 
 from automation_tool.openai_prompt_flow import (
     _build_mixed_chart_user_content,
     _json_paths_to_headers_and_urls,
+    run_analysis_responses_flow,
 )
 from automation_tool.cloudinary_json import purge_json_attachment_folder
 
@@ -106,6 +107,43 @@ def test_json_paths_to_headers_single_path_no_nested_executor(tmp_path: Path) ->
     assert len(out) == 1
     assert out[0][1] == "https://example.com/solo.json"
     up.assert_called_once()
+
+
+def test_run_analysis_purges_cloudinary_before_json_upload(tmp_path: Path) -> None:
+    j = tmp_path / "stamp_coinmap_XAUUSD_merged.json"
+    j.write_text('{"frames":{}}', encoding="utf-8")
+    client = MagicMock()
+    client.responses.create.return_value = MagicMock(output_text="ok", id="resp-1")
+
+    with patch(
+        "automation_tool.openai_prompt_flow.OpenAI",
+        return_value=client,
+    ), patch(
+        "automation_tool.openai_prompt_flow.purge_json_attachment_folder",
+    ) as purge, patch(
+        "automation_tool.openai_prompt_flow.upload_json_bytes_for_responses",
+        return_value="https://example.com/merged.json",
+    ) as up:
+        run_analysis_responses_flow(
+            api_key="sk-test",
+            prompt_id="prompt",
+            prompt_version=None,
+            charts_dir=tmp_path,
+            analysis_prompt="p",
+            max_images_per_call=10,
+            vector_store_ids=[],
+            store=True,
+            include=[],
+            chart_payloads=[("json", j)],
+            purge_json_attachment_storage=True,
+        )
+
+    purge.assert_called_once()
+    up.assert_called_once()
+    assert client.responses.create.call_args.kwargs["input"][0]["content"][2] == {
+        "type": "input_file",
+        "file_url": "https://example.com/merged.json",
+    }
 
 
 def test_purge_json_folder_calls_cloudinary_api() -> None:
