@@ -26,6 +26,7 @@ from automation_tool.tv_watchlist_daemon import (
     _daemon_plan_response_id_path,
     _openai_followup_persist_new_id,
     _openai_followup_prev_response_id,
+    _r1_followup_job,
     _should_write_intraday_alert_anchor,
 )
 from automation_tool.zones_state import Zone, ZonesState, read_zones_state_from_shard, write_zones_state_to_shard
@@ -347,6 +348,63 @@ def test_skip_scalp_r1_followup_marks_done_and_notifies(monkeypatch, tmp_path) -
         )
     ]
     assert any("skip scalp" in line for line in logs)
+
+
+def test_r1_followup_skips_pending_ticket_before_capture(monkeypatch, tmp_path) -> None:
+    shard = tmp_path / "vung_plan_chinh_sang.json"
+    write_zones_state_to_shard(
+        shard,
+        ZonesState(
+            symbol="XAUUSD",
+            zones=[
+                Zone(
+                    id="z1",
+                    label="plan_chinh",
+                    vung_cho="100–101",
+                    side="BUY",
+                    status="dang_thuc_thi",
+                    trade_line="BUY LIMIT 100 | SL 99 | TP1 103 | Lot 0.01",
+                    mt5_ticket=123,
+                    r1_followup_done=True,
+                )
+            ],
+        ),
+    )
+    params = WatchlistDaemonParams(
+        coinmap_tv_yaml=tmp_path / "coinmap_tv.yaml",
+        capture_coinmap_yaml=tmp_path / "cap.yaml",
+        charts_dir=tmp_path / "charts",
+        storage_state_path=None,
+        headless=True,
+        no_save_storage=True,
+        shard_path=shard,
+        mt5_execute=True,
+    )
+
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon.load_mt5_accounts_for_cli", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        "automation_tool.tv_watchlist_daemon.mt5_ticket_is_open_position",
+        lambda *_a, **_k: (False, "ticket=123 vẫn pending (chưa position)"),
+    )
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon._send_log", lambda *a, **k: None)
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon._send_user_notice", lambda *a, **k: None)
+
+    def fail_capture(*_args, **_kwargs):
+        raise AssertionError("pending ticket must not capture Coinmap for R1")
+
+    monkeypatch.setattr("automation_tool.coinmap.capture_charts", fail_capture)
+
+    _r1_followup_job(
+        settings=MagicMock(),
+        params=params,
+        zone_id="z1",
+        prev_status="cho_tp1",
+    )
+
+    st = read_zones_state_from_shard(shard)
+    assert st is not None
+    assert st.zones[0].status == "cho_tp1"
+    assert st.zones[0].r1_followup_done is False
 
 
 def test_daemon_plan_sl_loai_includes_post_entry_statuses() -> None:

@@ -1665,7 +1665,7 @@ def _r1_followup_job(
         if exe and tk_check > 0:
             accs_chk = load_mt5_accounts_for_cli(params.mt5_accounts_json)
             prim_chk = primary_account(accs_chk) if accs_chk else None
-            still_open, ticket_msg = mt5_ticket_still_open(
+            is_position, ticket_msg = mt5_ticket_is_open_position(
                 tk_check,
                 dry_run=dry,
                 terminal_path=prim_chk.terminal_path if prim_chk else None,
@@ -1674,7 +1674,16 @@ def _r1_followup_job(
                 server=prim_chk.server if prim_chk else None,
             )
             _send_log(settings, f"[r1] kiểm tra ticket | {ticket_msg}")
-            if not still_open:
+            if not is_position:
+                if "pending" in ticket_msg.lower() or "chưa position" in ticket_msg.lower():
+                    z0.status = prev_status  # type: ignore[assignment]
+                    z0.r1_followup_done = False
+                    _state_write(params, st0)
+                    _send_log(
+                        settings,
+                        f"[r1] bỏ qua kiểm tra 1R vì lệnh chưa khớp | zone_id={zone_id} | {ticket_msg}",
+                    )
+                    return
                 st_done = _state_read(params)
                 if st_done is not None:
                     z_done = next((z for z in st_done.zones if z.id == zone_id), None)
@@ -3053,24 +3062,6 @@ def _daemon_plan_main_loop(
                         if _tp1_touched(parsed_r1, float(p_last)):
                             continue
                         if not one_r_reached(parsed_r1, float(p_last), eps=_TP1_EPS):
-                            continue
-                        tk_r1 = int(z.mt5_ticket or 0)
-                        accs_r1_chk = load_mt5_accounts_for_cli(params.mt5_accounts_json)
-                        prim_r1_chk = primary_account(accs_r1_chk) if accs_r1_chk else None
-                        is_pos_r1, pos_msg_r1 = mt5_ticket_is_open_position(
-                            tk_r1,
-                            dry_run=bool(params.mt5_dry_run),
-                            login=prim_r1_chk.login if prim_r1_chk else None,
-                            password=prim_r1_chk.password if prim_r1_chk else None,
-                            server=prim_r1_chk.server if prim_r1_chk else None,
-                        )
-                        if not is_pos_r1:
-                            _poll_terminal.info(
-                                "daemon-plan | shard=%s | r1 skip (need open position) | zone_id=%s | %s",
-                                shard_tag,
-                                z.id,
-                                pos_msg_r1,
-                            )
                             continue
                         prev_status = z.status
                         z.status = "dang_thuc_thi"
