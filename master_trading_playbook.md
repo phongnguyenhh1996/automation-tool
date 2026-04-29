@@ -944,8 +944,17 @@ Trend {symbol} H1 - M15:
 Bias chính:
 
 📍 PLAN CHÍNH VÙNG CHỜ:
+  - trade_line tham khảo:
+  - hop_luu:
+  - điều kiện vào lệnh:
 📍 PLAN PHỤ VÙNG CHỜ:
+  - trade_line tham khảo:
+  - hop_luu:
+  - điều kiện vào lệnh:
 ⚡️ SCALP VÙNG:
+  - trade_line tham khảo:
+  - hop_luu:
+  - điều kiện vào lệnh:
 
 ### 9.5.1. Quy tắc dùng template
 - `out_chi_tiet` phải bám đúng phần sau marker `[OUTPUT_CHI_TIET]` và không in marker.

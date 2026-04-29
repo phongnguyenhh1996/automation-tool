@@ -1882,6 +1882,7 @@ def _r1_followup_job(
 
         if exe and not used_inplace_r1:
             z1.r1_followup_done = False
+            z1.status = prev_status  # type: ignore[assignment]
             _state_write(params, st1)
             _send_user_notice(
                 settings,
@@ -1900,8 +1901,9 @@ def _r1_followup_job(
                 params=params,
             )
         z1.trade_line = dec.trade_line_moi.strip()
+        z1.status = prev_status  # type: ignore[assignment]
         z1.tp1_followup_done = False
-        z1.r1_followup_done = False
+        z1.r1_followup_done = True
         _state_write(params, st1)
         return
     except Exception as e:

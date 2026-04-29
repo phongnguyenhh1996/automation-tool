@@ -453,6 +453,79 @@ def test_r1_followup_skips_pending_ticket_before_capture(monkeypatch, tmp_path) 
     assert st.zones[0].r1_followup_done is False
 
 
+def test_r1_followup_restores_cho_tp1_after_successful_inplace_change(monkeypatch, tmp_path) -> None:
+    shard = tmp_path / "vung_plan_chinh_sang.json"
+    write_zones_state_to_shard(
+        shard,
+        ZonesState(
+            symbol="XAUUSD",
+            zones=[
+                Zone(
+                    id="z1",
+                    label="plan_chinh",
+                    vung_cho="100–101",
+                    side="BUY",
+                    status="dang_thuc_thi",
+                    trade_line="BUY LIMIT 100 | SL 99 | TP1 103 | Lot 0.01",
+                    mt5_ticket=123,
+                    r1_followup_done=True,
+                )
+            ],
+        ),
+    )
+    params = WatchlistDaemonParams(
+        coinmap_tv_yaml=tmp_path / "coinmap_tv.yaml",
+        capture_coinmap_yaml=tmp_path / "cap.yaml",
+        charts_dir=tmp_path / "charts",
+        storage_state_path=None,
+        headless=True,
+        no_save_storage=True,
+        no_telegram=True,
+        shard_path=shard,
+        mt5_execute=True,
+        mt5_symbol="XAUUSD",
+    )
+    charts_file = tmp_path / "x.json"
+    charts_file.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon.load_mt5_accounts_for_cli", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        "automation_tool.tv_watchlist_daemon.mt5_ticket_is_open_position",
+        lambda *_a, **_k: (True, "ticket=123 is position"),
+    )
+    monkeypatch.setattr("automation_tool.coinmap.capture_charts", lambda **_k: [charts_file])
+    monkeypatch.setattr("automation_tool.images.coinmap_xauusd_5m_json_path", lambda _charts_dir: charts_file)
+    monkeypatch.setattr("automation_tool.images.read_main_chart_symbol", lambda _charts_dir: "XAUUSD")
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon.write_openai_coinmap_merged_from_raw_export", lambda p: p)
+    monkeypatch.setattr(
+        "automation_tool.tv_watchlist_daemon.run_single_followup_responses",
+        lambda **_k: (
+            '{"hanh_dong_quan_ly_lenh":"chinh_trade_line","trade_line_moi":"BUY LIMIT 100 | SL 100 | TP1 103 | Lot 0.01","reason":"Dời SL."}',
+            "resp-r1",
+        ),
+    )
+    monkeypatch.setattr(
+        "automation_tool.tv_watchlist_daemon.mt5_chinh_trade_line_inplace",
+        lambda *_a, **_k: MagicMock(ok=True, outcome="modified_sltp", message="modified"),
+    )
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon._send_log", lambda *a, **k: None)
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon._send_user_notice", lambda *a, **k: None)
+
+    _r1_followup_job(
+        settings=MagicMock(),
+        params=params,
+        zone_id="z1",
+        prev_status="cho_tp1",
+    )
+
+    st = read_zones_state_from_shard(shard)
+    assert st is not None
+    assert st.zones[0].status == "cho_tp1"
+    assert st.zones[0].trade_line == "BUY LIMIT 100 | SL 100 | TP1 103 | Lot 0.01"
+    assert st.zones[0].r1_followup_done is True
+    assert st.zones[0].tp1_followup_done is False
+
+
 def test_daemon_plan_sl_loai_includes_post_entry_statuses() -> None:
     assert _DAEMON_PLAN_SL_LOAI_STATUSES == frozenset(
         {"vung_cho", "cham", "vao_lenh", "cho_tp1"}
