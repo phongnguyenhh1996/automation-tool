@@ -825,24 +825,9 @@ def _skip_scalp_r1_followup_if_needed(
     settings: Settings,
     params: WatchlistDaemonParams,
 ) -> bool:
-    """Scalp chỉ xử lý tại TP1; không hỏi AI khi đạt 1R."""
-    if (zone.label or "").strip().lower() != "scalp":
-        return False
-    if zone.r1_followup_done:
-        return True
-    zone.r1_followup_done = True
-    _send_log(
-        settings,
-        f"[r1] skip scalp | zone_id={zone.id} | không check 1R / không gọi OpenAI",
-    )
-    _send_user_notice(
-        settings,
-        "Scalp: bỏ qua kiểm tra 1R và không hỏi AI.",
-        "Hệ thống chỉ chờ TP1 để huỷ/loại lệnh scalp; TP1 cũng không gửi OpenAI follow-up.",
-        zone=zone,
-        params=params,
-    )
-    return True
+    """Compatibility hook: scalp now uses the same 1R follow-up flow as other plans."""
+    _ = (zone, settings, params)
+    return False
 
 
 def _zone_label_slot_display_vn(zone: Zone) -> str:
@@ -1234,49 +1219,6 @@ def _tp1_followup_job(
                     f"[tp1] bỏ qua follow-up TP1 (ticket đã đóng trên MT5) | zone_id={zone_id} | {ticket_msg}",
                 )
                 return
-
-        # Scalp: chạm TP1 → huỷ ticket ngay, không gọi OpenAI / Coinmap.
-        if (z0.label or "").strip().lower() == "scalp":
-            tk = tk_check
-            if exe and tk > 0:
-                r = mt5_cancel_pending_or_close_position(
-                    tk,
-                    dry_run=dry,
-                    terminal_path=prim_chk.terminal_path if prim_chk else None,
-                    login=prim_chk.login if prim_chk else None,
-                    password=prim_chk.password if prim_chk else None,
-                    server=prim_chk.server if prim_chk else None,
-                )
-                _send_log(settings, f"[tp1] scalp chạm TP1 — mt5_cancel_close: {r.message}".strip())
-                if not params.no_telegram and settings.telegram_bot_token:
-                    send_mt5_execution_log_to_ngan_gon_chat(
-                        bot_token=settings.telegram_bot_token,
-                        telegram_chat_id=settings.telegram_chat_id,
-                        telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
-                        telegram_log_chat_id=settings.telegram_log_chat_id,
-                        source="tp1-scalp-tp1",
-                        text=f"scalp: chạm TP1 — huỷ ticket\n{r.message}",
-                        zone_label="scalp",
-                        trade_line=z0.trade_line,
-                        execution_ok=r.ok,
-                        session_slot=resolve_session_slot_raw(
-                            zone_session_slot=getattr(z0, "session_slot", None),
-                            shard_path=params.shard_path,
-                        ),
-                    )
-            z0.status = "loai"
-            z0.mt5_ticket = None
-            z0.tp1_followup_done = True
-            z0.r1_followup_done = True
-            _state_write(params, st0)
-            _send_user_notice(
-                settings,
-                "Scalp chạm TP1 — đã huỷ lệnh (không gọi AI).",
-                "Vùng scalp chuyển trạng thái loại.",
-                zone=z0,
-                params=params,
-            )
-            return
 
         if getattr(parsed, "tp2", None) is not None:
             ok_partial = True

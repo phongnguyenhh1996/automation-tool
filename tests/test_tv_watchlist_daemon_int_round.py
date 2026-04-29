@@ -28,6 +28,7 @@ from automation_tool.tv_watchlist_daemon import (
     _openai_followup_prev_response_id,
     _r1_followup_job,
     _should_write_intraday_alert_anchor,
+    _tp1_followup_job,
 )
 from automation_tool.zones_state import Zone, ZonesState, read_zones_state_from_shard, write_zones_state_to_shard
 
@@ -309,25 +310,7 @@ def test_arm_scalp_narrower_than_default() -> None:
     assert _arm_threshold_met_for_zone(z2, ref_s - ARM_THRESHOLD_TP1_SCALP - 0.25) is False
 
 
-def test_skip_scalp_r1_followup_marks_done_and_notifies(monkeypatch, tmp_path) -> None:
-    notices: list[tuple[str, str, str]] = []
-    logs: list[str] = []
-
-    def fake_notice(settings, title, body="", *, zone=None, params=None, zone_label=None):
-        notices.append((title, body, zone.label if zone is not None else ""))
-
-    monkeypatch.setattr("automation_tool.tv_watchlist_daemon._send_user_notice", fake_notice)
-    monkeypatch.setattr("automation_tool.tv_watchlist_daemon._send_log", lambda _settings, text: logs.append(text))
-    settings = MagicMock()
-    params = WatchlistDaemonParams(
-        coinmap_tv_yaml=tmp_path / "coinmap_tv.yaml",
-        capture_coinmap_yaml=tmp_path / "cap.yaml",
-        charts_dir=tmp_path / "charts",
-        storage_state_path=None,
-        headless=True,
-        no_save_storage=True,
-        shard_path=tmp_path / "vung_scalp_sang.json",
-    )
+def test_skip_scalp_r1_followup_no_longer_skips() -> None:
     z = Zone(
         id="s1",
         label="scalp",
@@ -338,16 +321,79 @@ def test_skip_scalp_r1_followup_marks_done_and_notifies(monkeypatch, tmp_path) -
         mt5_ticket=123,
     )
 
-    assert _skip_scalp_r1_followup_if_needed(z, settings=settings, params=params) is True
-    assert z.r1_followup_done is True
-    assert notices == [
-        (
-            "Scalp: bỏ qua kiểm tra 1R và không hỏi AI.",
-            "Hệ thống chỉ chờ TP1 để huỷ/loại lệnh scalp; TP1 cũng không gửi OpenAI follow-up.",
-            "scalp",
-        )
-    ]
-    assert any("skip scalp" in line for line in logs)
+    assert _skip_scalp_r1_followup_if_needed(z, settings=MagicMock(), params=MagicMock()) is False
+    assert z.r1_followup_done is False
+
+
+def test_tp1_followup_scalp_calls_openai_instead_of_auto_cancel(monkeypatch, tmp_path) -> None:
+    notices: list[tuple[str, str, str]] = []
+    logs: list[str] = []
+    openai_calls: list[dict] = []
+
+    def fake_notice(settings, title, body="", *, zone=None, params=None, zone_label=None):
+        notices.append((title, body, zone.label if zone is not None else ""))
+
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon._send_user_notice", fake_notice)
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon._send_log", lambda _settings, text: logs.append(text))
+    chart_json = tmp_path / "charts" / "coinmap.json"
+    chart_json.parent.mkdir()
+    chart_json.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr("automation_tool.coinmap.capture_charts", lambda **_kwargs: [chart_json])
+    monkeypatch.setattr("automation_tool.images.read_main_chart_symbol", lambda _charts_dir: "XAUUSD")
+    monkeypatch.setattr("automation_tool.images.coinmap_xauusd_5m_json_path", lambda _charts_dir: chart_json)
+    monkeypatch.setattr(
+        "automation_tool.tv_watchlist_daemon.write_openai_coinmap_merged_from_raw_export",
+        lambda path: path,
+    )
+
+    def fake_run_single_followup_responses(**kwargs):
+        openai_calls.append(kwargs)
+        return ('{"hanh_dong_quan_ly_lenh":"giu_nguyen","reason":"Scalp vẫn hợp lệ."}', "resp-scalp-tp1")
+
+    monkeypatch.setattr(
+        "automation_tool.tv_watchlist_daemon.run_single_followup_responses",
+        fake_run_single_followup_responses,
+    )
+
+    settings = MagicMock()
+    params = WatchlistDaemonParams(
+        coinmap_tv_yaml=tmp_path / "coinmap_tv.yaml",
+        capture_coinmap_yaml=tmp_path / "cap.yaml",
+        charts_dir=tmp_path / "charts",
+        storage_state_path=None,
+        headless=True,
+        no_save_storage=True,
+        shard_path=tmp_path / "vung_scalp_sang.json",
+        no_telegram=True,
+    )
+    write_zones_state_to_shard(
+        params.shard_path,
+        ZonesState(
+            symbol="XAUUSD",
+            zones=[
+                Zone(
+                    id="s1",
+                    label="scalp",
+                    vung_cho="100–101",
+                    side="BUY",
+                    status="dang_thuc_thi",
+                    trade_line="BUY LIMIT 100 | SL 99 | TP1 101 | Lot 0.01",
+                    mt5_ticket=123,
+                    tp1_followup_done=True,
+                )
+            ],
+        ),
+    )
+
+    _tp1_followup_job(settings=settings, params=params, zone_id="s1", p_last=101.0)
+
+    st = read_zones_state_from_shard(params.shard_path)
+    assert st is not None
+    assert st.zones[0].status == "vao_lenh"
+    assert st.zones[0].tp1_followup_done is True
+    assert openai_calls
+    assert notices and notices[0][2] == "scalp"
+    assert any("OpenAI TRADE_MANAGEMENT" in line for line in logs)
 
 
 def test_r1_followup_skips_pending_ticket_before_capture(monkeypatch, tmp_path) -> None:
