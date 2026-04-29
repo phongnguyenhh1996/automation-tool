@@ -276,6 +276,20 @@ def mt5_partial_close_tp1_all_accounts(
             password=acc.password,
             server=acc.server,
         )
+        if (
+            not r.ok
+            and acc.entry_take_profit == "tp1"
+            and r.kind == "none"
+            and "position" in r.message.lower()
+        ):
+            r = MT5ManageResult(
+                ok=True,
+                message=(
+                    f"Position ticket={ticket} không còn; account entry_take_profit=tp1 "
+                    "được coi là đã đóng tại TP1"
+                ),
+                kind="none",
+            )
         return acc_id, r
 
     async def _gather() -> list[tuple[str, MT5ManageResult]]:

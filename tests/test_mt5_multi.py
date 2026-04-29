@@ -269,3 +269,52 @@ def test_partial_close_tp1_all_accounts_uses_account_lot_rules(
 
     assert summary.ok_all
     assert seen == [(1, 101, 0.02), (2, 202, 0.05)]
+
+
+def test_partial_close_tp1_all_accounts_accepts_missing_tp1_entry_position(
+    sample_trade, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    accounts = [
+        MT5AccountEntry(
+            id="acc_tp2",
+            terminal_path="/tmp/mt5-acc-a/terminal64.exe",
+            login=1,
+            password="p",
+            server="srv",
+            primary=True,
+            lot=LotRuleFromTrade(),
+            entry_take_profit="tp2",
+        ),
+        MT5AccountEntry(
+            id="acc_tp1",
+            terminal_path="/tmp/mt5-acc-b/terminal64.exe",
+            login=2,
+            password="p",
+            server="srv",
+            primary=False,
+            lot=LotRuleFromTrade(),
+            entry_take_profit="tp1",
+        ),
+    ]
+
+    def fake_partial(ticket, **kwargs):
+        if ticket == 202:
+            return MT5ManageResult(
+                ok=False,
+                message="Không tìm thấy position ticket=202",
+                kind="none",
+            )
+        return MT5ManageResult(ok=True, message=f"partial {ticket}", kind="position")
+
+    monkeypatch.setattr("automation_tool.mt5_multi.mt5_close_position_partial", fake_partial)
+
+    summary = mt5_partial_close_tp1_all_accounts(
+        {"acc_tp2": 101, "acc_tp1": 202},
+        accounts,
+        sample_trade,
+        dry_run=False,
+    )
+
+    assert summary.ok_all
+    assert [r.ok for _, r in summary.results] == [True, True]
+    assert "đã đóng tại TP1" in summary.results[1][1].message
