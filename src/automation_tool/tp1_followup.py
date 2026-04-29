@@ -471,6 +471,9 @@ def _run_tp1_openai_and_act(
                         text=ch_txt,
                         zone_label=label,
                         trade_line=dec.trade_line_moi.strip(),
+                        previous_trade_line=(
+                            (st.trade_line_by_label.get(label) or trade_line) if st else trade_line
+                        ),
                         execution_ok=True,
                         action="chinh_trade_line",
                     )
@@ -504,6 +507,9 @@ def _run_tp1_openai_and_act(
                         text=cr.message,
                         zone_label=label,
                         trade_line=dec.trade_line_moi.strip(),
+                        previous_trade_line=(
+                            (st.trade_line_by_label.get(label) or trade_line) if st else trade_line
+                        ),
                         execution_ok=True,
                         action="chinh_trade_line",
                     )

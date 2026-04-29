@@ -1537,6 +1537,7 @@ def _tp1_followup_job(
                             text=ch_txt,
                             zone_label=z1.label,
                             trade_line=dec.trade_line_moi.strip(),
+                            previous_trade_line=z0.trade_line,
                             execution_ok=True,
                             action="chinh_trade_line",
                             session_slot=resolve_session_slot_raw(
@@ -1574,6 +1575,7 @@ def _tp1_followup_job(
                             text=cr.message,
                             zone_label=z1.label,
                             trade_line=dec.trade_line_moi.strip(),
+                            previous_trade_line=z0.trade_line,
                             execution_ok=True,
                             action="chinh_trade_line",
                             session_slot=resolve_session_slot_raw(
@@ -1884,6 +1886,7 @@ def _r1_followup_job(
                             text=ch_txt,
                             zone_label=z1.label,
                             trade_line=dec.trade_line_moi.strip(),
+                            previous_trade_line=z0.trade_line,
                             execution_ok=True,
                             action="chinh_trade_line",
                             session_slot=resolve_session_slot_raw(
@@ -1921,6 +1924,7 @@ def _r1_followup_job(
                             text=cr.message,
                             zone_label=z1.label,
                             trade_line=dec.trade_line_moi.strip(),
+                            previous_trade_line=z0.trade_line,
                             execution_ok=True,
                             action="chinh_trade_line",
                             session_slot=resolve_session_slot_raw(

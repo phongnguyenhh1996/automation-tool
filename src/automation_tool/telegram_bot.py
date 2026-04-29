@@ -89,6 +89,46 @@ def mt5_zone_chinh_line_vn(
     return f'Đã chỉnh lệnh cho "{quoted}".'
 
 
+def _trade_line_level_tokens(trade_line: Optional[str]) -> dict[str, str]:
+    """Extract display-ready SL/TP tokens from a pipe trade_line."""
+    text = (trade_line or "").strip()
+    if not text:
+        return {}
+    out: dict[str, str] = {}
+    for key in ("SL", "TP1", "TP2"):
+        m = re.search(
+            rf"(?:^|\|)\s*{re.escape(key)}\s+(-?\d+(?:\.\d+)?)\b",
+            text,
+            re.IGNORECASE,
+        )
+        if m:
+            out[key] = m.group(1)
+    return out
+
+
+def _numeric_tokens_differ(old: str, new: str, *, eps: float = 1e-9) -> bool:
+    try:
+        return abs(float(old) - float(new)) > eps
+    except ValueError:
+        return old != new
+
+
+def _trade_line_change_notice_lines(
+    previous_trade_line: Optional[str],
+    trade_line: Optional[str],
+) -> list[str]:
+    old_levels = _trade_line_level_tokens(previous_trade_line)
+    new_levels = _trade_line_level_tokens(trade_line)
+    lines: list[str] = []
+    for key in ("SL", "TP1", "TP2"):
+        old = old_levels.get(key)
+        new = new_levels.get(key)
+        if old is None or new is None or not _numeric_tokens_differ(old, new):
+            continue
+        lines.append(f"Đã dời {key} từ {old} về {new}.")
+    return lines
+
+
 def _trade_management_action_display_vn(action: Optional[str]) -> str:
     """Tên hành động Schema D cho tin quản lý lệnh."""
     key = (action or "").strip().lower()
@@ -652,6 +692,7 @@ def send_mt5_execution_log_to_ngan_gon_chat(
     execution_ok: bool,
     zone_label: Optional[str] = None,
     trade_line: Optional[str] = None,
+    previous_trade_line: Optional[str] = None,
     session_slot: Optional[str] = None,
     action: Optional[str] = None,
 ) -> None:
@@ -734,8 +775,15 @@ def send_mt5_execution_log_to_ngan_gon_chat(
         zone_line = mt5_zone_entry_line_vn(zone_label, session_slot=session_slot)
     if zone_line:
         out = f"{out}\n\n{zone_line}"
+    change_lines = (
+        _trade_line_change_notice_lines(previous_trade_line, trade_line)
+        if is_chinh_trade_line
+        else []
+    )
+    if change_lines:
+        out = f"{out}\n\n" + "\n".join(change_lines)
     tl_ok = (trade_line or "").strip()
-    if tl_ok:
+    if tl_ok and not change_lines:
         out = f"{out}\n\n{tl_ok}"
     _send_plain_text_to_chat_id(
         bot_token=bot_token,

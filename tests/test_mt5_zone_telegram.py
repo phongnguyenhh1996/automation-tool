@@ -81,6 +81,7 @@ def test_chinh_trade_line_success_message_is_not_entry_notice(monkeypatch):
         execution_ok=True,
         zone_label="plan_chinh",
         trade_line="BUY LIMIT 4709.0 | SL 4709.0 | TP1 4740.0 | Lot 0.04",
+        previous_trade_line="BUY LIMIT 4709.0 | SL 4699.0 | TP1 4730.0 | Lot 0.04",
         session_slot="sang",
         action="chinh_trade_line",
     )
@@ -88,5 +89,8 @@ def test_chinh_trade_line_success_message_is_not_entry_notice(monkeypatch):
     assert len(sent) == 1
     assert sent[0]["chat_id"] == "main"
     assert "Đã chỉnh lệnh cho \"Plan chính - Sáng\"." in sent[0]["text"]
+    assert "Đã dời SL từ 4699.0 về 4709.0." in sent[0]["text"]
+    assert "Đã dời TP1 từ 4730.0 về 4740.0." in sent[0]["text"]
+    assert "BUY LIMIT 4709.0 | SL 4709.0 | TP1 4740.0 | Lot 0.04" not in sent[0]["text"]
     assert "Đã vào lệnh cho" not in sent[0]["text"]
     assert "ENTRY TEMPLATE" not in sent[0]["text"]
