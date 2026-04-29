@@ -22,21 +22,18 @@ cd /d "%~dp0"
 REM Bắt buộc cặp active = XAUUSD (data/.main_chart_symbol bị ghi đè bởi env — xem images.get_active_main_symbol)
 set "AUTOMATION_MAIN_SYMBOL=XAUUSD"
 
-REM Create logs directory if missing
-if not exist "logs" mkdir "logs"
-
 REM Activate virtual environment
 call ".venv\Scripts\activate.bat"
 if errorlevel 1 (
-  echo [%date% %time%] ERROR: Failed to activate virtual environment.>> "logs\daemon.log"
+  echo [%date% %time%] ERROR: Failed to activate virtual environment.
   exit /b 1
 )
 
-echo [%date% %time%] INFO: Starting coinmap-automation tv-watchlist-daemon (gia) symbol=%AUTOMATION_MAIN_SYMBOL%>> "logs\daemon.log"
+echo [%date% %time%] INFO: Starting coinmap-automation tv-watchlist-daemon (gia) symbol=%AUTOMATION_MAIN_SYMBOL%
 REM Headless by default; do NOT pass --headed.
-coinmap-automation tv-watchlist-daemon --stop-daemon-plans-on-exit >> "logs\daemon.log" 2>&1
+coinmap-automation tv-watchlist-daemon --stop-daemon-plans-on-exit
 set "EXIT_CODE=%ERRORLEVEL%"
-echo [%date% %time%] INFO: Finished with exit code %EXIT_CODE%>> "logs\daemon.log"
+echo [%date% %time%] INFO: Finished with exit code %EXIT_CODE%
 
 exit /b %EXIT_CODE%
 

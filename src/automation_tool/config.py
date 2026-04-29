@@ -97,11 +97,6 @@ def default_charts_dir() -> Path:
     return symbol_data_dir() / "charts"
 
 
-def default_logs_dir() -> Path:
-    """Project ``logs/`` — capture failures, batch scripts, etc."""
-    return _root() / "logs"
-
-
 def default_coinmap_data_json_path() -> Path:
     """Single combined file is no longer written; JSON exports live next to PNGs in charts_dir."""
     return default_data_dir() / "coinmap_data.json"
