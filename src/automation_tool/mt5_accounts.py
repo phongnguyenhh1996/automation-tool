@@ -25,6 +25,7 @@ from automation_tool.mt5_openai_parse import ParsedTrade
 
 LotMode = Literal["fixed", "max_notional_usd", "max_loss_usd", "from_trade"]
 EntryTakeProfitTarget = Literal["tp1", "tp2"]
+EntrySlot = Literal["sang", "chieu", "toi"]
 
 
 @dataclass(frozen=True)
@@ -77,6 +78,9 @@ class MT5AccountEntry:
     entry_take_profit: EntryTakeProfitTarget = "tp2"
     #: Map symbol logic (XAUUSD, EURUSD, …) → tên đúng trên broker của acc đó (vd. XAUUSD vs XAUUSDm).
     symbol_map: dict[str, str] = field(default_factory=dict)
+    #: Chỉ cho account này vào lệnh ở các shard ``*_sang/_chieu/_toi`` được liệt kê.
+    #: ``None`` = không giới hạn, giữ hành vi cũ là vào cả ba khung.
+    entry_slots: Optional[tuple[EntrySlot, ...]] = None
 
 
 def _parse_symbol_map(obj: Any, index: int) -> dict[str, str]:
@@ -127,6 +131,28 @@ def _parse_entry_take_profit(obj: Any, index: int) -> EntryTakeProfitTarget:
     raise ValueError(f"accounts[{index}].entry_take_profit phải là 'tp1' hoặc 'tp2'")
 
 
+def _parse_entry_slots(obj: Any, index: int) -> Optional[tuple[EntrySlot, ...]]:
+    if obj is None:
+        return None
+    if not isinstance(obj, list):
+        raise ValueError(f"accounts[{index}].entry_slots phải là mảng ['sang','chieu','toi'] hoặc bỏ qua")
+    out: list[EntrySlot] = []
+    seen: set[str] = set()
+    for raw in obj:
+        slot = str(raw or "").strip().lower()
+        if slot not in ("sang", "chieu", "toi"):
+            raise ValueError(
+                f"accounts[{index}].entry_slots chỉ hỗ trợ 'sang', 'chieu', 'toi'; gặp {raw!r}"
+            )
+        if slot in seen:
+            continue
+        seen.add(slot)
+        out.append(slot)  # type: ignore[arg-type]
+    if not out:
+        raise ValueError(f"accounts[{index}].entry_slots không được rỗng")
+    return tuple(out)
+
+
 def _parse_one(obj: Any, index: int) -> MT5AccountEntry:
     if not isinstance(obj, dict):
         raise ValueError(f"accounts[{index}] phải là object")
@@ -157,6 +183,7 @@ def _parse_one(obj: Any, index: int) -> MT5AccountEntry:
     else:
         lot = _parse_lot(lot_raw)
     entry_tp = _parse_entry_take_profit(obj.get("entry_take_profit"), index)
+    entry_slots = _parse_entry_slots(obj.get("entry_slots"), index)
     sym_map = _parse_symbol_map(obj.get("symbol_map"), index)
     return MT5AccountEntry(
         id=acc_id,
@@ -167,8 +194,28 @@ def _parse_one(obj: Any, index: int) -> MT5AccountEntry:
         primary=primary,
         lot=lot,
         entry_take_profit=entry_tp,
+        entry_slots=entry_slots,
         symbol_map=sym_map,
     )
+
+
+def mt5_account_allows_entry_slot(acc: MT5AccountEntry, slot: Optional[str]) -> bool:
+    """Return whether ``acc`` may open a new trade in ``slot``; missing config means all slots."""
+    allowed = acc.entry_slots
+    if allowed is None:
+        return True
+    s = str(slot or "").strip().lower()
+    if s not in ("sang", "chieu", "toi"):
+        return True
+    return s in allowed
+
+
+def filter_mt5_accounts_for_entry_slot(
+    accounts: list[MT5AccountEntry],
+    slot: Optional[str],
+) -> list[MT5AccountEntry]:
+    """Filter multi-account entries by ``entry_slots`` for new order placement."""
+    return [a for a in accounts if mt5_account_allows_entry_slot(a, slot)]
 
 
 def load_mt5_accounts_from_path(path: Path) -> list[MT5AccountEntry]:

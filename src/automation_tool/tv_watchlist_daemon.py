@@ -31,7 +31,12 @@ from automation_tool.images import (
     get_active_main_symbol,
     read_main_chart_symbol,
 )
-from automation_tool.mt5_accounts import MT5AccountEntry, load_mt5_accounts_for_cli, primary_account
+from automation_tool.mt5_accounts import (
+    MT5AccountEntry,
+    filter_mt5_accounts_for_entry_slot,
+    load_mt5_accounts_for_cli,
+    primary_account,
+)
 from automation_tool.mt5_execute import (
     DaemonPlanMt5PriceSession,
     execute_trade,
@@ -777,6 +782,41 @@ def _send_user_notice(
         title=out_title,
         body=body,
     )
+
+
+def _entry_slot_for_zone(zone: Zone, params: WatchlistDaemonParams) -> Optional[str]:
+    return resolve_session_slot_raw(
+        zone_session_slot=getattr(zone, "session_slot", None),
+        shard_path=params.shard_path,
+    )
+
+
+def _filter_entry_accounts_for_zone(
+    accounts: list[MT5AccountEntry],
+    zone: Zone,
+    params: WatchlistDaemonParams,
+) -> tuple[list[MT5AccountEntry], Optional[str], list[str]]:
+    slot = _entry_slot_for_zone(zone, params)
+    allowed = filter_mt5_accounts_for_entry_slot(accounts, slot)
+    allowed_ids = {a.id for a in allowed}
+    blocked_ids = [a.id for a in accounts if a.id not in allowed_ids]
+    return allowed, slot, blocked_ids
+
+
+def _multi_summary_tracking_ticket(summary, accounts: list[MT5AccountEntry]) -> int:
+    """Prefer the configured primary ticket; if that account is filtered out, track the first ticket."""
+    try:
+        return int(summary.primary_ticket(accounts) or 0)
+    except Exception:
+        pass
+    for tid in (summary.tickets_by_account_id or {}).values():
+        try:
+            n = int(tid)
+        except (TypeError, ValueError):
+            n = 0
+        if n > 0:
+            return n
+    return 0
 
 
 def _skip_scalp_r1_followup_if_needed(
@@ -1999,9 +2039,29 @@ def _auto_entry_job(
 
         accs_ae = load_mt5_accounts_for_cli(params.mt5_accounts_json)
         if accs_ae:
+            exec_accs_ae, slot_ae, blocked_ae = _filter_entry_accounts_for_zone(accs_ae, z0, params)
+            if blocked_ae:
+                _send_log(
+                    settings,
+                    "[auto-entry] accounts filtered by entry_slots | "
+                    f"zone_id={zone_id} slot={slot_ae or 'unknown'} blocked={blocked_ae}",
+                )
+            if not exec_accs_ae:
+                z0.status = "cham"
+                z0.auto_entry_retry_after = ""
+                z0.auto_entry_mt5_failed = False
+                _state_write(params, st0)
+                _send_user_notice(
+                    settings,
+                    "Tự động vào lệnh bị chặn theo khung giờ.",
+                    f"Không account nào trong accounts.json cho phép vào lệnh khung {slot_ae or 'unknown'}.",
+                    zone=z0,
+                    params=params,
+                )
+                return
             summary_ae = execute_trade_all_accounts(
                 parsed,
-                accs_ae,
+                exec_accs_ae,
                 dry_run=params.mt5_dry_run,
                 symbol_override=params.mt5_symbol,
             )
@@ -2023,7 +2083,7 @@ def _auto_entry_job(
                     ),
                 )
             _send_log(settings, f"[auto-entry] mt5_execute_trade multi: {multi_ae[:400]}".strip())
-            tid = summary_ae.primary_ticket(accs_ae)
+            tid = _multi_summary_tracking_ticket(summary_ae, exec_accs_ae)
             ok_ae = tid > 0
             st2 = _state_read(params)
             if st2 is None:
@@ -2386,15 +2446,41 @@ def _zone_touch_job(
 
         accs_zt = load_mt5_accounts_for_cli(params.mt5_accounts_json)
         if accs_zt:
+            exec_accs_zt, slot_zt, blocked_zt = _filter_entry_accounts_for_zone(accs_zt, z1, params)
+            if blocked_zt:
+                _send_log(
+                    settings,
+                    "[zone-touch] accounts filtered by entry_slots | "
+                    f"zone_id={zone_id} slot={slot_zt or 'unknown'} blocked={blocked_zt}",
+                )
+            if not exec_accs_zt:
+                st_block = _state_read(params)
+                if st_block is not None:
+                    for z in st_block.zones:
+                        if z.id == zone_id:
+                            z.status = "cham"
+                            z.retry_at = ""
+                            z.mt5_ticket = None
+                            z.mt5_tickets_by_account = None
+                            break
+                    _state_write(params, st_block)
+                _send_user_notice(
+                    settings,
+                    "Vào lệnh bị chặn theo khung giờ.",
+                    f"Không account nào trong accounts.json cho phép vào lệnh khung {slot_zt or 'unknown'}.",
+                    zone=z1,
+                    params=params,
+                )
+                return
             summary_zt = execute_trade_all_accounts(
                 parsed,
-                accs_zt,
+                exec_accs_zt,
                 dry_run=params.mt5_dry_run,
                 symbol_override=params.mt5_symbol,
             )
             # MARKET: MT5 trả fill price; chỉ dùng giá từ account primary để update trade_line.
             try:
-                prim = primary_account(accs_zt)
+                prim = primary_account(exec_accs_zt)
                 filled_primary: Optional[float] = None
                 for rex in summary_zt.results:
                     if rex.account_id != prim.id:
@@ -2430,7 +2516,7 @@ def _zone_touch_job(
                     ),
                 )
             _send_log(settings, f"[zone-touch] mt5_execute_trade multi: {zt_txt[:400]}".strip())
-            tid = summary_zt.primary_ticket(accs_zt)
+            tid = _multi_summary_tracking_ticket(summary_zt, exec_accs_zt)
             if tid > 0:
                 st2 = _state_read(params)
                 if st2 is None:

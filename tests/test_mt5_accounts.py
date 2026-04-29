@@ -13,6 +13,7 @@ from automation_tool.mt5_accounts import (
     LotRuleFromTrade,
     LotRuleMaxLossUsd,
     LotRuleMaxNotionalUsd,
+    filter_mt5_accounts_for_entry_slot,
     load_mt5_accounts_from_path,
 )
 from automation_tool.mt5_execute import resolve_mt5_trade_symbol
@@ -243,6 +244,43 @@ def test_load_entry_take_profit_per_account_defaults_to_tp2() -> None:
         accs = load_mt5_accounts_from_path(p)
         assert accs[0].entry_take_profit == "tp1"
         assert accs[1].entry_take_profit == "tp2"
+
+
+def test_load_entry_slots_per_account_defaults_to_all_slots() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "accounts.json"
+        _write_accounts(
+            p,
+            [
+                {
+                    "id": "day_runner",
+                    "terminal_path": "C:/MT5/A/metatrader64.exe",
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                    "entry_slots": ["sang", "chieu"],
+                },
+                {
+                    "id": "all_day",
+                    "terminal_path": "C:/MT5/B/metatrader64.exe",
+                    "login": 2,
+                    "password": "y",
+                    "server": "S",
+                    "primary": False,
+                },
+            ],
+        )
+
+        accs = load_mt5_accounts_from_path(p)
+
+        assert accs[0].entry_slots == ("sang", "chieu")
+        assert accs[1].entry_slots is None
+        assert [a.id for a in filter_mt5_accounts_for_entry_slot(accs, "toi")] == ["all_day"]
+        assert [a.id for a in filter_mt5_accounts_for_entry_slot(accs, "sang")] == [
+            "day_runner",
+            "all_day",
+        ]
 
 
 def test_rejects_missing_terminal_path() -> None:
