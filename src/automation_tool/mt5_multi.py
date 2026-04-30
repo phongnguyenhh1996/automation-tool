@@ -26,6 +26,7 @@ from automation_tool.mt5_manage import (
     mt5_cancel_pending_or_close_position,
     mt5_chinh_trade_line_inplace,
     mt5_close_position_partial,
+    mt5_ticket_is_open_position,
 )
 from automation_tool.mt5_openai_parse import ParsedTrade
 
@@ -236,6 +237,30 @@ def mt5_partial_close_tp1_all_accounts(
     """Chốt một phần 50% trên từng account khi trade có TP2 và đã chạm TP1."""
     summary = MT5MultiManageSummary()
     by_id = {a.id: a for a in accounts}
+
+    prim = primary_account(accounts) if accounts else None
+    prim_ticket = int(ticket_by_account_id.get(prim.id, 0) or 0) if prim is not None else 0
+    if prim is not None and prim_ticket > 0:
+        is_pos, pos_msg = mt5_ticket_is_open_position(
+            prim_ticket,
+            dry_run=dry_run,
+            terminal_path=prim.terminal_path,
+            login=prim.login,
+            password=prim.password,
+            server=prim.server,
+        )
+        if not is_pos:
+            summary.results.append(
+                (
+                    prim.id,
+                    MT5ManageResult(
+                        ok=True,
+                        message=f"Bỏ qua chốt 50% (primary chưa có position): {pos_msg}",
+                        kind="none",
+                    ),
+                )
+            )
+            return summary
 
     items: list[tuple[str, int, MT5AccountEntry, Optional[float]]] = []
     for acc_id, ticket in ticket_by_account_id.items():

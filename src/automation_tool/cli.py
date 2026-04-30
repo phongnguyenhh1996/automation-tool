@@ -299,7 +299,7 @@ def _parser() -> argparse.ArgumentParser:
         "test-cloudinary-json",
         help=(
             "Preview OpenAI Responses input cho các file *.json trong charts-dir "
-            "(JSON upload Cloudinary raw -> input_file.file_url)."
+            "(Coinmap JSON = base64 input_file.file_data; JSON khác = input_text)."
         ),
     )
     tcj.add_argument(
@@ -1720,8 +1720,8 @@ def cmd_test_cloudinary_json(args: argparse.Namespace) -> None:
     mx = _default_max_coinmap_json_chars()
     preview_prompt = (
         "[test-cloudinary-json] Preview: chỉ các file *.json trong thư mục (thứ tự sort), "
-        "không gồm ảnh. JSON sẽ upload lên Cloudinary raw và đính kèm dạng "
-        "`input_file.file_url`.\n"
+        "không gồm ảnh. Coinmap JSON sẽ đính kèm dạng `input_file.file_data` base64; "
+        "JSON khác sẽ nằm trong `input_text`.\n"
     )
     payloads = [("json", p) for p in paths]
     content = _build_mixed_chart_user_content(

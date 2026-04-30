@@ -1,7 +1,9 @@
-"""Tests for chart JSON → Cloudinary raw + OpenAI Responses ``input_file`` ``file_url``."""
+"""Tests for chart JSON → OpenAI Responses (base64 file_data vs inline text)."""
 
 from __future__ import annotations
 
+import base64
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -9,32 +11,32 @@ from automation_tool.state_files import MORNING_FULL_ANALYSIS_FILENAME
 
 from automation_tool.openai_prompt_flow import (
     _build_mixed_chart_user_content,
-    _json_paths_to_headers_and_urls,
+    _prepare_json_headers_bodies,
     run_analysis_responses_flow,
 )
 from automation_tool.cloudinary_json import purge_json_attachment_folder
 
 
-def test_build_mixed_content_json_uses_input_file_url(tmp_path: Path) -> None:
+def _decode_file_data_url(data_url: str) -> str:
+    assert data_url.startswith("data:application/json;base64,")
+    b64 = data_url.split(",", 1)[1]
+    return base64.b64decode(b64).decode()
+
+
+def test_build_mixed_tradingview_json_inline_text(tmp_path: Path) -> None:
     j = tmp_path / "stamp_tradingview_XAUUSD_1h.json"
     j.write_text('{"ohlc":[]}', encoding="utf-8")
-    url = "https://res.cloudinary.com/demo/raw/upload/v1/f/x.json"
 
-    with patch(
-        "automation_tool.openai_prompt_flow.upload_json_bytes_for_responses",
-        return_value=url,
-    ) as up:
-        parts = _build_mixed_chart_user_content(
-            "prompt text",
-            [("json", j)],
-            max_json_chars=100_000,
-        )
-    up.assert_called_once()
+    parts = _build_mixed_chart_user_content(
+        "prompt text",
+        [("json", j)],
+        max_json_chars=100_000,
+    )
     assert parts[0] == {"type": "input_text", "text": "prompt text"}
     assert parts[1]["type"] == "input_text"
     assert "TradingView" in parts[1]["text"]
     assert j.name in parts[1]["text"]
-    assert parts[2] == {"type": "input_file", "file_url": url}
+    assert parts[2] == {"type": "input_text", "text": '{"ohlc":[]}'}
 
 
 def test_three_json_morning_m15_m5_order(tmp_path: Path) -> None:
@@ -45,71 +47,55 @@ def test_three_json_morning_m15_m5_order(tmp_path: Path) -> None:
     j15.write_text('{"m15":1}', encoding="utf-8")
     j5.write_text('{"m5":1}', encoding="utf-8")
 
-    with patch(
-        "automation_tool.openai_prompt_flow.upload_json_bytes_for_responses",
-        side_effect=[
-            "https://example.com/morning.json",
-            "https://example.com/15.json",
-            "https://example.com/5.json",
-        ],
-    ) as up:
-        parts = _build_mixed_chart_user_content(
-            "p",
-            [("json", morning), ("json", j15), ("json", j5)],
-            max_json_chars=100_000,
-        )
-    assert up.call_count == 3
+    parts = _build_mixed_chart_user_content(
+        "p",
+        [("json", morning), ("json", j15), ("json", j5)],
+        max_json_chars=100_000,
+    )
     assert parts[0] == {"type": "input_text", "text": "p"}
     assert parts[1]["type"] == "input_text" and "FULL_ANALYSIS snapshot" in parts[1]["text"]
     assert parts[1]["text"] and morning.name in parts[1]["text"]
-    assert parts[2] == {"type": "input_file", "file_url": "https://example.com/morning.json"}
+    assert parts[2] == {"type": "input_text", "text": '{"prices":[]}'}
     assert "Coinmap" in parts[3]["text"] and j15.name in parts[3]["text"]
-    assert parts[4] == {"type": "input_file", "file_url": "https://example.com/15.json"}
+    assert parts[4]["type"] == "input_file"
+    assert parts[4]["filename"] == j15.name
+    assert json.loads(_decode_file_data_url(parts[4]["file_data"])) == {"m15": 1}
     assert "Coinmap" in parts[5]["text"]
-    assert parts[6] == {"type": "input_file", "file_url": "https://example.com/5.json"}
+    assert parts[6]["type"] == "input_file"
+    assert json.loads(_decode_file_data_url(parts[6]["file_data"])) == {"m5": 1}
 
 
-def test_two_json_files_upload_order_and_count(tmp_path: Path) -> None:
+def test_two_json_tv_inline_coinmap_raw_base64(tmp_path: Path) -> None:
     j1 = tmp_path / "a_tradingview_a.json"
     j2 = tmp_path / "b_coinmap_x.json"
     j1.write_text('{"a":1}', encoding="utf-8")
     j2.write_text('{"b":2}', encoding="utf-8")
 
-    with patch(
-        "automation_tool.openai_prompt_flow.upload_json_bytes_for_responses",
-        side_effect=[
-            "https://example.com/1.json",
-            "https://example.com/2.json",
-        ],
-    ) as up:
-        parts = _build_mixed_chart_user_content(
-            "p",
-            [("json", j1), ("json", j2)],
-            max_json_chars=100_000,
-        )
-    assert up.call_count == 2
+    parts = _build_mixed_chart_user_content(
+        "p",
+        [("json", j1), ("json", j2)],
+        max_json_chars=100_000,
+    )
     assert parts[0] == {"type": "input_text", "text": "p"}
     assert parts[1]["type"] == "input_text" and "TradingView" in parts[1]["text"]
-    assert parts[2] == {"type": "input_file", "file_url": "https://example.com/1.json"}
+    assert parts[2] == {"type": "input_text", "text": '{"a":1}'}
     assert parts[3]["type"] == "input_text" and "Coinmap" in parts[3]["text"]
-    assert parts[4] == {"type": "input_file", "file_url": "https://example.com/2.json"}
+    assert parts[4]["type"] == "input_file"
+    assert json.loads(_decode_file_data_url(parts[4]["file_data"])) == {"b": 2}
 
 
-def test_json_paths_to_headers_single_path_no_nested_executor(tmp_path: Path) -> None:
+def test_prepare_json_headers_single_path(tmp_path: Path) -> None:
     j = tmp_path / "c_coinmap_footprint.json"
     j.write_text("{}", encoding="utf-8")
 
-    with patch(
-        "automation_tool.openai_prompt_flow.upload_json_bytes_for_responses",
-        return_value="https://example.com/solo.json",
-    ) as up:
-        out = _json_paths_to_headers_and_urls([j], max_json_chars=10_000)
+    out = _prepare_json_headers_bodies([j], max_json_chars=10_000)
     assert len(out) == 1
-    assert out[0][1] == "https://example.com/solo.json"
-    up.assert_called_once()
+    h, body = out[0]
+    assert "Coinmap" in h
+    assert body == "{}"
 
 
-def test_run_analysis_purges_cloudinary_before_json_upload(tmp_path: Path) -> None:
+def test_run_analysis_merged_json_inline_no_cloudinary_purge(tmp_path: Path) -> None:
     j = tmp_path / "stamp_coinmap_XAUUSD_merged.json"
     j.write_text('{"frames":{}}', encoding="utf-8")
     client = MagicMock()
@@ -119,11 +105,8 @@ def test_run_analysis_purges_cloudinary_before_json_upload(tmp_path: Path) -> No
         "automation_tool.openai_prompt_flow.OpenAI",
         return_value=client,
     ), patch(
-        "automation_tool.openai_prompt_flow.purge_json_attachment_folder",
-    ) as purge, patch(
-        "automation_tool.openai_prompt_flow.upload_json_bytes_for_responses",
-        return_value="https://example.com/merged.json",
-    ) as up:
+        "automation_tool.cloudinary_json.purge_json_attachment_folder",
+    ) as purge:
         run_analysis_responses_flow(
             api_key="sk-test",
             prompt_id="prompt",
@@ -138,12 +121,10 @@ def test_run_analysis_purges_cloudinary_before_json_upload(tmp_path: Path) -> No
             purge_json_attachment_storage=True,
         )
 
-    purge.assert_called_once()
-    up.assert_called_once()
-    assert client.responses.create.call_args.kwargs["input"][0]["content"][2] == {
-        "type": "input_file",
-        "file_url": "https://example.com/merged.json",
-    }
+    purge.assert_not_called()
+    content = client.responses.create.call_args.kwargs["input"][0]["content"]
+    assert content[2]["type"] == "input_text"
+    assert '"frames"' in content[2]["text"] or "{}" in content[2]["text"]
 
 
 def test_purge_json_folder_calls_cloudinary_api() -> None:

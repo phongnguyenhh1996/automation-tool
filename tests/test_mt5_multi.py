@@ -259,6 +259,10 @@ def test_partial_close_tp1_all_accounts_uses_account_lot_rules(
         return MT5ManageResult(ok=True, message=f"partial {ticket}", kind="position")
 
     monkeypatch.setattr("automation_tool.mt5_multi.mt5_close_position_partial", fake_partial)
+    monkeypatch.setattr(
+        "automation_tool.mt5_multi.mt5_ticket_is_open_position",
+        lambda ticket, **kwargs: (True, f"ticket={ticket} position mở"),
+    )
 
     summary = mt5_partial_close_tp1_all_accounts(
         {"acc_a": 101, "acc_b": 202},
@@ -307,6 +311,10 @@ def test_partial_close_tp1_all_accounts_accepts_missing_tp1_entry_position(
         return MT5ManageResult(ok=True, message=f"partial {ticket}", kind="position")
 
     monkeypatch.setattr("automation_tool.mt5_multi.mt5_close_position_partial", fake_partial)
+    monkeypatch.setattr(
+        "automation_tool.mt5_multi.mt5_ticket_is_open_position",
+        lambda ticket, **kwargs: (True, f"ticket={ticket} position mở"),
+    )
 
     summary = mt5_partial_close_tp1_all_accounts(
         {"acc_tp2": 101, "acc_tp1": 202},
@@ -318,3 +326,44 @@ def test_partial_close_tp1_all_accounts_accepts_missing_tp1_entry_position(
     assert summary.ok_all
     assert [r.ok for _, r in summary.results] == [True, True]
     assert "đã đóng tại TP1" in summary.results[1][1].message
+
+
+def test_partial_close_tp1_skips_when_ticket_not_yet_position(
+    sample_trade, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Chỉ gọi chốt một phần khi ticket đã là position (đã khớp)."""
+    accounts = [
+        MT5AccountEntry(
+            id="acc_a",
+            terminal_path="/tmp/mt5-acc-a/terminal64.exe",
+            login=1,
+            password="p",
+            server="srv",
+            primary=True,
+            lot=LotRuleFromTrade(),
+        ),
+    ]
+    calls: list[int] = []
+
+    def fake_partial(ticket, **kwargs):
+        calls.append(int(ticket))
+        return MT5ManageResult(ok=True, message="partial", kind="position")
+
+    monkeypatch.setattr("automation_tool.mt5_multi.mt5_close_position_partial", fake_partial)
+    monkeypatch.setattr(
+        "automation_tool.mt5_multi.mt5_ticket_is_open_position",
+        lambda ticket, **kwargs: (
+            False,
+            "ticket=101 vẫn pending (chưa position)",
+        ),
+    )
+
+    summary = mt5_partial_close_tp1_all_accounts(
+        {"acc_a": 101},
+        accounts,
+        sample_trade,
+        dry_run=False,
+    )
+    assert summary.ok_all
+    assert calls == []
+    assert "primary chưa có position" in summary.results[0][1].message

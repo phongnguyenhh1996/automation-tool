@@ -1226,6 +1226,7 @@ def _tp1_followup_job(
             if exe:
                 accs_pc = load_mt5_accounts_for_cli(params.mt5_accounts_json)
                 tmap_pc = z0.mt5_tickets_by_account or {}
+                skipped_partial_no_position = False
                 if accs_pc and tmap_pc:
                     summ_pc = mt5_partial_close_tp1_all_accounts(
                         tmap_pc,
@@ -1238,23 +1239,45 @@ def _tp1_followup_job(
                     ok_partial = summ_pc.ok_all
                 else:
                     prim_pc = primary_account(accs_pc) if accs_pc else None
-                    r_pc = mt5_close_position_partial(
-                        tk_check,
-                        fraction=0.5,
-                        expected_initial_volume=float(getattr(parsed, "lot", 0.0) or 0.0),
-                        dry_run=dry,
-                        terminal_path=prim_pc.terminal_path if prim_pc else None,
-                        login=prim_pc.login if prim_pc else None,
-                        password=prim_pc.password if prim_pc else None,
-                        server=prim_pc.server if prim_pc else None,
-                    )
-                    partial_msg = r_pc.message
-                    ok_partial = r_pc.ok
+                    if tk_check > 0 and prim_pc is not None:
+                        is_pos, pos_msg = mt5_ticket_is_open_position(
+                            tk_check,
+                            dry_run=dry,
+                            terminal_path=prim_pc.terminal_path,
+                            login=prim_pc.login,
+                            password=prim_pc.password,
+                            server=prim_pc.server,
+                        )
+                        if not is_pos:
+                            skipped_partial_no_position = True
+                            partial_msg = pos_msg
+                            ok_partial = True
+                            _send_log(
+                                settings,
+                                f"[tp1] bỏ qua partial close 50% vì chưa có position | {pos_msg}",
+                            )
+                    if not skipped_partial_no_position:
+                        r_pc = mt5_close_position_partial(
+                            tk_check,
+                            fraction=0.5,
+                            expected_initial_volume=float(getattr(parsed, "lot", 0.0) or 0.0),
+                            dry_run=dry,
+                            terminal_path=prim_pc.terminal_path if prim_pc else None,
+                            login=prim_pc.login if prim_pc else None,
+                            password=prim_pc.password if prim_pc else None,
+                            server=prim_pc.server if prim_pc else None,
+                        )
+                        partial_msg = r_pc.message
+                        ok_partial = r_pc.ok
                 _send_log(
                     settings,
                     f"[tp1] partial close 50% trước OpenAI | ok={ok_partial} | {partial_msg}".strip(),
                 )
-                if not params.no_telegram and settings.telegram_bot_token:
+                if (
+                    not params.no_telegram
+                    and settings.telegram_bot_token
+                    and not skipped_partial_no_position
+                ):
                     send_mt5_execution_log_to_ngan_gon_chat(
                         bot_token=settings.telegram_bot_token,
                         telegram_chat_id=settings.telegram_chat_id,

@@ -25,6 +25,7 @@ from automation_tool.mt5_manage import (
     mt5_cancel_pending_or_close_position,
     mt5_chinh_trade_line_inplace,
     mt5_close_position_partial,
+    mt5_ticket_is_open_position,
     mt5_ticket_still_open,
 )
 from automation_tool.mt5_multi import (
@@ -198,6 +199,23 @@ def _partial_close_tp1_runner_before_openai(
         ok = summ.ok_all
     else:
         prim = primary_account(accounts) if accounts else None
+        if int(ticket) > 0 and prim is not None:
+            is_pos, pos_msg = mt5_ticket_is_open_position(
+                int(ticket),
+                dry_run=dry,
+                terminal_path=prim.terminal_path,
+                login=prim.login,
+                password=prim.password,
+                server=prim.server,
+            )
+            if not is_pos:
+                _log_tp1.info(
+                    "tp1 partial-close: bỏ qua vì chưa có position | label=%s ticket=%s | %s",
+                    label,
+                    ticket,
+                    pos_msg,
+                )
+                return True
         r = mt5_close_position_partial(
             int(ticket),
             fraction=0.5,
