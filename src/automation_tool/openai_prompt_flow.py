@@ -545,21 +545,23 @@ JOURNAL_INTRADAY_RETRY_USER_TEMPLATE = (
 # Sau khi giá last realtime chạm TP1 (vùng đang ``cho_tp1``).
 TP1_POST_TOUCH_USER_TEMPLATE = (
     "[TRADE_MANAGEMENT]\n"
-    "Giá đã chạm mức TP1 của lệnh đang theo dõi; đánh giá Footprint M5 đính kèm (giữ hay thoát / chỉnh dòng lệnh).\n"
+    "Đánh giá Footprint M5 đính kèm (giữ hay thoát / chỉnh SL/TP).\n"
     "Vùng (label): {plan_label}\n"
-    "Mức TP1 từ trade_line: {tp1_price}\n\n"
-    "trade_line đã vào MT5: {trade_line_snip}\n\n"
+    "{entry_side} entry: {entry_price}\n"
+    "SL hiện tại: {current_sl}\n"
+    "TP hiện tại: {current_tp}\n\n"
 )
 
 # Daemon zones: giá đạt +1R (lợi nhuận bằng khoảng |Entry−SL|) khi đang ``cho_tp1`` (sau arm TP1).
 R1_POST_TOUCH_USER_TEMPLATE = (
     "[TRADE_MANAGEMENT]\n"
     "Giá đã đạt mức 1R; "
-    "đánh giá Footprint M5 đính kèm (giữ hay thoát / chỉnh dòng lệnh).\n"
+    "đánh giá Footprint M5 đính kèm (giữ hay thoát / chỉnh SL/TP).\n"
     "Vùng (label): {plan_label}\n"
     "Entry tham chiếu: {entry_ref}\n"
     "Mức 1R (hướng có lợi): {r1_price}\n"
-    "trade_line đã vào MT5: {trade_line_snip}\n\n"
+    "SL hiện tại: {current_sl}\n"
+    "TP hiện tại: {current_tp}\n\n"
 )
 
 

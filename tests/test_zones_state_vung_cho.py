@@ -133,3 +133,24 @@ def test_remove_zones_state_file(tmp_path: Path) -> None:
     p.write_text("{}", encoding="utf-8")
     assert remove_zones_state_file(p) is True
     assert remove_zones_state_file(p) is False
+
+
+def test_parse_zone_reads_has_position_flag() -> None:
+    z = _parse_zone(
+        {
+            "id": "plan_chinh_sang",
+            "label": "plan_chinh",
+            "vung_cho": "100–101",
+            "side": "BUY",
+            "status": "cho_tp1",
+            "has_position": True,
+            "managed_sl": 99.5,
+            "managed_tp": 103.0,
+            "last_r_followup_level": 2,
+        }
+    )
+    assert z is not None
+    assert z.has_position is True
+    assert z.managed_sl == 99.5
+    assert z.managed_tp == 103.0
+    assert z.last_r_followup_level == 2

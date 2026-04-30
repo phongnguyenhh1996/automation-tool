@@ -475,6 +475,47 @@ def mt5_ticket_is_open_position(
     return False, f"ticket={ticket} không còn position/pending"
 
 
+def mt5_ticket_current_sltp(
+    ticket: int,
+    *,
+    dry_run: bool = False,
+    terminal_path: Optional[str] = None,
+    login: Optional[int] = None,
+    password: Optional[str] = None,
+    server: Optional[str] = None,
+) -> tuple[Optional[float], Optional[float], str]:
+    """
+    Đọc SL/TP hiện tại theo ``ticket`` từ MT5.
+
+    Ưu tiên position; nếu chưa có position thì thử pending order.
+    """
+    if dry_run:
+        return None, None, "[DRY-RUN] bỏ qua đọc SL/TP"
+    if ticket <= 0:
+        return None, None, f"ticket không hợp lệ: {ticket}"
+    mt5 = _mt5_init(
+        terminal_path=terminal_path,
+        login=login,
+        password=password,
+        server=server,
+    )
+    if mt5 is None:
+        return None, None, "mt5.initialize thất bại"
+    for p in mt5.positions_get() or []:
+        if int(getattr(p, "ticket", 0)) != int(ticket):
+            continue
+        sl = float(getattr(p, "sl", 0.0) or 0.0)
+        tp = float(getattr(p, "tp", 0.0) or 0.0)
+        return sl, tp, f"ticket={ticket} position SL/TP"
+    for o in mt5.orders_get() or []:
+        if int(getattr(o, "ticket", 0)) != int(ticket):
+            continue
+        sl = float(getattr(o, "sl", 0.0) or 0.0)
+        tp = float(getattr(o, "tp", 0.0) or 0.0)
+        return sl, tp, f"ticket={ticket} pending SL/TP"
+    return None, None, f"ticket={ticket} không còn position/pending"
+
+
 def mt5_ticket_status_for_cutoff(
     ticket: int,
     *,

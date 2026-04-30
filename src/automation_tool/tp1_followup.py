@@ -6,7 +6,7 @@ import json
 import logging
 import re
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, Optional
 
@@ -25,6 +25,7 @@ from automation_tool.mt5_manage import (
     mt5_cancel_pending_or_close_position,
     mt5_chinh_trade_line_inplace,
     mt5_close_position_partial,
+    mt5_ticket_current_sltp,
     mt5_ticket_is_open_position,
     mt5_ticket_still_open,
 )
@@ -70,7 +71,8 @@ _EPS = 0.01
 @dataclass
 class TP1FollowupDecision:
     sau_tp1: Literal["loại", "chinh_trade_line", "giu_nguyen"]
-    trade_line_moi: str
+    new_sl: Optional[float]
+    new_tp: Optional[float]
     reason: str
     out_chi_tiet: str
     output_ngan_gon: str
@@ -148,17 +150,40 @@ def parse_tp1_followup_decision(text: str) -> Optional[TP1FollowupDecision]:
         sau = "giu_nguyen"
     else:
         return None
-    tlm = str(raw.get("trade_line_moi") or "").strip()
+    def _num_or_none(v: Any) -> Optional[float]:
+        try:
+            if v is None:
+                return None
+            s = str(v).strip()
+            if not s:
+                return None
+            return float(s)
+        except (TypeError, ValueError):
+            return None
+
+    new_sl = _num_or_none(raw.get("new_SL"))
+    if new_sl is None:
+        new_sl = _num_or_none(raw.get("new_sl"))
+    new_tp = _num_or_none(raw.get("new_TP"))
+    if new_tp is None:
+        new_tp = _num_or_none(raw.get("new_tp"))
     reason = str(raw.get("reason") or "").strip()
     oct = str(raw.get("out_chi_tiet") or "").strip()
     ogn = str(raw.get("output_ngan_gon") or "").strip()
     return TP1FollowupDecision(
         sau_tp1=sau,
-        trade_line_moi=tlm,
+        new_sl=new_sl,
+        new_tp=new_tp,
         reason=reason,
         out_chi_tiet=oct,
         output_ngan_gon=ogn,
     )
+
+
+def _fmt_level_for_prompt(v: Optional[float]) -> str:
+    if v is None:
+        return "(không có)"
+    return f"{v:g}"
 
 
 def _partial_close_tp1_runner_before_openai(
@@ -219,7 +244,7 @@ def _partial_close_tp1_runner_before_openai(
         r = mt5_close_position_partial(
             int(ticket),
             fraction=0.5,
-            expected_initial_volume=float(parsed.lot),
+            # Không truyền expected_initial_volume — luôn lấy volume thực từ position trên MT5.
             dry_run=dry,
             terminal_path=prim.terminal_path if prim else None,
             login=prim.login if prim else None,
@@ -338,14 +363,26 @@ def _run_tp1_openai_and_act(
     _log_tp1.info("tp1-followup Coinmap M5 JSON: %s", json_path)
     openai_merged = write_openai_coinmap_merged_from_raw_export(json_path)
 
-    tl0 = (trade_line or "").strip()
-    snip = (tl0[:200] + "…") if len(tl0) > 200 else tl0
+    current_sl: Optional[float] = None
+    current_tp: Optional[float] = None
+    if tk0 > 0 and accounts0:
+        prim_for_sltp = primary_account(accounts0)
+        current_sl, current_tp, sltp_msg = mt5_ticket_current_sltp(
+            tk0,
+            dry_run=dry,
+            terminal_path=prim_for_sltp.terminal_path,
+            login=prim_for_sltp.login,
+            password=prim_for_sltp.password,
+            server=prim_for_sltp.server,
+        )
+        _log_tp1.info("tp1-followup đọc SL/TP hiện tại | %s", sltp_msg)
+
     user_msg = TP1_POST_TOUCH_USER_TEMPLATE.format(
         plan_label=label,
-        trade_line=trade_line,
-        last_price=p_last,
-        tp1_price=parsed.tp1,
-        trade_line_snip=snip,
+        entry_side=str(getattr(parsed, "side", "") or "").upper(),
+        entry_price=_fmt_level_for_prompt(parsed.price),
+        current_sl=_fmt_level_for_prompt(current_sl),
+        current_tp=_fmt_level_for_prompt(current_tp),
     )
     out_text, new_id = run_single_followup_responses(
         api_key=settings.openai_api_key,
@@ -386,11 +423,12 @@ def _run_tp1_openai_and_act(
     pid = primary_account_id(accounts) if accounts else None
     tk = int(mt5_primary_ticket_for_label(st, label, pid) or 0) if st else 0
     _log_tp1.info(
-        "tp1-followup parse OK | sau_tp1=%s | mt5_execute=%s mt5_dry_run=%s | trade_line_moi_len=%d",
+        "tp1-followup parse OK | sau_tp1=%s | mt5_execute=%s mt5_dry_run=%s | new_SL=%s new_TP=%s",
         dec.sau_tp1,
         exe,
         dry,
-        len(dec.trade_line_moi or ""),
+        dec.new_sl,
+        dec.new_tp,
     )
     if settings.telegram_bot_token and not getattr(params, "no_telegram", False):
         send_trade_management_reason_notice(
@@ -400,7 +438,7 @@ def _run_tp1_openai_and_act(
             session_slot=None,
             action=dec.sau_tp1,
             reason=dec.reason,
-            trade_line=dec.trade_line_moi,
+            trade_line=None,
         )
 
     if dec.sau_tp1 == "loại":
@@ -447,22 +485,22 @@ def _run_tp1_openai_and_act(
         return new_id
 
     # chinh_trade_line
-    if not dec.trade_line_moi.strip():
-        _log.warning("tp1-followup: chinh_trade_line nhưng trade_line_moi rỗng.")
+    if dec.new_sl is None and dec.new_tp is None:
+        _log.warning("tp1-followup: chinh_trade_line nhưng thiếu cả new_SL/new_TP.")
         update_plan_tp1_followup_done(label, False, path=last_alert_path)
         return new_id
-    minimal = json.dumps(
-        {"intraday_hanh_dong": "VÀO LỆNH", "trade_line": dec.trade_line_moi.strip()},
-        ensure_ascii=False,
+
+    next_sl = float(dec.new_sl) if dec.new_sl is not None else float(parsed.sl)
+    if dec.new_tp is not None:
+        new_parsed = replace(parsed, sl=next_sl, tp1=float(dec.new_tp), tp2=None)
+    else:
+        new_parsed = replace(parsed, sl=next_sl)
+
+    _log_tp1.info(
+        "tp1-followup chinh_trade_line → áp dụng inplace new_SL=%s new_TP=%s",
+        dec.new_sl,
+        dec.new_tp,
     )
-    new_parsed, err = parse_openai_output_md(
-        minimal,
-        symbol_override=getattr(params, "mt5_symbol", None),
-    )
-    if err or new_parsed is None:
-        _log.warning("tp1-followup: parse trade_line_moi lỗi: %s", err)
-        update_plan_tp1_followup_done(label, False, path=last_alert_path)
-        return new_id
     sym_ov = getattr(params, "mt5_symbol", None)
     used_inplace = False
     if exe and tk > 0:
@@ -488,7 +526,7 @@ def _run_tp1_openai_and_act(
                         source="tp1-followup-chinh",
                         text=ch_txt,
                         zone_label=label,
-                        trade_line=dec.trade_line_moi.strip(),
+                        trade_line=st.trade_line_by_label.get(label) if st else trade_line,
                         previous_trade_line=(
                             (st.trade_line_by_label.get(label) or trade_line) if st else trade_line
                         ),
@@ -524,7 +562,7 @@ def _run_tp1_openai_and_act(
                         source="tp1-followup-chinh",
                         text=cr.message,
                         zone_label=label,
-                        trade_line=dec.trade_line_moi.strip(),
+                        trade_line=st.trade_line_by_label.get(label) if st else trade_line,
                         previous_trade_line=(
                             (st.trade_line_by_label.get(label) or trade_line) if st else trade_line
                         ),
@@ -548,7 +586,7 @@ def _run_tp1_openai_and_act(
         tmap_keep = st.mt5_tickets_by_label.get(label)
         update_plan_mt5_entry(
             label,
-            trade_line=dec.trade_line_moi.strip(),
+            trade_line=st.trade_line_by_label.get(label) or trade_line,
             mt5_ticket=tk,
             mt5_tickets_by_account=dict(tmap_keep) if tmap_keep else None,
             path=last_alert_path,

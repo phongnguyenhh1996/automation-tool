@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 from automation_tool.mt5_accounts import LotRuleFromTrade, MT5AccountEntry
 from automation_tool.mt5_execute import MT5ExecutionResult
 from automation_tool.mt5_manage import MT5ChinhTradeLineResult
+from automation_tool.mt5_openai_parse import ParsedTrade
 from automation_tool.state_files import (
     CHO_TP1,
     LastAlertState,
@@ -25,7 +26,8 @@ def test_parse_tp1_followup_decision_includes_reason() -> None:
         """```json
 {
   "hanh_dong_quan_ly_lenh": "giu_nguyen",
-  "trade_line_moi": "",
+  "new_SL": null,
+  "new_TP": null,
   "reason": "Giá giữ được VWAP và CVD chưa đảo chiều, nên tiếp tục giữ lệnh."
 }
 ```"""
@@ -34,6 +36,23 @@ def test_parse_tp1_followup_decision_includes_reason() -> None:
     assert dec is not None
     assert dec.sau_tp1 == "giu_nguyen"
     assert dec.reason == "Giá giữ được VWAP và CVD chưa đảo chiều, nên tiếp tục giữ lệnh."
+
+
+def test_parse_tp1_followup_decision_parses_new_sltp_numbers() -> None:
+    dec = parse_tp1_followup_decision(
+        """```json
+{
+  "hanh_dong_quan_ly_lenh": "chinh_trade_line",
+  "new_SL": "100.5",
+  "new_TP": 102,
+  "reason": "Dời SL/TP theo cụm thanh khoản mới."
+}
+```"""
+    )
+    assert dec is not None
+    assert dec.sau_tp1 == "chinh_trade_line"
+    assert dec.new_sl == 100.5
+    assert dec.new_tp == 102.0
 
 
 def test_partial_close_tp1_runner_requires_tp2(monkeypatch) -> None:
@@ -85,6 +104,10 @@ def test_chinh_trade_line_failure_does_not_create_new_order(monkeypatch, tmp_pat
     )
     monkeypatch.setattr("automation_tool.tp1_followup.load_mt5_accounts_for_cli", lambda _path: [account])
     monkeypatch.setattr("automation_tool.tp1_followup.mt5_ticket_still_open", lambda *a, **k: (True, "open"))
+    monkeypatch.setattr(
+        "automation_tool.tp1_followup.mt5_ticket_current_sltp",
+        lambda *a, **k: (99.0, 101.0, "ok"),
+    )
     monkeypatch.setattr("automation_tool.tp1_followup.capture_charts", lambda **k: [Path(k["charts_dir"]) / "x.json"])
     monkeypatch.setattr("automation_tool.tp1_followup.coinmap_xauusd_5m_json_path", lambda _charts_dir: tmp_path / "x.json")
     monkeypatch.setattr("automation_tool.tp1_followup.read_main_chart_symbol", lambda _charts_dir: "XAUUSD")
@@ -93,7 +116,7 @@ def test_chinh_trade_line_failure_does_not_create_new_order(monkeypatch, tmp_pat
     monkeypatch.setattr(
         "automation_tool.tp1_followup.run_single_followup_responses",
         lambda **k: (
-            '{"hanh_dong_quan_ly_lenh":"chinh_trade_line","trade_line_moi":"BUY LIMIT 100 | SL 100 | TP1 102 | Lot 0.01","reason":"Dời SL."}',
+            '{"hanh_dong_quan_ly_lenh":"chinh_trade_line","new_SL":100,"reason":"Dời SL."}',
             "new-response-id",
         ),
     )
@@ -163,7 +186,17 @@ def test_chinh_trade_line_failure_does_not_create_new_order(monkeypatch, tmp_pat
         label="plan_chinh",
         trade_line=old_trade_line,
         p_last=101.0,
-        parsed=MagicMock(side="BUY", tp1=101.0),
+        parsed=ParsedTrade(
+            symbol="XAUUSDm",
+            side="BUY",
+            kind="LIMIT",
+            price=100.0,
+            sl=99.0,
+            tp1=101.0,
+            tp2=None,
+            lot=0.01,
+            raw_line=old_trade_line,
+        ),
         page=MagicMock(),
         tv={},
         symbol="XAUUSD",
@@ -184,7 +217,6 @@ def test_chinh_trade_line_failure_does_not_create_new_order(monkeypatch, tmp_pat
 def test_chinh_trade_line_success_keeps_status_and_sends_manage_action(monkeypatch, tmp_path) -> None:
     last_alert_path = tmp_path / "last_alert_prices.json"
     old_trade_line = "BUY LIMIT 100 | SL 99 | TP1 101 | Lot 0.01"
-    new_trade_line = "BUY LIMIT 100 | SL 100 | TP1 102 | Lot 0.01"
     write_last_alert_state(
         LastAlertState(
             prices=(100.0, 200.0, 300.0),
@@ -207,6 +239,10 @@ def test_chinh_trade_line_success_keeps_status_and_sends_manage_action(monkeypat
     )
     monkeypatch.setattr("automation_tool.tp1_followup.load_mt5_accounts_for_cli", lambda _path: [account])
     monkeypatch.setattr("automation_tool.tp1_followup.mt5_ticket_still_open", lambda *a, **k: (True, "open"))
+    monkeypatch.setattr(
+        "automation_tool.tp1_followup.mt5_ticket_current_sltp",
+        lambda *a, **k: (99.0, 101.0, "ok"),
+    )
     monkeypatch.setattr("automation_tool.tp1_followup.capture_charts", lambda **k: [Path(k["charts_dir"]) / "x.json"])
     monkeypatch.setattr("automation_tool.tp1_followup.coinmap_xauusd_5m_json_path", lambda _charts_dir: tmp_path / "x.json")
     monkeypatch.setattr("automation_tool.tp1_followup.read_main_chart_symbol", lambda _charts_dir: "XAUUSD")
@@ -215,7 +251,7 @@ def test_chinh_trade_line_success_keeps_status_and_sends_manage_action(monkeypat
     monkeypatch.setattr(
         "automation_tool.tp1_followup.run_single_followup_responses",
         lambda **k: (
-            f'{{"hanh_dong_quan_ly_lenh":"chinh_trade_line","trade_line_moi":"{new_trade_line}","reason":"Dời SL."}}',
+            '{"hanh_dong_quan_ly_lenh":"chinh_trade_line","new_SL":100,"new_TP":102,"reason":"Dời SL."}',
             "new-response-id",
         ),
     )
@@ -267,7 +303,17 @@ def test_chinh_trade_line_success_keeps_status_and_sends_manage_action(monkeypat
         label="plan_chinh",
         trade_line=old_trade_line,
         p_last=101.0,
-        parsed=MagicMock(side="BUY", tp1=101.0),
+        parsed=ParsedTrade(
+            symbol="XAUUSDm",
+            side="BUY",
+            kind="LIMIT",
+            price=100.0,
+            sl=99.0,
+            tp1=101.0,
+            tp2=None,
+            lot=0.01,
+            raw_line=old_trade_line,
+        ),
         page=MagicMock(),
         tv={},
         symbol="XAUUSD",
@@ -281,7 +327,7 @@ def test_chinh_trade_line_success_keeps_status_and_sends_manage_action(monkeypat
     assert st is not None
     assert st.status_by_label["plan_chinh"] == CHO_TP1
     assert st.mt5_ticket_by_label["plan_chinh"] == 111
-    assert st.trade_line_by_label["plan_chinh"] == new_trade_line
+    assert st.trade_line_by_label["plan_chinh"] == old_trade_line
 
 
 def test_trade_management_does_not_send_raw_json_to_telegram(monkeypatch, tmp_path) -> None:
@@ -308,6 +354,10 @@ def test_trade_management_does_not_send_raw_json_to_telegram(monkeypatch, tmp_pa
     )
     monkeypatch.setattr("automation_tool.tp1_followup.load_mt5_accounts_for_cli", lambda _path: [account])
     monkeypatch.setattr("automation_tool.tp1_followup.mt5_ticket_still_open", lambda *a, **k: (True, "open"))
+    monkeypatch.setattr(
+        "automation_tool.tp1_followup.mt5_ticket_current_sltp",
+        lambda *a, **k: (99.0, 101.0, "ok"),
+    )
     monkeypatch.setattr("automation_tool.tp1_followup.capture_charts", lambda **k: [Path(k["charts_dir"]) / "x.json"])
     monkeypatch.setattr("automation_tool.tp1_followup.coinmap_xauusd_5m_json_path", lambda _charts_dir: tmp_path / "x.json")
     monkeypatch.setattr("automation_tool.tp1_followup.read_main_chart_symbol", lambda _charts_dir: "XAUUSD")
@@ -316,7 +366,7 @@ def test_trade_management_does_not_send_raw_json_to_telegram(monkeypatch, tmp_pa
     monkeypatch.setattr(
         "automation_tool.tp1_followup.run_single_followup_responses",
         lambda **k: (
-            '{"hanh_dong_quan_ly_lenh":"giu_nguyen","trade_line_moi":"","reason":"Giữ nguyên."}',
+            '{"hanh_dong_quan_ly_lenh":"giu_nguyen","new_SL":null,"new_TP":null,"reason":"Giữ nguyên."}',
             "new-response-id",
         ),
     )
@@ -366,7 +416,17 @@ def test_trade_management_does_not_send_raw_json_to_telegram(monkeypatch, tmp_pa
         label="plan_chinh",
         trade_line=old_trade_line,
         p_last=101.0,
-        parsed=MagicMock(side="BUY", tp1=101.0),
+        parsed=ParsedTrade(
+            symbol="XAUUSDm",
+            side="BUY",
+            kind="LIMIT",
+            price=100.0,
+            sl=99.0,
+            tp1=101.0,
+            tp2=None,
+            lot=0.01,
+            raw_line=old_trade_line,
+        ),
         page=MagicMock(),
         tv={},
         symbol="XAUUSD",
@@ -377,3 +437,99 @@ def test_trade_management_does_not_send_raw_json_to_telegram(monkeypatch, tmp_pa
 
     assert raw_sends == []
     assert reason_sends == ["Giữ nguyên."]
+
+
+def test_tp1_followup_prompt_includes_current_sltp(monkeypatch, tmp_path) -> None:
+    last_alert_path = tmp_path / "last_alert_prices.json"
+    old_trade_line = "BUY LIMIT 100 | SL 99 | TP1 101 | Lot 0.01"
+    write_last_alert_state(
+        LastAlertState(
+            prices=(100.0, 200.0, 300.0),
+            status_by_label={"plan_chinh": CHO_TP1, "plan_phu": "loai", "scalp": "loai"},
+            trade_line_by_label={"plan_chinh": old_trade_line},
+            mt5_ticket_by_label={"plan_chinh": 111},
+            mt5_tickets_by_label={"plan_chinh": {"main": 111}},
+        ),
+        path=last_alert_path,
+    )
+    account = MT5AccountEntry(
+        id="main",
+        terminal_path="/tmp/metatrader64.exe",
+        login=1,
+        password="x",
+        server="demo",
+        primary=True,
+        lot=LotRuleFromTrade(),
+    )
+    monkeypatch.setattr("automation_tool.tp1_followup.load_mt5_accounts_for_cli", lambda _path: [account])
+    monkeypatch.setattr("automation_tool.tp1_followup.mt5_ticket_still_open", lambda *a, **k: (True, "open"))
+    monkeypatch.setattr(
+        "automation_tool.tp1_followup.mt5_ticket_current_sltp",
+        lambda *a, **k: (99.25, 101.75, "ok"),
+    )
+    monkeypatch.setattr("automation_tool.tp1_followup.capture_charts", lambda **k: [Path(k["charts_dir"]) / "x.json"])
+    monkeypatch.setattr("automation_tool.tp1_followup.coinmap_xauusd_5m_json_path", lambda _charts_dir: tmp_path / "x.json")
+    monkeypatch.setattr("automation_tool.tp1_followup.read_main_chart_symbol", lambda _charts_dir: "XAUUSD")
+    monkeypatch.setattr("automation_tool.tp1_followup.write_openai_coinmap_merged_from_raw_export", lambda p: p)
+    (tmp_path / "x.json").write_text("{}", encoding="utf-8")
+    captured_user_text: list[str] = []
+
+    def fake_followup(**kwargs):
+        captured_user_text.append(kwargs["user_text"])
+        return ('{"hanh_dong_quan_ly_lenh":"giu_nguyen","reason":"Giữ nguyên."}', "new-response-id")
+
+    monkeypatch.setattr("automation_tool.tp1_followup.run_single_followup_responses", fake_followup)
+    settings = MagicMock()
+    settings.coinmap_email = ""
+    settings.coinmap_password = ""
+    settings.tradingview_password = ""
+    settings.telegram_bot_token = ""
+    settings.telegram_parse_mode = None
+    settings.openai_api_key = "key"
+    settings.openai_prompt_id = "prompt"
+    settings.openai_prompt_version = None
+    settings.openai_vector_store_ids = []
+    settings.openai_responses_store = True
+    settings.openai_responses_include = None
+    params = SimpleNamespace(
+        capture_coinmap_yaml=tmp_path / "cap.yaml",
+        charts_dir=tmp_path,
+        storage_state_path=None,
+        headless=True,
+        no_save_storage=True,
+        mt5_accounts_json=None,
+        mt5_dry_run=False,
+        mt5_execute=True,
+        mt5_symbol="XAUUSD",
+        no_telegram=True,
+    )
+
+    _run_tp1_openai_and_act(
+        settings=settings,
+        params=params,
+        last_alert_path=last_alert_path,
+        label="plan_chinh",
+        trade_line=old_trade_line,
+        p_last=101.0,
+        parsed=ParsedTrade(
+            symbol="XAUUSDm",
+            side="BUY",
+            kind="LIMIT",
+            price=100.0,
+            sl=99.0,
+            tp1=101.0,
+            tp2=None,
+            lot=0.01,
+            raw_line=old_trade_line,
+        ),
+        page=MagicMock(),
+        tv={},
+        symbol="XAUUSD",
+        settle_ms=0,
+        browser_context=MagicMock(),
+        prev_response_id="old-response-id",
+    )
+
+    assert captured_user_text
+    assert "SL hiện tại: 99.25" in captured_user_text[0]
+    assert "TP hiện tại: 101.75" in captured_user_text[0]

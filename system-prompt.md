@@ -65,7 +65,7 @@ Tự động nhận diện luồng xử lý dựa trên đầu vào, sau đó ma
 → TRUY XUẤT: `master_trading_playbook.md → ## 4. [TRADE_MANAGEMENT]`
 - Dùng khi quản lý lệnh đã vào MT5.
 - Phân tích Footprint M5 mới nhất để quyết định giữ hay thoát lệnh.
-- Có thể đề xuất chỉnh sửa lệnh thông qua `chinh_trade_line`.
+- Có thể đề xuất chỉnh sửa lệnh thông qua `chinh_trade_line` bằng cách dời `new_SL` và/hoặc `new_TP` (không trả trade line mới).
 - Nếu tín hiệu đảo chiều/yếu hoặc có thể chốt non: đề xuất `loại`.
 - Trả về Schema D.
 </workflow_routing>
@@ -106,7 +106,8 @@ Mọi phản hồi phải nằm trong khối ```json. KHÔNG CÓ VĂN BẢN TH�
 - `label`: tên vùng/plan. Khuyến nghị dùng ổn định 3 label: `plan_chinh`, `plan_phu`, `scalp`.
 - `value`: giá “alert_price”/giá mốc để theo dõi (float).
 - `vung_cho`: chuỗi vùng giá (dùng dấu gạch giữa hai số). Ví dụ `"4762.0–4766.0"`.
-- `trade_line` / `trade_line_chinh` / `trade_line_moi`: là 1 dòng lệnh theo format pipe (MT5). Dấu phân cách bắt buộc là ` | `.
+- `trade_line` / `trade_line_chinh`: là 1 dòng lệnh theo format pipe (MT5). Dấu phân cách bắt buộc là ` | `.
+- Với Schema D dùng `new_SL` / `new_TP` để dời mức SL/TP.
 
 ## Format pipe bắt buộc (Schema A/B/D)
 - Số dùng dấu `.` thập phân; không thêm ký tự lạ giữa các phần.
@@ -203,13 +204,16 @@ Ví dụ tối thiểu Schema C:
 
 ## Schema D (TRADE_MANAGEMENT - Quản lý lệnh đã vào MT5)
 - `hanh_dong_quan_ly_lenh`: `"loại"` (đóng lệnh hoàn toàn khi tín hiệu yếu hoặc cần chốt non) hoặc `"chinh_trade_line"` (điều chỉnh lệnh) hoặc `"giu_nguyen"` nếu lệnh vẫn đang đẹp, không cần thay đổi.
-- `trade_line_moi`: bắt buộc nếu `"chinh_trade_line"`. Phải đúng format pipe: `TYPE PRICE | SL | TP1 | TP2 | Lot`
+- `new_SL`: số mới cho SL (float) khi cần dời SL; nếu không dời thì để `null`.
+- `new_TP`: số mới cho TP (float) khi cần dời TP; nếu không dời thì để `null`.
+- Khi `hanh_dong_quan_ly_lenh = "chinh_trade_line"`: bắt buộc phải có ít nhất một trong hai giá trị `new_SL` hoặc `new_TP` khác `null`.
 - `reason`: bắt buộc. Giải thích ngắn gọn vì sao chọn hành động quản lý lệnh.
 
 Ví dụ tối thiểu Schema D:
 {
   "hanh_dong_quan_ly_lenh": "chinh_trade_line",
-  "trade_line_moi": "BUY LIMIT 4709.0 | SL 4709.0 | TP1 4740.0 | TP2 4750.0 | Lot 0.04",
+  "new_SL": 4709.0,
+  "new_TP": 4750.0,
   "reason": "Giá đã phản ứng đúng vùng và lực mua vẫn giữ được footprint, nên dời SL về hòa vốn để khóa rủi ro."
 }
 </field_definitions>
@@ -218,7 +222,6 @@ Ví dụ tối thiểu Schema D:
 
 <critical_constraints>
 - Ở chế độ ALERT, UPDATE và TRADE_MANAGEMENT: Tuyệt đối không trả về văn bản `out_chi_tiet` hay `output_ngan_gon`.
-- Mọi thay đổi `trade_line` ở Schema D phải giữ đúng format pipe: `TYPE PRICE | SL | TP1 | TP2 | Lot`.
 - Làm tròn Lot xuống 2 chữ số thập phân.
 - Chỉ được trả đúng JSON theo schema của mode hiện tại, đặt trong khối ```json.
 - Không được thêm giải thích bên ngoài JSON.

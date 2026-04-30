@@ -26,6 +26,8 @@ from automation_tool.tv_watchlist_daemon import (
     _daemon_plan_response_id_path,
     _openai_followup_persist_new_id,
     _openai_followup_prev_response_id,
+    _entry_touched_for_position_check,
+    _should_check_managed_tp_done,
     _r1_followup_job,
     _should_write_intraday_alert_anchor,
     _tp1_followup_job,
@@ -354,6 +356,21 @@ def test_tp1_followup_scalp_calls_openai_instead_of_auto_cancel(monkeypatch, tmp
         "automation_tool.tv_watchlist_daemon.run_single_followup_responses",
         fake_run_single_followup_responses,
     )
+    acc = MagicMock(terminal_path="/tmp/mt5-primary/terminal64.exe", login=111001, password="p", server="srv")
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon.load_mt5_accounts_for_cli", lambda *_a, **_k: [acc])
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon.primary_account", lambda accs: accs[0])
+    monkeypatch.setattr(
+        "automation_tool.tv_watchlist_daemon.mt5_ticket_still_open",
+        lambda *_a, **_k: (True, "ticket=123 open"),
+    )
+    monkeypatch.setattr(
+        "automation_tool.tv_watchlist_daemon.mt5_ticket_is_open_position",
+        lambda *_a, **_k: (True, "ticket=123 is position"),
+    )
+    monkeypatch.setattr(
+        "automation_tool.tv_watchlist_daemon.mt5_ticket_current_sltp",
+        lambda *_a, **_k: (99.0, 101.0, "ok"),
+    )
 
     settings = MagicMock()
     params = WatchlistDaemonParams(
@@ -445,6 +462,7 @@ def test_r1_followup_skips_pending_ticket_before_capture(monkeypatch, tmp_path) 
         params=params,
         zone_id="z1",
         prev_status="cho_tp1",
+        reached_r_level=1,
     )
 
     st = read_zones_state_from_shard(shard)
@@ -488,10 +506,16 @@ def test_r1_followup_restores_cho_tp1_after_successful_inplace_change(monkeypatc
     charts_file = tmp_path / "x.json"
     charts_file.write_text("{}", encoding="utf-8")
 
-    monkeypatch.setattr("automation_tool.tv_watchlist_daemon.load_mt5_accounts_for_cli", lambda *_a, **_k: [])
+    acc = MagicMock(terminal_path="/tmp/mt5-primary/terminal64.exe", login=111001, password="p", server="srv")
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon.load_mt5_accounts_for_cli", lambda *_a, **_k: [acc])
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon.primary_account", lambda accs: accs[0])
     monkeypatch.setattr(
         "automation_tool.tv_watchlist_daemon.mt5_ticket_is_open_position",
         lambda *_a, **_k: (True, "ticket=123 is position"),
+    )
+    monkeypatch.setattr(
+        "automation_tool.tv_watchlist_daemon.mt5_ticket_current_sltp",
+        lambda *_a, **_k: (99.0, 103.0, "ok"),
     )
     monkeypatch.setattr("automation_tool.coinmap.capture_charts", lambda **_k: [charts_file])
     monkeypatch.setattr("automation_tool.images.coinmap_xauusd_5m_json_path", lambda _charts_dir: charts_file)
@@ -500,7 +524,7 @@ def test_r1_followup_restores_cho_tp1_after_successful_inplace_change(monkeypatc
     monkeypatch.setattr(
         "automation_tool.tv_watchlist_daemon.run_single_followup_responses",
         lambda **_k: (
-            '{"hanh_dong_quan_ly_lenh":"chinh_trade_line","trade_line_moi":"BUY LIMIT 100 | SL 100 | TP1 103 | Lot 0.01","reason":"Dời SL."}',
+            '{"hanh_dong_quan_ly_lenh":"chinh_trade_line","new_SL":100,"new_TP":103,"reason":"Dời SL."}',
             "resp-r1",
         ),
     )
@@ -516,14 +540,43 @@ def test_r1_followup_restores_cho_tp1_after_successful_inplace_change(monkeypatc
         params=params,
         zone_id="z1",
         prev_status="cho_tp1",
+        reached_r_level=2,
     )
 
     st = read_zones_state_from_shard(shard)
     assert st is not None
     assert st.zones[0].status == "cho_tp1"
-    assert st.zones[0].trade_line == "BUY LIMIT 100 | SL 100 | TP1 103 | Lot 0.01"
-    assert st.zones[0].r1_followup_done is True
+    assert st.zones[0].trade_line == "BUY LIMIT 100 | SL 99 | TP1 103 | Lot 0.01"
+    assert st.zones[0].r1_followup_done is False
     assert st.zones[0].tp1_followup_done is False
+    assert st.zones[0].managed_sl == 100.0
+    assert st.zones[0].managed_tp == 103.0
+    assert st.zones[0].last_r_followup_level == 2
+
+
+def test_entry_touch_check_uses_trade_entry_price() -> None:
+    parsed_buy = MagicMock(side="BUY", price=100.0)
+    parsed_sell = MagicMock(side="SELL", price=100.0)
+    assert _entry_touched_for_position_check(parsed_buy, 99.99) is True
+    assert _entry_touched_for_position_check(parsed_buy, 100.5) is False
+    assert _entry_touched_for_position_check(parsed_sell, 100.01) is True
+    assert _entry_touched_for_position_check(parsed_sell, 99.5) is False
+
+
+def test_should_check_managed_tp_done_requires_has_position() -> None:
+    parsed_buy = MagicMock(side="BUY")
+    z = Zone(
+        id="z-managed",
+        label="plan_chinh",
+        vung_cho="100–101",
+        side="BUY",
+        status="cho_tp1",
+        managed_tp=101.0,
+        has_position=False,
+    )
+    assert _should_check_managed_tp_done(z, parsed_buy, 101.0) is False
+    z.has_position = True
+    assert _should_check_managed_tp_done(z, parsed_buy, 101.0) is True
 
 
 def test_daemon_plan_sl_loai_includes_post_entry_statuses() -> None:
@@ -568,6 +621,34 @@ def test_maybe_loai_zone_if_sl_hit_applies_to_vao_lenh_cho_tp1(monkeypatch, tmp_
     )
     assert _maybe_loai_zone_if_last_hit_sl(z_tp, 98.9, settings=settings, params=params) is True
     assert z_tp.status == "loai"
+
+
+def test_maybe_loai_zone_if_sl_hit_prefers_managed_sl(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon._send_log", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "automation_tool.tv_watchlist_daemon._send_user_notice", lambda *a, **k: None
+    )
+    settings = MagicMock()
+    params = WatchlistDaemonParams(
+        coinmap_tv_yaml=tmp_path / "coinmap_tv.yaml",
+        capture_coinmap_yaml=tmp_path / "cap.yaml",
+        charts_dir=tmp_path / "charts",
+        storage_state_path=None,
+        headless=True,
+        no_save_storage=True,
+        mt5_symbol="XAUUSD",
+    )
+    z = Zone(
+        id="z-managed",
+        label="plan_chinh",
+        vung_cho="98–100",
+        side="BUY",
+        status="cho_tp1",
+        trade_line="BUY LIMIT 100 | SL 99 | TP1 101 | Lot 0.01",
+        managed_sl=100.5,
+    )
+    assert _maybe_loai_zone_if_last_hit_sl(z, 100.4, settings=settings, params=params) is True
+    assert z.status == "loai"
 
 
 def test_invalidate_same_side_sell_uses_hi_excludes_scalp_and_non_waiting_statuses() -> None:

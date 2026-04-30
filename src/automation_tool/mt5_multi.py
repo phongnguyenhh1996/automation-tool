@@ -262,7 +262,7 @@ def mt5_partial_close_tp1_all_accounts(
             )
             return summary
 
-    items: list[tuple[str, int, MT5AccountEntry, Optional[float]]] = []
+    items: list[tuple[str, int, MT5AccountEntry]] = []
     for acc_id, ticket in ticket_by_account_id.items():
         acc = by_id.get(acc_id)
         if acc is None:
@@ -280,21 +280,15 @@ def mt5_partial_close_tp1_all_accounts(
             continue
         if int(ticket) <= 0:
             continue
-        lot_ov, _hint = _lot_override_for_entry(
-            trade,
-            acc,
-            dry_run=dry_run,
-            symbol_override=symbol_override,
-        )
-        expected = float(lot_ov) if lot_ov is not None else float(trade.lot)
-        items.append((acc_id, int(ticket), acc, expected))
+        items.append((acc_id, int(ticket), acc))
 
-    def _run_one(item: tuple[str, int, MT5AccountEntry, Optional[float]]) -> tuple[str, MT5ManageResult]:
-        acc_id, ticket, acc, expected = item
+    def _run_one(item: tuple[str, int, MT5AccountEntry]) -> tuple[str, MT5ManageResult]:
+        acc_id, ticket, acc = item
+        # Không truyền expected_initial_volume — luôn lấy volume thực từ position trên MT5
+        # để tránh skip sai khi SL/trade_line thay đổi giữa lúc vào lệnh và lúc chạm TP1.
         r = mt5_close_position_partial(
             int(ticket),
             fraction=0.5,
-            expected_initial_volume=expected,
             dry_run=dry_run,
             terminal_path=acc.terminal_path,
             login=acc.login,

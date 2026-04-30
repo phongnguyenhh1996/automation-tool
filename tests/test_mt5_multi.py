@@ -223,9 +223,10 @@ def test_execute_trade_all_accounts_uses_account_entry_take_profit(
     assert seen == [("acc_tp1", "tp1"), ("acc_tp2", "tp2")]
 
 
-def test_partial_close_tp1_all_accounts_uses_account_lot_rules(
+def test_partial_close_tp1_all_accounts_uses_position_volume(
     sample_trade, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Partial close không truyền expected_initial_volume — luôn dùng volume thực từ position MT5."""
     accounts = [
         MT5AccountEntry(
             id="acc_a",
@@ -246,7 +247,7 @@ def test_partial_close_tp1_all_accounts_uses_account_lot_rules(
             lot=LotRuleFixed(volume=0.05),
         ),
     ]
-    seen: list[tuple[str, int, float | None]] = []
+    seen: list[tuple[int, int, float | None]] = []
 
     def fake_partial(ticket, **kwargs):
         seen.append(
@@ -272,7 +273,8 @@ def test_partial_close_tp1_all_accounts_uses_account_lot_rules(
     )
 
     assert summary.ok_all
-    assert seen == [(1, 101, 0.02), (2, 202, 0.05)]
+    # expected_initial_volume phải là None — để mt5_close_position_partial tự đọc volume từ MT5
+    assert seen == [(1, 101, None), (2, 202, None)]
 
 
 def test_partial_close_tp1_all_accounts_accepts_missing_tp1_entry_position(

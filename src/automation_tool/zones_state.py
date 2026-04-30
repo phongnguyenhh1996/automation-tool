@@ -151,6 +151,13 @@ class Zone:
     tp1_followup_done: bool = False
     # Đã gửi một lần [TRADE_MANAGEMENT] khi giá đạt 1R (daemon zones); tránh spam.
     r1_followup_done: bool = False
+    # True khi zone đang ``cho_tp1`` và giá đã chạm entry + MT5 xác nhận ticket đã thành position.
+    has_position: bool = False
+    # Giá SL/TP mới từ [TRADE_MANAGEMENT] (nếu đã chỉnh thành công trên MT5).
+    managed_sl: Optional[float] = None
+    managed_tp: Optional[float] = None
+    # Mốc R gần nhất đã dispatch follow-up (1R, 2R, 3R...).
+    last_r_followup_level: int = 0
     retry_at: str = ""
     # ISO UTC: giữ tương thích state cũ; luồng hiện tại dùng ``auto_entry_mt5_failed`` thay vì cooldown.
     auto_entry_retry_after: str = ""
@@ -173,6 +180,10 @@ class Zone:
             "loai_streak": self.loai_streak,
             "tp1_followup_done": self.tp1_followup_done,
             "r1_followup_done": self.r1_followup_done,
+            "has_position": self.has_position,
+            "managed_sl": self.managed_sl,
+            "managed_tp": self.managed_tp,
+            "last_r_followup_level": self.last_r_followup_level,
             "retry_at": self.retry_at,
             "auto_entry_retry_after": self.auto_entry_retry_after,
             "auto_entry_mt5_failed": self.auto_entry_mt5_failed,
@@ -280,6 +291,19 @@ def _parse_zone(d: dict[str, Any]) -> Optional[Zone]:
     tp1_done = bool(td_raw) if isinstance(td_raw, bool) else False
     r1_raw = d.get("r1_followup_done")
     r1_done = bool(r1_raw) if isinstance(r1_raw, bool) else False
+    hp_raw = d.get("has_position")
+    has_position = bool(hp_raw) if isinstance(hp_raw, bool) else False
+    ms_raw = _as_float(d.get("managed_sl"))
+    mt_raw = _as_float(d.get("managed_tp"))
+    lrf_raw = d.get("last_r_followup_level")
+    last_r_followup_level = 0
+    if lrf_raw is not None:
+        try:
+            last_r_followup_level = int(lrf_raw)
+        except Exception:
+            last_r_followup_level = 0
+    if last_r_followup_level < 0:
+        last_r_followup_level = 0
     ra_raw = d.get("retry_at")
     retry_at = ra_raw.strip() if isinstance(ra_raw, str) else ""
     aer_raw = d.get("auto_entry_retry_after")
@@ -315,6 +339,10 @@ def _parse_zone(d: dict[str, Any]) -> Optional[Zone]:
         loai_streak=loai_streak,
         tp1_followup_done=tp1_done,
         r1_followup_done=r1_done,
+        has_position=has_position,
+        managed_sl=ms_raw,
+        managed_tp=mt_raw,
+        last_r_followup_level=last_r_followup_level,
         retry_at=retry_at,
         auto_entry_retry_after=auto_entry_retry_after,
         auto_entry_mt5_failed=auto_entry_mt5_failed,
@@ -381,6 +409,10 @@ def write_zones_for_slot(
                 loai_streak=z.loai_streak,
                 tp1_followup_done=z.tp1_followup_done,
                 r1_followup_done=z.r1_followup_done,
+                has_position=z.has_position,
+                managed_sl=z.managed_sl,
+                managed_tp=z.managed_tp,
+                last_r_followup_level=z.last_r_followup_level,
                 retry_at=z.retry_at,
                 auto_entry_retry_after=z.auto_entry_retry_after,
                 auto_entry_mt5_failed=z.auto_entry_mt5_failed,
