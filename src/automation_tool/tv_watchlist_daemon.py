@@ -69,14 +69,10 @@ from automation_tool.mt5_manage import (
 )
 from automation_tool.openai_errors import re_raise_unless_openai
 from automation_tool.openai_prompt_flow import (
-    R1_POST_TOUCH_USER_TEMPLATE,
     TP1_POST_TOUCH_USER_TEMPLATE,
     run_single_followup_responses,
 )
-from automation_tool.zone_one_r import (
-    entry_reference_price as _zone_one_r_entry_ref,
-    one_r_favorable_price as _zone_one_r_target_price,
-)
+
 from automation_tool.state_files import read_last_response_id, write_last_response_id
 from automation_tool.telegram_bot import (
     mt5_zone_label_display_vn,
@@ -1127,6 +1123,31 @@ def _max_r_multiple_reached(zone: Zone, parsed, p_last: float, *, eps: float = _
     return max(0, int(math.floor((favorable + eps) / risk)))
 
 
+def _half_sl_retrace_touched(zone: Zone, parsed, p_last: float, *, eps: float = _TP1_EPS) -> bool:
+    """
+    True khi giá đi ngược về phía SL đạt mốc 50% quãng Entry→SL.
+
+    Chỉ áp dụng khi SL nằm đúng phía rủi ro (BUY: SL < entry, SELL: SL > entry).
+    """
+    ref = _entry_reference_price(parsed)
+    sl_ref = getattr(zone, "managed_sl", None)
+    sl = float(sl_ref) if sl_ref is not None else float(parsed.sl)
+    side = str(getattr(parsed, "side", "") or "").strip().upper()
+    if side == "BUY":
+        risk = ref - sl
+        if risk <= eps:
+            return False
+        return float(p_last) <= (ref - 0.5 * risk + eps)
+    risk = sl - ref
+    if risk <= eps:
+        return False
+    return float(p_last) >= (ref + 0.5 * risk - eps)
+
+
+def _r_level_text(r_level: float) -> str:
+    return f"{float(r_level):g}"
+
+
 def _managed_tp_touched(zone: Zone, parsed, p_last: float) -> bool:
     tp = getattr(zone, "managed_tp", None)
     if tp is None:
@@ -1701,11 +1722,11 @@ def _r1_followup_job(
     params: WatchlistDaemonParams,
     zone_id: str,
     prev_status: str,
-    reached_r_level: int,
+    reached_r_level: float,
+    trigger_tag: str = "r_multiple",
 ) -> None:
     """
-    Follow-up khi giá đạt +1R (zones daemon): Coinmap M5 + [TRADE_MANAGEMENT] / Schema D — cùng parser
-    ``parse_tp1_followup_decision`` như sau TP1.
+    Follow-up theo mốc R (zones daemon): Coinmap M5 + [TRADE_MANAGEMENT] / Schema D.
     """
     from automation_tool.coinmap import capture_charts
     from automation_tool.images import coinmap_xauusd_5m_json_path, read_main_chart_symbol
@@ -1720,20 +1741,22 @@ def _r1_followup_job(
             return
         if z0.status in ("done", "loai"):
             return
-        if _skip_scalp_r1_followup_if_needed(z0, settings=settings, params=params):
+        followup_flag = "half_sl_followup_done" if trigger_tag == "half_sl" else "r1_followup_done"
+        r_level_text = _r_level_text(reached_r_level)
+        if trigger_tag != "half_sl" and _skip_scalp_r1_followup_if_needed(z0, settings=settings, params=params):
             z0.status = prev_status  # type: ignore[assignment]
             _state_write(params, st0)
             return
         if not z0.trade_line or not z0.mt5_ticket:
             z0.status = prev_status
-            z0.r1_followup_done = False
+            setattr(z0, followup_flag, False)
             _state_write(params, st0)
             return
 
         parsed, err = _parse_trade_from_zone_trade_line(z0.trade_line, symbol_override=params.mt5_symbol)
         if err or parsed is None:
             z0.status = prev_status
-            z0.r1_followup_done = False
+            setattr(z0, followup_flag, False)
             _state_write(params, st0)
             return
 
@@ -1745,11 +1768,11 @@ def _r1_followup_job(
             prim_chk = primary_account(accs_chk) if accs_chk else None
             if prim_chk is None:
                 z0.status = prev_status  # type: ignore[assignment]
-                z0.r1_followup_done = False
+                setattr(z0, followup_flag, False)
                 _state_write(params, st0)
                 _send_log(
                     settings,
-                    f"[r1] bỏ qua follow-up {reached_r_level}R vì thiếu account primary",
+                    f"[r1] bỏ qua follow-up {r_level_text}R vì thiếu account primary",
                 )
                 return
             is_position, ticket_msg = mt5_ticket_is_open_position(
@@ -1764,11 +1787,11 @@ def _r1_followup_job(
             if not is_position:
                 if "pending" in ticket_msg.lower() or "chưa position" in ticket_msg.lower():
                     z0.status = prev_status  # type: ignore[assignment]
-                    z0.r1_followup_done = False
+                    setattr(z0, followup_flag, False)
                     _state_write(params, st0)
                     _send_log(
                         settings,
-                        f"[r1] bỏ qua kiểm tra 1R vì lệnh chưa khớp | zone_id={zone_id} | {ticket_msg}",
+                        f"[r1] bỏ qua kiểm tra {r_level_text}R vì lệnh chưa khớp | zone_id={zone_id} | {ticket_msg}",
                     )
                     return
                 st_done = _state_read(params)
@@ -1789,7 +1812,7 @@ def _r1_followup_job(
 
         _send_user_notice(
             settings,
-            f"Giá đã đạt mức {reached_r_level}R.",
+            f"Giá đã đạt mức {r_level_text}R.",
             "Đang lấy biểu đồ M5 và hỏi AI quản lý lệnh.",
             zone=z0,
             params=params,
@@ -1814,8 +1837,6 @@ def _r1_followup_job(
         openai_merged = write_openai_coinmap_merged_from_raw_export(json_path)
 
         prev = _openai_followup_prev_response_id(params)
-        eref = _zone_one_r_entry_ref(parsed)
-        r1p = _zone_one_r_target_price(parsed)
         current_sl: Optional[float] = None
         current_tp: Optional[float] = None
         if tk_check > 0:
@@ -1831,10 +1852,10 @@ def _r1_followup_job(
                     server=prim_for_prompt.server,
                 )
                 _send_log(settings, f"[r1] đọc SL/TP hiện tại | {sltp_msg}")
-        user_text = R1_POST_TOUCH_USER_TEMPLATE.format(
+        user_text = TP1_POST_TOUCH_USER_TEMPLATE.format(
             plan_label=z0.label,
-            entry_ref=eref,
-            r1_price=r1p,
+            entry_side=str(getattr(parsed, "side", "") or "").upper(),
+            entry_price=_fmt_level_for_prompt(getattr(parsed, "price", None)),
             current_sl=_fmt_level_for_prompt(current_sl),
             current_tp=_fmt_level_for_prompt(current_tp),
         )
@@ -1865,12 +1886,12 @@ def _r1_followup_job(
             return
 
         if dec is None:
-            z1.r1_followup_done = False
+            setattr(z1, followup_flag, False)
             z1.status = prev_status
             _state_write(params, st1)
             _send_user_notice(
                 settings,
-                "Tại 1R: không đọc được quyết định từ AI.",
+                f"Tại {r_level_text}R: không đọc được quyết định từ AI.",
                 "Hệ thống sẽ thử lại — xem log kỹ thuật nếu cần chi tiết.",
                 zone=z1,
                 params=params,
@@ -1897,11 +1918,12 @@ def _r1_followup_job(
 
         if dec.sau_tp1 == "giu_nguyen":
             z1.status = prev_status  # type: ignore[assignment]
-            z1.r1_followup_done = False
+            if trigger_tag != "half_sl":
+                setattr(z1, followup_flag, False)
             _state_write(params, st1)
             _send_user_notice(
                 settings,
-                f"Tại {reached_r_level}R: AI chọn «giữ nguyên» — không đổi lệnh.",
+                f"Tại {r_level_text}R: AI chọn «giữ nguyên» — không đổi lệnh.",
                 "Tiếp tục theo dõi theo plan.",
                 zone=z1,
                 params=params,
@@ -1933,11 +1955,12 @@ def _r1_followup_job(
                     _send_log(settings, f"[r1] mt5_cancel_close: {r.message}".strip())
             z1.status = "loai"
             z1.mt5_tickets_by_account = None
-            z1.r1_followup_done = False
+            if trigger_tag != "half_sl":
+                setattr(z1, followup_flag, False)
             _state_write(params, st1)
             _send_user_notice(
                 settings,
-                f"Tại {reached_r_level}R: AI chọn «loại» — đóng / bỏ theo dõi vùng.",
+                f"Tại {r_level_text}R: AI chọn «loại» — đóng / bỏ theo dõi vùng.",
                 "Đã gửi lệnh đóng trên MT5 nếu bật thực thi.",
                 zone=z1,
                 params=params,
@@ -1945,7 +1968,7 @@ def _r1_followup_job(
             return
 
         if dec.new_sl is None and dec.new_tp is None:
-            z1.r1_followup_done = False
+            setattr(z1, followup_flag, False)
             z1.status = prev_status  # type: ignore[assignment]
             _state_write(params, st1)
             return
@@ -2035,12 +2058,12 @@ def _r1_followup_job(
                     )
 
         if exe and not used_inplace_r1:
-            z1.r1_followup_done = False
+            setattr(z1, followup_flag, False)
             z1.status = prev_status  # type: ignore[assignment]
             _state_write(params, st1)
             _send_user_notice(
                 settings,
-                f"Tại {reached_r_level}R: chỉnh lệnh không thành công.",
+                f"Tại {r_level_text}R: chỉnh lệnh không thành công.",
                 "Giữ nguyên lệnh/ticket cũ; hệ thống không đóng, không huỷ và không đặt lệnh mới.",
                 zone=z1,
                 params=params,
@@ -2049,7 +2072,7 @@ def _r1_followup_job(
         elif exe and used_inplace_r1:
             _send_user_notice(
                 settings,
-                f"Tại {reached_r_level}R: đã cập nhật lệnh tại chỗ (SL/TP hoặc sửa lệnh chờ).",
+                f"Tại {r_level_text}R: đã cập nhật lệnh tại chỗ (SL/TP hoặc sửa lệnh chờ).",
                 "Không đóng + mở mới; ticket giữ nguyên.",
                 zone=z1,
                 params=params,
@@ -2057,8 +2080,11 @@ def _r1_followup_job(
         # TRADE_MANAGEMENT: chỉ thực thi trade_line mới trên MT5, không ghi đè trade_line gốc trong state.
         z1.status = prev_status  # type: ignore[assignment]
         z1.tp1_followup_done = False
-        z1.r1_followup_done = False
-        z1.last_r_followup_level = max(int(getattr(z1, "last_r_followup_level", 0) or 0), int(reached_r_level))
+        if trigger_tag != "half_sl":
+            z1.r1_followup_done = False
+            z1.last_r_followup_level = max(
+                int(getattr(z1, "last_r_followup_level", 0) or 0), int(reached_r_level)
+            )
         if dec.new_sl is not None:
             z1.managed_sl = float(dec.new_sl)
         if dec.new_tp is not None:
@@ -2067,7 +2093,12 @@ def _r1_followup_job(
         return
     except Exception as e:
         _send_log(settings, f"[r1] ERROR | zone_id={zone_id} | {e!s}")
-        _send_user_notice(settings, "Lỗi khi xử lý bước tại 1R.", str(e), params=params)
+        _send_user_notice(
+            settings,
+            f"Lỗi khi xử lý bước tại {_r_level_text(reached_r_level)}R.",
+            str(e),
+            params=params,
+        )
         re_raise_unless_openai(e, exit_on_openai=False, settings=settings)
 
 
@@ -2214,6 +2245,7 @@ def _auto_entry_job(
                     z.tp1_followup_done = False
                     z.r1_followup_done = False
                     z.has_position = False
+                    z.half_sl_followup_done = False
                     z.managed_sl = None
                     z.managed_tp = None
                     z.last_r_followup_level = 0
@@ -2276,6 +2308,7 @@ def _auto_entry_job(
                 z.tp1_followup_done = False
                 z.r1_followup_done = False
                 z.has_position = False
+                z.half_sl_followup_done = False
                 z.managed_sl = None
                 z.managed_tp = None
                 z.last_r_followup_level = 0
@@ -2504,6 +2537,7 @@ def _zone_touch_job(
         z1.loai_streak = 0
         z1.tp1_followup_done = False
         z1.r1_followup_done = False
+        z1.half_sl_followup_done = False
 
         if act != "VÀO LỆNH":
             # keep touched state (no revert to vung_cho); daemon can retry later
@@ -2546,6 +2580,7 @@ def _zone_touch_job(
         z1.tp1_followup_done = False
         z1.r1_followup_done = False
         z1.has_position = False
+        z1.half_sl_followup_done = False
         z1.managed_sl = None
         z1.managed_tp = None
         z1.last_r_followup_level = 0
@@ -3213,6 +3248,7 @@ def _daemon_plan_main_loop(
                             z.status = "cho_tp1"
                             z.tp1_followup_done = False
                             z.has_position = False
+                            z.half_sl_followup_done = False
                             changed = True
                             _send_log(settings, f"[tp1] arm | zone_id={z.id} vao_lenh->cho_tp1 last={p_last}")
                             _thr_tp1 = arm_threshold_tp1_for_label(z.label or "")
@@ -3285,6 +3321,30 @@ def _daemon_plan_main_loop(
                                         f"[tp1] managed TP touched + no position -> done | zone_id={z.id} | {msg_pos_now}",
                                     )
                                     continue
+                            if (
+                                bool(getattr(z, "has_position", False))
+                                and not bool(getattr(z, "half_sl_followup_done", False))
+                                and not _tp1_touched(parsed, float(p_last))
+                                and _half_sl_retrace_touched(z, parsed, float(p_last), eps=_TP1_EPS)
+                            ):
+                                prev_status = z.status
+                                z.status = "dang_thuc_thi"
+                                z.half_sl_followup_done = True
+                                _state_write(params, st_tp1b)
+                                _send_log(
+                                    settings,
+                                    f"[r1] dispatch 0.5R (entry->SL 50%) | zone_id={z.id} "
+                                    f"{prev_status}->dang_thuc_thi last={p_last}",
+                                )
+                                _r1_followup_job(
+                                    settings=settings,
+                                    params=params,
+                                    zone_id=z.id,
+                                    prev_status=prev_status,
+                                    reached_r_level=-0.5,
+                                    trigger_tag="half_sl",
+                                )
+                                continue
                             if not _tp1_touched(parsed, float(p_last)):
                                 continue
                             z.status = "dang_thuc_thi"

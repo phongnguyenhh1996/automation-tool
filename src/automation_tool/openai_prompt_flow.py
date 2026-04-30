@@ -552,14 +552,15 @@ TP1_POST_TOUCH_USER_TEMPLATE = (
     "TP hiện tại: {current_tp}\n\n"
 )
 
-# Daemon zones: giá đạt +1R (lợi nhuận bằng khoảng |Entry−SL|) khi đang ``cho_tp1`` (sau arm TP1).
+# Daemon zones: follow-up theo mốc R khi đang ``cho_tp1`` (sau arm TP1).
 R1_POST_TOUCH_USER_TEMPLATE = (
     "[TRADE_MANAGEMENT]\n"
-    "Giá đã đạt mức 1R; "
+    "Giá đã đạt mức {r_level}R; "
     "đánh giá Footprint M5 đính kèm (giữ hay thoát / chỉnh SL/TP).\n"
     "Vùng (label): {plan_label}\n"
+    "{entry_side} entry: {entry_price}\n"
     "Entry tham chiếu: {entry_ref}\n"
-    "Mức 1R (hướng có lợi): {r1_price}\n"
+    "Mức {r_level}R (so với entry): {r_level_price}\n"
     "SL hiện tại: {current_sl}\n"
     "TP hiện tại: {current_tp}\n\n"
 )

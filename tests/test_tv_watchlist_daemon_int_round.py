@@ -27,6 +27,7 @@ from automation_tool.tv_watchlist_daemon import (
     _openai_followup_persist_new_id,
     _openai_followup_prev_response_id,
     _entry_touched_for_position_check,
+    _half_sl_retrace_touched,
     _should_check_managed_tp_done,
     _r1_followup_job,
     _should_write_intraday_alert_anchor,
@@ -577,6 +578,30 @@ def test_should_check_managed_tp_done_requires_has_position() -> None:
     assert _should_check_managed_tp_done(z, parsed_buy, 101.0) is False
     z.has_position = True
     assert _should_check_managed_tp_done(z, parsed_buy, 101.0) is True
+
+
+def test_half_sl_retrace_touched_uses_entry_to_sl_halfway() -> None:
+    parsed_buy = MagicMock(side="BUY", price=100.0, sl=99.0)
+    z_buy = Zone(
+        id="z-buy",
+        label="plan_chinh",
+        vung_cho="99–101",
+        side="BUY",
+        status="cho_tp1",
+    )
+    assert _half_sl_retrace_touched(z_buy, parsed_buy, 99.5) is True
+    assert _half_sl_retrace_touched(z_buy, parsed_buy, 99.7) is False
+
+    parsed_sell = MagicMock(side="SELL", price=100.0, sl=101.0)
+    z_sell = Zone(
+        id="z-sell",
+        label="plan_chinh",
+        vung_cho="99–101",
+        side="SELL",
+        status="cho_tp1",
+    )
+    assert _half_sl_retrace_touched(z_sell, parsed_sell, 100.5) is True
+    assert _half_sl_retrace_touched(z_sell, parsed_sell, 100.3) is False
 
 
 def test_daemon_plan_sl_loai_includes_post_entry_statuses() -> None:
