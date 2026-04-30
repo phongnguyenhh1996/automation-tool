@@ -12,6 +12,10 @@ _OPENAI_BILLING_TELEGRAM_BODY = (
     "Tình hình là em OpenAI vừa gửi tối hậu thư: 'Hết thóc rồi, không gáy được nữa'. "
     "Sếp Cường xem nạp thêm ít năng lượng cho em nó tiếp tục cống hiến nhé."
 )
+_OPENAI_BILLING_ACTION_HINT = (
+    "Vào trang billing để nạp thêm credits / thêm payment method: "
+    "https://platform.openai.com/account/billing"
+)
 
 
 def _nested_code(body: Any) -> str | None:
@@ -63,10 +67,7 @@ def format_openai_exception(exc: BaseException) -> str | None:
         code = _nested_code(getattr(exc, "body", None))
         raw = str(exc)
         if code == "insufficient_quota" or "insufficient_quota" in raw:
-            return (
-                "OpenAI returned 429 insufficient_quota: no credits left or billing is not set up.\n"
-                "Add a payment method or buy credits: https://platform.openai.com/account/billing"
-            )
+            return f"{_OPENAI_BILLING_TELEGRAM_TITLE}: {_OPENAI_BILLING_TELEGRAM_BODY}\n{_OPENAI_BILLING_ACTION_HINT}"
         return (
             "OpenAI returned 429 (rate limit or quota). Wait and retry, or check usage limits.\n"
             f"Details: {raw}"
