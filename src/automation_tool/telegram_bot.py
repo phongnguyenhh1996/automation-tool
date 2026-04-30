@@ -89,6 +89,22 @@ def mt5_zone_chinh_line_vn(
     return f'Đã chỉnh lệnh cho "{quoted}".'
 
 
+def mt5_zone_partial_close_line_vn(
+    zone_label: Optional[str],
+    session_slot: Optional[str] = None,
+) -> Optional[str]:
+    """Một dòng cho thao tác chốt bớt (partial close), không gợi ý vào lệnh mới."""
+    if not zone_label or not str(zone_label).strip():
+        return None
+    key = str(zone_label).strip().lower()
+    display = _MT5_ZONE_LABEL_DISPLAY_VN.get(key)
+    if not display:
+        return None
+    slot_vn = session_slot_display_vn(session_slot) if session_slot else None
+    quoted = f"{display} - {slot_vn}" if slot_vn else display
+    return f'Đã chốt 50% lệnh cho "{quoted}".'
+
+
 def _trade_line_level_tokens(trade_line: Optional[str]) -> dict[str, str]:
     """Extract display-ready SL/TP tokens from a pipe trade_line."""
     text = (trade_line or "").strip()
@@ -767,9 +783,19 @@ def send_mt5_execution_log_to_ngan_gon_chat(
 
     action_key = (action or "").strip().lower()
     is_chinh_trade_line = action_key in ("chinh_trade_line", "chỉnh_trade_line", "chinh_sua", "chỉnh")
+    is_partial_close = action_key in (
+        "partial_close",
+        "partial-close",
+        "partial close",
+        "tp1-partial-close",
+        "tp1_partial_close",
+    )
     if is_chinh_trade_line:
         out = "MT5 đã cập nhật lệnh theo quyết định quản lý lệnh."
         zone_line = mt5_zone_chinh_line_vn(zone_label, session_slot=session_slot)
+    elif is_partial_close:
+        out = "MT5 đã chốt bớt vị thế theo quyết định quản lý lệnh."
+        zone_line = mt5_zone_partial_close_line_vn(zone_label, session_slot=session_slot)
     else:
         out = random.choice(_MT5_NGAN_GON_MESSAGES)
         zone_line = mt5_zone_entry_line_vn(zone_label, session_slot=session_slot)

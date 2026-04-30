@@ -94,3 +94,30 @@ def test_chinh_trade_line_success_message_is_not_entry_notice(monkeypatch):
     assert "BUY LIMIT 4709.0 | SL 4709.0 | TP1 4740.0 | Lot 0.04" not in sent[0]["text"]
     assert "Đã vào lệnh cho" not in sent[0]["text"]
     assert "ENTRY TEMPLATE" not in sent[0]["text"]
+
+
+def test_partial_close_success_message_is_not_entry_notice(monkeypatch):
+    sent: list[dict] = []
+    monkeypatch.setattr("automation_tool.telegram_bot.send_message", lambda **kwargs: sent.append(kwargs))
+    monkeypatch.setattr("automation_tool.telegram_bot.random.choice", lambda _items: "ENTRY TEMPLATE")
+
+    send_mt5_execution_log_to_ngan_gon_chat(
+        bot_token="token",
+        telegram_chat_id="main",
+        telegram_python_bot_chat_id="python",
+        telegram_log_chat_id=None,
+        source="tp1-partial-close",
+        text="partial-close ok",
+        execution_ok=True,
+        zone_label="scalp",
+        trade_line="BUY LIMIT 4614.0 | SL 4612.0 | TP1 4627.0 | TP2 4632.0 | Lot 0.02",
+        session_slot="chieu",
+        action="partial_close",
+    )
+
+    assert len(sent) == 1
+    assert sent[0]["chat_id"] == "main"
+    assert "MT5 đã chốt bớt vị thế theo quyết định quản lý lệnh." in sent[0]["text"]
+    assert "Đã chốt 50% lệnh cho \"Scalp - Chiều\"." in sent[0]["text"]
+    assert "Đã vào lệnh cho" not in sent[0]["text"]
+    assert "ENTRY TEMPLATE" not in sent[0]["text"]

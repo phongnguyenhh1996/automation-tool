@@ -78,6 +78,38 @@ def test_partial_close_tp1_runner_requires_tp2(monkeypatch) -> None:
     assert calls == []
 
 
+def test_partial_close_tp1_runner_sends_manage_action(monkeypatch) -> None:
+    sent_actions: list[str | None] = []
+    monkeypatch.setattr(
+        "automation_tool.tp1_followup.mt5_close_position_partial",
+        lambda *a, **k: SimpleNamespace(ok=True, message="partial close ok"),
+    )
+    monkeypatch.setattr(
+        "automation_tool.tp1_followup.send_mt5_execution_log_to_ngan_gon_chat",
+        lambda **kwargs: sent_actions.append(kwargs.get("action")),
+    )
+
+    ok = _partial_close_tp1_runner_before_openai(
+        settings=SimpleNamespace(
+            telegram_bot_token="token",
+            telegram_chat_id="main",
+            telegram_python_bot_chat_id="python",
+            telegram_log_chat_id=None,
+        ),
+        params=SimpleNamespace(mt5_execute=True, mt5_dry_run=False, no_telegram=False),
+        label="scalp",
+        trade_line="BUY LIMIT 100 | SL 99 | TP1 101 | TP2 102 | Lot 0.02",
+        parsed=SimpleNamespace(tp2=102.0, lot=0.02),
+        ticket=111,
+        ticket_by_account={},
+        accounts=[],
+        symbol_override="XAUUSD",
+    )
+
+    assert ok is True
+    assert sent_actions == ["partial_close"]
+
+
 def test_chinh_trade_line_failure_does_not_create_new_order(monkeypatch, tmp_path) -> None:
     last_alert_path = tmp_path / "last_alert_prices.json"
     old_trade_line = "BUY LIMIT 100 | SL 99 | TP1 101 | Lot 0.01"

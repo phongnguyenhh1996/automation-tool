@@ -271,6 +271,7 @@ def _partial_close_tp1_runner_before_openai(
             zone_label=label,
             trade_line=trade_line,
             execution_ok=ok,
+            action="partial_close",
         )
     return ok
 
