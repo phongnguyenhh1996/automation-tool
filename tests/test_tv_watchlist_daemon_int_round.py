@@ -366,9 +366,11 @@ def test_tp1_followup_scalp_calls_openai_instead_of_auto_cancel(monkeypatch, tmp
         "automation_tool.tv_watchlist_daemon.mt5_ticket_still_open",
         lambda *_a, **_k: (True, "ticket=123 open"),
     )
+    # TP1 follow-up không còn gate "must be open position" trước OpenAI.
+    # Nếu helper này bị gọi ở case TP1 không TP2, test phải fail để phát hiện regression.
     monkeypatch.setattr(
         "automation_tool.tv_watchlist_daemon.mt5_ticket_is_open_position",
-        lambda *_a, **_k: (True, "ticket=123 is position"),
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("unexpected position gate before OpenAI")),
     )
     monkeypatch.setattr(
         "automation_tool.tv_watchlist_daemon.mt5_ticket_current_sltp",
@@ -414,6 +416,83 @@ def test_tp1_followup_scalp_calls_openai_instead_of_auto_cancel(monkeypatch, tmp
     assert openai_calls
     assert notices and notices[0][2] == "scalp"
     assert any("OpenAI TRADE_MANAGEMENT" in line for line in logs)
+
+
+def test_tp1_followup_with_tp2_skips_partial_close_when_has_position_false(monkeypatch, tmp_path) -> None:
+    openai_calls: list[dict] = []
+
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon._send_user_notice", lambda *a, **k: None)
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon._send_log", lambda *a, **k: None)
+    chart_json = tmp_path / "charts" / "coinmap.json"
+    chart_json.parent.mkdir()
+    chart_json.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr("automation_tool.coinmap.capture_charts", lambda **_kwargs: [chart_json])
+    monkeypatch.setattr("automation_tool.images.read_main_chart_symbol", lambda _charts_dir: "XAUUSD")
+    monkeypatch.setattr("automation_tool.images.coinmap_xauusd_5m_json_path", lambda _charts_dir: chart_json)
+    monkeypatch.setattr(
+        "automation_tool.tv_watchlist_daemon.write_openai_coinmap_merged_from_raw_export",
+        lambda path: path,
+    )
+
+    def fake_run_single_followup_responses(**kwargs):
+        openai_calls.append(kwargs)
+        return ('{"hanh_dong_quan_ly_lenh":"giu_nguyen","reason":"Scalp vẫn hợp lệ."}', "resp-tp2")
+
+    monkeypatch.setattr(
+        "automation_tool.tv_watchlist_daemon.run_single_followup_responses",
+        fake_run_single_followup_responses,
+    )
+    monkeypatch.setattr(
+        "automation_tool.tv_watchlist_daemon.mt5_ticket_still_open",
+        lambda *_a, **_k: (True, "ticket=123 open"),
+    )
+    monkeypatch.setattr(
+        "automation_tool.tv_watchlist_daemon.mt5_close_position_partial",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("partial close must not run when has_position=false")
+        ),
+    )
+    monkeypatch.setattr(
+        "automation_tool.tv_watchlist_daemon.mt5_ticket_current_sltp",
+        lambda *_a, **_k: (99.0, 102.0, "ok"),
+    )
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon.load_mt5_accounts_for_cli", lambda *_a, **_k: [])
+
+    settings = MagicMock()
+    params = WatchlistDaemonParams(
+        coinmap_tv_yaml=tmp_path / "coinmap_tv.yaml",
+        capture_coinmap_yaml=tmp_path / "cap.yaml",
+        charts_dir=tmp_path / "charts",
+        storage_state_path=None,
+        headless=True,
+        no_save_storage=True,
+        shard_path=tmp_path / "vung_scalp_sang.json",
+        no_telegram=True,
+        mt5_execute=True,
+    )
+    write_zones_state_to_shard(
+        params.shard_path,
+        ZonesState(
+            symbol="XAUUSD",
+            zones=[
+                Zone(
+                    id="s1",
+                    label="scalp",
+                    vung_cho="100–101",
+                    side="BUY",
+                    status="dang_thuc_thi",
+                    trade_line="BUY LIMIT 100 | SL 99 | TP1 101 | TP2 102 | Lot 0.01",
+                    mt5_ticket=123,
+                    tp1_followup_done=True,
+                    has_position=False,
+                )
+            ],
+        ),
+    )
+
+    _tp1_followup_job(settings=settings, params=params, zone_id="s1", p_last=101.0)
+
+    assert openai_calls
 
 
 def test_r1_followup_skips_pending_ticket_before_capture(monkeypatch, tmp_path) -> None:

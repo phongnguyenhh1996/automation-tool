@@ -1334,7 +1334,7 @@ def _tp1_followup_job(
                 )
                 return
 
-        if getattr(parsed, "tp2", None) is not None:
+        if getattr(parsed, "tp2", None) is not None and bool(getattr(z0, "has_position", False)):
             ok_partial = True
             partial_msg = ""
             if exe:
@@ -1470,34 +1470,6 @@ def _tp1_followup_job(
                     server=prim_for_prompt.server,
                 )
                 _send_log(settings, f"[tp1] đọc SL/TP hiện tại | {sltp_msg}")
-        if exe and tk_check > 0:
-            accs_before_openai = load_mt5_accounts_for_cli(params.mt5_accounts_json)
-            prim_before_openai = primary_account(accs_before_openai) if accs_before_openai else None
-            if prim_before_openai is None:
-                z0.status = "cho_tp1"
-                z0.tp1_followup_done = False
-                z0.r1_followup_done = False
-                _state_write(params, st0)
-                _send_log(
-                    settings,
-                    f"[tp1] skip OpenAI TRADE_MANAGEMENT vì thiếu account primary | zone_id={zone_id}",
-                )
-                return
-            is_pos_before_openai, pos_msg_before_openai = mt5_ticket_is_open_position(
-                tk_check,
-                dry_run=dry,
-                terminal_path=prim_before_openai.terminal_path,
-                login=prim_before_openai.login,
-                password=prim_before_openai.password,
-                server=prim_before_openai.server,
-            )
-            _send_log(settings, f"[tp1] kiểm tra position trước OpenAI | {pos_msg_before_openai}")
-            if not is_pos_before_openai:
-                z0.status = "cho_tp1"
-                z0.tp1_followup_done = False
-                z0.r1_followup_done = False
-                _state_write(params, st0)
-                return
         user_text = TP1_POST_TOUCH_USER_TEMPLATE.format(
             plan_label=z0.label,
             entry_side=str(getattr(parsed, "side", "") or "").upper(),
