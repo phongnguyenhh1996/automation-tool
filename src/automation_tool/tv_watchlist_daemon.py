@@ -154,6 +154,7 @@ _TP1_EPS = 0.01
 _ARM_THRESHOLD = ARM_THRESHOLD_TP1_DEFAULT
 _RETRY_WAIT_MINUTES = 15
 _RETRY_WAIT_MINUTES_SCALP = 10
+_OPENAI_MANAGE_INTERVAL_MINUTES = 15
 _ZONE_TOUCH_INITIAL_DELAY_MINUTES = 10
 _ZONE_TOUCH_LOAI_CONFIRM_ROUNDS = 3
 DAEMON_PLAN_AUTO_CUTOFF_HOUR = 0
@@ -833,6 +834,26 @@ def _zone_label_slot_display_vn(zone: Zone) -> str:
     if lab and slot:
         return f"{lab} - {slot}"
     return lab or "(unknown)"
+
+
+def _send_entry_management_notice(settings: Settings, zone: Zone, text: str) -> None:
+    """Notice ngắn cho luồng quản lý lệnh sau khi đã has_position."""
+    title = (text or "").strip()
+    if not title:
+        return
+    send_user_friendly_notice(
+        bot_token=settings.telegram_bot_token,
+        chat_id=settings.telegram_python_bot_chat_id,
+        title=title,
+        body="",
+    )
+
+
+def _entry_management_target_touched(zone: Zone, parsed, p_last: float) -> bool:
+    """Dừng ping 15p khi chạm một trong hai mốc: -0.5R adverse hoặc >= 1R favorable."""
+    if _half_sl_retrace_touched(zone, parsed, p_last, eps=_TP1_EPS):
+        return True
+    return _max_r_multiple_reached(zone, parsed, p_last, eps=_TP1_EPS) >= 1
 
 
 def _mark_initial_zone_touch_wait(
@@ -1741,22 +1762,36 @@ def _r1_followup_job(
             return
         if z0.status in ("done", "loai"):
             return
-        followup_flag = "half_sl_followup_done" if trigger_tag == "half_sl" else "r1_followup_done"
+        if trigger_tag == "half_sl":
+            followup_flag = "half_sl_followup_done"
+            should_toggle_followup_flag = True
+        elif trigger_tag == "time_15m":
+            followup_flag = ""
+            should_toggle_followup_flag = False
+        else:
+            followup_flag = "r1_followup_done"
+            should_toggle_followup_flag = True
+
+        def _reset_followup_flag(zone: Zone) -> None:
+            if should_toggle_followup_flag and followup_flag:
+                setattr(zone, followup_flag, False)
+
         r_level_text = _r_level_text(reached_r_level)
+        is_time_followup = trigger_tag == "time_15m"
         if trigger_tag != "half_sl" and _skip_scalp_r1_followup_if_needed(z0, settings=settings, params=params):
             z0.status = prev_status  # type: ignore[assignment]
             _state_write(params, st0)
             return
         if not z0.trade_line or not z0.mt5_ticket:
             z0.status = prev_status
-            setattr(z0, followup_flag, False)
+            _reset_followup_flag(z0)
             _state_write(params, st0)
             return
 
         parsed, err = _parse_trade_from_zone_trade_line(z0.trade_line, symbol_override=params.mt5_symbol)
         if err or parsed is None:
             z0.status = prev_status
-            setattr(z0, followup_flag, False)
+            _reset_followup_flag(z0)
             _state_write(params, st0)
             return
 
@@ -1768,7 +1803,7 @@ def _r1_followup_job(
             prim_chk = primary_account(accs_chk) if accs_chk else None
             if prim_chk is None:
                 z0.status = prev_status  # type: ignore[assignment]
-                setattr(z0, followup_flag, False)
+                _reset_followup_flag(z0)
                 _state_write(params, st0)
                 _send_log(
                     settings,
@@ -1787,7 +1822,7 @@ def _r1_followup_job(
             if not is_position:
                 if "pending" in ticket_msg.lower() or "chưa position" in ticket_msg.lower():
                     z0.status = prev_status  # type: ignore[assignment]
-                    setattr(z0, followup_flag, False)
+                    _reset_followup_flag(z0)
                     _state_write(params, st0)
                     _send_log(
                         settings,
@@ -1810,13 +1845,20 @@ def _r1_followup_job(
                 )
                 return
 
-        _send_user_notice(
-            settings,
-            f"Giá đã đạt mức {r_level_text}R.",
-            "Đang lấy biểu đồ M5 và hỏi AI quản lý lệnh.",
-            zone=z0,
-            params=params,
-        )
+        if trigger_tag == "time_15m":
+            _send_entry_management_notice(
+                settings,
+                z0,
+                f"{_zone_label_slot_display_vn(z0)}: Gửi OpenAI quản lý lệnh sau 15p",
+            )
+        else:
+            _send_user_notice(
+                settings,
+                f"Giá đã đạt mức {r_level_text}R.",
+                "Đang lấy biểu đồ M5 và hỏi AI quản lý lệnh.",
+                zone=z0,
+                params=params,
+            )
 
         capture_charts(
             coinmap_yaml=params.capture_coinmap_yaml,
@@ -1886,12 +1928,16 @@ def _r1_followup_job(
             return
 
         if dec is None:
-            setattr(z1, followup_flag, False)
+            _reset_followup_flag(z1)
             z1.status = prev_status
             _state_write(params, st1)
             _send_user_notice(
                 settings,
-                f"Tại {r_level_text}R: không đọc được quyết định từ AI.",
+                (
+                    "Theo chu kỳ 15p: không đọc được quyết định từ AI."
+                    if is_time_followup
+                    else f"Tại {r_level_text}R: không đọc được quyết định từ AI."
+                ),
                 "Hệ thống sẽ thử lại — xem log kỹ thuật nếu cần chi tiết.",
                 zone=z1,
                 params=params,
@@ -1918,12 +1964,15 @@ def _r1_followup_job(
 
         if dec.sau_tp1 == "giu_nguyen":
             z1.status = prev_status  # type: ignore[assignment]
-            if trigger_tag != "half_sl":
-                setattr(z1, followup_flag, False)
+            _reset_followup_flag(z1)
             _state_write(params, st1)
             _send_user_notice(
                 settings,
-                f"Tại {r_level_text}R: AI chọn «giữ nguyên» — không đổi lệnh.",
+                (
+                    "Theo chu kỳ 15p: AI chọn «giữ nguyên» — không đổi lệnh."
+                    if is_time_followup
+                    else f"Tại {r_level_text}R: AI chọn «giữ nguyên» — không đổi lệnh."
+                ),
                 "Tiếp tục theo dõi theo plan.",
                 zone=z1,
                 params=params,
@@ -1955,12 +2004,15 @@ def _r1_followup_job(
                     _send_log(settings, f"[r1] mt5_cancel_close: {r.message}".strip())
             z1.status = "loai"
             z1.mt5_tickets_by_account = None
-            if trigger_tag != "half_sl":
-                setattr(z1, followup_flag, False)
+            _reset_followup_flag(z1)
             _state_write(params, st1)
             _send_user_notice(
                 settings,
-                f"Tại {r_level_text}R: AI chọn «loại» — đóng / bỏ theo dõi vùng.",
+                (
+                    "Theo chu kỳ 15p: AI chọn «loại» — đóng / bỏ theo dõi vùng."
+                    if is_time_followup
+                    else f"Tại {r_level_text}R: AI chọn «loại» — đóng / bỏ theo dõi vùng."
+                ),
                 "Đã gửi lệnh đóng trên MT5 nếu bật thực thi.",
                 zone=z1,
                 params=params,
@@ -1968,7 +2020,7 @@ def _r1_followup_job(
             return
 
         if dec.new_sl is None and dec.new_tp is None:
-            setattr(z1, followup_flag, False)
+            _reset_followup_flag(z1)
             z1.status = prev_status  # type: ignore[assignment]
             _state_write(params, st1)
             return
@@ -2058,12 +2110,16 @@ def _r1_followup_job(
                     )
 
         if exe and not used_inplace_r1:
-            setattr(z1, followup_flag, False)
+            _reset_followup_flag(z1)
             z1.status = prev_status  # type: ignore[assignment]
             _state_write(params, st1)
             _send_user_notice(
                 settings,
-                f"Tại {r_level_text}R: chỉnh lệnh không thành công.",
+                (
+                    "Theo chu kỳ 15p: chỉnh lệnh không thành công."
+                    if is_time_followup
+                    else f"Tại {r_level_text}R: chỉnh lệnh không thành công."
+                ),
                 "Giữ nguyên lệnh/ticket cũ; hệ thống không đóng, không huỷ và không đặt lệnh mới.",
                 zone=z1,
                 params=params,
@@ -2072,7 +2128,11 @@ def _r1_followup_job(
         elif exe and used_inplace_r1:
             _send_user_notice(
                 settings,
-                f"Tại {r_level_text}R: đã cập nhật lệnh tại chỗ (SL/TP hoặc sửa lệnh chờ).",
+                (
+                    "Theo chu kỳ 15p: đã cập nhật lệnh tại chỗ (SL/TP hoặc sửa lệnh chờ)."
+                    if is_time_followup
+                    else f"Tại {r_level_text}R: đã cập nhật lệnh tại chỗ (SL/TP hoặc sửa lệnh chờ)."
+                ),
                 "Không đóng + mở mới; ticket giữ nguyên.",
                 zone=z1,
                 params=params,
@@ -2080,7 +2140,7 @@ def _r1_followup_job(
         # TRADE_MANAGEMENT: chỉ thực thi trade_line mới trên MT5, không ghi đè trade_line gốc trong state.
         z1.status = prev_status  # type: ignore[assignment]
         z1.tp1_followup_done = False
-        if trigger_tag != "half_sl":
+        if trigger_tag not in ("half_sl", "time_15m"):
             z1.r1_followup_done = False
             z1.last_r_followup_level = max(
                 int(getattr(z1, "last_r_followup_level", 0) or 0), int(reached_r_level)
@@ -2245,6 +2305,7 @@ def _auto_entry_job(
                     z.tp1_followup_done = False
                     z.r1_followup_done = False
                     z.has_position = False
+                    z.openai_manage_retry_at = ""
                     z.half_sl_followup_done = False
                     z.managed_sl = None
                     z.managed_tp = None
@@ -2308,6 +2369,7 @@ def _auto_entry_job(
                 z.tp1_followup_done = False
                 z.r1_followup_done = False
                 z.has_position = False
+                z.openai_manage_retry_at = ""
                 z.half_sl_followup_done = False
                 z.managed_sl = None
                 z.managed_tp = None
@@ -2580,6 +2642,7 @@ def _zone_touch_job(
         z1.tp1_followup_done = False
         z1.r1_followup_done = False
         z1.has_position = False
+        z1.openai_manage_retry_at = ""
         z1.half_sl_followup_done = False
         z1.managed_sl = None
         z1.managed_tp = None
@@ -3248,6 +3311,7 @@ def _daemon_plan_main_loop(
                             z.status = "cho_tp1"
                             z.tp1_followup_done = False
                             z.has_position = False
+                            z.openai_manage_retry_at = ""
                             z.half_sl_followup_done = False
                             changed = True
                             _send_log(settings, f"[tp1] arm | zone_id={z.id} vao_lenh->cho_tp1 last={p_last}")
@@ -3295,11 +3359,46 @@ def _daemon_plan_main_loop(
                                     )
                                 if is_pos:
                                     z.has_position = True
+                                    z.openai_manage_retry_at = _retry_at_iso(
+                                        _OPENAI_MANAGE_INTERVAL_MINUTES
+                                    )
                                     changed_has_position = True
                                     _send_log(
                                         settings,
                                         f"[tp1] has_position=true | zone_id={z.id} | {msg_pos}",
                                     )
+                                    _send_entry_management_notice(
+                                        settings,
+                                        z,
+                                        f"Đã khớp lệnh {_zone_label_slot_display_vn(z)}. "
+                                        "Sẽ gửi data cho OpenAI quản lý lệnh sau 15p",
+                                    )
+                            if bool(getattr(z, "has_position", False)):
+                                if _entry_management_target_touched(z, parsed, float(p_last)):
+                                    if (getattr(z, "openai_manage_retry_at", "") or "").strip():
+                                        z.openai_manage_retry_at = ""
+                                        changed_has_position = True
+                                elif _is_retry_due(getattr(z, "openai_manage_retry_at", "")):
+                                    prev_status = z.status
+                                    z.status = "dang_thuc_thi"
+                                    z.openai_manage_retry_at = _retry_at_iso(
+                                        _OPENAI_MANAGE_INTERVAL_MINUTES
+                                    )
+                                    _state_write(params, st_tp1b)
+                                    _send_log(
+                                        settings,
+                                        f"[r1] dispatch 15m openai-manage | zone_id={z.id} "
+                                        f"{prev_status}->dang_thuc_thi last={p_last}",
+                                    )
+                                    _r1_followup_job(
+                                        settings=settings,
+                                        params=params,
+                                        zone_id=z.id,
+                                        prev_status=prev_status,
+                                        reached_r_level=0,
+                                        trigger_tag="time_15m",
+                                    )
+                                    continue
                             if _should_check_managed_tp_done(z, parsed, float(p_last)) and prim_pos is not None:
                                 is_pos_now, msg_pos_now = mt5_ticket_is_open_position(
                                     int(z.mt5_ticket),
@@ -3315,6 +3414,8 @@ def _daemon_plan_main_loop(
                                     z.mt5_tickets_by_account = None
                                     z.tp1_followup_done = True
                                     z.r1_followup_done = True
+                                    z.has_position = False
+                                    z.openai_manage_retry_at = ""
                                     _state_write(params, st_tp1b)
                                     _send_log(
                                         settings,
@@ -3330,6 +3431,7 @@ def _daemon_plan_main_loop(
                                 prev_status = z.status
                                 z.status = "dang_thuc_thi"
                                 z.half_sl_followup_done = True
+                                z.openai_manage_retry_at = ""
                                 _state_write(params, st_tp1b)
                                 _send_log(
                                     settings,

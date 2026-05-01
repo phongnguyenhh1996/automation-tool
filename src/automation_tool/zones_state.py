@@ -153,6 +153,8 @@ class Zone:
     r1_followup_done: bool = False
     # True khi zone đang ``cho_tp1`` và giá đã chạm entry + MT5 xác nhận ticket đã thành position.
     has_position: bool = False
+    # ISO UTC: thời điểm tới hạn gửi OpenAI quản lý lệnh định kỳ sau khi đã ``has_position=true``.
+    openai_manage_retry_at: str = ""
     # Đã gửi follow-up khi giá hồi 50% quãng entry → SL (adverse) trong trạng thái ``cho_tp1``.
     half_sl_followup_done: bool = False
     # Giá SL/TP mới từ [TRADE_MANAGEMENT] (nếu đã chỉnh thành công trên MT5).
@@ -183,6 +185,7 @@ class Zone:
             "tp1_followup_done": self.tp1_followup_done,
             "r1_followup_done": self.r1_followup_done,
             "has_position": self.has_position,
+            "openai_manage_retry_at": self.openai_manage_retry_at,
             "half_sl_followup_done": self.half_sl_followup_done,
             "managed_sl": self.managed_sl,
             "managed_tp": self.managed_tp,
@@ -296,6 +299,8 @@ def _parse_zone(d: dict[str, Any]) -> Optional[Zone]:
     r1_done = bool(r1_raw) if isinstance(r1_raw, bool) else False
     hp_raw = d.get("has_position")
     has_position = bool(hp_raw) if isinstance(hp_raw, bool) else False
+    omra_raw = d.get("openai_manage_retry_at")
+    openai_manage_retry_at = omra_raw.strip() if isinstance(omra_raw, str) else ""
     hs_raw = d.get("half_sl_followup_done")
     half_sl_done = bool(hs_raw) if isinstance(hs_raw, bool) else False
     ms_raw = _as_float(d.get("managed_sl"))
@@ -345,6 +350,7 @@ def _parse_zone(d: dict[str, Any]) -> Optional[Zone]:
         tp1_followup_done=tp1_done,
         r1_followup_done=r1_done,
         has_position=has_position,
+        openai_manage_retry_at=openai_manage_retry_at,
         half_sl_followup_done=half_sl_done,
         managed_sl=ms_raw,
         managed_tp=mt_raw,

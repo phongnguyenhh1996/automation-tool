@@ -27,6 +27,7 @@ from automation_tool.tv_watchlist_daemon import (
     _openai_followup_persist_new_id,
     _openai_followup_prev_response_id,
     _entry_touched_for_position_check,
+    _entry_management_target_touched,
     _half_sl_retrace_touched,
     _should_check_managed_tp_done,
     _r1_followup_job,
@@ -602,6 +603,20 @@ def test_half_sl_retrace_touched_uses_entry_to_sl_halfway() -> None:
     )
     assert _half_sl_retrace_touched(z_sell, parsed_sell, 100.5) is True
     assert _half_sl_retrace_touched(z_sell, parsed_sell, 100.3) is False
+
+
+def test_entry_management_target_touched_for_half_sl_or_one_r() -> None:
+    parsed_buy = MagicMock(side="BUY", price=100.0, sl=99.0)
+    z = Zone(
+        id="z-manage",
+        label="plan_chinh",
+        vung_cho="99–101",
+        side="BUY",
+        status="cho_tp1",
+    )
+    assert _entry_management_target_touched(z, parsed_buy, 99.5) is True
+    assert _entry_management_target_touched(z, parsed_buy, 101.0) is True
+    assert _entry_management_target_touched(z, parsed_buy, 100.2) is False
 
 
 def test_daemon_plan_sl_loai_includes_post_entry_statuses() -> None:
