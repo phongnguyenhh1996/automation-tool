@@ -70,8 +70,10 @@ from automation_tool.mt5_manage import (
 from automation_tool.openai_errors import re_raise_unless_openai
 from automation_tool.openai_prompt_flow import (
     TP1_POST_TOUCH_USER_TEMPLATE,
+    resolve_agent_runtime,
     run_single_followup_responses,
 )
+from automation_tool.openai_agents import AgentRole, resolve_model_for_role
 
 from automation_tool.state_files import read_last_response_id, write_last_response_id
 from automation_tool.telegram_bot import (
@@ -1481,18 +1483,27 @@ def _tp1_followup_job(
             current_sl=_fmt_level_for_prompt(current_sl),
             current_tp=_fmt_level_for_prompt(current_tp),
         )
+        system_prompt, vector_store_ids = resolve_agent_runtime(
+            settings=settings,
+            role=AgentRole.TRADE_MANAGEMENT,
+            api_key=settings.openai_api_key,
+        )
         out_text, new_id = run_single_followup_responses(
             api_key=settings.openai_api_key,
-            prompt_id=settings.openai_prompt_id,
-            prompt_version=settings.openai_prompt_version,
+            system_prompt=system_prompt,
             user_text=user_text,
             coinmap_json_paths=[openai_merged],
             previous_response_id=prev or "",
-            vector_store_ids=settings.openai_vector_store_ids,
+            vector_store_ids=vector_store_ids,
             store=settings.openai_responses_store,
             include=settings.openai_responses_include,
-            # Force config for [TRADE_MANAGEMENT]
-            model="gpt-5.4-mini",
+            # [TRADE_MANAGEMENT]: allow per-agent model via OPENAI_MODEL_TRADE_MANAGEMENT.
+            model=resolve_model_for_role(
+                settings,
+                AgentRole.TRADE_MANAGEMENT,
+                override=params.openai_model_cli,
+                fallback="gpt-5.4-mini",
+            ),
             reasoning_summary="auto",
             reasoning_effort="high",
         )
@@ -1859,18 +1870,27 @@ def _r1_followup_job(
             current_sl=_fmt_level_for_prompt(current_sl),
             current_tp=_fmt_level_for_prompt(current_tp),
         )
+        system_prompt, vector_store_ids = resolve_agent_runtime(
+            settings=settings,
+            role=AgentRole.TRADE_MANAGEMENT,
+            api_key=settings.openai_api_key,
+        )
         out_text, new_id = run_single_followup_responses(
             api_key=settings.openai_api_key,
-            prompt_id=settings.openai_prompt_id,
-            prompt_version=settings.openai_prompt_version,
+            system_prompt=system_prompt,
             user_text=user_text,
             coinmap_json_paths=[openai_merged],
             previous_response_id=prev or "",
-            vector_store_ids=settings.openai_vector_store_ids,
+            vector_store_ids=vector_store_ids,
             store=settings.openai_responses_store,
             include=settings.openai_responses_include,
-            # Force config for [TRADE_MANAGEMENT]
-            model="gpt-5.4-mini",
+            # [TRADE_MANAGEMENT]: allow per-agent model via OPENAI_MODEL_TRADE_MANAGEMENT.
+            model=resolve_model_for_role(
+                settings,
+                AgentRole.TRADE_MANAGEMENT,
+                override=params.openai_model_cli,
+                fallback="gpt-5.4-mini",
+            ),
             reasoning_summary="auto",
             reasoning_effort="high",
         )
@@ -2440,18 +2460,27 @@ def _zone_touch_job(
             last_price=last_price,
             after_retry_wait=after_retry_wait,
         )
+        system_prompt, vector_store_ids = resolve_agent_runtime(
+            settings=settings,
+            role=AgentRole.INTRADAY_ALERT,
+            api_key=settings.openai_api_key,
+        )
         out_text, new_id = run_single_followup_responses(
             api_key=settings.openai_api_key,
-            prompt_id=settings.openai_prompt_id,
-            prompt_version=settings.openai_prompt_version,
+            system_prompt=system_prompt,
             user_text=user_text,
             coinmap_json_paths=[openai_merged],
             previous_response_id=prev or "",
-            vector_store_ids=settings.openai_vector_store_ids,
+            vector_store_ids=vector_store_ids,
             store=settings.openai_responses_store,
             include=settings.openai_responses_include,
-            # Force config for [INTRADAY_ALERT]
-            model="gpt-5.4-mini",
+            # [INTRADAY_ALERT]: allow per-agent model via OPENAI_MODEL_INTRADAY_ALERT.
+            model=resolve_model_for_role(
+                settings,
+                AgentRole.INTRADAY_ALERT,
+                override=params.openai_model_cli,
+                fallback="gpt-5.4-mini",
+            ),
             reasoning_summary="auto",
             reasoning_effort="high",
         )

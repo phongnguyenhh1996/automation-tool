@@ -40,8 +40,15 @@ from automation_tool.openai_prompt_flow import (
     build_intraday_update_user_text,
     default_analysis_prompt,
     is_first_intraday_update_after_all,
+    resolve_agent_runtime,
     run_analysis_responses_flow,
     run_single_followup_responses,
+)
+from automation_tool.openai_agents import (
+    AgentRole,
+    sync_knowledge_files_for_role,
+    resolve_model_for_role,
+    resolve_vector_store_ids_for_role,
 )
 from automation_tool.images import (
     CHART_SLOT_COUNT,
@@ -192,7 +199,7 @@ def _configure_stdio_utf8() -> None:
 
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Coinmap chart capture → OpenAI Responses (prompt id) → Telegram bot",
+        description="Coinmap chart capture → OpenAI Responses (source-managed prompts) → Telegram bot",
     )
     sub = p.add_subparsers(dest="command", required=True)
 
@@ -221,9 +228,20 @@ def _parser() -> argparse.ArgumentParser:
     )
     c.set_defaults(func=cmd_capture)
 
+    ovs = sub.add_parser(
+        "openai-provision-vector-stores",
+        help="Ensure vector store ids exist for all agent roles",
+    )
+    ovs.add_argument(
+        "--no-create",
+        action="store_true",
+        help="Only resolve existing env/map ids; do not auto-create missing vector stores.",
+    )
+    ovs.set_defaults(func=cmd_openai_provision_vector_stores)
+
     a = sub.add_parser(
         "analyze",
-        help="OpenAI: một lần gọi multimodal với chart (no capture; uses OPENAI_PROMPT_ID)",
+        help="OpenAI: một lần gọi multimodal với chart (no capture; uses source-managed prompts)",
     )
     a.add_argument("--charts-dir", type=Path, default=None)
     a.add_argument(
@@ -1393,6 +1411,64 @@ def cmd_browser_tail(args: argparse.Namespace) -> None:
         print("\nStopped.", flush=True)
 
 
+def cmd_openai_provision_vector_stores(args: argparse.Namespace) -> None:
+    s = load_settings()
+    if not s.openai_api_key:
+        raise SystemExit("OPENAI_API_KEY is required.")
+    if not (s.openai_model or "").strip():
+        raise SystemExit(
+            "OPENAI_MODEL is required (source-managed prompts mode requires explicit model)."
+        )
+
+    old_auto = bool(s.openai_auto_create_agent_vector_store)
+    try:
+        if not bool(getattr(args, "no_create", False)):
+            s.openai_auto_create_agent_vector_store = True
+        rows: list[tuple[str, str, list[str], list[str], list[str]]] = []
+        for role in (
+            AgentRole.FULL_ANALYSIS,
+            AgentRole.INTRADAY_ALERT,
+            AgentRole.INTRADAY_UPDATE,
+            AgentRole.TRADE_MANAGEMENT,
+            AgentRole.RETROSPECTIVE,
+        ):
+            ids = resolve_vector_store_ids_for_role(
+                settings=s,
+                role=role,
+                api_key=s.openai_api_key,
+            )
+            if ids:
+                sync = sync_knowledge_files_for_role(
+                    api_key=s.openai_api_key,
+                    vector_store_id=ids[0],
+                    role=role,
+                )
+                rows.append(
+                    (
+                        role.value,
+                        ", ".join(ids),
+                        sync["uploaded"],
+                        sync["skipped"],
+                        sync["missing"],
+                    )
+                )
+            else:
+                rows.append((role.value, "(none)", [], [], []))
+    finally:
+        s.openai_auto_create_agent_vector_store = old_auto
+
+    print(f"Map file: {s.openai_agent_vector_stores_map_path}")
+    print("Agent vector stores:")
+    for role_name, ids, uploaded, skipped, missing in rows:
+        print(f"  - {role_name}: {ids}")
+        if uploaded:
+            print(f"      uploaded: {', '.join(uploaded)}")
+        if skipped:
+            print(f"      skipped(attached): {', '.join(skipped)}")
+        if missing:
+            print(f"      missing(local): {', '.join(missing)}")
+
+
 def _run_openai_flow(
     s,
     charts_dir: Path,
@@ -1406,14 +1482,23 @@ def _run_openai_flow(
     purge_openai_user_data_files: bool | None = None,
     model: str | None = None,
 ) -> PromptTwoStepResult:
+    system_prompt, vector_store_ids = resolve_agent_runtime(
+        settings=s,
+        role=AgentRole.FULL_ANALYSIS,
+        api_key=s.openai_api_key,
+    )
+    model = resolve_model_for_role(
+        s,
+        AgentRole.FULL_ANALYSIS,
+        override=model,
+    )
     return run_analysis_responses_flow(
         api_key=s.openai_api_key,
-        prompt_id=s.openai_prompt_id,
-        prompt_version=s.openai_prompt_version,
+        system_prompt=system_prompt,
         charts_dir=charts_dir,
         analysis_prompt=analysis_prompt,
         max_images_per_call=max_images,
-        vector_store_ids=s.openai_vector_store_ids,
+        vector_store_ids=vector_store_ids,
         store=s.openai_responses_store,
         include=s.openai_responses_include,
         chart_paths=chart_paths,
@@ -2591,19 +2676,28 @@ def cmd_update(args: argparse.Namespace) -> None:
         )
 
     try:
+        system_prompt, vector_store_ids = resolve_agent_runtime(
+            settings=s,
+            role=AgentRole.INTRADAY_UPDATE,
+            api_key=s.openai_api_key,
+        )
+        model = resolve_model_for_role(
+            s,
+            AgentRole.INTRADAY_UPDATE,
+            override=getattr(args, "model", None),
+        )
         out_text, new_id = run_single_followup_responses(
             api_key=s.openai_api_key,
-            prompt_id=s.openai_prompt_id,
-            prompt_version=s.openai_prompt_version,
+            system_prompt=system_prompt,
             user_text=user_msg,
             morning_snapshot_path=morning_snapshot,
             coinmap_json_paths=coinmap_paths,
             extra_chart_payloads=tv_ict_payloads,
             previous_response_id=prev_for_openai,
-            vector_store_ids=s.openai_vector_store_ids,
+            vector_store_ids=vector_store_ids,
             store=s.openai_responses_store,
             include=s.openai_responses_include,
-            model=resolved_openai_model(s, getattr(args, "model", None)),
+            model=model,
         )
     except Exception as e:
         re_raise_unless_openai(e)

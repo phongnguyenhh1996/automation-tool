@@ -47,11 +47,26 @@ class Settings:
     coinmap_password: Optional[str]
     tradingview_password: Optional[str]
     openai_api_key: str
-    openai_prompt_id: str
-    openai_prompt_version: Optional[str]
-    # Optional model id for Responses API (overrides model saved on the dashboard prompt).
+    # Model id for Responses API (required when using source-managed prompts).
     openai_model: Optional[str]
+    openai_model_full_analysis: Optional[str]
+    openai_model_intraday_alert: Optional[str]
+    openai_model_intraday_update: Optional[str]
+    openai_model_trade_management: Optional[str]
+    openai_model_retrospective: Optional[str]
     openai_vector_store_ids: list[str]
+    openai_vector_store_ids_full_analysis: list[str]
+    openai_vector_store_ids_intraday_alert: list[str]
+    openai_vector_store_ids_intraday_update: list[str]
+    openai_vector_store_ids_trade_management: list[str]
+    openai_vector_store_ids_retrospective: list[str]
+    openai_system_prompt_full_analysis_path: Path
+    openai_system_prompt_intraday_alert_path: Path
+    openai_system_prompt_intraday_update_path: Path
+    openai_system_prompt_trade_management_path: Path
+    openai_system_prompt_retrospective_path: Path
+    openai_agent_vector_stores_map_path: Path
+    openai_auto_create_agent_vector_store: bool
     openai_responses_store: bool
     openai_responses_include: List[str]
     telegram_bot_token: str
@@ -128,6 +143,35 @@ def _parse_vector_store_ids() -> list[str]:
     return [p.strip() for p in raw.split(",") if p.strip()]
 
 
+def _parse_vector_store_ids_for_agent(agent_suffix: str, fallback: list[str]) -> list[str]:
+    raw = (
+        os.getenv(f"OPENAI_VECTOR_STORE_IDS_{agent_suffix}")
+        or os.getenv(f"OPENAI_VECTOR_STORE_ID_{agent_suffix}")
+        or ""
+    ).strip()
+    if not raw:
+        return list(fallback)
+    return [p.strip() for p in raw.split(",") if p.strip()]
+
+
+def _parse_model_for_agent(agent_suffix: str, fallback: Optional[str]) -> Optional[str]:
+    raw = (os.getenv(f"OPENAI_MODEL_{agent_suffix}") or "").strip()
+    if raw:
+        return raw
+    return (fallback or "").strip() or None
+
+
+def _default_agent_prompts_dir() -> Path:
+    return _root() / "prompts" / "agents"
+
+
+def _agent_prompt_path(agent_suffix: str, default_filename: str) -> Path:
+    raw = (os.getenv(f"OPENAI_SYSTEM_PROMPT_{agent_suffix}_PATH") or "").strip()
+    if raw:
+        return Path(raw)
+    return _default_agent_prompts_dir() / default_filename
+
+
 def _parse_telegram_parse_mode() -> Optional[str]:
     raw = (os.getenv("TELEGRAM_PARSE_MODE") or "").strip()
     if not raw:
@@ -141,16 +185,57 @@ def _parse_telegram_parse_mode() -> Optional[str]:
 
 
 def load_settings() -> Settings:
-    ver = (os.getenv("OPENAI_PROMPT_VERSION") or "").strip()
+    global_vs = _parse_vector_store_ids()
+    global_model = ((os.getenv("OPENAI_MODEL") or "").strip() or None)
     return Settings(
         coinmap_email=os.getenv("COINMAP_EMAIL") or None,
         coinmap_password=os.getenv("COINMAP_PASSWORD") or None,
         tradingview_password=os.getenv("TRADINGVIEW_PASSWORD") or None,
         openai_api_key=os.getenv("OPENAI_API_KEY", ""),
-        openai_prompt_id=(os.getenv("OPENAI_PROMPT_ID") or "").strip(),
-        openai_prompt_version=ver if ver else None,
-        openai_model=((os.getenv("OPENAI_MODEL") or "").strip() or None),
-        openai_vector_store_ids=_parse_vector_store_ids(),
+        openai_model=global_model,
+        openai_model_full_analysis=_parse_model_for_agent("FULL_ANALYSIS", global_model),
+        openai_model_intraday_alert=_parse_model_for_agent("INTRADAY_ALERT", global_model),
+        openai_model_intraday_update=_parse_model_for_agent("INTRADAY_UPDATE", global_model),
+        openai_model_trade_management=_parse_model_for_agent("TRADE_MANAGEMENT", global_model),
+        openai_model_retrospective=_parse_model_for_agent("RETROSPECTIVE", global_model),
+        openai_vector_store_ids=global_vs,
+        openai_vector_store_ids_full_analysis=_parse_vector_store_ids_for_agent(
+            "FULL_ANALYSIS", global_vs
+        ),
+        openai_vector_store_ids_intraday_alert=_parse_vector_store_ids_for_agent(
+            "INTRADAY_ALERT", global_vs
+        ),
+        openai_vector_store_ids_intraday_update=_parse_vector_store_ids_for_agent(
+            "INTRADAY_UPDATE", global_vs
+        ),
+        openai_vector_store_ids_trade_management=_parse_vector_store_ids_for_agent(
+            "TRADE_MANAGEMENT", global_vs
+        ),
+        openai_vector_store_ids_retrospective=_parse_vector_store_ids_for_agent(
+            "RETROSPECTIVE", global_vs
+        ),
+        openai_system_prompt_full_analysis_path=_agent_prompt_path(
+            "FULL_ANALYSIS", "full_analysis.system.md"
+        ),
+        openai_system_prompt_intraday_alert_path=_agent_prompt_path(
+            "INTRADAY_ALERT", "intraday_alert.system.md"
+        ),
+        openai_system_prompt_intraday_update_path=_agent_prompt_path(
+            "INTRADAY_UPDATE", "intraday_update.system.md"
+        ),
+        openai_system_prompt_trade_management_path=_agent_prompt_path(
+            "TRADE_MANAGEMENT", "trade_management.system.md"
+        ),
+        openai_system_prompt_retrospective_path=_agent_prompt_path(
+            "RETROSPECTIVE", "retrospective.system.md"
+        ),
+        openai_agent_vector_stores_map_path=Path(
+            (os.getenv("OPENAI_AGENT_VECTOR_STORES_MAP_PATH") or "").strip()
+            or (default_data_dir() / "openai_agent_vector_stores.json")
+        ),
+        openai_auto_create_agent_vector_store=_env_bool(
+            "OPENAI_AUTO_CREATE_AGENT_VECTOR_STORE", True
+        ),
         openai_responses_store=_env_bool("OPENAI_RESPONSES_STORE", True),
         openai_responses_include=_parse_include(),
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
@@ -174,7 +259,6 @@ def load_settings() -> Settings:
 def resolved_openai_model(settings: Settings, override: Optional[str] = None) -> Optional[str]:
     """
     Model id for ``responses.create``: ``override`` (e.g. CLI ``--model``) wins, else ``OPENAI_MODEL``.
-    Returns None to let the API use the model configured on the stored prompt.
     """
     o = (override or "").strip()
     if o:
@@ -186,8 +270,10 @@ def resolved_openai_model(settings: Settings, override: Optional[str] = None) ->
 def require_openai(s: Settings) -> None:
     if not s.openai_api_key:
         raise SystemExit("OPENAI_API_KEY is required.")
-    if not s.openai_prompt_id:
-        raise SystemExit("OPENAI_PROMPT_ID is required (dashboard prompt id, e.g. pmpt_...).")
+    if not (s.openai_model or "").strip():
+        raise SystemExit(
+            "OPENAI_MODEL is required when using source-managed prompts (no OPENAI_PROMPT_ID)."
+        )
 
 
 def require_telegram(s: Settings) -> None:

@@ -48,8 +48,10 @@ from automation_tool.openai_errors import re_raise_unless_openai
 from automation_tool.openai_prompt_flow import (
     JOURNAL_INTRADAY_FIRST_USER_TEMPLATE,
     JOURNAL_INTRADAY_RETRY_USER_TEMPLATE,
+    resolve_agent_runtime,
     run_single_followup_responses,
 )
+from automation_tool.openai_agents import AgentRole, resolve_model_for_role
 from automation_tool.state_files import (
     LOAI,
     VAO_LENH,
@@ -457,19 +459,28 @@ def run_intraday_touch_flow(
 
         # Run OpenAI request in background so we can continue polling `last` and supersede touches.
         try:
+            system_prompt, vector_store_ids = resolve_agent_runtime(
+                settings=settings,
+                role=AgentRole.INTRADAY_ALERT,
+                api_key=settings.openai_api_key,
+            )
             out_text, new_id = _run_worker_in_background_with_poll(
                 worker=lambda: run_single_followup_responses(
                     api_key=settings.openai_api_key,
-                    prompt_id=settings.openai_prompt_id,
-                    prompt_version=settings.openai_prompt_version,
+                    system_prompt=system_prompt,
                     user_text=user_msg,
                     coinmap_json_paths=[openai_merged],
                     previous_response_id=prev_id,
-                    vector_store_ids=settings.openai_vector_store_ids,
+                    vector_store_ids=vector_store_ids,
                     store=settings.openai_responses_store,
                     include=settings.openai_responses_include,
-                    # Force config for [INTRADAY_ALERT]
-                    model="gpt-5.4-mini",
+                    # [INTRADAY_ALERT]: allow per-agent model via OPENAI_MODEL_INTRADAY_ALERT.
+                    model=resolve_model_for_role(
+                        settings,
+                        AgentRole.INTRADAY_ALERT,
+                        override=params.openai_model_cli,
+                        fallback="gpt-5.4-mini",
+                    ),
                     reasoning_summary="auto",
                     reasoning_effort="high",
                 ),

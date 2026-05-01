@@ -40,8 +40,10 @@ from automation_tool.mt5_openai_parse import ParsedTrade, parse_openai_output_md
 from automation_tool.openai_analysis_json import arm_threshold_tp1_for_label
 from automation_tool.openai_prompt_flow import (
     TP1_POST_TOUCH_USER_TEMPLATE,
+    resolve_agent_runtime,
     run_single_followup_responses,
 )
+from automation_tool.openai_agents import AgentRole, resolve_model_for_role
 from automation_tool.state_files import (
     CHO_TP1,
     LOAI,
@@ -385,18 +387,26 @@ def _run_tp1_openai_and_act(
         current_sl=_fmt_level_for_prompt(current_sl),
         current_tp=_fmt_level_for_prompt(current_tp),
     )
+    system_prompt, vector_store_ids = resolve_agent_runtime(
+        settings=settings,
+        role=AgentRole.TRADE_MANAGEMENT,
+        api_key=settings.openai_api_key,
+    )
     out_text, new_id = run_single_followup_responses(
         api_key=settings.openai_api_key,
-        prompt_id=settings.openai_prompt_id,
-        prompt_version=settings.openai_prompt_version,
+        system_prompt=system_prompt,
         user_text=user_msg,
         coinmap_json_paths=[openai_merged],
         previous_response_id=prev_response_id,
-        vector_store_ids=settings.openai_vector_store_ids,
+        vector_store_ids=vector_store_ids,
         store=settings.openai_responses_store,
         include=settings.openai_responses_include,
-        # Force config for [TRADE_MANAGEMENT]
-        model="gpt-5.4-mini",
+        # [TRADE_MANAGEMENT]: allow per-agent model via OPENAI_MODEL_TRADE_MANAGEMENT.
+        model=resolve_model_for_role(
+            settings,
+            AgentRole.TRADE_MANAGEMENT,
+            fallback="gpt-5.4-mini",
+        ),
         reasoning_summary="auto",
         reasoning_effort="high",
     )

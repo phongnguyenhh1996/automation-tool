@@ -152,6 +152,10 @@ def test_chinh_trade_line_failure_does_not_create_new_order(monkeypatch, tmp_pat
             "new-response-id",
         ),
     )
+    monkeypatch.setattr(
+        "automation_tool.tp1_followup.resolve_agent_runtime",
+        lambda **_k: ("prompt", []),
+    )
     close_calls: list[object] = []
     execute_calls: list[object] = []
     monkeypatch.setattr(
@@ -193,9 +197,6 @@ def test_chinh_trade_line_failure_does_not_create_new_order(monkeypatch, tmp_pat
     settings.telegram_bot_token = ""
     settings.telegram_parse_mode = None
     settings.openai_api_key = "key"
-    settings.openai_prompt_id = "prompt"
-    settings.openai_prompt_version = None
-    settings.openai_vector_store_ids = []
     settings.openai_responses_store = True
     settings.openai_responses_include = None
     params = SimpleNamespace(
@@ -288,6 +289,10 @@ def test_chinh_trade_line_success_keeps_status_and_sends_manage_action(monkeypat
         ),
     )
     monkeypatch.setattr(
+        "automation_tool.tp1_followup.resolve_agent_runtime",
+        lambda **_k: ("prompt", []),
+    )
+    monkeypatch.setattr(
         "automation_tool.tp1_followup.mt5_chinh_trade_line_all_accounts",
         lambda *a, **k: SimpleNamespace(
             ok_all_inplace=True,
@@ -310,9 +315,6 @@ def test_chinh_trade_line_success_keeps_status_and_sends_manage_action(monkeypat
     settings.telegram_log_chat_id = None
     settings.telegram_parse_mode = None
     settings.openai_api_key = "key"
-    settings.openai_prompt_id = "prompt"
-    settings.openai_prompt_version = None
-    settings.openai_vector_store_ids = []
     settings.openai_responses_store = True
     settings.openai_responses_include = None
     params = SimpleNamespace(
@@ -402,6 +404,10 @@ def test_trade_management_does_not_send_raw_json_to_telegram(monkeypatch, tmp_pa
             "new-response-id",
         ),
     )
+    monkeypatch.setattr(
+        "automation_tool.tp1_followup.resolve_agent_runtime",
+        lambda **_k: ("prompt", []),
+    )
     raw_sends: list[str] = []
     monkeypatch.setattr(
         "automation_tool.tp1_followup.send_openai_output_to_telegram",
@@ -423,9 +429,6 @@ def test_trade_management_does_not_send_raw_json_to_telegram(monkeypatch, tmp_pa
     settings.telegram_log_chat_id = None
     settings.telegram_parse_mode = None
     settings.openai_api_key = "key"
-    settings.openai_prompt_id = "prompt"
-    settings.openai_prompt_version = None
-    settings.openai_vector_store_ids = []
     settings.openai_responses_store = True
     settings.openai_responses_include = None
     params = SimpleNamespace(
@@ -511,6 +514,10 @@ def test_tp1_followup_prompt_includes_current_sltp(monkeypatch, tmp_path) -> Non
         return ('{"hanh_dong_quan_ly_lenh":"giu_nguyen","reason":"Giữ nguyên."}', "new-response-id")
 
     monkeypatch.setattr("automation_tool.tp1_followup.run_single_followup_responses", fake_followup)
+    monkeypatch.setattr(
+        "automation_tool.tp1_followup.resolve_agent_runtime",
+        lambda **_k: ("prompt", []),
+    )
     settings = MagicMock()
     settings.coinmap_email = ""
     settings.coinmap_password = ""
@@ -518,9 +525,6 @@ def test_tp1_followup_prompt_includes_current_sltp(monkeypatch, tmp_path) -> Non
     settings.telegram_bot_token = ""
     settings.telegram_parse_mode = None
     settings.openai_api_key = "key"
-    settings.openai_prompt_id = "prompt"
-    settings.openai_prompt_version = None
-    settings.openai_vector_store_ids = []
     settings.openai_responses_store = True
     settings.openai_responses_include = None
     params = SimpleNamespace(

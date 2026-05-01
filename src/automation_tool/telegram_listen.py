@@ -14,8 +14,9 @@ from typing import Any, Optional
 
 import httpx
 
-from automation_tool.config import Settings, resolved_openai_model
-from automation_tool.openai_prompt_flow import run_text_followup_responses
+from automation_tool.config import Settings
+from automation_tool.openai_prompt_flow import resolve_agent_runtime, run_text_followup_responses
+from automation_tool.openai_agents import AgentRole, resolve_model_for_role
 from automation_tool.telegram_bot import send_message, send_openai_output_to_telegram
 
 _log = logging.getLogger("automation_tool.telegram_listen")
@@ -484,16 +485,24 @@ def run_telegram_listener(
                         if not ask_body.upper().startswith("[RETROSPECTIVE"):
                             ask_body = f"[RETROSPECTIVE_ANALYSIS]\n{ask_body}"
                         try:
+                            system_prompt, vector_store_ids = resolve_agent_runtime(
+                                settings=settings,
+                                role=AgentRole.RETROSPECTIVE,
+                                api_key=settings.openai_api_key,
+                            )
                             out_text, new_id = run_text_followup_responses(
                                 api_key=settings.openai_api_key,
-                                prompt_id=settings.openai_prompt_id,
-                                prompt_version=settings.openai_prompt_version,
+                                system_prompt=system_prompt,
                                 user_text=ask_body,
                                 previous_response_id=openai_response_id,
-                                vector_store_ids=settings.openai_vector_store_ids,
+                                vector_store_ids=vector_store_ids,
                                 store=settings.openai_responses_store,
                                 include=settings.openai_responses_include,
-                                model=resolved_openai_model(settings, params.openai_model),
+                                model=resolve_model_for_role(
+                                    settings,
+                                    AgentRole.RETROSPECTIVE,
+                                    override=params.openai_model,
+                                ),
                             )
                             # Best-effort: show the chained response id for traceability.
                             if new_id:

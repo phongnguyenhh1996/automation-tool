@@ -3,8 +3,8 @@ from __future__ import annotations
 """
 OpenAI Responses: user turns are short routing tags + context.
 
-Full trading/output rules live in the OpenAI Prompt (``OPENAI_PROMPT_ID``) — keep that
-prompt in sync with ``system-prompt.md`` at the repo root. Do not duplicate schema here.
+Full trading/output rules are loaded from source-managed prompt files (see
+``prompts/agents/*.system.md``). Do not duplicate schema logic here.
 """
 
 import base64
@@ -18,6 +18,12 @@ from typing import Any, NamedTuple, Optional
 
 from openai import OpenAI
 
+from automation_tool.config import Settings
+from automation_tool.openai_agents import (
+    AgentRole,
+    load_system_prompt,
+    resolve_vector_store_ids_for_role,
+)
 from automation_tool.coinmap_openai_slim import (
     should_slim_coinmap_json_path,
     slim_coinmap_export_for_openai,
@@ -35,6 +41,9 @@ from automation_tool.state_files import MORNING_FULL_ANALYSIS_FILENAME
 from automation_tool.zones_state import format_intraday_update_time_line
 
 _log = logging.getLogger(__name__)
+_DEFAULT_TEXT_FORMAT = "text"
+_DEFAULT_TEXT_VERBOSITY = "medium"
+_DEFAULT_REASONING_EFFORT = "medium"
 
 
 class PromptTwoStepResult(NamedTuple):
@@ -263,23 +272,30 @@ def _build_mixed_chart_user_content(
     return parts
 
 
-def _prompt_dict(prompt_id: str, prompt_version: str | None) -> dict[str, Any]:
-    d: dict[str, Any] = {"id": prompt_id}
-    if prompt_version:
-        d["version"] = prompt_version
-    return d
-
-
 def _merge_model(common: dict[str, Any], model: str | None) -> None:
     if model and str(model).strip():
         common["model"] = str(model).strip()
 
 
+def resolve_agent_runtime(
+    *,
+    settings: Settings,
+    role: AgentRole,
+    api_key: str,
+) -> tuple[str, list[str]]:
+    system_prompt = load_system_prompt(settings, role)
+    vector_store_ids = resolve_vector_store_ids_for_role(
+        settings=settings,
+        role=role,
+        api_key=api_key,
+    )
+    return system_prompt, vector_store_ids
+
+
 def run_analysis_responses_flow(
     *,
     api_key: str,
-    prompt_id: str,
-    prompt_version: str | None,
+    system_prompt: str,
     charts_dir: Path,
     analysis_prompt: str,
     max_images_per_call: int,
@@ -287,6 +303,9 @@ def run_analysis_responses_flow(
     store: bool,
     include: list[str],
     reasoning_summary: str = "auto",
+    reasoning_effort: str | None = _DEFAULT_REASONING_EFFORT,
+    text_format: str = _DEFAULT_TEXT_FORMAT,
+    text_verbosity: str | None = _DEFAULT_TEXT_VERBOSITY,
     chart_paths: list[Path] | None = None,
     chart_payloads: list[ChartOpenAIPayload] | None = None,
     max_coinmap_json_chars: int | None = None,
@@ -311,7 +330,6 @@ def run_analysis_responses_flow(
     if not (analysis_prompt or "").strip():
         analysis_prompt = default_analysis_prompt(read_main_chart_symbol(charts_dir))
     client = OpenAI(api_key=api_key)
-    prompt = _prompt_dict(prompt_id, prompt_version)
     tools: list[dict[str, Any]] = []
     if vector_store_ids:
         tools.append(
@@ -322,13 +340,22 @@ def run_analysis_responses_flow(
         )
 
     reasoning: dict[str, Any] = {"summary": reasoning_summary}
+    _eff = (reasoning_effort or "").strip()
+    if _eff:
+        reasoning["effort"] = _eff
 
     common: dict[str, Any] = {
-        "prompt": prompt,
+        "instructions": system_prompt,
         "store": store,
         "include": include,
         "reasoning": reasoning,
+        "text": {
+            "format": {"type": (text_format or _DEFAULT_TEXT_FORMAT)},
+        },
     }
+    _verb = (text_verbosity or "").strip()
+    if _verb:
+        common["text"]["verbosity"] = _verb
     if tools:
         common["tools"] = tools
     _merge_model(common, model)
@@ -400,8 +427,7 @@ def run_analysis_responses_flow(
 def run_prompt_two_step_flow(
     *,
     api_key: str,
-    prompt_id: str,
-    prompt_version: str | None,
+    system_prompt: str,
     charts_dir: Path,
     first_prompt: str,
     follow_up_prompt: str,
@@ -410,6 +436,9 @@ def run_prompt_two_step_flow(
     store: bool,
     include: list[str],
     reasoning_summary: str = "auto",
+    reasoning_effort: str | None = _DEFAULT_REASONING_EFFORT,
+    text_format: str = _DEFAULT_TEXT_FORMAT,
+    text_verbosity: str | None = _DEFAULT_TEXT_VERBOSITY,
     chart_paths: list[Path] | None = None,
     chart_payloads: list[ChartOpenAIPayload] | None = None,
     max_coinmap_json_chars: int | None = None,
@@ -428,8 +457,7 @@ def run_prompt_two_step_flow(
         analysis_prompt = a or default_analysis_prompt(read_main_chart_symbol(charts_dir))
     return run_analysis_responses_flow(
         api_key=api_key,
-        prompt_id=prompt_id,
-        prompt_version=prompt_version,
+        system_prompt=system_prompt,
         charts_dir=charts_dir,
         analysis_prompt=analysis_prompt,
         max_images_per_call=max_images_per_call,
@@ -437,6 +465,9 @@ def run_prompt_two_step_flow(
         store=store,
         include=include,
         reasoning_summary=reasoning_summary,
+        reasoning_effort=reasoning_effort,
+        text_format=text_format,
+        text_verbosity=text_verbosity,
         chart_paths=chart_paths,
         chart_payloads=chart_payloads,
         max_coinmap_json_chars=max_coinmap_json_chars,
@@ -569,8 +600,7 @@ R1_POST_TOUCH_USER_TEMPLATE = (
 def run_single_followup_responses(
     *,
     api_key: str,
-    prompt_id: str,
-    prompt_version: str | None,
+    system_prompt: str,
     user_text: str,
     coinmap_json_paths: Sequence[Path],
     extra_chart_payloads: Sequence[ChartOpenAIPayload] | None = None,
@@ -580,7 +610,9 @@ def run_single_followup_responses(
     store: bool,
     include: list[str],
     reasoning_summary: str | None = "auto",
-    reasoning_effort: str | None = None,
+    reasoning_effort: str | None = _DEFAULT_REASONING_EFFORT,
+    text_format: str = _DEFAULT_TEXT_FORMAT,
+    text_verbosity: str | None = _DEFAULT_TEXT_VERBOSITY,
     max_coinmap_json_chars: int | None = None,
     model: str | None = None,
 ) -> tuple[str, str]:
@@ -593,8 +625,8 @@ def run_single_followup_responses(
     Otherwise chains to that id (intraday alert, TP1, etc.).
 
     ``reasoning_summary`` / ``reasoning_effort``: when ``reasoning_summary`` is ``None``, the request
-    omits the ``reasoning`` field so the stored prompt (dashboard) controls reasoning. Otherwise
-    ``reasoning`` is sent; non-empty ``reasoning_effort`` adds ``reasoning.effort``.
+    omits the ``reasoning`` field. Otherwise ``reasoning`` is sent; non-empty
+    ``reasoning_effort`` adds ``reasoning.effort``.
     """
     paths: list[Path] = []
     if morning_snapshot_path is not None:
@@ -614,7 +646,6 @@ def run_single_followup_responses(
             raise FileNotFoundError(f"JSON attachment not found: {p}")
 
     client = OpenAI(api_key=api_key)
-    prompt = _prompt_dict(prompt_id, prompt_version)
     tools: list[dict[str, Any]] = []
     if vector_store_ids:
         tools.append(
@@ -625,10 +656,16 @@ def run_single_followup_responses(
         )
 
     common: dict[str, Any] = {
-        "prompt": prompt,
+        "instructions": system_prompt,
         "store": store,
         "include": include,
+        "text": {
+            "format": {"type": (text_format or _DEFAULT_TEXT_FORMAT)},
+        },
     }
+    _verb = (text_verbosity or "").strip()
+    if _verb:
+        common["text"]["verbosity"] = _verb
     if reasoning_summary is not None:
         reasoning: dict[str, Any] = {"summary": reasoning_summary}
         _eff = (reasoning_effort or "").strip()
@@ -671,14 +708,16 @@ def run_single_followup_responses(
 def run_text_followup_responses(
     *,
     api_key: str,
-    prompt_id: str,
-    prompt_version: str | None,
+    system_prompt: str,
     user_text: str,
     previous_response_id: str,
     vector_store_ids: list[str],
     store: bool,
     include: list[str],
     reasoning_summary: str = "auto",
+    reasoning_effort: str | None = _DEFAULT_REASONING_EFFORT,
+    text_format: str = _DEFAULT_TEXT_FORMAT,
+    text_verbosity: str | None = _DEFAULT_TEXT_VERBOSITY,
     model: str | None = None,
 ) -> tuple[str, str]:
     """
@@ -687,7 +726,6 @@ def run_text_followup_responses(
     Returns ``(output_text, new_response_id)``.
     """
     client = OpenAI(api_key=api_key)
-    prompt = _prompt_dict(prompt_id, prompt_version)
     tools: list[dict[str, Any]] = []
     if vector_store_ids:
         tools.append(
@@ -698,13 +736,22 @@ def run_text_followup_responses(
         )
 
     reasoning: dict[str, Any] = {"summary": reasoning_summary}
+    _eff = (reasoning_effort or "").strip()
+    if _eff:
+        reasoning["effort"] = _eff
 
     common: dict[str, Any] = {
-        "prompt": prompt,
+        "instructions": system_prompt,
         "store": store,
         "include": include,
         "reasoning": reasoning,
+        "text": {
+            "format": {"type": (text_format or _DEFAULT_TEXT_FORMAT)},
+        },
     }
+    _verb = (text_verbosity or "").strip()
+    if _verb:
+        common["text"]["verbosity"] = _verb
     if tools:
         common["tools"] = tools
     _merge_model(common, model)
