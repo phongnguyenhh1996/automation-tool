@@ -29,6 +29,7 @@ from automation_tool.tv_watchlist_daemon import (
     _entry_touched_for_position_check,
     _entry_management_target_touched,
     _half_sl_retrace_touched,
+    _max_r_multiple_reached,
     _should_check_managed_tp_done,
     _r1_followup_job,
     _should_write_intraday_alert_anchor,
@@ -603,6 +604,35 @@ def test_half_sl_retrace_touched_uses_entry_to_sl_halfway() -> None:
     )
     assert _half_sl_retrace_touched(z_sell, parsed_sell, 100.5) is True
     assert _half_sl_retrace_touched(z_sell, parsed_sell, 100.3) is False
+
+
+def test_half_sl_retrace_touched_uses_original_trade_sl_even_if_managed_sl_exists() -> None:
+    parsed_sell = MagicMock(side="SELL", price=100.0, sl=101.0)
+    z_sell = Zone(
+        id="z-sell-managed",
+        label="plan_chinh",
+        vung_cho="99–101",
+        side="SELL",
+        status="cho_tp1",
+        managed_sl=100.2,
+    )
+    # -0.5R theo SL gốc: 100 + 0.5*(101-100) = 100.5
+    assert _half_sl_retrace_touched(z_sell, parsed_sell, 100.5) is True
+    assert _half_sl_retrace_touched(z_sell, parsed_sell, 100.4) is False
+
+
+def test_max_r_multiple_reached_uses_original_trade_sl_even_if_managed_sl_exists() -> None:
+    parsed_sell = MagicMock(side="SELL", price=4630.5, sl=4637.5)
+    z = Zone(
+        id="z-r-fixed",
+        label="scalp",
+        vung_cho="4629.8–4631.2",
+        side="SELL",
+        status="cho_tp1",
+        managed_sl=4632.0,
+    )
+    # Risk theo SL gốc: 7.0; favorable = 4630.5 - 4625.167 = 5.333 => floor(0.7618) = 0R
+    assert _max_r_multiple_reached(z, parsed_sell, 4625.167) == 0
 
 
 def test_entry_management_target_touched_for_half_sl_or_one_r() -> None:

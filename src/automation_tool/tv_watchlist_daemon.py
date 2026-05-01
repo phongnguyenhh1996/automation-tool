@@ -1127,14 +1127,16 @@ def _favorable_distance_from_entry(parsed, p_last: float) -> float:
 
 
 def _risk_distance_with_zone_override(zone: Zone, parsed) -> float:
+    _ = zone
     ref = _entry_reference_price(parsed)
-    sl_ref = getattr(zone, "managed_sl", None)
-    sl = float(sl_ref) if sl_ref is not None else float(parsed.sl)
+    # R multiple luôn neo theo SL gốc trong trade_line (parsed.sl),
+    # không đổi theo managed_sl để tránh "nhảy R" sau khi dời SL.
+    sl = float(parsed.sl)
     return abs(ref - sl)
 
 
 def _max_r_multiple_reached(zone: Zone, parsed, p_last: float, *, eps: float = _TP1_EPS) -> int:
-    """Largest integer R-level reached from entry using SL override when available."""
+    """Largest integer R-level reached from entry using original trade SL."""
     risk = _risk_distance_with_zone_override(zone, parsed)
     if risk <= 0:
         return 0
@@ -1151,8 +1153,9 @@ def _half_sl_retrace_touched(zone: Zone, parsed, p_last: float, *, eps: float = 
     Chỉ áp dụng khi SL nằm đúng phía rủi ro (BUY: SL < entry, SELL: SL > entry).
     """
     ref = _entry_reference_price(parsed)
-    sl_ref = getattr(zone, "managed_sl", None)
-    sl = float(sl_ref) if sl_ref is not None else float(parsed.sl)
+    _ = zone
+    # Mốc -0.5R cũng neo theo SL gốc trong trade_line.
+    sl = float(parsed.sl)
     side = str(getattr(parsed, "side", "") or "").strip().upper()
     if side == "BUY":
         risk = ref - sl
