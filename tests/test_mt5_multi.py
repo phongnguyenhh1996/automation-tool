@@ -11,7 +11,11 @@ import pytest
 from automation_tool.mt5_accounts import MT5AccountEntry, LotRuleFixed, LotRuleFromTrade
 from automation_tool.mt5_execute import MT5ExecutionResult
 from automation_tool.mt5_manage import MT5ManageResult
-from automation_tool.mt5_multi import execute_trade_all_accounts, mt5_partial_close_tp1_all_accounts
+from automation_tool.mt5_multi import (
+    execute_trade_all_accounts,
+    mt5_cancel_pending_or_close_all_accounts,
+    mt5_partial_close_tp1_all_accounts,
+)
 from automation_tool.mt5_openai_parse import parse_openai_output_md
 
 
@@ -221,6 +225,88 @@ def test_execute_trade_all_accounts_uses_account_entry_take_profit(
     summ = execute_trade_all_accounts(sample_trade, accounts, dry_run=True)
     assert summ.ok_all
     assert seen == [("acc_tp1", "tp1"), ("acc_tp2", "tp2")]
+
+
+def test_cancel_close_all_accounts_retries_failed_position_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    accounts = [
+        MT5AccountEntry(
+            id="acc_a",
+            terminal_path="/tmp/mt5-acc-a/terminal64.exe",
+            login=1,
+            password="p",
+            server="srv",
+            primary=True,
+            lot=LotRuleFromTrade(),
+        ),
+    ]
+    calls: list[int] = []
+
+    def fake_cancel_close(ticket, **kwargs):
+        calls.append(int(ticket))
+        if len(calls) < 3:
+            return MT5ManageResult(
+                ok=False,
+                message=f"Đóng position thất bại lần {len(calls)}",
+                kind="position",
+            )
+        return MT5ManageResult(ok=True, message="Đã đóng position", kind="position")
+
+    monkeypatch.setattr(
+        "automation_tool.mt5_multi.mt5_cancel_pending_or_close_position",
+        fake_cancel_close,
+    )
+
+    summary = mt5_cancel_pending_or_close_all_accounts(
+        {"acc_a": 101},
+        accounts,
+        dry_run=False,
+    )
+
+    assert summary.ok_all
+    assert calls == [101, 101, 101]
+    assert summary.results[0][1].message == "Đã đóng position"
+
+
+def test_cancel_close_all_accounts_does_not_retry_pending_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    accounts = [
+        MT5AccountEntry(
+            id="acc_a",
+            terminal_path="/tmp/mt5-acc-a/terminal64.exe",
+            login=1,
+            password="p",
+            server="srv",
+            primary=True,
+            lot=LotRuleFromTrade(),
+        ),
+    ]
+    calls: list[int] = []
+
+    def fake_cancel_close(ticket, **kwargs):
+        calls.append(int(ticket))
+        return MT5ManageResult(
+            ok=False,
+            message="Huỷ pending thất bại",
+            kind="pending",
+        )
+
+    monkeypatch.setattr(
+        "automation_tool.mt5_multi.mt5_cancel_pending_or_close_position",
+        fake_cancel_close,
+    )
+
+    summary = mt5_cancel_pending_or_close_all_accounts(
+        {"acc_a": 101},
+        accounts,
+        dry_run=False,
+    )
+
+    assert not summary.ok_all
+    assert calls == [101]
+    assert summary.results[0][1].message == "Huỷ pending thất bại"
 
 
 def test_partial_close_tp1_all_accounts_uses_position_volume(

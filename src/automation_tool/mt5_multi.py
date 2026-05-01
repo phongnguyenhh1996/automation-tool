@@ -31,6 +31,9 @@ from automation_tool.mt5_manage import (
 from automation_tool.mt5_openai_parse import ParsedTrade
 
 
+_MULTI_CANCEL_POSITION_RETRIES = 2
+
+
 @dataclass
 class MT5MultiExecutionSummary:
     """Kết quả gửi lệnh qua tất cả tài khoản trong cấu hình."""
@@ -197,14 +200,25 @@ def mt5_cancel_pending_or_close_all_accounts(
 
     def _run_one(item: tuple[str, int, MT5AccountEntry]) -> tuple[str, MT5ManageResult]:
         acc_id, ticket, acc = item
-        r = mt5_cancel_pending_or_close_position(
-            int(ticket),
-            dry_run=dry_run,
-            terminal_path=acc.terminal_path,
-            login=acc.login,
-            password=acc.password,
-            server=acc.server,
-        )
+        attempts = _MULTI_CANCEL_POSITION_RETRIES + 1
+        r: Optional[MT5ManageResult] = None
+        for attempt in range(1, attempts + 1):
+            r = mt5_cancel_pending_or_close_position(
+                int(ticket),
+                dry_run=dry_run,
+                terminal_path=acc.terminal_path,
+                login=acc.login,
+                password=acc.password,
+                server=acc.server,
+            )
+            if r.ok or r.kind != "position":
+                break
+            if attempt == attempts:
+                r = MT5ManageResult(
+                    ok=False,
+                    message=f"{r.message} (đã thử {attempts} lần)",
+                    kind=r.kind,
+                )
         return acc_id, r
 
     async def _gather() -> list[tuple[str, MT5ManageResult]]:

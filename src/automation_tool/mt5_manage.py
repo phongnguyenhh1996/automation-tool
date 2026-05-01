@@ -13,8 +13,10 @@ from automation_tool.mt5_execute import (
     ensure_mt5_session,
     _ensure_symbol,
     _filling_for_symbol,
+    _is_retryable_order_send_retcode,
     _load_mt5,
     _order_type_for_pending,
+    _refresh_market_order_price,
     format_last_error,
     resolve_mt5_trade_symbol,
     symbol_uses_market_execution,
@@ -85,6 +87,27 @@ def _is_done(mt5: Any, ret: Any) -> bool:
         return int(rc) == int(mt5.TRADE_RETCODE_DONE)
     except (TypeError, ValueError):
         return False
+
+
+def _send_market_close_with_retry(
+    mt5: Any,
+    request: dict[str, Any],
+    *,
+    attempts: int = 3,
+) -> Any:
+    ret = None
+    max_attempts = max(1, int(attempts))
+    for attempt in range(max_attempts):
+        ret = mt5.order_send(request)
+        if ret is None or _is_done(mt5, ret):
+            return ret
+        rc = getattr(ret, "retcode", None)
+        if attempt >= max_attempts - 1 or not _is_retryable_order_send_retcode(mt5, rc):
+            return ret
+        ok, _note = _refresh_market_order_price(mt5, request)
+        if not ok:
+            return ret
+    return ret
 
 
 def mt5_cancel_pending_order(
@@ -200,7 +223,7 @@ def mt5_close_position(
         }
         if not symbol_uses_market_execution(mt5, sym):
             req["price"] = price
-        r = mt5.order_send(req)
+        r = _send_market_close_with_retry(mt5, req)
         if r is None:
             return MT5ManageResult(
                 ok=False,
@@ -343,7 +366,7 @@ def mt5_close_position_partial(
         }
         if not symbol_uses_market_execution(mt5, sym):
             req["price"] = price
-        r = mt5.order_send(req)
+        r = _send_market_close_with_retry(mt5, req)
         if r is None:
             return MT5ManageResult(
                 ok=False,

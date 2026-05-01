@@ -340,7 +340,7 @@ Khi trả kết quả phải có đủ:
 - TP1:
   - VWAP / HL gần nhất
   - plan chính / plan phụ: RR tối thiểu ≥ 1:1.6
-  - scalp XAUUSD: ưu tiên TP **5–10 giá**, không kéo TP quá xa chỉ để ép RR nếu vùng chốt gần hơn và dễ đạt hơn
+  - scalp XAUUSD: ưu tiên TP **5–10 giá**, có thể kéo TP dài hơn nếu tính hiệu tốt
 - Thêm các điểm có tính đảo chiều cao để scalp **5–10 giá**
 - Không BUY khi dưới VWAP nhiều ngày mà chưa reclaim
 - Không SELL nếu dưới POC mà không có trap / volume
@@ -378,10 +378,10 @@ Có một số mốc từ file cũ, nhưng theo memory cần ưu tiên như sau:
 - TP1:
   - dễ đạt
   - đặt tại VWAP / HL gần nhất / vùng volume trống
-  - riêng scalp XAUUSD ưu tiên TP 5–10 giá, không ép TP xa nếu thị trường chỉ cho nhịp ngắn
+  - riêng scalp XAUUSD ưu tiên TP 5–10 giá, có thể kéo TP dài hơn nếu tính hiệu tốt
 - TP2:
   - xa hơn tại premium/discount HTF hoặc OB/FVG lớn
-- Nếu TP1 quá xa hoặc RR không chuẩn → tự điều chỉnh lại; với scalp, ưu tiên TP 5–10 giá và vùng dễ đạt
+- Nếu TP1 quá xa hoặc RR không chuẩn → tự điều chỉnh lại; với scalp, ưu tiên TP 5–10 giá và vùng dễ đạt, có thể kéo TP dài hơn nếu tính hiệu tốt.
 - SL luôn anti-sweep:
   - sau liquidity
   - buffer 3–5 pip / giá
@@ -653,7 +653,7 @@ Nếu mất nhiều xác nhận:
 TP1 (50% khối lượng):
 - VWAP / HL/LH gần nhất / LVN gần nhất.
 - Mục tiêu: dễ đạt; plan chính / plan phụ ưu tiên RR ≥ 1:1.6.
-- Riêng scalp XAUUSD: ưu tiên TP 5–10 giá theo vùng dễ đạt, không kéo TP quá xa chỉ để đạt RR.
+- Riêng scalp XAUUSD: ưu tiên TP 5–10 giá theo vùng dễ đạt, có thể kéo TP dài hơn nếu tính hiệu tốt.
 
 TP2 (30% khối lượng):
 - POC / VAH / VAL / OB/FVG đối diện.

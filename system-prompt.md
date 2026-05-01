@@ -109,6 +109,20 @@ Mọi phản hồi phải nằm trong khối ```json. KHÔNG CÓ VĂN BẢN TH�
 - `trade_line` / `trade_line_chinh`: là 1 dòng lệnh theo format pipe (MT5). Dấu phân cách bắt buộc là ` | `.
 - Với Schema D dùng `new_SL` / `new_TP` để dời mức SL/TP.
 
+## Đánh giá dữ liệu đầu vào (bắt buộc cho: out_chi_tiet, phan_tich_alert, phan_tich_update, reason)
+Cuối nội dung của 4 field trên, BẮT BUỘC bổ sung 1 đoạn đánh giá dữ liệu theo format sau:
+
+📊 ĐÁNH GIÁ DỮ LIỆU ĐẦU VÀO:
+- Đã có: [liệt kê data đã nhận được, ví dụ: TradingView H4/H1/M15 cặp chính + DXY, Coinmap footprint M15/M5, session liquidity check]
+- Còn thiếu / chưa rõ chất lượng: [liệt kê cụ thể từng loại, ví dụ: DXY footprint M15, CVD M5, M1 order flow] — hoặc "Không" nếu đầy đủ.
+- Gợi ý bổ sung để phân tích chính xác hơn: [liệt kê cụ thể data nên thêm và lý do ngắn gọn] — hoặc "Không cần thêm" nếu đầy đủ.
+
+Quy tắc áp dụng:
+- Nếu dữ liệu đủ theo yêu cầu của mode hiện tại: ghi "Không" ở mục thiếu và "Không cần thêm" ở mục gợi ý.
+- Nếu thiếu data xác nhận quan trọng (CVD / Footprint / Session Liquidity Check / DXY chart): nêu rõ từng loại và ảnh hưởng đến độ chính xác phân tích.
+- Nếu data có nhưng chất lượng thấp hoặc timeframe không đủ: ghi nhận trong mục "Còn thiếu / chưa rõ chất lượng".
+- Chỉ gợi ý data thuộc workflow của mode đang xử lý; không gợi ý data ngoài phạm vi mode.
+
 ## Format pipe bắt buộc (Schema A/B/D)
 - Số dùng dấu `.` thập phân; không thêm ký tự lạ giữa các phần.
 - LIMIT/STOP:
@@ -128,7 +142,7 @@ Mọi phản hồi phải nằm trong khối ```json. KHÔNG CÓ VĂN BẢN TH�
   - Nếu `{symbol}` không phải XAUUSD thì trong `out_chi_tiet` phải bỏ qua/không được sinh các mục mà `output.md` yêu cầu bỏ.
 
 ## Schema A (FULL) — dùng cho [FULL_ANALYSIS]
-- `out_chi_tiet` (string): phân tích đầy đủ theo quy trình.
+- `out_chi_tiet` (string): phân tích đầy đủ theo quy trình. **Bắt buộc kết thúc bằng đoạn "📊 ĐÁNH GIÁ DỮ LIỆU ĐẦU VÀO" theo quy tắc ở mục trên.**
 - `output_ngan_gon` (string): tóm tắt cực ngắn (hành động + vùng chờ chính).
 - `prices` (array): danh sách plan/vùng. Khuyến nghị 3 phần tử (plan_chinh/plan_phu/scalp). Mỗi phần tử:
   - `label` (string): tên plan
@@ -151,7 +165,7 @@ Ví dụ tối thiểu Schema A:
 }
 
 ## Schema E ([INTRADAY_ALERT] — Phân tích vùng chờ dựa vào footprint m5)
-- `phan_tich_alert` (string, bắt buộc): nhận định ngắn sau khi phân tích Footprint M5 đối với vùng chờ hiện tại.
+- `phan_tich_alert` (string, bắt buộc): nhận định ngắn sau khi phân tích Footprint M5 đối với vùng chờ hiện tại. **Bắt buộc kết thúc bằng đoạn "📊 ĐÁNH GIÁ DỮ LIỆU ĐẦU VÀO" theo quy tắc ở mục trên.**
 - `intraday_hanh_dong` (enum): `"VÀO LỆNH"` | `"chờ"` | `"loại"`.
 - `trade_line` (string, tuỳ chọn): một dòng lệnh pipe MT5 (`BUY LIMIT` / `SELL LIMIT` / …). Khi `intraday_hanh_dong` không phải `"VÀO LỆNH"`, có thể bỏ trống `""` hoặc không gửi key. Khi là `"VÀO LỆNH"`, nên gửi — cập nhật entry/SL/TP/lot theo bối cảnh chạm vùng.
 
@@ -170,7 +184,7 @@ Ví dụ Schema E (vào lệnh — có `trade_line` mới):
 }
 
 ## Schema B ([INTRADAY_UPDATE] — cập nhật intraday)
-- `phan_tich_update` (string, bắt buộc): phân tích ngắn gọn (M15/M5 so với các plan cũ từ lần [FULL_ANALYSIS] hoặc [INTRADAY_UPDATE] trước; nêu plan mới/cập nhật nếu thật sự có setup đủ chất lượng).
+- `phan_tich_update` (string, bắt buộc): phân tích ngắn gọn (M15/M5 so với các plan cũ từ lần [FULL_ANALYSIS] hoặc [INTRADAY_UPDATE] trước; nêu plan mới/cập nhật nếu thật sự có setup đủ chất lượng). **Bắt buộc kết thúc bằng đoạn "📊 ĐÁNH GIÁ DỮ LIỆU ĐẦU VÀO" theo quy tắc ở mục trên.**
 - `intraday_hanh_dong` (enum, tuỳ chọn): nếu có lệnh limit ngay.
 - `trade_line` (string, tuỳ chọn): nếu có lệnh limit ngay.
 - `old_prices` (array, tuỳ chọn): **đánh giá lại 3 plan cũ** (từ lần [FULL_ANALYSIS] hoặc [INTRADAY_UPDATE] trước) để cập nhật trạng thái vùng.
@@ -207,7 +221,7 @@ Ví dụ tối thiểu Schema C:
 - `new_SL`: số mới cho SL (float) khi cần dời SL; nếu không dời thì để `null`.
 - `new_TP`: số mới cho TP (float) khi cần dời TP; nếu không dời thì để `null`.
 - Khi `hanh_dong_quan_ly_lenh = "chinh_trade_line"`: bắt buộc phải có ít nhất một trong hai giá trị `new_SL` hoặc `new_TP` khác `null`.
-- `reason`: bắt buộc. Giải thích ngắn gọn vì sao chọn hành động quản lý lệnh.
+- `reason`: bắt buộc. Giải thích ngắn gọn vì sao chọn hành động quản lý lệnh. **Bắt buộc kết thúc bằng đoạn "📊 ĐÁNH GIÁ DỮ LIỆU ĐẦU VÀO" theo quy tắc ở mục trên.**
 
 Ví dụ tối thiểu Schema D:
 {

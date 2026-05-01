@@ -93,6 +93,7 @@ def test_mt5_close_position_partial_closes_half_volume(monkeypatch: pytest.Monke
     class FakeMT5:
         TRADE_ACTION_DEAL = 1
         POSITION_TYPE_BUY = 0
+        ORDER_TYPE_BUY = 0
         ORDER_TYPE_SELL = 1
         ORDER_TIME_GTC = 0
         TRADE_RETCODE_DONE = 10009
@@ -158,6 +159,7 @@ def test_mt5_close_position_partial_skips_when_runner_already_remaining(
     class FakeMT5:
         TRADE_ACTION_DEAL = 1
         POSITION_TYPE_BUY = 0
+        ORDER_TYPE_BUY = 0
         ORDER_TYPE_SELL = 1
         ORDER_TIME_GTC = 0
         TRADE_RETCODE_DONE = 10009
@@ -237,3 +239,57 @@ def test_mt5_close_position_partial_skips_when_min_lot_cannot_be_split(
     assert result.ok is True
     assert "volume quá nhỏ" in result.message.lower()
     assert fake.requests == []
+
+
+def test_mt5_close_position_retries_requote_with_latest_price(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeMT5:
+        TRADE_ACTION_DEAL = 1
+        POSITION_TYPE_BUY = 0
+        ORDER_TYPE_BUY = 0
+        ORDER_TYPE_SELL = 1
+        ORDER_TIME_GTC = 0
+        TRADE_RETCODE_DONE = 10009
+        TRADE_RETCODE_REQUOTE = 10004
+
+        def __init__(self) -> None:
+            self.requests: list[dict[str, Any]] = []
+            self.ticks = [
+                SimpleNamespace(bid=2650.0, ask=2650.2),
+                SimpleNamespace(bid=2651.0, ask=2651.2),
+            ]
+
+        def positions_get(self) -> list[Any]:
+            return [
+                SimpleNamespace(
+                    ticket=123,
+                    symbol="XAUUSDm",
+                    volume=0.02,
+                    type=self.POSITION_TYPE_BUY,
+                    magic=222,
+                )
+            ]
+
+        def symbol_info(self, _symbol: str) -> Any:
+            return SimpleNamespace()
+
+        def symbol_info_tick(self, _symbol: str) -> Any:
+            return self.ticks.pop(0)
+
+        def order_send(self, request: dict[str, Any]) -> Any:
+            self.requests.append(dict(request))
+            if len(self.requests) == 1:
+                return SimpleNamespace(retcode=self.TRADE_RETCODE_REQUOTE)
+            return SimpleNamespace(retcode=self.TRADE_RETCODE_DONE)
+
+    fake = FakeMT5()
+    monkeypatch.setattr(mt5_manage, "_mt5_init", lambda *a, **k: fake)
+    monkeypatch.setattr(mt5_manage, "_filling_for_symbol", lambda _mt5, _sym: 7)
+    monkeypatch.setattr(mt5_manage, "symbol_uses_market_execution", lambda _mt5, _sym: False)
+
+    result = mt5_manage.mt5_close_position(123, terminal_path="/tmp/metatrader64.exe")
+
+    assert result.ok is True
+    assert result.kind == "position"
+    assert [req["price"] for req in fake.requests] == [2650.0, 2651.0]
