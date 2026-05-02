@@ -30,16 +30,16 @@ Chỉ được phép vào lệnh khi tối thiểu có đủ 3 lớp xác nhận
 
 Công thức lõi:
 - **Xu hướng rõ + dòng tiền đồng thuận + footprint xác nhận mạnh → MỚI ĐƯỢC VÀO**
-- **VWAP–POC hợp lưu + CVD đồng thuận + trap rõ + stacked/absorption đúng vị trí + Re-check Before Touch đủ chuẩn → MỚI VÀO**
+- **VWAP–POC hợp lưu + CVD đồng thuận + trap rõ + stacked/absorption đúng vị trí + SL/TP/RR đạt chuẩn → ĐƯA LIMIT NGAY**
 - Thiếu 1 mắt xích quan trọng → **CHỜ** hoặc **ĐỨNG NGOÀI**
 
 ### 0.3. Thang điểm hợp lưu 100
 - Có **20 điều kiện**, chia thành 5 nhóm, mỗi tiêu chí 5 điểm:
-  1. Cấu trúc giá (20đ)
-  2. Order Flow – CVD (20đ)
-  3. Footprint (20đ)
-  4. Lọc nâng cao: OI, US10Y, VIX, tin tức (20đ)
-  5. Quản lý & Thực thi (20đ)
+  1. Cấu trúc giá (25đ)
+  2. Order Flow – CVD (25đ)
+  3. Footprint (25đ)
+  4. Lọc nâng cao: OI, US10Y, VIX, tin tức (10đ)
+  5. Quản lý & Thực thi (15đ)
 
 ### 0.4. Ngưỡng hành động theo điểm số
 - **< 70 điểm** → Không đủ hợp lưu / chỉ backup / đứng ngoài
@@ -372,9 +372,8 @@ Khi trả kết quả phải có đủ:
 ### 1.11. Quản lý vốn / RR / lot
 Có một số mốc từ file cũ, nhưng theo memory cần ưu tiên như sau:
 - Lệnh phải đủ đẹp để limit không cần re-check thêm ngoài bộ lọc đã định
-- Entry đầu tiên:
-  - tối thiểu RR **≥ 1:1**
-  - chuẩn ưu tiên RR **≥ 1:1.6**
+- Entry:
+  - RR tối thiểu **≥ 1:1.6**
 - TP1:
   - dễ đạt
   - đặt tại VWAP / HL gần nhất / vùng volume trống
@@ -384,7 +383,8 @@ Có một số mốc từ file cũ, nhưng theo memory cần ưu tiên như sau:
 - Nếu TP1 quá xa hoặc RR không chuẩn → tự điều chỉnh lại; với scalp, ưu tiên TP 5–10 giá và vùng dễ đạt, có thể kéo TP dài hơn nếu tính hiệu tốt.
 - SL luôn anti-sweep:
   - sau liquidity
-  - buffer 3–5 pip / giá
+  - buffer 3–5 giá với XAUUSD
+  - với USDJPY và EURUSD thì SL thường 10-15 nếu rất đẹp + buffer 
 - Với forex:
   - SL thường 6–8 pip nếu rất đẹp
   - có thể 7–12 pip ở cặp phụ
