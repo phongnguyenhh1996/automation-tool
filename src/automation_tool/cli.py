@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from automation_tool.coinmap import capture_charts, load_coinmap_yaml
+from automation_tool.coinmap_merged import write_openai_coinmap_merged_from_raw_export
 from automation_tool.config import (
     default_charts_dir,
     default_coinmap_config_path,
@@ -220,6 +221,37 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     c.set_defaults(func=cmd_capture)
+
+    cm5 = sub.add_parser(
+        "capture-m5-footprint",
+        aliases=["capture-m5-merged"],
+        help=(
+            "Capture Coinmap footprint M5 cho cặp chính và transform thành "
+            "coinmap_merged JSON; không gọi OpenAI."
+        ),
+    )
+    cm5.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Path to coinmap_update.yaml (mặc định: config/coinmap_update.yaml)",
+    )
+    cm5.add_argument("--charts-dir", type=Path, default=None)
+    cm5.add_argument("--storage-state", type=Path, default=None, help="Playwright storage state JSON")
+    cm5.add_argument("--no-save-storage", action="store_true", help="Do not write storage state after run")
+    cm5.add_argument("--headed", action="store_true", help="Show browser window")
+    cm5.add_argument(
+        "--main-symbol",
+        default=None,
+        metavar="SYM",
+        help="Cặp cần capture M5 footprint (vd. XAUUSD); mặc định dùng active symbol.",
+    )
+    cm5.add_argument(
+        "--use-service",
+        action="store_true",
+        help="Bắt buộc attach browser service đang chạy thay vì mở Chrome mới.",
+    )
+    cm5.set_defaults(func=cmd_capture_m5_footprint)
 
     a = sub.add_parser(
         "analyze",
@@ -1494,6 +1526,71 @@ def cmd_capture(args: argparse.Namespace) -> None:
     _log.info("capture: xong | %s file(s) → %s", len(paths), charts_dir)
     for pth in paths:
         print(f"  {pth}")
+
+
+def _first_coinmap_m5_json_path(paths: Sequence[Path]) -> Optional[Path]:
+    for pth in paths:
+        if pth.name.endswith("_5m.json") and "_coinmap_" in pth.name:
+            return pth
+    return None
+
+
+def cmd_capture_m5_footprint(args: argparse.Namespace) -> None:
+    """
+    Manual [TRADE_MANAGEMENT]-style data prep:
+    Coinmap M5 raw export -> compact ``coinmap_merged`` JSON, without OpenAI.
+    """
+    s = load_settings()
+    cfg = args.config or default_coinmap_update_config_path()
+    storage = args.storage_state or default_storage_state_path()
+    use_service = bool(getattr(args, "use_service", False))
+    _log.info(
+        "capture-m5-footprint: bắt đầu | config=%s charts_dir=%s headed=%s use_service=%s",
+        cfg,
+        args.charts_dir if args.charts_dir is not None else "(default theo data/.main_chart_symbol)",
+        args.headed,
+        use_service,
+    )
+    paths = capture_charts(
+        coinmap_yaml=cfg,
+        charts_dir=args.charts_dir,
+        storage_state_path=storage,
+        email=s.coinmap_email,
+        password=s.coinmap_password,
+        tradingview_password=s.tradingview_password,
+        save_storage_state=not args.no_save_storage,
+        headless=not args.headed,
+        reuse_browser_context=None,
+        main_chart_symbol=args.main_symbol,
+        enable_coinmap=True,
+        enable_tradingview=False,
+        clear_charts_before_capture=True,
+        require_browser_service=use_service,
+        coinmap_capture_intervals=("5m",),
+    )
+    charts_dir = args.charts_dir or default_charts_dir()
+    stamp = stamp_from_capture_paths(paths)
+    raw_m5 = (
+        coinmap_main_pair_interval_json_path(charts_dir, "5m", stamp=stamp)
+        if stamp
+        else None
+    )
+    if raw_m5 is None:
+        raw_m5 = _first_coinmap_m5_json_path(paths)
+    if raw_m5 is None or not raw_m5.is_file():
+        raise SystemExit(
+            f"capture-m5-footprint: no Coinmap M5 JSON under {charts_dir} after capture "
+            f"(stamp={stamp!r})."
+        )
+    merged = write_openai_coinmap_merged_from_raw_export(raw_m5)
+    _log.info(
+        "capture-m5-footprint: xong | raw_m5=%s | merged=%s",
+        raw_m5,
+        merged,
+    )
+    print(f"Captured {len(paths)} file(s).")
+    print(f"Raw Coinmap M5 JSON: {raw_m5}")
+    print(f"Merged JSON: {merged}")
 
 
 def cmd_tvdatafeed_login(args: argparse.Namespace) -> None:

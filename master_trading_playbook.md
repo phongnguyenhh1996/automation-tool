@@ -1,6 +1,5 @@
 # master_trading_playbook
 
-> Bản master duy nhất dùng để ra quyết định sau này.  
 > **Nguyên tắc ưu tiên:** nếu có trùng lặp hoặc mâu thuẫn, **ưu tiên memory mới hơn, khắt khe hơn, sát backtest hơn**.  
 > **Mục tiêu:** chỉ dùng 1 file này làm chuẩn tham chiếu để phân tích, cập nhật intraday, quản lý lệnh, ra plan limit, và vận hành EA/Grid.
 
@@ -34,18 +33,30 @@ Công thức lõi:
 - Thiếu 1 mắt xích quan trọng → **CHỜ** hoặc **ĐỨNG NGOÀI**
 
 ### 0.3. Thang điểm hợp lưu 100
-- Có **20 điều kiện**, chia thành 5 nhóm, mỗi tiêu chí 5 điểm:
-  1. Cấu trúc giá (25đ)
+- Có **19 điều kiện**, chia thành 4 nhóm:
+  1. Cấu trúc giá (30đ)
+   - DXY đồng thuận plan → +5đ
+   - Bias H1 rõ (BOS + giữ cấu trúc) → +5đ
+   - Bias M15 rõ (CHoCH/BOS gần nhất) → +5đ
+   - Entry tại vùng HL/LH, OB/FVG, Discount/Premium → +5đ
+   - Có sweep liquidity trước entry (EQH/EQL/session high-low) →  +5đ
+   - Pullback hợp lệ (không phá cấu trúc chính) (OB/FVG/HL) →  +5đ
   2. Order Flow – CVD (25đ)
+   - CVD đảo chiều mạnh từ ≥ 3 nến → +6đ
+   - CVD đồng thuận với bias → +7đ
+   - Không phân kỳ tại entry → +4đ
+   - CVD follow-through ≥ 2–3 nến sau entry → +4đ
+   - Delta shift (âm → dương hoặc ngược lại tại POI) → +4đ
   3. Footprint (25đ)
-  4. Lọc nâng cao: OI, US10Y, VIX, tin tức (10đ)
-  5. Quản lý & Thực thi (15đ)
-
-### 0.4. Ngưỡng hành động theo điểm số
-- **< 70 điểm** → Không đủ hợp lưu / chỉ backup / đứng ngoài
-- **70–89 điểm** → Vùng chờ, chấp nhận được nhưng chưa đẹp
-- **≥ 90 điểm** → Hợp lưu mạnh, có thể limit ngay
-- **100/100** → Chuẩn tuyệt đối, lệnh đẹp nhất
+   - Có trap rõ (SELL trap khi BUY, BUY trap khi SELL) kèm volume spike → +6đ
+   - Giá đóng trên VWAP (BUY) hoặc dưới VWAP (SELL) với follow-through → +7đ
+   - POC / VAH / VAL đúng vị trí hỗ trợ entry → +7đ
+   - Stacked BID/ASK ≥ 2 nến liên tiếp tại VWAP/HL → +5đ
+  4. Quản lý & Thực thi (20đ)
+   - Entry 1 đủ RR ≥ 1:1.6 → +5đ
+   - SL anti-sweep, đặt xa liquidity pool + buffer → +5đ
+   - TP đặt đúng vùng VWAP / HL gần nhất / POC intraday,Premium/Discount H1 → +5đ
+   - Plan giữ được nguyên ngày, không cần re-check → +5đ
 
 ### 0.5. Quy tắc ra quyết định chung
 - Chỉ đề xuất **LIMIT + SL + TP** nếu đủ hợp lưu cao để vào ngay.
@@ -56,7 +67,7 @@ Công thức lõi:
   - RR đạt chuẩn,
   - không cần sửa lại liên tục.
 - Nếu hợp lưu thấp nhưng vùng tốt → đề xuất limit xa hơn hoặc chờ tín hiệu sâu hơn.
-- Chỉ cho phép vào lệnh khi hợp lưu trên **80 điểm**; tuy nhiên để **limit ngay** nên hướng tới **≥ 90 điểm**.
+- Chỉ cho phép vào lệnh khi hợp lưu trên **70 điểm**
 
 ---
 
@@ -88,7 +99,7 @@ Khi chạy quy trình phân tích Forex chuẩn, user phải gửi đủ **10 h�
 - **M15** = chọn POI / vùng entry / plan trong ngày
 - **M5** = xác nhận entry
 - **Footprint M15/M5** = trap, stacked, absorption, CVD, reclaim VWAP/POC
-- **DXY** = bias macro, đặc biệt quan trọng với EURUSD / GBPUSD / USDJPY
+- **DXY** = bias macro, đặc biệt quan trọng với EURUSD / USDJPY
 - Có thể dùng thêm:
   - TPO
   - OI
@@ -108,13 +119,14 @@ Khi chạy quy trình phân tích Forex chuẩn, user phải gửi đủ **10 h�
   - vị trí giá với VWAP / POC
   - delta / CVD / absorption / trap
 - Ứng dụng:
-  - DXY tăng mạnh → ưu tiên SELL EURUSD / GBPUSD
-  - DXY giảm mạnh → ưu tiên BUY EURUSD / GBPUSD
+  - DXY tăng mạnh → ưu tiên SELL EURUSD / XAUUSD - ưu tiên BUY USDJPY
+  - DXY giảm mạnh → ưu tiên BUY EURUSD / XAUUSD - ưu tiên SELL USDJPY
   - DXY không rõ → thận trọng / đứng ngoài / chỉ lấy setup cực mạnh
+  - Các cặp tiền phân tích ở bước 2 trở đi, dựa trên xu hướng đã xác định ở bước 1.
 
-#### Bước 2 – Context & cấu trúc H1
+#### Bước 2 – Context & cấu trúc H4, H1
 - Xác định:
-  - trend H1 hiện tại
+  - trend H4, H1 hiện tại
   - giá đang ở premium / discount / equilibrium
   - POI nào mạnh nhất
   - có BOS / CHoCH hợp lệ chưa
@@ -192,8 +204,7 @@ Bắt buộc rà thêm nếu có dữ liệu:
 - fake-break window 18h–19h
 - London / New York liquidity
 
-#### Bước 7 – Chấm điểm 100 & quyết định
-- Tự chấm plan theo thang 100
+#### Bước 7 – Chấm điểm 100 & quyết định (dựa vào mục 0.3 ở trên NGUYÊN TẮC GỐC)
 - Kết luận:
   - Main plan
   - Backup plan
@@ -207,7 +218,8 @@ Bắt buộc rà thêm nếu có dữ liệu:
 
 ### 1.4. Bộ lọc bắt buộc trước khi đề xuất entry
 #### A. Cấu trúc giá
-- H1 – M15 phải rõ xu hướng
+- H1 – M15 phải rõ xu hướng , Ưu tiên trade theo trend H1 – M15.
+- Đồng thuận xu hướng DXY
 - Entry tại:
   - HL / LH
   - EQ
@@ -266,15 +278,6 @@ Có thể chấp nhận nếu đủ **≥ 3/4**:
 - breakdown mạnh
 - seller takeover rõ
 
-### 1.6. Re-check Before Touch (bắt buộc)
-Trong **2–3 pip / giá trước entry**, phải kiểm lại:
-1. CVD đồng thuận ≥ 3 nến
-2. VWAP/POC không dịch ngược > 3–5 pip
-3. Có stacked hoặc absorption sát HL / VWAP / vùng vào
-4. Có volume spike xác nhận
-
-**Thiếu 1/4 → HUỶ LIMIT**
-
 ### 1.7. Filter giữ / hủy limit trong ngày
 GIỮ LIMIT khi:
 - H1 chưa BOS ngược
@@ -324,78 +327,79 @@ Khi trả kết quả phải có đủ:
 
 ### 1.10. Quy tắc riêng theo cặp
 #### XAUUSD
-- Cặp chính
-- Mặc định:
-  - **1 plan chính**
-  - **2 plan phụ / scalp trong ngày**
-- SELL tại đỉnh phân phối, BUY tại đáy tích lũy
-- Entry ưu tiên ở:
+- Mặc định phải có:
+  - **1 plan chính**: ưu tiên hướng được H4, H1, DXY và Footprint đồng thuận mạnh.
+  - **1 plan phụ**: bias ngược tại vùng sweep đối diện, TP ngắn hơn.
+  - **1 scalp plan**: BUY khi có HL + absorption + stacked BID M5; SELL khi ở premium M15 + stacked ASK + CD giảm.
+- Scalp XAUUSD ưu tiên TP **7–10 giá**, có thể kéo TP dài hơn nếu tín hiệu tốt.
+- Entry ưu tiên ở vùng có hợp lưu:
   - VWAP–POC
   - VAH/VAL
   - premium/discount
   - POC shift / VA shift
-- SL thường:
-  - 6–8 giá cho scalp confirm mạnh
-  - anti-sweep khắt khe hơn nếu plan intraday lớn
+  - CD/CVD đồng thuận
+  - trap rõ
+  - stacked đúng vị trí
+- SELL tại đỉnh phân phối, BUY tại đáy tích lũy.
+- SL luôn anti-sweep:
+  - đặt xa hơn liquidity pool 5–7 giá.
+  - không đặt SL ngay sát HL/LH; luôn giấu SL sau liquidity pool + buffer 3–5 giá.
 - TP1:
-  - VWAP / HL gần nhất
+  - VWAP / HL gần nhất / POC intraday / vùng volume trống
   - plan chính / plan phụ: RR tối thiểu ≥ 1:1.6
-  - scalp XAUUSD: ưu tiên TP **5–10 giá**, có thể kéo TP dài hơn nếu tính hiệu tốt
-- Thêm các điểm có tính đảo chiều cao để scalp **5–10 giá**
-- Không BUY khi dưới VWAP nhiều ngày mà chưa reclaim
-- Không SELL nếu dưới POC mà không có trap / volume
-- Tránh sideway > 8h không volume spike
-- Ưu tiên phiên Âu–Mỹ
+- TP2: premium/discount H1 hoặc OB/FVG lớn.
+- Tránh:
+  - BUY khi dưới VWAP nhiều ngày mà chưa reclaim.
+  - SELL dưới POC nếu không có trap/volume.
+  - sideway > 8h không có volume spike.
+  - TP ngay HVN/POC.
+- Ưu tiên phiên Âu–Mỹ.
 
 #### EURUSD
-- Chỉ plan chính
-- Bias H1 phải trùng DXY
-- Ưu tiên risk 2–3%
-- SL rất nhỏ 3–5 pip nếu setup cực đẹp theo Elliott/Wyckoff/Market Profile
-- RR mục tiêu cao hơn, có thể 1:10 trong setup chuẩn đặc biệt
-- Ưu tiên VAL–POC có absorption / spring / upthrust rõ
-- Không scalp nếu plan không đủ rõ
+- Chỉ 1 plan chính, không ép plan phụ nếu setup chưa đủ đẹp.
+- Bias H1 phải đi cùng DXY.
+- Ưu tiên setup ít nhưng cực chuẩn.
+- Có thể áp dụng Elliott + Wyckoff + Market Profile để tăng độ chọn lọc.
+- Vùng đẹp:
+  - VAL–POC
+  - spring / upthrust
+  - absorption mạnh
+- SL: 7–12 pip, mặc định đệm thêm 1–2 pip.
+- Quản lý vốn riêng: risk 2–3% khi đủ hợp lưu cao.
+- Ưu tiên RR lớn.
 
 #### USDJPY
-- Chỉ plan chính
-- Với SELL:
-  - SL phải **anti-sweep riêng**
-  - giấu sau liquidity pool (EQH / stop cluster) + buffer 3–5 pip
-  - có thể dời SL xa thêm 10 pip và giảm lot cụm để giữ risk
-- Không giữ limit qua tin đỏ lớn
-
-#### GBPJPY
-- Chỉ plan chính
-- Vẫn áp dụng khung cấu trúc + footprint + order flow như cặp phụ
-- Không scalp nếu không có lợi thế rõ
+- Chỉ 1 plan chính.
+- Thuận xu hướng DXY.
+- Luôn anti-sweep + giấu SL sau liquidity.
+- SL: 7–12 pip, mặc định đệm thêm 1–2 pip.
+- SELL phải giấu SL sau EQH / stop cluster + buffer 7–12 pip.
+- Nếu cần có thể dời SL xa thêm 15 pip.
+- Không giữ qua CPI/FOMC.
 
 ### 1.11. Quản lý vốn / RR / lot
-Có một số mốc từ file cũ, nhưng theo memory cần ưu tiên như sau:
-- Lệnh phải đủ đẹp để limit không cần re-check thêm ngoài bộ lọc đã định
+- Nguyên tắc cốt lõi:
+  - Chỉ vào lệnh khi đủ hợp lưu cao → limit không cần re-check.
+  - Nếu chưa chắc → VÙNG CHỜ / ĐỨNG NGOÀI.
 - Entry:
   - RR tối thiểu **≥ 1:1.6**
 - TP1:
   - dễ đạt
   - đặt tại VWAP / HL gần nhất / vùng volume trống
-  - riêng scalp XAUUSD ưu tiên TP 5–10 giá, có thể kéo TP dài hơn nếu tính hiệu tốt
+  - riêng scalp XAUUSD ưu tiên TP 7–10 giá, có thể kéo TP dài hơn nếu tính hiệu tốt
 - TP2:
   - xa hơn tại premium/discount HTF hoặc OB/FVG lớn
-- Nếu TP1 quá xa hoặc RR không chuẩn → tự điều chỉnh lại; với scalp, ưu tiên TP 5–10 giá và vùng dễ đạt, có thể kéo TP dài hơn nếu tính hiệu tốt.
+- Nếu TP1 quá xa hoặc RR không chuẩn → tự điều chỉnh lại; với scalp, ưu tiên TP 7–10 giá và vùng dễ đạt, có thể kéo TP dài hơn nếu tính hiệu tốt.
 - SL luôn anti-sweep:
   - sau liquidity
   - buffer 3–5 giá với XAUUSD
-  - với USDJPY và EURUSD thì SL thường 10-15 nếu rất đẹp + buffer 
-- Với forex:
-  - SL thường 6–8 pip nếu rất đẹp
-  - có thể 7–12 pip ở cặp phụ
-- Với XAUUSD:
-  - scalp 5–10 giá
-  - kế hoạch intraday cần anti-sweep theo cấu trúc thật
+- Với USDJPY và EURUSD:
+  - SL: 7–12 pip
+  - mặc định luôn đệm SL ra thêm 1–2 pip
 - Mọi chốt plan đều phải:
   - **✅ check lại SL và TP**
 
 ### 1.12. EA Grid / Smart Control (bắt buộc sau FULL_ANALYSIS)
-Sau khi hoàn tất phân tích Hybrid Dual Plan, phải đề xuất:
 - chế độ EA:
   - Buy
   - Sell
@@ -492,17 +496,6 @@ Phải trả lời theo logic:
    - TP1 dễ đạt
    - TP2 nếu có
    - RR
-
-### 2.7. Mẫu logic hành động
-- Nếu đủ 3 lớp:
-  - cấu trúc đúng
-  - CVD đồng thuận
-  - footprint confirm mạnh  
-  → có thể đề xuất **limit / market logic tại vùng**
-- Nếu chỉ có vị trí đẹp nhưng footprint yếu  
-  → chỉ **CHỜ**
-- Nếu đã mất cấu trúc / mất VWAP / CD ngược  
-  → **HUỶ VÙNG**
 
 ---
 
@@ -687,13 +680,11 @@ Lưu ý:
 - Entry tại premium + EQH + VWAP/POC
 - stacked ASK + absorption + CVD giảm rõ
 - breakdown và mất VWAP xác nhận seller takeover
-- cần re-check before touch cực kỹ
 
 #### XAUUSD BUY SL
 - lỗi vì M5 đã CHoCH giảm trước khi khớp
 - CVD giảm, giá dưới VWAP, không có stacked BID mới
 - không có volume spike BUY
-- vi phạm re-check before touch
 - bài học: nếu M5 BOS/CHoCH ngược bias → huỷ limit ngay
 
 ### 4.9. Output chuẩn của [TRADE_MANAGEMENT]
@@ -702,46 +693,6 @@ Lưu ý:
 3. Giữ / giảm / BE / chốt phần / thoát ngay
 4. TP1 / TP2 có cần chỉnh không
 5. Vùng nào market đang để lại để dời SL / TP
-
----
-
-## 5. APPENDIX – PAIR-SPECIFIC EXECUTION RULES
-
-### 5.1. XAUUSD – khung mặc định
-- 1 plan chính + 2 plan phụ/scalp
-- scalp 5–10 giá là cấu trúc mặc định cần đề xuất thêm
-- ưu tiên:
-  - VWAP–POC hợp lưu
-  - CD đồng thuận
-  - trap rõ
-  - stacked đúng vị trí
-- tránh:
-  - dưới VWAP nhiều ngày chưa reclaim mà BUY
-  - sideway > 8h không volume spike
-  - SELL khi dưới POC mà không có trap/volume
-
-### 5.2. EURUSD – quy tắc tăng độ chọn lọc
-- Bias H1 phải đi cùng DXY
-- Ưu tiên setup ít nhưng cực chuẩn
-- Có thể áp dụng Elliott + Wyckoff + Market Profile
-- Vùng đẹp:
-  - VAL–POC
-  - spring / upthrust
-  - absorption mạnh
-- quản lý vốn chuẩn riêng:
-  - risk 2–3%
-  - SL 3–5 pip
-  - RR lớn
-
-### 5.3. USDJPY – anti-sweep riêng
-- SELL phải giấu SL sau EQH / stop cluster + buffer 3–5 pip
-- nếu cần có thể dời SL xa thêm 10 pip
-- giảm lot cụm để giữ risk tổng cố định
-- không giữ qua CPI/FOMC
-
-### 5.4. GBPJPY
-- chỉ lấy plan chính nếu cấu trúc + footprint thật rõ
-- không cố scalp
 
 ---
 
@@ -777,7 +728,6 @@ Lưu ý:
 
 ### 6.3. Wyckoff / Storyline / Malaysia SNR
 - Storyline Weekly / Daily / H4 để làm bias HTF
-- “Kết thúc của một cốt truyện là khởi đầu cốt truyện ngược lại”
 - Phân biệt SnR fresh vs used
 - Dùng session Á / London / Mỹ làm hợp lưu vùng
 - Không dùng đơn lẻ làm entry chính; vẫn phải overlay footprint + CVD
@@ -809,50 +759,6 @@ Lưu ý:
   - H1 BOS ngược
   - M15 CHoCH ngược
   - footprint đảo hoàn toàn
-
----
-
-## 8. APPENDIX – SPOT CRYPTO WORKFLOW (LƯU ĐỂ KHÔNG MẤT)
-
-> Không phải trọng tâm file forex, nhưng đã nằm trong memory nên vẫn giữ để không bỏ sót.
-
-### 8.1. Workflow Spot DCA
-- Macro Flow:
-  - USDT.D
-  - BTC.D
-  - TOTAL2/3
-- Coin filter:
-  - volume ≥ 10M
-  - footprint nhạy
-  - loại coin nhiễu
-- cấu trúc:
-  - CHoCH + HL + HH
-  - OB/FVG ở discount
-  - fibo 0.5–0.618
-- footprint confirm:
-  - trap SELL
-  - CD đảo chiều ≥ 3 nến
-  - stacked BID tại HL/VWAP
-  - reclaim VWAP
-- DCA 3 điểm:
-  - 0.5 fibo
-  - 0.618 fibo
-  - HL extreme / POC
-- 1 SL chung
-- TP1 = fibo 0.618
-- TP2 = fibo 1.0
-- risk cố định 40$
-
-### 8.2. Filter bổ sung trước khi confirm entry Spot
-- Google Trends
-- LunarCrush
-- chart W1 nếu chưa có
-- CoinMarketCal / Twitter / Messari
-- TokenUnlocks
-- CoinDesk / CoinTelegraph / The Block
-- CryptoQuant / Whale Alert / Nansen
-- funding rate / OI
-- nếu có unlock lớn / funding quá cao / inflow xấu / tin xấu → delay hoặc loại bỏ
 
 ---
 
@@ -970,10 +876,6 @@ Bias chính:
 
 ### 9.5.3. Quy tắc bỏ qua mục khi không phải XAUUSD
 Nếu `{symbol}` **không phải `XAUUSD`** thì trong `out_chi_tiet` phải **bỏ qua / không được sinh** các mục sau:
-- `🧭 1. BỐI CẢNH VĨ MÔ (DXY)`
-- `👉 KẾT LUẬN DXY:`
-- `🧭 2. CẤU TRÚC {symbol}` với các mục con `🔴 H4 / 🔴 H1 / 🔴 M15`
-- `🧭 4. ORDER FLOW (CVD)` gồm `M15 / M5`
 - `📊 SCALP:`
 - `🤖 EA GRID PLAN:`
 
@@ -991,7 +893,7 @@ Nếu `{symbol}` **không phải `XAUUSD`** thì trong `out_chi_tiet` phải **b
 ## 10. KẾT LUẬN CHUẨN CỦA TOÀN HỆ THỐNG
 
 ### 10.1. Công thức vào lệnh
-- **Trend H1 rõ + M15 đúng POI + M5 confirm + CVD đồng thuận ≥ 3 nến + trap/stacked/absorption đúng vị trí + reclaim VWAP/POC rõ + Re-check Before Touch đạt chuẩn → MỚI VÀO**
+- **Trend H1 rõ + M15 đúng POI + M5 confirm + CVD đồng thuận ≥ 3 nến + trap/stacked/absorption đúng vị trí + reclaim VWAP/POC rõ → MỚI VÀO**
 
 ### 10.2. Công thức hủy lệnh
 LOẠI khi có ≥ 2–3 yếu tố sau:
