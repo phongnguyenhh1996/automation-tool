@@ -154,7 +154,6 @@ _TP1_EPS = 0.01
 _ARM_THRESHOLD = ARM_THRESHOLD_TP1_DEFAULT
 _RETRY_WAIT_MINUTES = 15
 _RETRY_WAIT_MINUTES_SCALP = 10
-_OPENAI_MANAGE_INTERVAL_MINUTES = 15
 _ZONE_TOUCH_LOAI_CONFIRM_ROUNDS = 3
 _M5_ANALYSIS_CAPTURE_SLOT_MINUTE_REMAINDER = 1
 DAEMON_PLAN_AUTO_CUTOFF_HOUR = 0
@@ -165,11 +164,6 @@ DAEMON_PLAN_AUTO_CUTOFF_FRIDAY_MINUTE = 0
 
 def _is_scalp_zone(zone: Zone) -> bool:
     return (zone.label or "").strip().lower() == "scalp"
-
-
-def _zone_touch_retry_wait_minutes(zone: Zone) -> int:
-    """Chạm vùng scalp: gửi lại Coinmap + OpenAI mỗi 10 phút; plan khác: 15 phút."""
-    return _RETRY_WAIT_MINUTES_SCALP if _is_scalp_zone(zone) else _RETRY_WAIT_MINUTES
 
 
 def _zone_touch_coinmap_main_json_path(charts_dir: Path, zone: Zone) -> tuple[Optional[Path], str]:
@@ -216,6 +210,28 @@ def _m5_analysis_capture_slot_wait_seconds(now: Optional[datetime] = None) -> in
     return max(0, int(math.ceil(seconds_until_slot)))
 
 
+def _third_future_m5_analysis_capture_slot(now: Optional[datetime] = None) -> datetime:
+    """
+    Return the capture slot for the 3rd future closed M5 candle.
+
+    M5 data is captured at minute ``5n + 1``. If current time is 08:13,
+    future slots are 08:16, 08:21, 08:26, so retry at 08:26.
+    """
+    current = now or _now_utc()
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    current = current.astimezone(timezone.utc)
+
+    slot = current.replace(second=0, microsecond=0)
+    minutes_until_next_slot = (
+        _M5_ANALYSIS_CAPTURE_SLOT_MINUTE_REMAINDER - slot.minute
+    ) % 5
+    if minutes_until_next_slot == 0 and slot <= current:
+        minutes_until_next_slot = 5
+    slot = slot + timedelta(minutes=minutes_until_next_slot)
+    return slot + timedelta(minutes=10)
+
+
 def _wait_for_m5_analysis_capture_slot(
     settings: Settings,
     *,
@@ -244,6 +260,22 @@ def _wait_for_m5_analysis_capture_slot(
 
 def _retry_at_iso(minutes: int = _RETRY_WAIT_MINUTES) -> str:
     return (_now_utc() + timedelta(minutes=int(minutes))).isoformat()
+
+
+def _zone_touch_retry_at_iso(zone: Zone) -> str:
+    if _is_scalp_zone(zone):
+        return _retry_at_iso(_RETRY_WAIT_MINUTES_SCALP)
+    return _third_future_m5_analysis_capture_slot().isoformat()
+
+
+def _zone_touch_after_retry_title(zone: Zone) -> str:
+    if _is_scalp_zone(zone):
+        return f"Sau {_RETRY_WAIT_MINUTES_SCALP}p giá chạm vùng chờ."
+    return "Sau 3 nến M5 giá chạm vùng chờ."
+
+
+def _trade_management_retry_at_iso() -> str:
+    return _third_future_m5_analysis_capture_slot().isoformat()
 
 
 def _is_retry_due(retry_at: str) -> bool:
@@ -895,7 +927,7 @@ def _send_entry_management_notice(settings: Settings, zone: Zone, text: str) -> 
 
 
 def _entry_management_target_touched(zone: Zone, parsed, p_last: float) -> bool:
-    """Dừng ping 15p khi chạm một trong hai mốc: -0.5R adverse hoặc >= 1R favorable."""
+    """Dừng ping quản lý lệnh định kỳ khi chạm -0.5R adverse hoặc >= 1R favorable."""
     if _half_sl_retrace_touched(zone, parsed, p_last, eps=_TP1_EPS):
         return True
     return _max_r_multiple_reached(zone, parsed, p_last, eps=_TP1_EPS) >= 1
@@ -964,7 +996,7 @@ def _apply_zone_touch_loai_decision(
         return True
 
     zone.status = "cham"
-    zone.retry_at = _retry_at_iso(_zone_touch_retry_wait_minutes(zone))
+    zone.retry_at = _zone_touch_retry_at_iso(zone)
     return False
 
 
@@ -1875,7 +1907,7 @@ def _r1_followup_job(
             _send_entry_management_notice(
                 settings,
                 z0,
-                f"{_zone_label_slot_display_vn(z0)}: Gửi OpenAI quản lý lệnh sau 15p",
+                f"{_zone_label_slot_display_vn(z0)}: Gửi OpenAI quản lý lệnh sau 3 nến M5",
             )
         else:
             _send_user_notice(
@@ -1966,7 +1998,7 @@ def _r1_followup_job(
             _send_user_notice(
                 settings,
                 (
-                    "Theo chu kỳ 15p: không đọc được quyết định từ AI."
+                    "Theo chu kỳ 3 nến M5: không đọc được quyết định từ AI."
                     if is_time_followup
                     else f"Tại {r_level_text}R: không đọc được quyết định từ AI."
                 ),
@@ -2001,7 +2033,7 @@ def _r1_followup_job(
             _send_user_notice(
                 settings,
                 (
-                    "Theo chu kỳ 15p: AI chọn «giữ nguyên» — không đổi lệnh."
+                    "Theo chu kỳ 3 nến M5: AI chọn «giữ nguyên» — không đổi lệnh."
                     if is_time_followup
                     else f"Tại {r_level_text}R: AI chọn «giữ nguyên» — không đổi lệnh."
                 ),
@@ -2041,7 +2073,7 @@ def _r1_followup_job(
             _send_user_notice(
                 settings,
                 (
-                    "Theo chu kỳ 15p: AI chọn «loại» — đóng / bỏ theo dõi vùng."
+                    "Theo chu kỳ 3 nến M5: AI chọn «loại» — đóng / bỏ theo dõi vùng."
                     if is_time_followup
                     else f"Tại {r_level_text}R: AI chọn «loại» — đóng / bỏ theo dõi vùng."
                 ),
@@ -2148,7 +2180,7 @@ def _r1_followup_job(
             _send_user_notice(
                 settings,
                 (
-                    "Theo chu kỳ 15p: chỉnh lệnh không thành công."
+                    "Theo chu kỳ 3 nến M5: chỉnh lệnh không thành công."
                     if is_time_followup
                     else f"Tại {r_level_text}R: chỉnh lệnh không thành công."
                 ),
@@ -2161,7 +2193,7 @@ def _r1_followup_job(
             _send_user_notice(
                 settings,
                 (
-                    "Theo chu kỳ 15p: đã cập nhật lệnh tại chỗ (SL/TP hoặc sửa lệnh chờ)."
+                    "Theo chu kỳ 3 nến M5: đã cập nhật lệnh tại chỗ (SL/TP hoặc sửa lệnh chờ)."
                     if is_time_followup
                     else f"Tại {r_level_text}R: đã cập nhật lệnh tại chỗ (SL/TP hoặc sửa lệnh chờ)."
                 ),
@@ -2448,7 +2480,7 @@ def _zone_touch_job(
     - update zone status + trade_line + mt5 ticket (optional)
 
     ``after_retry_wait``: True khi dispatch từ vòng ``cham`` sau khi hết ``retry_at``
-    (scalp ~10 phút + Coinmap M1; plan khác ~15 phút + M5), khác với lần chạm đầu từ ``vung_cho``.
+    (scalp ~10 phút + Coinmap M1; plan khác sau 3 slot M5 ``5n+1``), khác với lần chạm đầu từ ``vung_cho``.
     """
     st0 = _state_read(params)
     if st0 is None:
@@ -2465,10 +2497,9 @@ def _zone_touch_job(
             f"vung_cho={zone.vung_cho} bounds={lo}–{hi} last={last_price}",
         )
         side_vn = "mua" if (zone.side or "").strip().upper() == "BUY" else "bán"
-        _rw_m = _zone_touch_retry_wait_minutes(zone)
         _chart_tf = "M1" if _is_scalp_zone(zone) else "M5"
         _touch_title = (
-            f"Sau {_rw_m}p giá chạm vùng chờ."
+            _zone_touch_after_retry_title(zone)
             if after_retry_wait
             else "Giá đã chạm vùng chờ."
         )
@@ -2643,7 +2674,7 @@ def _zone_touch_job(
         if act != "VÀO LỆNH":
             # keep touched state (no revert to vung_cho); daemon can retry later
             z1.status = "cham"
-            z1.retry_at = _retry_at_iso(_zone_touch_retry_wait_minutes(z1))
+            z1.retry_at = _zone_touch_retry_at_iso(z1)
             _state_write(params, st1)
             _send_log(
                 settings,
@@ -2668,7 +2699,7 @@ def _zone_touch_job(
         )
         if err or parsed is None:
             z1.status = "cham"
-            z1.retry_at = _retry_at_iso(_zone_touch_retry_wait_minutes(z1))
+            z1.retry_at = _zone_touch_retry_at_iso(z1)
             _state_write(params, st1)
             _send_log(
                 settings,
@@ -3411,9 +3442,7 @@ def _daemon_plan_main_loop(
                                     )
                                 if is_pos:
                                     z.has_position = True
-                                    z.openai_manage_retry_at = _retry_at_iso(
-                                        _OPENAI_MANAGE_INTERVAL_MINUTES
-                                    )
+                                    z.openai_manage_retry_at = _trade_management_retry_at_iso()
                                     changed_has_position = True
                                     _send_log(
                                         settings,
@@ -3423,7 +3452,7 @@ def _daemon_plan_main_loop(
                                         settings,
                                         z,
                                         f"Đã khớp lệnh {_zone_label_slot_display_vn(z)}. "
-                                        "Sẽ gửi data cho OpenAI quản lý lệnh sau 15p",
+                                        "Sẽ gửi data cho OpenAI quản lý lệnh sau 3 nến M5",
                                     )
                             if bool(getattr(z, "has_position", False)):
                                 if _entry_management_target_touched(z, parsed, float(p_last)):
@@ -3433,9 +3462,7 @@ def _daemon_plan_main_loop(
                                 elif _is_retry_due(getattr(z, "openai_manage_retry_at", "")):
                                     prev_status = z.status
                                     z.status = "dang_thuc_thi"
-                                    z.openai_manage_retry_at = _retry_at_iso(
-                                        _OPENAI_MANAGE_INTERVAL_MINUTES
-                                    )
+                                    z.openai_manage_retry_at = _trade_management_retry_at_iso()
                                     _state_write(params, st_tp1b)
                                     _send_log(
                                         settings,

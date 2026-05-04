@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import automation_tool.tv_watchlist_daemon as daemon
 from automation_tool.openai_analysis_json import ARM_THRESHOLD_TP1_SCALP
 from automation_tool.state_files import read_last_response_id, write_last_response_id
 from automation_tool.tradingview_touch_flow import LOAI_CONFIRM_ROUNDS
@@ -36,7 +37,9 @@ from automation_tool.tv_watchlist_daemon import (
     _r1_followup_job,
     _should_write_intraday_alert_anchor,
     _tp1_followup_job,
+    _third_future_m5_analysis_capture_slot,
     _wait_for_m5_analysis_capture_slot,
+    _zone_touch_retry_at_iso,
 )
 from automation_tool.zones_state import Zone, ZonesState, read_zones_state_from_shard, write_zones_state_to_shard
 
@@ -117,6 +120,44 @@ def test_m5_analysis_capture_slot_waits_until_5n_plus_1_minute() -> None:
     assert _m5_analysis_capture_slot_wait_seconds(
         datetime(2026, 5, 4, 8, 7, 15, tzinfo=tz)
     ) == 225
+
+
+def test_third_future_m5_analysis_capture_slot_targets_third_closed_candle() -> None:
+    tz = timezone.utc
+
+    assert _third_future_m5_analysis_capture_slot(
+        datetime(2026, 5, 4, 8, 13, 0, tzinfo=tz)
+    ) == datetime(2026, 5, 4, 8, 26, 0, tzinfo=tz)
+    assert _third_future_m5_analysis_capture_slot(
+        datetime(2026, 5, 4, 8, 16, 0, tzinfo=tz)
+    ) == datetime(2026, 5, 4, 8, 31, 0, tzinfo=tz)
+    assert _third_future_m5_analysis_capture_slot(
+        datetime(2026, 5, 4, 8, 59, 30, tzinfo=tz)
+    ) == datetime(2026, 5, 4, 9, 11, 0, tzinfo=tz)
+
+
+def test_zone_touch_retry_at_for_m5_plan_uses_third_future_capture_slot(monkeypatch) -> None:
+    now = datetime(2026, 5, 4, 8, 13, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon._now_utc", lambda: now)
+
+    zone = Zone(
+        id="plan_chinh_sang",
+        label="plan_chinh",
+        vung_cho="100-101",
+        side="BUY",
+        status="cham",
+    )
+
+    assert _zone_touch_retry_at_iso(zone) == "2026-05-04T08:26:00+00:00"
+
+
+def test_trade_management_retry_at_uses_third_future_m5_capture_slot(monkeypatch) -> None:
+    now = datetime(2026, 5, 4, 8, 13, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon._now_utc", lambda: now)
+
+    retry_at_iso = getattr(daemon, "_trade_management_retry_at_iso", lambda: "")
+
+    assert retry_at_iso() == "2026-05-04T08:26:00+00:00"
 
 
 def test_m5_analysis_capture_slot_sends_user_notice_when_waiting(monkeypatch, tmp_path) -> None:
