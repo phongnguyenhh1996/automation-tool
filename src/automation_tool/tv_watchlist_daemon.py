@@ -155,7 +155,6 @@ _ARM_THRESHOLD = ARM_THRESHOLD_TP1_DEFAULT
 _RETRY_WAIT_MINUTES = 15
 _RETRY_WAIT_MINUTES_SCALP = 10
 _OPENAI_MANAGE_INTERVAL_MINUTES = 15
-_ZONE_TOUCH_INITIAL_DELAY_MINUTES = 10
 _ZONE_TOUCH_LOAI_CONFIRM_ROUNDS = 3
 _M5_ANALYSIS_CAPTURE_SLOT_MINUTE_REMAINDER = 1
 DAEMON_PLAN_AUTO_CUTOFF_HOUR = 0
@@ -902,7 +901,7 @@ def _entry_management_target_touched(zone: Zone, parsed, p_last: float) -> bool:
     return _max_r_multiple_reached(zone, parsed, p_last, eps=_TP1_EPS) >= 1
 
 
-def _mark_initial_zone_touch_wait(
+def _mark_initial_zone_touch_dispatch(
     st: ZonesState,
     *,
     touched_zone: Zone,
@@ -910,10 +909,10 @@ def _mark_initial_zone_touch_wait(
     settings: Settings,
     params: WatchlistDaemonParams,
 ) -> list[tuple[Zone, str, float]]:
-    """Lần đầu chạm vùng: giữ ``cham`` và hẹn check AI sau 10 phút."""
-    touched_zone.status = "cham"
+    """Lần đầu chạm vùng: chuyển sang worker ngay; không hẹn chờ 10 phút."""
+    touched_zone.status = "dang_thuc_thi"
     touched_zone.auto_entry_mt5_failed = False
-    touched_zone.retry_at = _retry_at_iso(_ZONE_TOUCH_INITIAL_DELAY_MINUTES)
+    touched_zone.retry_at = ""
 
     invalidated = _invalidate_same_side_zones_after_touch(st, touched_zone=touched_zone)
     if invalidated:
@@ -939,13 +938,13 @@ def _mark_initial_zone_touch_wait(
 
     _send_log(
         settings,
-        f"[zone-touch] initial_touch_wait | zone_id={touched_zone.id} "
-        f"last={last_price} -> status=cham retry_at={touched_zone.retry_at}",
+        f"[zone-touch] initial_touch_dispatch | zone_id={touched_zone.id} "
+        f"last={last_price} -> status=dang_thuc_thi retry_at={touched_zone.retry_at}",
     )
     _send_user_notice(
         settings,
         "Giá đã chạm vùng chờ.",
-        f"Hệ thống sẽ đợi {_ZONE_TOUCH_INITIAL_DELAY_MINUTES} phút rồi kiểm tra lại với AI.",
+        "Hệ thống sẽ lấy dữ liệu tại mốc M5 kế tiếp rồi gửi AI phân tích.",
         zone=touched_zone,
         params=params,
     )
@@ -3289,15 +3288,28 @@ def _daemon_plan_main_loop(
                     if (float(lo) - eps) <= p <= (float(hi) + eps):
                         matched.append(z)
 
-                for z in matched:
-                    _mark_initial_zone_touch_wait(
-                        st,
+                for mz in matched:
+                    st_current = _state_read(params)
+                    if st_current is None:
+                        break
+                    z = next((zz for zz in st_current.zones if zz.id == mz.id), None)
+                    if z is None or z.status != "vung_cho":
+                        continue
+                    _mark_initial_zone_touch_dispatch(
+                        st_current,
                         touched_zone=z,
                         last_price=float(p_last),
                         settings=settings,
                         params=params,
                     )
-                    _state_write(params, st)
+                    _state_write(params, st_current)
+                    _zone_touch_job(
+                        settings=settings,
+                        params=params,
+                        zone_id=z.id,
+                        last_price=float(p_last),
+                        after_retry_wait=False,
+                    )
 
                 st_r1 = _state_read(params)
                 if st_r1 is not None:
