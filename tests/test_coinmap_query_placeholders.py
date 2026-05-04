@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from automation_tool.coinmap import (
     _api_export_mode,
     _coinmap_endpoint_key_from_response_url,
+    _coinmap_auto_from_to_ms,
     _coinmap_interval_minutes,
     _coinmap_interval_to_resolution_num,
     _merge_api_query_params,
@@ -68,6 +69,14 @@ def test_auto_from_to_default_uses_vn_session_window() -> None:
     step = {"interval": "5m", "symbol": "X"}
     q = _merge_api_query_params(api_cd, step)
     assert int(q["from"]) <= int(q["to"])
+
+
+def test_auto_from_to_applies_to_padding_ms() -> None:
+    step = {"interval": "5m", "symbol": "X"}
+    _, base_to = _coinmap_auto_from_to_ms({}, step)
+    _, padded_to = _coinmap_auto_from_to_ms({"auto_to_padding_ms": 180_000}, step)
+
+    assert 180_000 <= padded_to - base_to < 181_000
 
 
 def test_merge_symbol_is_per_step_not_main() -> None:

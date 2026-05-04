@@ -110,6 +110,7 @@ chart_download:
     vn_session_timezone: Asia/Ho_Chi_Minh
     vn_session_start_hour: 5
     auto_countback: 1000
+    auto_to_padding_ms: 180000
     auto_time_padding_ms: 0
     merge_repeated_endpoint_responses: true
     network_capture_max_responses_per_endpoint: 0

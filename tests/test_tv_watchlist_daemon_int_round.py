@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from automation_tool.openai_analysis_json import ARM_THRESHOLD_TP1_SCALP
 from automation_tool.state_files import read_last_response_id, write_last_response_id
 from automation_tool.tradingview_touch_flow import LOAI_CONFIRM_ROUNDS
@@ -29,13 +31,23 @@ from automation_tool.tv_watchlist_daemon import (
     _entry_touched_for_position_check,
     _entry_management_target_touched,
     _half_sl_retrace_touched,
+    _m5_analysis_capture_slot_wait_seconds,
     _max_r_multiple_reached,
     _should_check_managed_tp_done,
     _r1_followup_job,
     _should_write_intraday_alert_anchor,
     _tp1_followup_job,
+    _wait_for_m5_analysis_capture_slot,
 )
 from automation_tool.zones_state import Zone, ZonesState, read_zones_state_from_shard, write_zones_state_to_shard
+
+
+@pytest.fixture(autouse=True)
+def _no_m5_capture_slot_sleep(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "automation_tool.tv_watchlist_daemon._wait_for_m5_analysis_capture_slot",
+        lambda *_args, **_kwargs: None,
+    )
 
 
 def test_daemon_plan_sidecar_filename_matches_json_stem() -> None:
@@ -89,6 +101,71 @@ def test_intraday_alert_anchor_only_writes_when_sidecar_empty(tmp_path) -> None:
         no_save_storage=True,
     )
     assert _should_write_intraday_alert_anchor(no_shard) is False
+
+
+def test_m5_analysis_capture_slot_waits_until_5n_plus_1_minute() -> None:
+    tz = timezone.utc
+
+    assert _m5_analysis_capture_slot_wait_seconds(
+        datetime(2026, 5, 4, 8, 6, 0, tzinfo=tz)
+    ) == 0
+    assert _m5_analysis_capture_slot_wait_seconds(
+        datetime(2026, 5, 4, 8, 6, 59, tzinfo=tz)
+    ) == 0
+    assert _m5_analysis_capture_slot_wait_seconds(
+        datetime(2026, 5, 4, 8, 5, 30, tzinfo=tz)
+    ) == 30
+    assert _m5_analysis_capture_slot_wait_seconds(
+        datetime(2026, 5, 4, 8, 7, 15, tzinfo=tz)
+    ) == 225
+
+
+def test_m5_analysis_capture_slot_sends_user_notice_when_waiting(monkeypatch, tmp_path) -> None:
+    logs: list[str] = []
+    notices: list[tuple[str, str, object, object]] = []
+    sleeps: list[float] = []
+
+    monkeypatch.setattr(
+        "automation_tool.tv_watchlist_daemon._m5_analysis_capture_slot_wait_seconds",
+        lambda *_args, **_kwargs: 42,
+    )
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon.time.sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon._send_log", lambda _settings, text: logs.append(text))
+    monkeypatch.setattr(
+        "automation_tool.tv_watchlist_daemon._send_user_notice",
+        lambda _settings, title, body="", **kwargs: notices.append(
+            (title, body, kwargs.get("zone"), kwargs.get("params"))
+        ),
+    )
+    settings = MagicMock()
+    params = WatchlistDaemonParams(
+        coinmap_tv_yaml=tmp_path / "coinmap_tv.yaml",
+        capture_coinmap_yaml=tmp_path / "cap.yaml",
+        charts_dir=tmp_path / "charts",
+        storage_state_path=None,
+        headless=True,
+        no_save_storage=True,
+        shard_path=tmp_path / "vung_sang.json",
+    )
+    zone = Zone(id="z1", label="plan_chinh", vung_cho="100-101", side="BUY")
+
+    _wait_for_m5_analysis_capture_slot(
+        settings,
+        source="zone-touch INTRADAY_ALERT",
+        params=params,
+        zone=zone,
+    )
+
+    assert sleeps == [42]
+    assert logs and "[m5-slot]" in logs[0]
+    assert notices == [
+        (
+            "Đang chờ mốc lấy dữ liệu M5.",
+            "Sẽ lấy Coinmap M5 tại phút 5n+1 trước khi gửi AI phân tích. Dự kiến chờ 42 giây.",
+            zone,
+            params,
+        )
+    ]
 
 
 def test_daemon_plan_prev_seeds_from_main_when_sidecar_empty(monkeypatch, tmp_path) -> None:

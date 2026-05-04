@@ -157,6 +157,7 @@ _RETRY_WAIT_MINUTES_SCALP = 10
 _OPENAI_MANAGE_INTERVAL_MINUTES = 15
 _ZONE_TOUCH_INITIAL_DELAY_MINUTES = 10
 _ZONE_TOUCH_LOAI_CONFIRM_ROUNDS = 3
+_M5_ANALYSIS_CAPTURE_SLOT_MINUTE_REMAINDER = 1
 DAEMON_PLAN_AUTO_CUTOFF_HOUR = 0
 DAEMON_PLAN_AUTO_CUTOFF_MINUTE = 0
 DAEMON_PLAN_AUTO_CUTOFF_FRIDAY_HOUR = 0
@@ -195,6 +196,51 @@ def _now_utc() -> datetime:
 
 def _now_iso() -> str:
     return _now_utc().isoformat()
+
+
+def _m5_analysis_capture_slot_wait_seconds(now: Optional[datetime] = None) -> int:
+    """
+    M5 data gửi AI chỉ lấy ở phút ``5n + 1`` (:01, :06, :11...),
+    tức sau khi nến M5 vừa đóng và Coinmap có thêm một phút để cập nhật.
+    """
+    current = now or _now_utc()
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    if current.minute % 5 == _M5_ANALYSIS_CAPTURE_SLOT_MINUTE_REMAINDER:
+        return 0
+    minutes_until_slot = (
+        _M5_ANALYSIS_CAPTURE_SLOT_MINUTE_REMAINDER - current.minute
+    ) % 5
+    seconds_until_slot = (
+        minutes_until_slot * 60 - current.second - current.microsecond / 1_000_000
+    )
+    return max(0, int(math.ceil(seconds_until_slot)))
+
+
+def _wait_for_m5_analysis_capture_slot(
+    settings: Settings,
+    *,
+    source: str,
+    params: Optional[WatchlistDaemonParams] = None,
+    zone: Optional[Zone] = None,
+) -> None:
+    wait_s = _m5_analysis_capture_slot_wait_seconds()
+    if wait_s <= 0:
+        return
+    target = _now_utc() + timedelta(seconds=wait_s)
+    _send_log(
+        settings,
+        f"[m5-slot] {source}: chờ {wait_s}s để lấy Coinmap M5 tại phút 5n+1 "
+        f"(target={target.isoformat()})",
+    )
+    _send_user_notice(
+        settings,
+        "Đang chờ mốc lấy dữ liệu M5.",
+        f"Sẽ lấy Coinmap M5 tại phút 5n+1 trước khi gửi AI phân tích. Dự kiến chờ {wait_s} giây.",
+        zone=zone,
+        params=params,
+    )
+    time.sleep(wait_s)
 
 
 def _retry_at_iso(minutes: int = _RETRY_WAIT_MINUTES) -> str:
@@ -1436,6 +1482,12 @@ def _tp1_followup_job(
             params=params,
         )
 
+        _wait_for_m5_analysis_capture_slot(
+            settings,
+            source="tp1 TRADE_MANAGEMENT",
+            params=params,
+            zone=z0,
+        )
         capture_charts(
             coinmap_yaml=params.capture_coinmap_yaml,
             charts_dir=params.charts_dir,
@@ -1835,6 +1887,12 @@ def _r1_followup_job(
                 params=params,
             )
 
+        _wait_for_m5_analysis_capture_slot(
+            settings,
+            source="r1 TRADE_MANAGEMENT",
+            params=params,
+            zone=z0,
+        )
         capture_charts(
             coinmap_yaml=params.capture_coinmap_yaml,
             charts_dir=params.charts_dir,
@@ -2446,6 +2504,13 @@ def _zone_touch_job(
         from automation_tool.coinmap import capture_charts
 
         _touch_iv = ("1m",) if _is_scalp_zone(zone) else ("5m",)
+        if _touch_iv == ("5m",):
+            _wait_for_m5_analysis_capture_slot(
+                settings,
+                source="zone-touch INTRADAY_ALERT",
+                params=params,
+                zone=zone,
+            )
         capture_charts(
             coinmap_yaml=params.capture_coinmap_yaml,
             charts_dir=params.charts_dir,

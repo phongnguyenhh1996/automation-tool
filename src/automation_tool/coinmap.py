@@ -606,7 +606,8 @@ def _vn_session_anchor_utc_ms(
 
 def _coinmap_auto_from_to_ms(api_cd: dict[str, Any], step: dict[str, Any]) -> tuple[int, int]:
     """
-    Default (``auto_from_to_mode`` unset or ``vn_session``): ``to`` = UTC now (ms);
+    Default (``auto_from_to_mode`` unset or ``vn_session``): ``to`` = UTC now (ms)
+    plus optional ``auto_to_padding_ms``;
     ``from`` = same clock instant as 05:00 (configurable) in Vietnam timezone
     (``Asia/Ho_Chi_Minh``), i.e. the start of the current local session through now.
 
@@ -623,6 +624,7 @@ def _coinmap_auto_from_to_ms(api_cd: dict[str, Any], step: dict[str, Any]) -> tu
     now_local = datetime.now(tz=tz)
     now_utc = now_local.astimezone(timezone.utc)
     to_ms = int(now_utc.timestamp() * 1000)
+    to_ms += max(0, int(api_cd.get("auto_to_padding_ms") or 0))
     mode = str(api_cd.get("auto_from_to_mode") or "vn_session").strip().lower()
     if mode in ("countback", "legacy"):
         countback = max(1, int(api_cd.get("auto_countback") or 1000))
