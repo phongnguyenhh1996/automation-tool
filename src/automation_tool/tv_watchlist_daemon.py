@@ -91,6 +91,7 @@ from automation_tool.openai_analysis_json import (
     arm_threshold_tp1_for_label,
     auto_mt5_hop_luu_passes_for_label,
     auto_mt5_hop_luu_threshold_for_label,
+    is_scalp_label,
     parse_vung_cho_bounds,
 )
 from automation_tool.daemon_launcher import (
@@ -165,7 +166,7 @@ DAEMON_PLAN_AUTO_CUTOFF_FRIDAY_MINUTE = 0
 
 
 def _is_scalp_zone(zone: Zone) -> bool:
-    return (zone.label or "").strip().lower() == "scalp"
+    return is_scalp_label(zone.label or "")
 
 
 def _zone_touch_coinmap_main_json_path(charts_dir: Path, zone: Zone) -> tuple[Optional[Path], str]:

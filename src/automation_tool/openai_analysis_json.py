@@ -12,6 +12,13 @@ OldPlanHanhDong = Literal["chờ", "loại"]
 
 ZONE_LABELS_ORDER = ("plan_chinh", "plan_phu", "scalp")
 
+
+def is_scalp_label(label: str) -> bool:
+    """True cho label ``scalp`` (cũ) lẫn ``scalp_<id>`` (mới, ví dụ ``scalp_1``, ``scalp_2``)."""
+    key = (label or "").strip().lower()
+    return key == "scalp" or key.startswith("scalp_")
+
+
 # Morning auto-MT5: hop_luu must be greater than this value for plan_chinh / plan_phu.
 AUTO_MT5_HOP_LUU_THRESHOLD = 75
 # Scalp: hop_luu must be greater than this value.
@@ -20,8 +27,7 @@ AUTO_MT5_HOP_LUU_THRESHOLD_SCALP = 60
 
 def auto_mt5_hop_luu_threshold_for_label(label: str) -> int:
     """Ngưỡng hop_luu cho auto-MT5 theo label; đủ điều kiện khi ``hop_luu > ngưỡng``."""
-    key = label.strip().lower()
-    if key == "scalp":
+    if is_scalp_label(label):
         return AUTO_MT5_HOP_LUU_THRESHOLD_SCALP
     return AUTO_MT5_HOP_LUU_THRESHOLD
 
@@ -40,8 +46,7 @@ ARM_THRESHOLD_TP1_SCALP = 1.0
 
 def arm_threshold_tp1_for_label(label: str) -> float:
     """Scalp dùng dải hẹp hơn plan_chinh / plan_phu (đồng bộ daemon + tp1_followup)."""
-    key = (label or "").strip().lower()
-    if key == "scalp":
+    if is_scalp_label(label):
         return ARM_THRESHOLD_TP1_SCALP
     return ARM_THRESHOLD_TP1_DEFAULT
 
