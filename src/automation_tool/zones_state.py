@@ -398,8 +398,14 @@ def write_zones_for_slot(
     slot: SessionSlot,
     zones_dir: Optional[Path] = None,
     last_observed: Optional[LastObserved] = None,
+    update_manifest_slot: bool = True,
 ) -> None:
-    """Write three shard files + manifest for one session slot."""
+    """Write shard files + manifest for one session slot.
+
+    ``update_manifest_slot=False``: ghi shard bình thường nhưng **không** cập nhật
+    ``last_write_slot`` trong manifest (giữ nguyên giá trị cũ). Dùng cho luồng
+    ``update-scalp`` để tránh làm lệch slot của zones chính.
+    """
     root = zones_dir or default_zones_dir()
     with _zones_io_lock:
         root.mkdir(parents=True, exist_ok=True)
@@ -434,15 +440,30 @@ def write_zones_for_slot(
                 session_slot=slot,
             )
             _write_shard_file(shard_path(root, lab, slot), symbol, slot, z2)
-        man: dict[str, Any] = {
-            "symbol": symbol,
-            "last_write_slot": slot,
-            "updated_at": _now_iso(),
-            "schema_version": _SCHEMA_MANIFEST,
-        }
+
+        mp = manifest_path(root)
+        if update_manifest_slot:
+            man: dict[str, Any] = {
+                "symbol": symbol,
+                "last_write_slot": slot,
+                "updated_at": _now_iso(),
+                "schema_version": _SCHEMA_MANIFEST,
+            }
+        else:
+            # Đọc manifest hiện tại, giữ nguyên last_write_slot
+            try:
+                man = json.loads(mp.read_text(encoding="utf-8")) if mp.is_file() else {}
+            except (json.JSONDecodeError, OSError):
+                man = {}
+            if not isinstance(man, dict):
+                man = {}
+            man["symbol"] = symbol
+            man["updated_at"] = _now_iso()
+            man.setdefault("schema_version", _SCHEMA_MANIFEST)
+
         if last_observed is not None:
             man["last_observed"] = last_observed.to_json_dict()
-        _atomic_write_json(manifest_path(root), man)
+        _atomic_write_json(mp, man)
 
 
 def read_manifest_last_write_slot(zones_dir: Path) -> Optional[SessionSlot]:

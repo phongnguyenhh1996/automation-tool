@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import replace
 from pathlib import Path
 from typing import Optional
 
@@ -316,6 +317,15 @@ def apply_first_response_vao_lenh(
             body="Không tự đặt lệnh. Kiểm tra trade_line trong phản hồi AI.",
         )
         return False
+
+    # Scalp: chỉ vào TP1, bỏ TP2 để MT5 đặt lệnh với target TP1.
+    if label == "scalp" and parsed.tp2 is not None:
+        _log.info(
+            "first_response: scalp — bỏ TP2 (%.5f), chỉ vào TP1 (%.5f)",
+            float(parsed.tp2),
+            float(parsed.tp1),
+        )
+        parsed = replace(parsed, tp2=None)
 
     _thr = auto_mt5_hop_luu_threshold_for_label(label)
     _log.info(

@@ -3105,7 +3105,13 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
             session_slot=slot,
         )
         if scalp_zones:
-            write_zones_for_slot(symbol=sym, zones=scalp_zones, slot=slot, zones_dir=zones_dir)
+            write_zones_for_slot(
+                symbol=sym,
+                zones=scalp_zones,
+                slot=slot,
+                zones_dir=zones_dir,
+                update_manifest_slot=False,
+            )
             _log.info(
                 "update-scalp: đã ghi shard zones | slot=%s zones=%d labels=%s | dir=%s",
                 slot,
