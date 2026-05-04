@@ -4,7 +4,9 @@ import json
 import logging
 import math
 import re
+import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -2916,6 +2918,99 @@ def _zone_touch_job(
             return
 
 
+# ---------------------------------------------------------------------------
+# Scheduled scalp-update inside daemon-gia
+# ---------------------------------------------------------------------------
+
+#: Times (HCM) at which daemon-gia automatically fires ``update-scalp`` + ``reconcile-daemon-plans``.
+SCALP_UPDATE_SCHEDULE_HCM: tuple[tuple[int, int], ...] = (
+    (13, 0),
+    (14, 0),
+    (16, 30),
+    (19, 0),
+    (20, 30),
+    (22, 0),
+)
+#: Fire the job if current time is within this many minutes *after* the scheduled minute.
+_SCALP_FIRE_WINDOW_MINUTES: int = 2
+
+
+def _scalp_schedule_slot_due(
+    now_hcm: datetime,
+    last_fired: dict[tuple[int, int], Any],
+) -> Optional[tuple[int, int]]:
+    """Return the first ``(hour, minute)`` slot that is due but not yet fired today."""
+    today = now_hcm.date()
+    now_total = now_hcm.hour * 60 + now_hcm.minute
+    for slot_h, slot_m in SCALP_UPDATE_SCHEDULE_HCM:
+        slot_total = slot_h * 60 + slot_m
+        if 0 <= (now_total - slot_total) < _SCALP_FIRE_WINDOW_MINUTES:
+            if last_fired.get((slot_h, slot_m)) != today:
+                return (slot_h, slot_m)
+    return None
+
+
+def _run_scalp_update_and_reconcile(
+    *,
+    sym: str,
+    params: "WatchlistDaemonParams",
+    zones_dir: Path,
+    slot_label: str,
+) -> None:
+    """Background thread: chạy ``update-scalp`` rồi ``reconcile-daemon-plans``."""
+    cmd: list[str] = [
+        sys.executable,
+        "-m",
+        "automation_tool.cli",
+        "update-scalp",
+        "--main-symbol",
+        sym,
+        "--config",
+        str(params.capture_coinmap_yaml),
+    ]
+    if params.storage_state_path:
+        cmd += ["--storage-state", str(params.storage_state_path)]
+    if not params.headless:
+        cmd.append("--headed")
+    if params.no_save_storage:
+        cmd.append("--no-save-storage")
+
+    try:
+        cwd = str(Path.cwd().resolve())
+    except OSError:
+        cwd = None
+
+    _log.info("scalp-scheduler | slot=%s | spawn update-scalp cmd=%s", slot_label, cmd)
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            timeout=720,
+        )
+        if result.returncode == 0:
+            _log.info(
+                "scalp-scheduler | slot=%s | update-scalp OK → reconcile-daemon-plans",
+                slot_label,
+            )
+            n = reconcile_daemon_plans_at_boot(zones_dir)
+            _log.info(
+                "scalp-scheduler | slot=%s | reconcile-daemon-plans spawned %s process(es)",
+                slot_label,
+                n,
+            )
+        else:
+            _log.warning(
+                "scalp-scheduler | slot=%s | update-scalp FAILED returncode=%d",
+                slot_label,
+                result.returncode,
+            )
+    except subprocess.TimeoutExpired:
+        _log.warning("scalp-scheduler | slot=%s | update-scalp timeout (720 s)", slot_label)
+    except Exception as exc:
+        _log.warning("scalp-scheduler | slot=%s | update-scalp exception: %s", slot_label, exc)
+
+
 def _tv_watchlist_price_only_loop(
     *,
     settings: Settings,
@@ -2940,6 +3035,10 @@ def _tv_watchlist_price_only_loop(
     stale_s = float(mt5_stale_reconnect_s or 0.0)
     stale_state: dict[str, Any] = {}
     last_prices: list[float] = []
+    # Scheduled scalp-update state
+    _scalp_last_fired: dict[tuple[int, int], Any] = {}
+    _scalp_update_thread: Optional[threading.Thread] = None
+    _tz_hcm = ZoneInfo(params.timezone_name or "Asia/Ho_Chi_Minh")
     try:
         while True:
             try:
@@ -3043,6 +3142,38 @@ def _tv_watchlist_price_only_loop(
                     )
             except Exception:
                 pass
+            # Scheduled scalp-update check (13h, 14h, 16h30, 19h, 20h30, 22h HCM)
+            try:
+                _now_hcm = datetime.now(_tz_hcm)
+                _due_slot = _scalp_schedule_slot_due(_now_hcm, _scalp_last_fired)
+                if _due_slot is not None:
+                    _slot_label = f"{_due_slot[0]:02d}:{_due_slot[1]:02d}"
+                    # Mark as fired immediately to prevent double-fire within the window
+                    _scalp_last_fired[_due_slot] = _now_hcm.date()
+                    if _scalp_update_thread is None or not _scalp_update_thread.is_alive():
+                        _log.info(
+                            "scalp-scheduler | slot=%s | launching update-scalp thread",
+                            _slot_label,
+                        )
+                        _scalp_update_thread = threading.Thread(
+                            target=_run_scalp_update_and_reconcile,
+                            kwargs=dict(
+                                sym=sym,
+                                params=params,
+                                zones_dir=zones_dir,
+                                slot_label=_slot_label,
+                            ),
+                            daemon=True,
+                            name=f"scalp-update-{_slot_label}",
+                        )
+                        _scalp_update_thread.start()
+                    else:
+                        _log.info(
+                            "scalp-scheduler | slot=%s | skip — previous run still active",
+                            _slot_label,
+                        )
+            except Exception as _sche:
+                _log.warning("scalp-scheduler: schedule check error: %s", _sche)
             time.sleep(poll_s)
     finally:
         try:
