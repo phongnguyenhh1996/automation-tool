@@ -742,56 +742,92 @@ def maybe_post_entry_tp1_tick(
             )
             if not touched:
                 continue
-            # Scalp: chạm TP1 → huỷ ticket ngay, không gọi OpenAI follow-up.
+            # Scalp: chạm TP1 → kiểm tra has_position.
+            # Nếu chưa có position (lệnh pending) → huỷ lệnh ngay, không gọi OpenAI.
+            # Nếu đã có position → fall through xuống partial-close + OpenAI như các label khác.
             if lab == "scalp":
                 dry = bool(getattr(params, "mt5_dry_run", False))
                 exe = getattr(params, "mt5_execute", True)
                 tk_sc = int(tk or 0)
                 accs_sp = load_mt5_accounts_for_cli(getattr(params, "mt5_accounts_json", None))
-                tmap_sp = (st.mt5_tickets_by_label.get(lab) or {}) if st else {}
-                if exe and (tk_sc > 0 or tmap_sp):
-                    if accs_sp and tmap_sp:
-                        summ_sp = mt5_cancel_pending_or_close_all_accounts(
-                            tmap_sp, accs_sp, dry_run=dry
-                        )
-                        msg_sp = format_mt5_multi_manage_for_telegram(summ_sp)
-                        r_ok_sp = summ_sp.ok_all
-                    else:
-                        prim_sp = primary_account(accs_sp) if accs_sp else None
-                        r = mt5_cancel_pending_or_close_position(
+
+                has_pos = False
+                if exe and tk_sc > 0:
+                    prim_hp = primary_account(accs_sp) if accs_sp else None
+                    if prim_hp:
+                        has_pos, hp_msg = mt5_ticket_is_open_position(
                             tk_sc,
                             dry_run=dry,
-                            terminal_path=prim_sp.terminal_path if prim_sp else None,
-                            login=prim_sp.login if prim_sp else None,
-                            password=prim_sp.password if prim_sp else None,
-                            server=prim_sp.server if prim_sp else None,
+                            terminal_path=prim_hp.terminal_path,
+                            login=prim_hp.login,
+                            password=prim_hp.password,
+                            server=prim_hp.server,
                         )
-                        msg_sp = r.message
-                        r_ok_sp = r.ok
-                    _log.info("tp1: scalp cho_tp1 chạm TP1 — huỷ ticket | %s", msg_sp)
-                    if settings.telegram_bot_token and not getattr(params, "no_telegram", False):
-                        send_mt5_execution_log_to_ngan_gon_chat(
-                            bot_token=settings.telegram_bot_token,
-                            telegram_chat_id=settings.telegram_chat_id,
-                            telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
-                            telegram_log_chat_id=settings.telegram_log_chat_id,
-                            source="tp1-scalp-tp1",
-                            text=f"{lab}: scalp chạm TP1 — huỷ ticket\n{msg_sp}",
-                            zone_label=lab,
-                            trade_line=tl,
-                            execution_ok=r_ok_sp,
+                        _log_tp1.info(
+                            "tp1 scalp has_position=%s | label=%s ticket=%s | %s",
+                            has_pos,
+                            lab,
+                            tk_sc,
+                            hp_msg,
                         )
-                else:
-                    _log.info(
-                        "tp1: scalp cho_tp1 chạm TP1 — bỏ qua MT5 (exe=%s tk=%s)",
-                        exe,
-                        tk_sc,
+
+                if not has_pos:
+                    # Lệnh pending (chưa khớp) → huỷ ngay, không gọi OpenAI
+                    tmap_sp = (st.mt5_tickets_by_label.get(lab) or {}) if st else {}
+                    if exe and (tk_sc > 0 or tmap_sp):
+                        if accs_sp and tmap_sp:
+                            summ_sp = mt5_cancel_pending_or_close_all_accounts(
+                                tmap_sp, accs_sp, dry_run=dry
+                            )
+                            msg_sp = format_mt5_multi_manage_for_telegram(summ_sp)
+                            r_ok_sp = summ_sp.ok_all
+                        else:
+                            prim_sp = primary_account(accs_sp) if accs_sp else None
+                            r = mt5_cancel_pending_or_close_position(
+                                tk_sc,
+                                dry_run=dry,
+                                terminal_path=prim_sp.terminal_path if prim_sp else None,
+                                login=prim_sp.login if prim_sp else None,
+                                password=prim_sp.password if prim_sp else None,
+                                server=prim_sp.server if prim_sp else None,
+                            )
+                            msg_sp = r.message
+                            r_ok_sp = r.ok
+                        _log.info(
+                            "tp1: scalp chạm TP1 (không có position) — huỷ pending | %s", msg_sp
+                        )
+                        if settings.telegram_bot_token and not getattr(params, "no_telegram", False):
+                            send_mt5_execution_log_to_ngan_gon_chat(
+                                bot_token=settings.telegram_bot_token,
+                                telegram_chat_id=settings.telegram_chat_id,
+                                telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
+                                telegram_log_chat_id=settings.telegram_log_chat_id,
+                                source="tp1-scalp-tp1",
+                                text=f"{lab}: scalp chạm TP1 (pending) — huỷ lệnh\n{msg_sp}",
+                                zone_label=lab,
+                                trade_line=tl,
+                                execution_ok=r_ok_sp,
+                            )
+                    else:
+                        _log.info(
+                            "tp1: scalp chạm TP1 (pending) — bỏ qua MT5 (exe=%s tk=%s)",
+                            exe,
+                            tk_sc,
+                        )
+                    update_single_plan_status(lab, LOAI, path=last_alert_path)
+                    clear_plan_mt5_fields(lab, path=last_alert_path)
+                    update_plan_tp1_followup_done(lab, False, path=last_alert_path)
+                    _log_tp1.info(
+                        "tp1: %s chạm TP1 (scalp, pending) — huỷ lệnh, không gọi OpenAI",
+                        lab,
                     )
+                    return None
+                # has_pos=True: đã có position, chạm TP1 → đánh dấu done luôn, không gọi OpenAI
                 update_single_plan_status(lab, LOAI, path=last_alert_path)
                 clear_plan_mt5_fields(lab, path=last_alert_path)
                 update_plan_tp1_followup_done(lab, False, path=last_alert_path)
                 _log_tp1.info(
-                    "tp1: %s cho_tp1 chạm TP1 (scalp) — huỷ ticket / loại, không gọi OpenAI",
+                    "tp1: %s chạm TP1 (scalp, has_position) — đánh dấu done, không gọi OpenAI",
                     lab,
                 )
                 return None
