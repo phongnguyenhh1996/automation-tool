@@ -188,6 +188,24 @@ def write_last_all_response_id(response_id: str, path: Optional[Path] = None) ->
     _atomic_write_text(p, response_id.strip() + "\n")
 
 
+def default_last_scalp_response_id_path() -> Path:
+    """OpenAI ``response_id`` từ lần ``update-scalp`` trước (thread scalp riêng)."""
+    return symbol_data_dir() / "last_scalp_response_id.txt"
+
+
+def read_last_scalp_response_id(path: Optional[Path] = None) -> Optional[str]:
+    p = path or default_last_scalp_response_id_path()
+    if not p.is_file():
+        return None
+    line = p.read_text(encoding="utf-8").strip()
+    return line or None
+
+
+def write_last_scalp_response_id(response_id: str, path: Optional[Path] = None) -> None:
+    p = path or default_last_scalp_response_id_path()
+    _atomic_write_text(p, response_id.strip() + "\n")
+
+
 @dataclass(frozen=True)
 class MorningBaselinePrices:
     prices: tuple[float, float, float]

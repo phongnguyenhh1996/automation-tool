@@ -39,6 +39,7 @@ from automation_tool.openai_errors import re_raise_unless_openai
 from automation_tool.openai_prompt_flow import (
     PromptTwoStepResult,
     build_intraday_update_user_text,
+    build_scalp_update_user_text,
     default_analysis_prompt,
     is_first_intraday_update_after_all,
     run_analysis_responses_flow,
@@ -60,15 +61,18 @@ from automation_tool.state_files import (
     default_last_alert_prices_path,
     default_last_all_response_id_path,
     default_last_response_id_path,
+    default_last_scalp_response_id_path,
     default_morning_baseline_prices_path,
     default_morning_full_analysis_path,
     merge_trade_lines_from_openai_analysis_text,
     read_last_alert_prices,
     read_last_all_response_id,
     read_last_response_id,
+    read_last_scalp_response_id,
     write_last_alert_prices,
     write_last_all_response_id,
     write_last_response_id,
+    write_last_scalp_response_id,
     write_morning_baseline_prices,
     write_morning_full_analysis,
 )
@@ -95,6 +99,7 @@ from automation_tool.zones_state import (
     migrate_legacy_zones_state_if_needed,
     write_zones_for_slot,
     zones_from_analysis_payload,
+    zones_from_scalp_payload,
 )
 from automation_tool.telegram_bot import (
     send_message,
@@ -668,6 +673,47 @@ def _parser() -> argparse.ArgumentParser:
         help="Thư mục zones (shard) hoặc legacy zones_state.json — mặc định data/<SYM>/zones/",
     )
     up.set_defaults(func=cmd_update)
+
+    # --- update-scalp: same as update but asks for best scalp plan; scalp_<id> labels ---
+    ups = sub.add_parser(
+        "update-scalp",
+        help=(
+            "Scalp intraday: Coinmap M5 + OpenAI follow-up tìm 1 plan scalp đẹp nhất; "
+            "zones lưu vào data/<SYM>/zones/ với label scalp_<id>."
+        ),
+    )
+    ups.add_argument("--config", type=Path, default=None, help="Coinmap yaml for capture only (default: coinmap_update.yaml)")
+    ups.add_argument(
+        "--tv-config",
+        type=Path,
+        default=None,
+        help="Yaml chứa tradingview_capture cho monitor (default: config/coinmap.yaml)",
+    )
+    ups.add_argument("--charts-dir", type=Path, default=None)
+    ups.add_argument("--storage-state", type=Path, default=None)
+    ups.add_argument("--no-save-storage", action="store_true")
+    ups.add_argument("--headed", action="store_true")
+    ups.add_argument(
+        "--main-symbol",
+        default=None,
+        metavar="SYM",
+        help="Giống capture: thay XAUUSD trong yaml chụp (mặc định coinmap_update.yaml)",
+    )
+    ups.add_argument("--no-telegram", action="store_true")
+    ups.add_argument(
+        "--no-tradingview",
+        action="store_true",
+        help="Skip TradingView 15m_ict capture step",
+    )
+    ups.add_argument(
+        "--zones-json",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Thư mục zones (mặc định: data/<SYM>/zones/) — cùng thư mục với zones thông thường",
+    )
+    ups.add_argument("--model", default=None, metavar="ID", help=_OPENAI_MODEL_HELP)
+    ups.set_defaults(func=cmd_update_scalp)
 
     wd = sub.add_parser(
         "tv-watchlist-daemon",
@@ -2845,6 +2891,230 @@ def cmd_update(args: argparse.Namespace) -> None:
     # Không cần tạo TradingView alerts nữa; monitor đọc trực tiếp giá realtime từ Watchlist.
 
     _send_phan_tich_update_if_any()
+
+
+def cmd_update_scalp(args: argparse.Namespace) -> None:
+    """
+    Luồng ``update-scalp``: giống ``update`` nhưng yêu cầu tìm 1 plan scalp đẹp nhất.
+    - Thread OpenAI riêng (``last_scalp_response_id.txt``).
+    - Zone labels dạng ``scalp_<id>`` (ví dụ: ``scalp_1``, ``scalp_2``, ``scalp_3``).
+    - Zones lưu vào ``data/<SYM>/zones/`` cùng với zones thông thường.
+    """
+    from automation_tool.images import set_active_main_symbol_file
+
+    s = load_settings()
+    if getattr(args, "main_symbol", None):
+        set_active_main_symbol_file(args.main_symbol)
+    _log.info(
+        "update-scalp: bắt đầu | capture_yaml=%s tv_yaml=%s no_tradingview=%s",
+        args.config or default_coinmap_update_config_path(),
+        args.tv_config or default_coinmap_config_path(),
+        args.no_tradingview,
+    )
+    cfg_cap = args.config or default_coinmap_update_config_path()
+    storage = args.storage_state or default_storage_state_path()
+    cfg_tv = args.tv_config or default_coinmap_config_path()
+
+    mp = default_morning_full_analysis_path()
+    if not mp.is_file():
+        raise SystemExit(
+            f"Missing {mp} — run `coinmap-automation all` so morning analysis is saved "
+            "before running update-scalp."
+        )
+
+    _send_python_bot_job_started(
+        s,
+        title=f"Scalp update vào lúc {_now_clock_hcm()} bắt đầu chạy",
+        no_telegram=args.no_telegram,
+    )
+    paths = capture_charts(
+        coinmap_yaml=cfg_cap,
+        charts_dir=args.charts_dir,
+        storage_state_path=storage,
+        email=s.coinmap_email,
+        password=s.coinmap_password,
+        tradingview_password=s.tradingview_password,
+        save_storage_state=not args.no_save_storage,
+        headless=not args.headed,
+        reuse_browser_context=None,
+        main_chart_symbol=args.main_symbol,
+        clear_charts_before_capture=True,
+        coinmap_capture_intervals=("5m", "15m"),
+    )
+    charts_dir = args.charts_dir or default_charts_dir()
+    print(f"Captured {len(paths)} file(s) for update-scalp run.")
+    stamp = stamp_from_capture_paths(paths)
+    m5 = coinmap_main_pair_interval_json_path(charts_dir, "5m", stamp=stamp)
+    m15 = coinmap_main_pair_interval_json_path(charts_dir, "15m", stamp=stamp)
+    from automation_tool.images import coinmap_merged_openai_files, read_main_chart_symbol
+
+    main_s = read_main_chart_symbol(charts_dir)
+    _dxy_m, main_m = coinmap_merged_openai_files(
+        charts_dir, stamp, main_s
+    ) if stamp else (None, None)
+    _log.info(
+        "update-scalp: capture xong | %s file(s) | stamp=%s | M15=%s | M5=%s | main_merged=%s",
+        len(paths), stamp, m15, m5, main_m,
+    )
+    use_merged_coinmap = main_m is not None and main_m.is_file()
+    coinmap_paths: list[Path]
+    if use_merged_coinmap:
+        coinmap_paths = [main_m]
+    else:
+        if m5 is None:
+            raise SystemExit(
+                f"No 5m Coinmap JSON under {charts_dir} after capture (stamp={stamp!r}). "
+                "Check coinmap_update.yaml capture_plan and api_data_export, or merged export."
+            )
+        if m15 is None:
+            raise SystemExit(
+                f"No 15m Coinmap JSON under {charts_dir} after capture (stamp={stamp!r}). "
+                "Check coinmap_update.yaml capture_plan includes 15m."
+            )
+        print(
+            f"Warning: {charts_dir} has no {stamp}_coinmap_{main_s}_merged.json; "
+            "using raw 15m + 5m JSON (legacy).",
+            file=sys.stderr,
+        )
+        coinmap_paths = [m15, m5]
+
+    tv_ict_payloads: list[ChartOpenAIPayload] = []
+    if not args.no_tradingview:
+        if not stamp:
+            _log.warning("update-scalp: skip TradingView 15m_ict capture because stamp is missing")
+        else:
+            tv_plan = [
+                {
+                    "symbol": main_s,
+                    "intervals": [
+                        {
+                            "label": "15 phút",
+                            "slug": "15m_ict",
+                            "indicator_profile": "ict_killzones",
+                        }
+                    ],
+                }
+            ]
+            tv_paths = capture_charts(
+                coinmap_yaml=cfg_tv,
+                charts_dir=charts_dir,
+                storage_state_path=storage,
+                email=s.coinmap_email,
+                password=s.coinmap_password,
+                tradingview_password=s.tradingview_password,
+                save_storage_state=not args.no_save_storage,
+                headless=not args.headed,
+                reuse_browser_context=None,
+                main_chart_symbol=main_s,
+                enable_coinmap=False,
+                enable_tradingview=True,
+                clear_charts_before_capture=False,
+                stamp_override=stamp,
+                tradingview_capture_plan=tv_plan,
+                tradingview_force_screenshot=True,
+            )
+            paths.extend(tv_paths)
+            tv_ict_payloads = _tradingview_slot_openai_payload(
+                charts_dir, stamp=stamp, symbol=main_s, interval_slug="15m_ict"
+            )
+            _log.info(
+                "update-scalp: TradingView 15m_ict capture xong | %s file(s) | payloads=%s",
+                len(tv_paths),
+                len(tv_ict_payloads),
+            )
+            if not tv_ict_payloads:
+                print(
+                    f"Warning: TradingView 15m_ict was not found for OpenAI attachment "
+                    f"(stamp={stamp!r}, symbol={main_s}).",
+                    file=sys.stderr,
+                )
+
+    require_openai(s)
+
+    # Luôn tạo hội thoại mới: đính kèm morning_full_analysis.json + không dùng previous_response_id.
+    morning_snapshot: Path = mp
+    prev_for_openai: str | None = None
+
+    user_msg = build_scalp_update_user_text(
+        first_after_all=True,
+        coinmap_attachment_mode="merged" if use_merged_coinmap else "legacy",
+    )
+    if tv_ict_payloads:
+        user_msg += (
+            "\nĐính kèm thêm một ảnh TradingView 15m Session Liquidity Check / ICT Killzones "
+            "của cặp chính sau các file JSON Coinmap; dùng để kiểm tra liquidity pool/sweep "
+            "theo phiên.\n"
+        )
+
+    try:
+        out_text, new_id = run_single_followup_responses(
+            api_key=s.openai_api_key,
+            prompt_id=s.openai_prompt_id,
+            prompt_version=s.openai_prompt_version,
+            user_text=user_msg,
+            morning_snapshot_path=morning_snapshot,
+            coinmap_json_paths=coinmap_paths,
+            extra_chart_payloads=tv_ict_payloads,
+            previous_response_id=prev_for_openai,
+            vector_store_ids=s.openai_vector_store_ids,
+            store=s.openai_responses_store,
+            include=s.openai_responses_include,
+            model=resolved_openai_model(s, getattr(args, "model", None)),
+        )
+    except Exception as e:
+        re_raise_unless_openai(e)
+
+    print(out_text)
+    write_last_scalp_response_id(new_id)
+    _log.info("update-scalp: OpenAI follow-up xong | new_response_id=%s", new_id)
+
+    update_payload = parse_analysis_from_openai_text(out_text)
+    zones_dir = zones_dir_from_cli_path(getattr(args, "zones_json", None))
+
+    def _send_phan_tich_scalp_if_any() -> None:
+        if args.no_telegram:
+            return
+        if update_payload is None:
+            return
+        text = (update_payload.phan_tich_update or "").strip()
+        plan_lines = format_plan_lines_for_telegram(update_payload)
+        if not text and not plan_lines:
+            return
+        require_telegram(s)
+        parts: list[str] = []
+        if text:
+            parts.append("Scalp update: " + text)
+        if plan_lines:
+            parts.append(plan_lines)
+        message = "\n\n".join(parts)
+        send_message(
+            bot_token=s.telegram_bot_token,
+            chat_id=s.telegram_chat_id,
+            text=message,
+            parse_mode=s.telegram_parse_mode,
+        )
+
+    if update_payload is not None and update_payload.prices:
+        from automation_tool.images import get_active_main_symbol
+        sym = get_active_main_symbol().strip().upper()
+        slot: SessionSlot = session_slot_now_hcm()
+        scalp_zones = zones_from_scalp_payload(
+            symbol=sym,
+            payload=update_payload,
+            source="update-scalp",
+            session_slot=slot,
+        )
+        if scalp_zones:
+            write_zones_for_slot(symbol=sym, zones=scalp_zones, slot=slot, zones_dir=zones_dir)
+            _log.info(
+                "update-scalp: đã ghi shard zones | slot=%s zones=%d labels=%s | dir=%s",
+                slot,
+                len(scalp_zones),
+                [z.label for z in scalp_zones],
+                zones_dir,
+            )
+
+    _send_phan_tich_scalp_if_any()
 
 
 def cmd_tv_watchlist_daemon(args: argparse.Namespace) -> None:

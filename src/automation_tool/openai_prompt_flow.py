@@ -457,6 +457,15 @@ _INTRADAY_UPDATE_PLAN_HINT = (
     "thì trả đúng 1 hoặc 2 phần tử trong `prices`, không cần cố tạo đủ 3 plan mới.\n"
 )
 
+_SCALP_UPDATE_PLAN_HINT = (
+    "Nhiệm vụ chính: tìm **1 plan scalp đẹp nhất** trong phiên hiện tại (hop_luu > 60, "
+    "có đủ hợp lưu M5 để vào lệnh nhanh, RR tối thiểu 1:1.5). "
+    "Nếu có 2–3 setup scalp đủ chất lượng thì có thể trả thêm, nhưng không bắt buộc. "
+    "Bắt buộc dùng label dạng `scalp_<id>` cho mỗi plan trong `prices` "
+    "(ví dụ: `scalp_1`, `scalp_2`, `scalp_3`). "
+    "Không dùng label `plan_chinh` hay `plan_phu` cho luồng scalp này.\n"
+)
+
 
 def is_first_intraday_update_after_all(
     *,
@@ -527,6 +536,55 @@ def build_intraday_update_user_text(
         "Đính kèm **hai** file JSON theo thứ tự: **(1) M15**, **(2) M5** (footprint cặp chính).\n"
         f"{_INTRADAY_UPDATE_PLAN_HINT}"
     )
+
+def build_scalp_update_user_text(
+    *,
+    first_after_all: bool = False,
+    coinmap_attachment_mode: str = "merged",
+) -> str:
+    """
+    User message cho ``coinmap-automation update-scalp``: giống ``build_intraday_update_user_text``
+    nhưng yêu cầu tìm plan scalp đẹp nhất và dùng label ``scalp_<timeframe>``.
+    """
+    time_line = format_intraday_update_time_line()
+    merged = str(coinmap_attachment_mode or "merged").strip().lower() != "legacy"
+
+    if first_after_all:
+        if merged:
+            return (
+                "[INTRADAY_UPDATE]\n"
+                f"{time_line}"
+                "Phân tích buổi sáng (Schema A) nằm trong file **morning_full_analysis.json** đính kèm đầu tiên.\n"
+                "Đính kèm **hai** file JSON theo thứ tự: **(1)** morning_full_analysis.json, **(2)** một file "
+                "**Coinmap merged** cho cặp chính (cùng schema ``coinmap_merged``: khung 15m và 5m trong ``frames``, "
+                "footprint và summary theo từng khung).\n"
+                f"{_SCALP_UPDATE_PLAN_HINT}"
+            )
+        return (
+            "[INTRADAY_UPDATE]\n"
+            f"{time_line}"
+            "Phân tích buổi sáng (Schema A) nằm trong file **morning_full_analysis.json** đính kèm đầu tiên.\n"
+            "Đính kèm **ba** file JSON theo thứ tự: **(1)** morning_full_analysis.json, **(2)** M15, **(3)** M5 "
+            "(footprint cặp chính).\n"
+            f"{_SCALP_UPDATE_PLAN_HINT}"
+        )
+
+    if merged:
+        return (
+            "[INTRADAY_UPDATE]\n"
+            f"{time_line}"
+            "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
+            "Đính kèm **một** file JSON: **Coinmap merged** cho cặp chính (15m và 5m trong cùng file).\n"
+            f"{_SCALP_UPDATE_PLAN_HINT}"
+        )
+    return (
+        "[INTRADAY_UPDATE]\n"
+        f"{time_line}"
+        "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
+        "Đính kèm **hai** file JSON theo thứ tự: **(1) M15**, **(2) M5** (footprint cặp chính).\n"
+        f"{_SCALP_UPDATE_PLAN_HINT}"
+    )
+
 
 # TradingView tab Nhật ký: giá chạm → Coinmap compact ``coinmap_merged`` (từ raw M5/M1) + OpenAI (intraday).
 # Trả về Schema E: chỉ ``phan_tich_alert`` + ``intraday_hanh_dong``; nếu VÀO LỆNH, dùng trade_line theo baseline vùng.

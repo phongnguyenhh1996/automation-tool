@@ -926,6 +926,32 @@ def zones_from_analysis_payload(
     return zones
 
 
+def zones_from_scalp_payload(
+    *,
+    symbol: str,
+    payload: AnalysisPayload,
+    source: str,
+    session_slot: Optional[SessionSlot] = None,
+) -> list[Zone]:
+    """
+    Như :func:`zones_from_analysis_payload` nhưng dành cho luồng ``update-scalp``:
+    chấp nhận bất kỳ label nào (``scalp_1h``, ``scalp_2h``, ``scalp_4h30``, …)
+    thay vì chỉ các label trong ``ZONE_LABELS_ORDER``.
+    Đảm bảo không trùng label (lấy phần tử đầu tiên mỗi label).
+    """
+    zones: list[Zone] = []
+    seen: set[str] = set()
+    for pe in payload.prices:
+        lab = (pe.label or "").strip().lower()
+        if not lab or lab in seen:
+            continue
+        seen.add(lab)
+        zones.append(
+            zone_from_price_entry(lab=lab, pe=pe, source=source, session_slot=session_slot)
+        )
+    return zones
+
+
 def zones_from_analysis_payload_merged(
     *,
     existing: ZonesState | None,
