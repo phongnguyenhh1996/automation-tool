@@ -1373,6 +1373,68 @@ def _fmt_level_for_prompt(v: Optional[float]) -> str:
     return f"{v:g}"
 
 
+def _cancel_tp1_pending_orders_for_zone(
+    *,
+    zone: Zone,
+    params: WatchlistDaemonParams,
+    settings: Settings,
+) -> tuple[bool, str]:
+    """Huỷ pending ticket(s) của zone trước khi loại do chạm TP1 mà chưa khớp position."""
+    if not params.mt5_execute:
+        return True, "mt5_execute=false — bỏ qua huỷ pending trên MT5"
+
+    dry = bool(params.mt5_dry_run)
+    accounts = load_mt5_accounts_for_cli(params.mt5_accounts_json)
+    tmap = zone.mt5_tickets_by_account or {}
+    messages: list[str] = []
+    ok_all = True
+
+    if accounts and tmap:
+        by_id = {acc.id: acc for acc in accounts}
+        for acc_id, ticket in tmap.items():
+            acc = by_id.get(acc_id)
+            if acc is None:
+                ok_all = False
+                messages.append(f"acc={acc_id}: không có trong accounts.json")
+                continue
+            r = mt5_cancel_pending_order(
+                int(ticket),
+                dry_run=dry,
+                terminal_path=acc.terminal_path,
+                login=acc.login,
+                password=acc.password,
+                server=acc.server,
+            )
+            ok_all = ok_all and bool(r.ok)
+            messages.append(f"acc={acc_id} ticket={ticket}: {r.message}")
+        msg = " | ".join(messages)
+        _send_log(settings, f"[tp1] huỷ pending trước khi loại multi | ok={ok_all} | {msg}".strip())
+        return ok_all, msg
+
+    ticket = int(zone.mt5_ticket or 0)
+    if ticket <= 0:
+        return True, "zone không có mt5_ticket"
+
+    primary = primary_account(accounts) if accounts else None
+    if primary is not None:
+        r = mt5_cancel_pending_order(
+            ticket,
+            dry_run=dry,
+            terminal_path=primary.terminal_path,
+            login=primary.login,
+            password=primary.password,
+            server=primary.server,
+        )
+    else:
+        r = mt5_cancel_pending_order(
+            ticket,
+            dry_run=dry,
+            terminal_session_only=True,
+        )
+    _send_log(settings, f"[tp1] huỷ pending trước khi loại | ok={r.ok} | {r.message}".strip())
+    return bool(r.ok), r.message
+
+
 def _tp1_followup_job(
     *,
     settings: Settings,
@@ -1441,6 +1503,41 @@ def _tp1_followup_job(
                     f"[tp1] bỏ qua follow-up TP1 (ticket đã đóng trên MT5) | zone_id={zone_id} | {ticket_msg}",
                 )
                 return
+
+        if not bool(getattr(z0, "has_position", False)):
+            ok_cancel, cancel_msg = _cancel_tp1_pending_orders_for_zone(
+                zone=z0,
+                params=params,
+                settings=settings,
+            )
+            if not ok_cancel:
+                z0.status = "cho_tp1"
+                z0.tp1_followup_done = False
+                z0.r1_followup_done = False
+                _state_write(params, st0)
+                _send_user_notice(
+                    settings,
+                    "Chạm TP1 nhưng chưa có position và huỷ pending chưa thành công.",
+                    "Chưa gọi AI; hệ thống sẽ thử lại ở tick sau để tránh bỏ sót pending order.",
+                    zone=z0,
+                    params=params,
+                )
+                return
+            z0.status = "loai"
+            z0.mt5_ticket = None
+            z0.mt5_tickets_by_account = None
+            z0.tp1_followup_done = True
+            z0.r1_followup_done = True
+            z0.has_position = False
+            _state_write(params, st0)
+            _send_user_notice(
+                settings,
+                "Chạm TP1 nhưng lệnh chưa khớp — loại vùng.",
+                f"Đã huỷ pending ticket(s) của zone trước khi loại. {cancel_msg}",
+                zone=z0,
+                params=params,
+            )
+            return
 
         if getattr(parsed, "tp2", None) is not None and bool(getattr(z0, "has_position", False)):
             ok_partial = True
