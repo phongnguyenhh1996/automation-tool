@@ -20,6 +20,8 @@ from automation_tool.telegram_bot import send_message, send_openai_output_to_tel
 
 _log = logging.getLogger("automation_tool.telegram_listen")
 
+_EXPLAIN_FOLLOWUP_MODEL = "gpt-5.4-mini"
+
 
 @dataclass(frozen=True)
 class TelegramListenParams:
@@ -119,6 +121,11 @@ def _parse_ask_args(args_text: str) -> tuple[Optional[str], str]:
     if not rid:
         return None, msg
     return rid, msg
+
+
+def _explain_followup_model(_requested_model: Optional[str] = None) -> str:
+    """Force [RETROSPECTIVE_ANALYSIS]/EXPLAIN follow-ups to the mini model."""
+    return _EXPLAIN_FOLLOWUP_MODEL
 
 
 def _parse_symbols_from_args_text(args_text: str) -> Optional[str]:
@@ -493,7 +500,9 @@ def run_telegram_listener(
                                 vector_store_ids=settings.openai_vector_store_ids,
                                 store=settings.openai_responses_store,
                                 include=settings.openai_responses_include,
-                                model=resolved_openai_model(settings, params.openai_model),
+                                model=_explain_followup_model(
+                                    resolved_openai_model(settings, params.openai_model)
+                                ),
                             )
                             # Best-effort: show the chained response id for traceability.
                             if new_id:
