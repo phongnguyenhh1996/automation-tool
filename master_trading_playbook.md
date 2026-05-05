@@ -519,7 +519,6 @@ Phải trả lời theo logic:
 2. M15 CHoCH + giữ cấu trúc mới?
 3. VWAP/POC shift >5 pip + HOLD ≥2 nến?
 4. CVD đảo ≥3 nến LIÊN TIẾP + mạnh?
-5. Giá còn gần vùng chờ (≤10–15 pip)?
 6. Footprint có COMBO (trap + stacked/absorption + follow-through)?
 7. Đúng giờ vàng + có volume?
 8. Không có tin đỏ 30’ tới?
@@ -544,17 +543,6 @@ Không tính tín hiệu đơn lẻ
 - CVD đảo chiều mạnh và giữ ≥ 3 nến
 - giá phá VWAP và không reclaim theo hướng bias cũ
 - có tin đỏ lớn sắp tới
-
-### 3.4. Khi update mà giá đã đi được một đoạn
-- Nếu plan chính đã bỏ lỡ:
-  - không chase
-  - chỉ tìm re-entry nếu có pullback chuẩn vào POI mới
-- Nếu TP gần vùng mạnh:
-  - ưu tiên chốt nhanh
-- Nếu footprint cho thấy lực suy yếu trước TP:
-  - chốt non hoặc dời BE
-- Nếu đầu phiên Mỹ / London có trap ngược bias:
-  - thu hẹp kỳ vọng TP
 
 ### 3.5. Output chuẩn của [INTRADAY_UPDATE]
 1. Bias sáng còn giữ hay không
