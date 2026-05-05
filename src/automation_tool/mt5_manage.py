@@ -854,3 +854,44 @@ def mt5_chinh_trade_line_inplace(
         )
     finally:
         pass
+
+
+def mt5_cancel_all_pending_orders(
+    *,
+    dry_run: bool = False,
+    terminal_path: Optional[str] = None,
+    login: Optional[int] = None,
+    password: Optional[str] = None,
+    server: Optional[str] = None,
+) -> tuple[int, int, list[str]]:
+    """Huỷ **toàn bộ** pending orders (lệnh chờ) trong account MT5.
+
+    Returns:
+        ``(n_cancelled, n_failed, messages)`` — đếm lệnh huỷ thành công/thất bại và log chi tiết.
+    """
+    if dry_run:
+        return 0, 0, ["[DRY-RUN] Sẽ huỷ tất cả pending orders"]
+    mt5 = _mt5_init(terminal_path, login, password, server)
+    if mt5 is None:
+        return 0, 0, ["mt5.initialize thất bại"]
+    orders = list(mt5.orders_get() or [])
+    if not orders:
+        return 0, 0, ["không có pending order"]
+    n_ok = 0
+    n_fail = 0
+    msgs: list[str] = []
+    for o in orders:
+        ticket = int(getattr(o, "ticket", 0))
+        if ticket <= 0:
+            continue
+        req = {"action": mt5.TRADE_ACTION_REMOVE, "order": ticket}
+        r = mt5.order_send(req)
+        if r is not None and int(getattr(r, "retcode", -1)) == int(mt5.TRADE_RETCODE_DONE):
+            n_ok += 1
+            msgs.append(f"ticket={ticket}: đã huỷ ✓")
+        else:
+            n_fail += 1
+            comment = getattr(r, "comment", None) if r is not None else "order_send=None"
+            rc = getattr(r, "retcode", None) if r is not None else None
+            msgs.append(f"ticket={ticket}: thất bại ({comment or f'retcode={rc}'})")
+    return n_ok, n_fail, msgs

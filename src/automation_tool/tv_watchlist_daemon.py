@@ -60,6 +60,7 @@ from automation_tool.mt5_openai_parse import (
     parse_openai_output_md,
 )
 from automation_tool.mt5_manage import (
+    mt5_cancel_all_pending_orders,
     mt5_cancel_pending_or_close_position,
     mt5_cancel_pending_order,
     mt5_chinh_trade_line_inplace,
@@ -334,6 +335,67 @@ class WatchlistDaemonParams:
 def _daemon_gia_same_bid(a: float, b: float) -> bool:
     """So sánh bid liên tiếp (tránh float noise)."""
     return abs(float(a) - float(b)) <= 1e-5
+
+
+_DAEMON_GIA_AUTO_STOP_HOUR = 0
+_DAEMON_GIA_AUTO_STOP_MINUTE = 15
+
+
+def _daemon_gia_compute_stop_deadline(tz_name: str) -> datetime:
+    """Tính mốc dừng tự động 00:30 (12h30 đêm) theo múi giờ ``tz_name``.
+
+    - Nếu chưa đến 00:30 hôm nay → mốc là hôm nay 00:30.
+    - Nếu đã qua 00:30 → mốc là **ngày mai** 00:30.
+    """
+    z = ZoneInfo(tz_name)
+    now = datetime.now(z)
+    candidate = datetime.combine(
+        now.date(),
+        dt_time(_DAEMON_GIA_AUTO_STOP_HOUR, _DAEMON_GIA_AUTO_STOP_MINUTE),
+        tzinfo=z,
+    )
+    if now >= candidate:
+        candidate += timedelta(days=1)
+    return candidate
+
+
+def _daemon_gia_cancel_all_pending_at_shutdown(
+    accounts_json: Optional[Path],
+    *,
+    dry_run: bool = False,
+    settings: Settings,
+) -> None:
+    """Huỷ toàn bộ pending orders trên tất cả tài khoản trong ``accounts.json`` trước khi dừng daemon giá."""
+    accounts = load_mt5_accounts_for_cli(accounts_json)
+    if not accounts:
+        _send_log(settings, "[daemon-gia] shutdown | không có accounts.json — bỏ qua huỷ pending")
+        return
+
+    total_ok = 0
+    total_fail = 0
+    all_msgs: list[str] = []
+    for acc in accounts:
+        try:
+            n_ok, n_fail, msgs = mt5_cancel_all_pending_orders(
+                dry_run=dry_run,
+                terminal_path=acc.terminal_path,
+                login=acc.login,
+                password=acc.password,
+                server=acc.server,
+            )
+            total_ok += n_ok
+            total_fail += n_fail
+            for m in msgs:
+                all_msgs.append(f"acc={acc.id}: {m}")
+        except Exception as e:
+            total_fail += 1
+            all_msgs.append(f"acc={acc.id}: lỗi {e}")
+
+    detail = " | ".join(all_msgs) if all_msgs else "(không có)"
+    _send_log(
+        settings,
+        f"[daemon-gia] shutdown | huỷ pending toàn bộ account: ok={total_ok} fail={total_fail} | {detail}",
+    )
 
 
 def _daemon_gia_stale_reensure_due(
@@ -2926,10 +2988,7 @@ def _zone_touch_job(
 #: Times (HCM) at which daemon-gia automatically fires ``update-scalp`` + ``reconcile-daemon-plans``.
 SCALP_UPDATE_SCHEDULE_HCM: tuple[tuple[int, int], ...] = (
     (13, 0),
-    (14, 0),
     (16, 30),
-    (19, 0),
-    (20, 30),
     (22, 0),
 )
 #: Fire the job if current time is within this many minutes *after* the scheduled minute.
@@ -3040,8 +3099,31 @@ def _tv_watchlist_price_only_loop(
     _scalp_last_fired: dict[tuple[int, int], Any] = {}
     _scalp_update_thread: Optional[threading.Thread] = None
     _tz_hcm = ZoneInfo(params.timezone_name or "Asia/Ho_Chi_Minh")
+    # Auto-stop 00:30 (12h30 đêm)
+    _gia_stop_deadline = _daemon_gia_compute_stop_deadline(params.timezone_name or "Asia/Ho_Chi_Minh")
+    _send_log(
+        settings,
+        f"[daemon-gia] auto-stop 00:30 | mốc={_gia_stop_deadline.strftime('%Y-%m-%d %H:%M %Z')}",
+    )
+    _gia_stop_logged = False
     try:
         while True:
+            # ── Kiểm tra auto-stop 00:30 ──────────────────────────────────────
+            _now_tz = datetime.now(_tz_hcm)
+            if _now_tz >= _gia_stop_deadline:
+                if not _gia_stop_logged:
+                    _gia_stop_logged = True
+                    _send_log(
+                        settings,
+                        f"[daemon-gia] đã đến 00:30 | đang huỷ toàn bộ pending orders rồi dừng…",
+                    )
+                _daemon_gia_cancel_all_pending_at_shutdown(
+                    params.mt5_accounts_json,
+                    dry_run=bool(params.mt5_dry_run),
+                    settings=settings,
+                )
+                _send_log(settings, "[daemon-gia] auto-stop 00:30 | đã dừng daemon giá.")
+                break
             try:
                 cur_manifest_slot = read_manifest_last_write_slot(zones_dir)
                 if cur_manifest_slot is not None:
