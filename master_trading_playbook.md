@@ -154,8 +154,8 @@ Khi chạy quy trình phân tích Forex chuẩn, user phải gửi đủ **10 h�
   - HL / LH / BOS / CHoCH
   - liquidity pool / EQH / EQL / session highs-lows
 - Lưu ý:
-  - Không BUY tại premium
-  - Không SELL tại discount
+  - Không BUY tại premium (bắt buộc, nếu vi phạm thì tìm chọn vùng khác)
+  - Không SELL tại discount (bắt buộc, nếu vi phạm thì tìm chọn vùng khác)
   - Không đặt limit ngay tại liquidity
   - Nếu vùng trùng liquidity → chỉ vào sau **sweep + CHoCH LTF + footprint confirm**
 - Ưu tiên vùng:
@@ -391,8 +391,14 @@ Khi trả kết quả phải có đủ:
   - xa hơn tại premium/discount HTF hoặc OB/FVG lớn
 - Nếu TP1 quá xa hoặc RR không chuẩn → tự điều chỉnh lại; với scalp, ưu tiên TP 7–10 giá và vùng dễ đạt, có thể kéo TP dài hơn nếu tính hiệu tốt.
 - SL luôn anti-sweep:
-  - sau liquidity
-  - buffer 3–5 giá với XAUUSD
+  - SL phải nằm sau toàn bộ liquidity pool dưới entry, cộng buffer 3–5 giá tối thiểu.
+  - Không chỉ nhìn POI ngay tại vùng vào, mà phải rà luôn cụm liquidity thấp hơn 1–2 tầng: swing low gần nhất, VAL, session low, đáy sweep trước đó.
+  - Nếu bên dưới còn liquidity chưa được khai thác rõ ràng thì không cho phép SL nằm ngay trên cụm đó.
+  - Nếu dưới vùng entry còn VAL / đáy session / internal low chưa bị sweep, thì có 2 lựa chọn:
+    1. widen SL ra sau cụm liquidity đó,
+    2. hoặc bỏ kèo, chờ re-test sâu hơn.
+  - Không cho phép chọn phương án “SL ngắn cho đẹp RR” nếu nó nằm trong vùng quét tự nhiên của market.
+
 - Với USDJPY và EURUSD:
   - SL: 7–12 pip
   - mặc định luôn đệm SL ra thêm 1–2 pip
