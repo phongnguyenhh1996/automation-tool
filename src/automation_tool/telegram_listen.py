@@ -364,6 +364,55 @@ def _run_update_pipeline_in_thread(
             _PROCS[:] = [p for p in _PROCS if p.popen.poll() is None]
 
 
+def _run_update_scalp_pipeline_in_thread(
+    *,
+    settings: Settings,
+    reply_chat_id: str,
+    update_main_symbol: str,
+    trigger_message_id: Optional[int],
+) -> None:
+    root = _project_root()
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    ref = f"(msg_id={trigger_message_id})" if trigger_message_id else ""
+    _send_status(
+        settings,
+        reply_chat_id,
+        f"▶️ /tim-scalp received {ref}\nStarting update-scalp pipeline ({update_main_symbol}) at {stamp}.",
+    )
+
+    if sys.platform == "win32":
+        cmd = ["cmd", "/c", "run_update_scalp.bat"]
+    else:
+        cmd = [
+            sys.executable,
+            "-m",
+            "automation_tool.cli",
+            "update-scalp",
+            "--main-symbol",
+            update_main_symbol,
+        ]
+
+    try:
+        mp = _spawn_managed_process(name="update-scalp", cmd=cmd, cwd=root)
+        out, _ = mp.popen.communicate()
+        code = int(mp.popen.returncode or 0)
+        if code == 0:
+            _send_status(settings, reply_chat_id, "✅ /tim-scalp finished successfully (exit code 0).")
+        else:
+            tail = (out or "").strip()
+            if len(tail) > 1500:
+                tail = tail[-1500:]
+            msg = f"❌ /tim-scalp failed (exit code {code})."
+            if tail:
+                msg += "\n\nLast output:\n" + tail
+            _send_status(settings, reply_chat_id, msg)
+    except Exception as e:
+        _send_status(settings, reply_chat_id, f"❌ /tim-scalp crashed: {e!r}")
+    finally:
+        with _PROC_LOCK:
+            _PROCS[:] = [p for p in _PROCS if p.popen.poll() is None]
+
+
 def _run_analyze_many_pipeline_in_thread(
     *,
     settings: Settings,
@@ -538,6 +587,23 @@ def run_telegram_listener(
                             },
                             daemon=True,
                             name="telegram-update-runner",
+                        )
+                        t.start()
+                    elif cmd == "tim-scalp":
+                        mid = _message_id_from_envelope(env)
+                        thread_id = _message_thread_id_from_envelope(env)
+                        t = threading.Thread(
+                            target=_run_update_scalp_pipeline_in_thread,
+                            kwargs={
+                                "settings": settings,
+                                "reply_chat_id": listen_chat_id,
+                                "update_main_symbol": (params.update_main_symbol or "XAUUSD")
+                                .strip()
+                                .upper(),
+                                "trigger_message_id": mid,
+                            },
+                            daemon=True,
+                            name="telegram-update-scalp-runner",
                         )
                         t.start()
                     elif cmd == "full":

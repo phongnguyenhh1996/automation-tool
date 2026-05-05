@@ -568,7 +568,10 @@ def _parser() -> argparse.ArgumentParser:
 
     tl = sub.add_parser(
         "telegram-listen",
-        help="Listen inbound Telegram messages in a channel/group (poll getUpdates). Supports /full.",
+        help=(
+            "Listen inbound Telegram messages in a channel/group (poll getUpdates). "
+            "Supports /full, /update, /tim-scalp."
+        ),
     )
     tl.add_argument(
         "--poll-interval-seconds",
