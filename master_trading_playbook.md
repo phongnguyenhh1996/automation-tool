@@ -787,55 +787,15 @@ Lưu ý:
 ### 9.5. TEMPLATE OUTPUT TÍCH HỢP (HỢP NHẤT TỪ output.md)
 
 > Phần này được hợp nhất từ `output.md` để hệ thống chỉ cần đọc **1 file duy nhất**.  
-> **Chỉ dùng cho [FULL_ANALYSIS] / Schema A** để sinh `out_chi_tiet` và `output_ngan_gon`.  
+> **Chỉ dùng cho [FULL_ANALYSIS] / Schema A** để sinh `output_ngan_gon`.  
 > Với `[INTRADAY_ALERT]`, `[INTRADAY_UPDATE]`, `[TRADE_MANAGEMENT]` **không dùng template dưới đây**, chỉ dùng schema JSON tương ứng.
 
 [MASTER_OUTPUT_CONTEXT]
 - Toàn bộ nội dung template dưới đây phải được generate dựa trên chính `master_trading_playbook.md`.
 - Logic phân tích, checklist, filter, bài học, rule entry/quản lý → lấy từ các section chính của file này.
-- Template bên dưới chỉ là **khung câu chữ cố định** cho `out_chi_tiet` và `output_ngan_gon` ở `[FULL_ANALYSIS]`.
+- Template bên dưới chỉ là **khung câu chữ cố định** cho `output_ngan_gon` ở `[FULL_ANALYSIS]`.
 - Nếu thiếu dữ liệu xác nhận quan trọng, đặc biệt footprint / CVD / reclaim VWAP / trend bias → không được ép ra entry.
 - Nếu logic giao dịch và template có xung đột, ưu tiên **logic giao dịch trong master file**, nhưng vẫn phải giữ đúng cấu trúc nội dung của template.
-
-[OUTPUT_CHI_TIET]
-🔥 PHÂN TÍCH {symbol} – FULL QUY TRÌNH
-
-——————————
-🧭 1. BỐI CẢNH VĨ MÔ (DXY)
-
-👉 KẾT LUẬN DXY:
-
-————————————-
-🧭 2. CẤU TRÚC {symbol}
-🔴 H4
-
-🔴 H1
-
-🔴 M15
-
-🧭 4. ORDER FLOW (CVD)
-M15:
-
-M5:
-
-🚨 KẾT LUẬN CHÍNH
-👉 Bias ngày:
-
-👉 Trạng thái hiện tại: (ngắn gọn)
-
-📍 PLAN CHÍNH
-
-📊 CHẤM ĐIỂM PLAN CHÍNH: thang điểm 100 (chỉ chấm điểm không phân tích)
-
-⚡️ PLAN PHỤ
-
-📊 CHẤM ĐIỂM PLAN PHỤ: thang điểm 100 (chỉ chấm điểm không phân tích)
-
-📊 SCALP:
-
-📊 CHẤM ĐIỂM SCALP: thang điểm 100 (chỉ chấm điểm không phân tích)
-
-🤖 EA GRID PLAN:
 
 [OUTPUT_NGAN_GON]
 👉 BỐI CẢNH VĨ MÔ:
@@ -857,7 +817,7 @@ Bias chính:
   - điều kiện vào lệnh:
 
 ### 9.5.1. Quy tắc dùng template
-- `out_chi_tiet` phải bám đúng phần sau marker `[OUTPUT_CHI_TIET]` và không in marker.
+- Không có template cho `phan_tich_cham_diem`; field này phải làm theo mô tả trong `system-prompt.md`.
 - `output_ngan_gon` phải bám đúng phần sau marker `[OUTPUT_NGAN_GON]` và không in marker.
 - Trong `[OUTPUT_NGAN_GON]`, với từng plan bắt buộc có đủ:
   - `trade_line` tham khảo
@@ -869,13 +829,10 @@ Bias chính:
 - `{symbol}` phải được thay bằng cặp đang phân tích trong lần gọi hiện tại. Ví dụ: `EURUSD`, `USDJPY`, `XAUUSD`.
 
 ### 9.5.3. Quy tắc bỏ qua mục khi không phải XAUUSD
-Nếu `{symbol}` **không phải `XAUUSD`** thì trong `out_chi_tiet` phải **bỏ qua / không được sinh** các mục sau:
-- `📊 SCALP:`
-- `🤖 EA GRID PLAN:`
+Nếu `{symbol}` **không phải `XAUUSD`** thì trong `output_ngan_gon` phải **bỏ qua / không được sinh** mục SCALP.
 
 ### 9.5.4. Mối quan hệ giữa template và schema
 - Phần template này chỉ phục vụ nội dung text của **Schema A**:
-  - `out_chi_tiet`
   - `output_ngan_gon`
 - Không dùng template này cho:
   - `Schema B / [INTRADAY_UPDATE]`

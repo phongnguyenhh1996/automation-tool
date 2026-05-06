@@ -34,6 +34,26 @@ def test_format_plan_lines_for_telegram_order_and_hop_luu() -> None:
     assert format_plan_lines_for_telegram(None) == ""
 
 
+def test_schema_a_phan_tich_cham_diem_parses_without_out_chi_tiet() -> None:
+    raw = """```json
+{
+  "phan_tich_cham_diem": "PLAN CHÍNH\\nCấu trúc giá: 25/30. H1/M15 đồng thuận, trừ điểm vì sweep chưa sạch.\\nTổng: 82/100",
+  "output_ngan_gon": "Tóm tắt vùng chờ.",
+  "prices": [
+    {"label":"plan_chinh","value":4709.0,"vung_cho":"4707.0–4709.0","hop_luu":82,"trade_line":"BUY LIMIT 4709.0 | SL 4699.0 | TP1 4740.0 | Lot 0.04"}
+  ],
+  "intraday_hanh_dong": "chờ",
+  "trade_line_chinh": ""
+}
+```"""
+    p = parse_analysis_from_openai_text(raw)
+    assert p is not None
+    assert "PLAN CHÍNH" in p.phan_tich_cham_diem
+    assert p.out_chi_tiet == ""
+    assert p.output_ngan_gon == "Tóm tắt vùng chờ."
+    assert p.prices[0].hop_luu == 82
+
+
 def test_select_zone_highest_hop_luu() -> None:
     prices = [
         PriceZoneEntry("plan_chinh", 100.0, hop_luu=70, trade_line=""),

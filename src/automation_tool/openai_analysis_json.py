@@ -238,6 +238,8 @@ class AnalysisPayload:
     """Structured analysis JSON (snake_case keys)."""
 
     out_chi_tiet: str = ""
+    #: [FULL_ANALYSIS] only: detailed confluence scoring text for Telegram (Schema A).
+    phan_tich_cham_diem: str = ""
     output_ngan_gon: str = ""
     #: [INTRADAY_UPDATE] only: short analysis for Telegram (Schema B).
     phan_tich_update: str = ""
@@ -321,8 +323,10 @@ def try_parse_analysis_payload(data: dict[str, Any]) -> Optional[AnalysisPayload
     if not data:
         return None
     oct = data.get("out_chi_tiet")
+    ptcd_raw = data.get("phan_tich_cham_diem")
     ogn = data.get("output_ngan_gon")
     out_chi = oct.strip() if isinstance(oct, str) else ""
+    phan_tich_cham_diem = ptcd_raw.strip() if isinstance(ptcd_raw, str) else ""
     out_ngan = ogn.strip() if isinstance(ogn, str) else ""
     ptu_raw = data.get("phan_tich_update")
     phan_tich_update = ptu_raw.strip() if isinstance(ptu_raw, str) else ""
@@ -367,6 +371,7 @@ def try_parse_analysis_payload(data: dict[str, Any]) -> Optional[AnalysisPayload
     # Accept payload if it has at least one semantic field (not empty shell).
     if (
         not out_chi
+        and not phan_tich_cham_diem
         and not out_ngan
         and not phan_tich_update
         and not phan_tich_alert
@@ -381,6 +386,7 @@ def try_parse_analysis_payload(data: dict[str, Any]) -> Optional[AnalysisPayload
 
     return AnalysisPayload(
         out_chi_tiet=out_chi,
+        phan_tich_cham_diem=phan_tich_cham_diem,
         output_ngan_gon=out_ngan,
         phan_tich_update=phan_tich_update,
         phan_tich_alert=phan_tich_alert,

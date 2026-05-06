@@ -5,6 +5,7 @@ from automation_tool.telegram_bot import (
     build_t_me_c_message_url,
     parse_openai_telegram_payload,
     send_openai_output_to_telegram,
+    split_analysis_json_chi_tiet_ngan_gon,
     split_output_chi_tiet_ngan_gon,
 )
 
@@ -119,6 +120,19 @@ def test_split_missing_returns_none():
     assert split_output_chi_tiet_ngan_gon("no markers") is None
 
 
+def test_split_analysis_json_uses_phan_tich_cham_diem():
+    raw = """```json
+{
+  "phan_tich_cham_diem": "PLAN CHÍNH\\nCấu trúc giá: 25/30. H1/M15 đồng thuận, trừ điểm vì sweep chưa sạch.\\nTổng: 82/100",
+  "output_ngan_gon": "Short summary"
+}
+```"""
+    assert split_analysis_json_chi_tiet_ngan_gon(raw) == (
+        "PLAN CHÍNH\nCấu trúc giá: 25/30. H1/M15 đồng thuận, trừ điểm vì sweep chưa sạch.\nTổng: 82/100",
+        "Short summary",
+    )
+
+
 def test_build_t_me_c_message_url():
     assert build_t_me_c_message_url("-1001234567890", 99) == "https://t.me/c/1234567890/99"
     assert build_t_me_c_message_url("1003884334166", 1) == "https://t.me/c/1003884334166/1"
@@ -227,6 +241,40 @@ SHORT"""
     assert "https://t.me/c/1234567890/42" in calls[1]["text"]
     assert calls[1]["parse_mode"] == "HTML"
     assert calls[1]["html_ready"] is True
+
+
+def test_send_openai_json_phan_tich_cham_diem_routes(monkeypatch):
+    calls: list[dict] = []
+
+    def fake_send(**kwargs):
+        calls.append(kwargs)
+        if kwargs.get("chat_id") == "-1001234567890":
+            return 42
+        return None
+
+    monkeypatch.setattr(
+        "automation_tool.telegram_bot.send_message",
+        fake_send,
+    )
+    raw = """```json
+{
+  "phan_tich_cham_diem": "SCORE DETAIL",
+  "output_ngan_gon": "SHORT"
+}
+```"""
+    send_openai_output_to_telegram(
+        bot_token="t",
+        chat_id="-1001234567890",
+        raw=raw,
+        default_parse_mode="HTML",
+        summary_chat_id="sum",
+    )
+    assert len(calls) == 2
+    assert calls[0]["chat_id"] == "-1001234567890"
+    assert calls[0]["text"] == "SCORE DETAIL"
+    assert calls[1]["chat_id"] == "sum"
+    assert "SHORT" in calls[1]["text"]
+    assert "https://t.me/c/1234567890/42" in calls[1]["text"]
 
 
 def test_send_openai_json_multiple(monkeypatch):

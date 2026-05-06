@@ -414,13 +414,13 @@ def parse_openai_telegram_payload(
 
 def split_analysis_json_chi_tiet_ngan_gon(raw: str) -> tuple[str, str] | None:
     """
-    Khi model trả JSON phân tích có ``out_chi_tiet`` / ``output_ngan_gon`` (không dùng marker).
+    Khi model trả JSON phân tích có ``phan_tich_cham_diem`` / ``output_ngan_gon`` (không dùng marker).
     Trả ``(chi_tiet, ngan_gon)`` nếu có ít nhất một chuỗi không rỗng; ngược lại ``None``.
     """
     p = parse_analysis_from_openai_text(raw)
     if p is None:
         return None
-    ct = (p.out_chi_tiet or "").strip()
+    ct = (p.phan_tich_cham_diem or p.out_chi_tiet or "").strip()
     ng = (p.output_ngan_gon or "").strip()
     if not ct and not ng:
         return None

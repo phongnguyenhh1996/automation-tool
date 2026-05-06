@@ -325,7 +325,7 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         metavar="ID",
         help=(
-            "Chat/channel nhận OUTPUT chi tiết (markers / JSON out_chi_tiet); "
+            "Chat/channel nhận phân tích chấm điểm chi tiết (markers / JSON phan_tich_cham_diem); "
             "mặc định TELEGRAM_ANALYSIS_DETAIL_CHAT_ID trong .env"
         ),
     )
@@ -465,7 +465,7 @@ def _parser() -> argparse.ArgumentParser:
         "--telegram-detail-chat-id",
         default=None,
         metavar="ID",
-        help="Chat/channel for detailed execution logs (markers / JSON out_chi_tiet)",
+        help="Chat/channel for detailed scoring analysis (markers / JSON phan_tich_cham_diem)",
     )
     am.add_argument("--model", default=None, metavar="ID", help=_OPENAI_MODEL_HELP)
     am.set_defaults(func=cmd_analyze_many)
@@ -1944,7 +1944,7 @@ def cmd_analyze(args: argparse.Namespace) -> None:
     _log.info("analyze: OpenAI xong | response_id=%s", out.final_response_id)
     if not args.no_telegram and out.after_charts:
         require_telegram(s)
-        # out_chi_tiet → TELEGRAM_CHAT_ID; output_ngan_gon → TELEGRAM_OUTPUT_NGAN_GON_CHAT_ID.
+        # phan_tich_cham_diem → TELEGRAM_CHAT_ID; output_ngan_gon → TELEGRAM_OUTPUT_NGAN_GON_CHAT_ID.
         # TELEGRAM_ANALYSIS_DETAIL_CHAT_ID is for per-step logs (first_response / journal), not here.
         send_openai_output_to_telegram(
             bot_token=s.telegram_bot_token,
@@ -2032,7 +2032,7 @@ def cmd_analyze_many(args: argparse.Namespace) -> None:
         print(f"\n==== {sym} OUTPUT ====\n{out.full_text()}\n")
         if not args.no_telegram and out.after_charts:
             require_telegram(s)
-            # New flow requirement: only send OUTPUT_CHI_TIET to TELEGRAM_ANALYSIS_DETAIL_CHAT_ID
+            # New flow requirement: only send phan_tich_cham_diem to TELEGRAM_ANALYSIS_DETAIL_CHAT_ID
             # (or --telegram-detail-chat-id override).
             dual = split_analysis_json_chi_tiet_ngan_gon(out.after_charts)
             if dual is None:

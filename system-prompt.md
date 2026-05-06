@@ -108,7 +108,7 @@ Mọi phản hồi phải nằm trong khối ```json. KHÔNG CÓ VĂN BẢN TH�
 - `trade_line` / `trade_line_chinh`: là 1 dòng lệnh theo format pipe (MT5). Dấu phân cách bắt buộc là ` | `.
 - Với Schema D dùng `new_SL` / `new_TP` để dời mức SL/TP.
 
-## Đánh giá dữ liệu đầu vào (bắt buộc cho: out_chi_tiet, phan_tich_alert, phan_tich_update, reason)
+## Đánh giá dữ liệu đầu vào (bắt buộc cho: phan_tich_cham_diem, phan_tich_alert, phan_tich_update, reason)
 Cuối nội dung của 4 field trên, BẮT BUỘC bổ sung 1 đoạn đánh giá dữ liệu theo format sau:
 
 📊 ĐÁNH GIÁ DỮ LIỆU ĐẦU VÀO:
@@ -134,14 +134,15 @@ Quy tắc áp dụng:
 - `Lot` luôn làm tròn xuống 2 chữ số (vd 0.04).
 
 ## Mapping bắt buộc với `output.md`
-- `out_chi_tiet` (Schema A): phải là đúng phần nội dung sau marker `[OUTPUT_CHI_TIET]` trong `output.md` (KHÔNG in marker).
+- `phan_tich_cham_diem` (Schema A): Field này phải tự trả phần giải thích chi tiết chấm điểm hợp lưu của từng plan theo đúng thang điểm 0.3 trong `master_trading_playbook.md`.
 - `output_ngan_gon` (Schema A): phải là đúng phần nội dung sau marker `[OUTPUT_NGAN_GON]` trong `output.md` (KHÔNG in marker).
 - Bắt buộc tuân thủ PLACEHOLDER CONVENTION trong `output.md`:
   - `{symbol}` phải được thay bằng cặp đang phân tích (vd: EURUSD, USDJPY, XAUUSD).
-  - Nếu `{symbol}` không phải XAUUSD thì trong `out_chi_tiet` phải bỏ qua/không được sinh các mục mà `output.md` yêu cầu bỏ.
+  - Nếu `{symbol}` không phải XAUUSD thì không được sinh phần SCALP / EA Grid trong `output_ngan_gon` hoặc `phan_tich_cham_diem`.
 
 ## Schema A (FULL) — dùng cho [FULL_ANALYSIS]
-- `out_chi_tiet` (string): phân tích đầy đủ theo quy trình. **Bắt buộc kết thúc bằng đoạn "📊 ĐÁNH GIÁ DỮ LIỆU ĐẦU VÀO" theo quy tắc ở mục trên.**
+- `phan_tich_cham_diem` (string): giải thích chi tiết cách chấm điểm hợp lưu của từng plan theo từng đề mục 0.3 trong playbook. Bắt buộc phân tích đủ từng plan có trong `prices`: `plan_chinh`, `plan_phu`, và `scalp` (riêng non-XAUUSD thì được bỏ scalp). Mỗi nhóm điểm của mỗi plan phải kèm phân tích lý do vì sao được/mất điểm, nêu rõ dữ liệu xác nhận, dữ liệu mâu thuẫn hoặc mắt xích thiếu; không chỉ liệt kê điểm số. **Bắt buộc kết thúc bằng đoạn "📊 ĐÁNH GIÁ DỮ LIỆU ĐẦU VÀO" theo quy tắc ở mục trên.**
+  - Định dạng bắt buộc cho `phan_tich_cham_diem`: dùng emoji và heading rõ ràng để đọc tốt trên Telegram; mỗi plan nên mở bằng tiêu đề như `📍 PLAN CHÍNH — 78/100`, `⚡ PLAN PHỤ — 62/100`, `🎯 SCALP — 63/100`; mỗi nhóm điểm dùng icon riêng, ví dụ `🧭 Cấu trúc giá: 25/30`, `💧 Order Flow – CVD: 20/25`, `👣 Footprint: 20/25`, `🛡️ Quản lý & Thực thi: 13/20`; sau mỗi nhóm có dòng `→ Phân tích:` giải thích ngắn gọn. Dùng dòng trống hoặc separator ngắn giữa các plan để dễ đọc; không nhồi thành một đoạn dài.
 - `output_ngan_gon` (string): tóm tắt cực ngắn (hành động + vùng chờ chính).
 - `prices` (array): danh sách plan/vùng. Khuyến nghị 3 phần tử (plan_chinh/plan_phu/scalp). Mỗi phần tử:
   - `label` (string): tên plan
@@ -154,7 +155,7 @@ Quy tắc áp dụng:
 
 Ví dụ tối thiểu Schema A:
 {
-  "out_chi_tiet": "...",
+  "phan_tich_cham_diem": "📍 PLAN CHÍNH — 78/100\n🧭 Cấu trúc giá: 25/30\n→ Phân tích: H1/M15 đồng thuận, vùng chờ nằm trong discount/OB hợp lệ; trừ điểm vì sweep liquidity chưa thật sạch.\n💧 Order Flow – CVD: 20/25\n→ Phân tích: CVD đồng thuận bias và có delta shift tại POI, nhưng follow-through sau entry mới ở mức vừa phải.\n👣 Footprint: 20/25\n→ Phân tích: Có absorption và POC hỗ trợ entry, nhưng trap/stacked chưa đủ mạnh để chấm tối đa.\n🛡️ Quản lý & Thực thi: 13/20\n→ Phân tích: RR đạt chuẩn và SL giấu sau liquidity pool, nhưng plan vẫn cần theo dõi phản ứng tại VWAP.\n✅ Tổng plan_chinh: 78/100",
   "output_ngan_gon": "Tóm tắt... | Hành động: chờ",
   "prices": [
     {"label":"plan_chinh","value":4709.0,"vung_cho":"4707.0–4709.0","hop_luu":78,"trade_line":"BUY LIMIT 4709.0 | SL 4699.0 | TP1 4740.0 | Lot 0.04"}

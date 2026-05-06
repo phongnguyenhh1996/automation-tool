@@ -62,7 +62,7 @@ class Settings:
     # Optional second chat: [OUTPUT_NGAN_GON] (dual markers). MT5: thành công → telegram_chat_id;
     # thất bại / từ chối → telegram_python_bot_chat_id (tin user-friendly).
     telegram_output_ngan_gon_chat_id: Optional[str]
-    # Optional: [OUTPUT_CHI_TIET] / JSON out_chi_tiet → this channel (analyze / dual-send).
+    # Optional: JSON phan_tich_cham_diem / legacy [OUTPUT_CHI_TIET] → this channel (analyze / dual-send).
     telegram_analysis_detail_chat_id: Optional[str]
     # Optional: nhận bản sao log bước chạy (INFO) — cùng bot, chat/channel khác (vd. supergroup -100…).
     telegram_log_chat_id: Optional[str]
