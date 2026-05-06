@@ -105,21 +105,21 @@ def test_intraday_alert_anchor_only_writes_when_sidecar_empty(tmp_path) -> None:
     assert _should_write_intraday_alert_anchor(no_shard) is False
 
 
-def test_m5_analysis_capture_slot_waits_until_5n_plus_1_minute() -> None:
+def test_m5_analysis_capture_slot_waits_until_5n_plus_1_minute_then_buffers_2_minutes() -> None:
     tz = timezone.utc
 
     assert _m5_analysis_capture_slot_wait_seconds(
         datetime(2026, 5, 4, 8, 6, 0, tzinfo=tz)
-    ) == 0
+    ) == 120
     assert _m5_analysis_capture_slot_wait_seconds(
         datetime(2026, 5, 4, 8, 6, 59, tzinfo=tz)
-    ) == 0
+    ) == 120
     assert _m5_analysis_capture_slot_wait_seconds(
         datetime(2026, 5, 4, 8, 5, 30, tzinfo=tz)
-    ) == 30
+    ) == 150
     assert _m5_analysis_capture_slot_wait_seconds(
         datetime(2026, 5, 4, 8, 7, 15, tzinfo=tz)
-    ) == 225
+    ) == 345
 
 
 def test_third_future_m5_analysis_capture_slot_targets_third_closed_candle() -> None:
@@ -127,13 +127,13 @@ def test_third_future_m5_analysis_capture_slot_targets_third_closed_candle() -> 
 
     assert _third_future_m5_analysis_capture_slot(
         datetime(2026, 5, 4, 8, 13, 0, tzinfo=tz)
-    ) == datetime(2026, 5, 4, 8, 26, 0, tzinfo=tz)
+    ) == datetime(2026, 5, 4, 8, 28, 0, tzinfo=tz)
     assert _third_future_m5_analysis_capture_slot(
         datetime(2026, 5, 4, 8, 16, 0, tzinfo=tz)
-    ) == datetime(2026, 5, 4, 8, 31, 0, tzinfo=tz)
+    ) == datetime(2026, 5, 4, 8, 33, 0, tzinfo=tz)
     assert _third_future_m5_analysis_capture_slot(
         datetime(2026, 5, 4, 8, 59, 30, tzinfo=tz)
-    ) == datetime(2026, 5, 4, 9, 11, 0, tzinfo=tz)
+    ) == datetime(2026, 5, 4, 9, 13, 0, tzinfo=tz)
 
 
 def test_zone_touch_retry_at_for_m5_plan_uses_third_future_capture_slot(monkeypatch) -> None:
@@ -148,7 +148,7 @@ def test_zone_touch_retry_at_for_m5_plan_uses_third_future_capture_slot(monkeypa
         status="cham",
     )
 
-    assert _zone_touch_retry_at_iso(zone) == "2026-05-04T08:26:00+00:00"
+    assert _zone_touch_retry_at_iso(zone) == "2026-05-04T08:28:00+00:00"
 
 
 def test_trade_management_retry_at_uses_third_future_m5_capture_slot(monkeypatch) -> None:
@@ -157,7 +157,7 @@ def test_trade_management_retry_at_uses_third_future_m5_capture_slot(monkeypatch
 
     retry_at_iso = getattr(daemon, "_trade_management_retry_at_iso", lambda: "")
 
-    assert retry_at_iso() == "2026-05-04T08:26:00+00:00"
+    assert retry_at_iso() == "2026-05-04T08:28:00+00:00"
 
 
 def test_m5_analysis_capture_slot_sends_user_notice_when_waiting(monkeypatch, tmp_path) -> None:
@@ -201,7 +201,7 @@ def test_m5_analysis_capture_slot_sends_user_notice_when_waiting(monkeypatch, tm
     assert notices == [
         (
             "Đang chờ mốc lấy dữ liệu M5.",
-            "Sẽ lấy Coinmap M5 tại phút 5n+1 trước khi gửi AI phân tích. Dự kiến chờ 42 giây.",
+            "Sẽ lấy Coinmap M5 tại phút 5n+1 rồi buffer thêm 2 phút trước khi gửi AI phân tích. Dự kiến chờ 42 giây.",
             zone,
             params,
         )

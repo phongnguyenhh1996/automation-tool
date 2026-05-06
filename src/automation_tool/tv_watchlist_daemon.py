@@ -158,6 +158,7 @@ _RETRY_WAIT_MINUTES = 15
 _RETRY_WAIT_MINUTES_SCALP = 10
 _ZONE_TOUCH_LOAI_CONFIRM_ROUNDS = 3
 _M5_ANALYSIS_CAPTURE_SLOT_MINUTE_REMAINDER = 1
+_M5_ANALYSIS_CAPTURE_POST_SLOT_BUFFER_SECONDS = 120
 DAEMON_PLAN_AUTO_CUTOFF_HOUR = 0
 DAEMON_PLAN_AUTO_CUTOFF_MINUTE = 0
 DAEMON_PLAN_AUTO_CUTOFF_FRIDAY_HOUR = 0
@@ -195,29 +196,32 @@ def _now_iso() -> str:
 
 def _m5_analysis_capture_slot_wait_seconds(now: Optional[datetime] = None) -> int:
     """
-    M5 data gửi AI chỉ lấy ở phút ``5n + 1`` (:01, :06, :11...),
-    tức sau khi nến M5 vừa đóng và Coinmap có thêm một phút để cập nhật.
+    M5 data gửi AI chờ tới phút ``5n + 1`` (:01, :06, :11...)
+    rồi buffer thêm 2 phút để Coinmap kịp cập nhật.
     """
     current = now or _now_utc()
     if current.tzinfo is None:
         current = current.replace(tzinfo=timezone.utc)
+    wait_to_slot = 0
     if current.minute % 5 == _M5_ANALYSIS_CAPTURE_SLOT_MINUTE_REMAINDER:
-        return 0
+        return _M5_ANALYSIS_CAPTURE_POST_SLOT_BUFFER_SECONDS
     minutes_until_slot = (
         _M5_ANALYSIS_CAPTURE_SLOT_MINUTE_REMAINDER - current.minute
     ) % 5
     seconds_until_slot = (
         minutes_until_slot * 60 - current.second - current.microsecond / 1_000_000
     )
-    return max(0, int(math.ceil(seconds_until_slot)))
+    wait_to_slot = max(0, int(math.ceil(seconds_until_slot)))
+    return wait_to_slot + _M5_ANALYSIS_CAPTURE_POST_SLOT_BUFFER_SECONDS
 
 
 def _third_future_m5_analysis_capture_slot(now: Optional[datetime] = None) -> datetime:
     """
     Return the capture slot for the 3rd future closed M5 candle.
 
-    M5 data is captured at minute ``5n + 1``. If current time is 08:13,
-    future slots are 08:16, 08:21, 08:26, so retry at 08:26.
+    M5 data first waits for minute ``5n + 1`` then adds a 2-minute
+    Coinmap buffer. If current time is 08:13, base slots are 08:16,
+    08:21, 08:26, so retry at 08:28 after the buffer.
     """
     current = now or _now_utc()
     if current.tzinfo is None:
@@ -231,7 +235,7 @@ def _third_future_m5_analysis_capture_slot(now: Optional[datetime] = None) -> da
     if minutes_until_next_slot == 0 and slot <= current:
         minutes_until_next_slot = 5
     slot = slot + timedelta(minutes=minutes_until_next_slot)
-    return slot + timedelta(minutes=10)
+    return slot + timedelta(minutes=10, seconds=_M5_ANALYSIS_CAPTURE_POST_SLOT_BUFFER_SECONDS)
 
 
 def _wait_for_m5_analysis_capture_slot(
@@ -247,13 +251,13 @@ def _wait_for_m5_analysis_capture_slot(
     target = _now_utc() + timedelta(seconds=wait_s)
     _send_log(
         settings,
-        f"[m5-slot] {source}: chờ {wait_s}s để lấy Coinmap M5 tại phút 5n+1 "
+        f"[m5-slot] {source}: chờ {wait_s}s để lấy Coinmap M5 tại phút 5n+1 + buffer 2p "
         f"(target={target.isoformat()})",
     )
     _send_user_notice(
         settings,
         "Đang chờ mốc lấy dữ liệu M5.",
-        f"Sẽ lấy Coinmap M5 tại phút 5n+1 trước khi gửi AI phân tích. Dự kiến chờ {wait_s} giây.",
+        f"Sẽ lấy Coinmap M5 tại phút 5n+1 rồi buffer thêm 2 phút trước khi gửi AI phân tích. Dự kiến chờ {wait_s} giây.",
         zone=zone,
         params=params,
     )
@@ -2568,7 +2572,7 @@ def _zone_touch_job(
     - update zone status + trade_line + mt5 ticket (optional)
 
     ``after_retry_wait``: True khi dispatch từ vòng ``cham`` sau khi hết ``retry_at``
-    (scalp ~10 phút + Coinmap M1; plan khác sau 3 slot M5 ``5n+1``), khác với lần chạm đầu từ ``vung_cho``.
+    (scalp ~10 phút + Coinmap M1; plan khác sau 3 slot M5 ``5n+1`` + buffer 2p), khác với lần chạm đầu từ ``vung_cho``.
     """
     st0 = _state_read(params)
     if st0 is None:

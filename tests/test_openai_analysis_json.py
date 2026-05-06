@@ -96,10 +96,10 @@ def test_select_zone_tiebreak_order() -> None:
 
 def test_select_zone_requires_above_threshold() -> None:
     tl = "BUY LIMIT 1 | SL 0 | TP1 2 | Lot 0.01"
-    assert AUTO_MT5_HOP_LUU_THRESHOLD == 60
+    assert AUTO_MT5_HOP_LUU_THRESHOLD == 70
     assert AUTO_MT5_HOP_LUU_THRESHOLD_SCALP == 50
-    assert select_zone_for_auto_mt5([PriceZoneEntry("plan_chinh", 1.0, hop_luu=60, trade_line=tl)]) is None
-    assert select_zone_for_auto_mt5([PriceZoneEntry("plan_chinh", 1.0, hop_luu=61, trade_line=tl)]) is not None
+    assert select_zone_for_auto_mt5([PriceZoneEntry("plan_chinh", 1.0, hop_luu=70, trade_line=tl)]) is None
+    assert select_zone_for_auto_mt5([PriceZoneEntry("plan_chinh", 1.0, hop_luu=71, trade_line=tl)]) is not None
 
 
 def test_select_zone_scalp_uses_lower_threshold() -> None:

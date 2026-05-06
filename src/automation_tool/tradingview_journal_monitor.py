@@ -615,7 +615,7 @@ def _run_intraday_touch_loop(
         if hop_done:
             _journal_log(
                 tz,
-                "JSON prices: plan_chinh/plan_phu hop_luu>60, scalp hop_luu>50 + trade_line tại vùng chạm — đã ghi vao_lenh / MT5 (nếu bật). Kết thúc vòng trong.",
+                "JSON prices: plan_chinh/plan_phu hop_luu>70, scalp hop_luu>50 + trade_line tại vùng chạm — đã ghi vao_lenh / MT5 (nếu bật). Kết thúc vòng trong.",
             )
             if not params.no_telegram:
                 _journal_log(

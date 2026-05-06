@@ -20,7 +20,7 @@ def is_scalp_label(label: str) -> bool:
 
 
 # Morning auto-MT5: hop_luu must be greater than this value for plan_chinh / plan_phu.
-AUTO_MT5_HOP_LUU_THRESHOLD = 60
+AUTO_MT5_HOP_LUU_THRESHOLD = 70
 # Scalp: hop_luu must be greater than this value.
 AUTO_MT5_HOP_LUU_THRESHOLD_SCALP = 50
 
