@@ -54,6 +54,21 @@ def test_schema_a_phan_tich_cham_diem_parses_without_out_chi_tiet() -> None:
     assert p.prices[0].hop_luu == 82
 
 
+def test_schema_a_context_object_parses_for_intraday_update_snapshot() -> None:
+    data = {
+        "context": {
+            "dxy_macro_bias": "DXY H4/H1 còn bullish, ưu tiên SELL XAUUSD nếu vàng yếu.",
+            "h4_h1_structure": "XAUUSD H4 sideway tại premium, H1 có CHoCH giảm.",
+            "h1_morning": "Buổi sáng H1 đang retest POI, chưa sweep liquidity.",
+        },
+        "phan_tich_cham_diem": "PLAN CHÍNH",
+        "output_ngan_gon": "Tóm tắt.",
+    }
+    p = try_parse_analysis_payload(data)
+    assert p is not None
+    assert p.context == data["context"]
+
+
 def test_select_zone_highest_hop_luu() -> None:
     prices = [
         PriceZoneEntry("plan_chinh", 100.0, hop_luu=70, trade_line=""),

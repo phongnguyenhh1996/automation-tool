@@ -457,6 +457,12 @@ _INTRADAY_UPDATE_PLAN_HINT = (
     "thì trả đúng 1 hoặc 2 phần tử trong `prices`, không cần cố tạo đủ 3 plan mới.\n"
 )
 
+_MORNING_CONTEXT_HINT = (
+    "Bắt buộc đọc object `context` trong morning_full_analysis.json để kế thừa DXY / macro bias, "
+    "cấu trúc H4/H1 và H1 sáng; xem đây là snapshot chi tiết của bias buổi sáng trước khi đánh giá "
+    "footprint intraday.\n"
+)
+
 _SCALP_UPDATE_PLAN_HINT = (
     "Nhiệm vụ chính: tìm **1 plan scalp đẹp nhất** trong phiên hiện tại (hop_luu > 50, "
     "có đủ hợp lưu M5 để vào lệnh nhanh, RR tối thiểu 1:1.5). "
@@ -510,6 +516,7 @@ def build_intraday_update_user_text(
                 "Đính kèm **hai** file JSON theo thứ tự: **(1)** morning_full_analysis.json, **(2)** một file "
                 "**Coinmap merged** cho cặp chính (cùng schema ``coinmap_merged``: khung 15m và 5m trong ``frames``, "
                 "footprint và summary theo từng khung).\n"
+                f"{_MORNING_CONTEXT_HINT}"
                 f"{_INTRADAY_UPDATE_PLAN_HINT}"
             )
         return (
@@ -518,6 +525,7 @@ def build_intraday_update_user_text(
             "Phân tích buổi sáng (Schema A) nằm trong file **morning_full_analysis.json** đính kèm đầu tiên.\n"
             "Đính kèm **ba** file JSON theo thứ tự: **(1)** morning_full_analysis.json, **(2)** M15, **(3)** M5 "
             "(footprint cặp chính).\n"
+            f"{_MORNING_CONTEXT_HINT}"
             f"{_INTRADAY_UPDATE_PLAN_HINT}"
         )
 
@@ -558,6 +566,7 @@ def build_scalp_update_user_text(
                 "Đính kèm **hai** file JSON theo thứ tự: **(1)** morning_full_analysis.json, **(2)** một file "
                 "**Coinmap merged** cho cặp chính (cùng schema ``coinmap_merged``: khung 15m và 5m trong ``frames``, "
                 "footprint và summary theo từng khung).\n"
+                f"{_MORNING_CONTEXT_HINT}"
                 f"{_SCALP_UPDATE_PLAN_HINT}"
             )
         return (
@@ -566,6 +575,7 @@ def build_scalp_update_user_text(
             "Phân tích buổi sáng (Schema A) nằm trong file **morning_full_analysis.json** đính kèm đầu tiên.\n"
             "Đính kèm **ba** file JSON theo thứ tự: **(1)** morning_full_analysis.json, **(2)** M15, **(3)** M5 "
             "(footprint cặp chính).\n"
+            f"{_MORNING_CONTEXT_HINT}"
             f"{_SCALP_UPDATE_PLAN_HINT}"
         )
 

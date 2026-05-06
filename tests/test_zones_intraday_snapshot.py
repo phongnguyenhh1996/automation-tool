@@ -80,6 +80,9 @@ def test_build_intraday_update_user_text_first_after_all_merged() -> None:
     assert "hai" in t
     assert "merged" in t.lower()
     assert "morning_full_analysis" in t
+    assert "`context`" in t
+    assert "DXY / macro bias" in t
+    assert "snapshot chi tiết" in t
 
 
 def test_build_intraday_update_user_text_first_after_all_legacy_three_files() -> None:

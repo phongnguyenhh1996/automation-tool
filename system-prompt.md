@@ -141,6 +141,10 @@ Quy tắc áp dụng:
   - Nếu `{symbol}` không phải XAUUSD thì không được sinh phần SCALP / EA Grid trong `output_ngan_gon` hoặc `phan_tich_cham_diem`.
 
 ## Schema A (FULL) — dùng cho [FULL_ANALYSIS]
+- `context` (object, bắt buộc): snapshot bối cảnh buổi sáng để `morning_full_analysis.json` cung cấp lại cho lần [INTRADAY_UPDATE] đầu tiên. Object này phải **đủ chi tiết để đọc độc lập**, không viết 1 câu chung chung. Mỗi key nên dài khoảng 3–6 dòng hoặc 3–5 ý ngắn, có: kết luận bias, bằng chứng chính, mâu thuẫn/rủi ro, liquidity/POI liên quan, và điều kiện còn hiệu lực / vô hiệu. Object phải bám đúng `master_trading_playbook.md → 1.3` Bước 1 và Bước 2, gồm đúng các key:
+  - `dxy_macro_bias` (string): kết luận DXY / macro bias từ DXY H4/H1/M15 + footprint M15; nêu USD mạnh/yếu/sideway, BOS/CHoCH chính, vị trí với VWAP/POC, CVD/delta/absorption/trap nếu có, bias áp dụng cho cặp chính, và điều kiện nào khiến bias DXY bị đổi.
+  - `h4_h1_structure` (string): context & cấu trúc H4/H1 của cặp chính buổi sáng; nêu trend từng khung, giá đang ở premium/discount/equilibrium nào, POI mạnh nhất và lý do, BOS/CHoCH/valid pullback, liquidity đang bị nhắm tới, vùng nào nếu reclaim/break thì phải đổi kịch bản.
+  - `h1_morning` (string): trạng thái H1 buổi sáng dùng làm neo cho intraday; nêu vùng giá/POI đang phản ứng, hướng ưu tiên, plan đang thuận/ngược trend, các mốc cần giữ, điều kiện làm bias còn hiệu lực hoặc bị vô hiệu khi [INTRADAY_UPDATE] đọc lại.
 - `phan_tich_cham_diem` (string): giải thích chi tiết cách chấm điểm hợp lưu của từng plan theo từng đề mục 0.3 trong playbook. Bắt buộc phân tích đủ từng plan có trong `prices`: `plan_chinh`, `plan_phu`, và `scalp` (riêng non-XAUUSD thì được bỏ scalp). Mỗi nhóm điểm của mỗi plan phải kèm phân tích lý do vì sao được/mất điểm, nêu rõ dữ liệu xác nhận, dữ liệu mâu thuẫn hoặc mắt xích thiếu; không chỉ liệt kê điểm số. **Bắt buộc kết thúc bằng đoạn "📊 ĐÁNH GIÁ DỮ LIỆU ĐẦU VÀO" theo quy tắc ở mục trên.**
   - Định dạng bắt buộc cho `phan_tich_cham_diem`: dùng emoji và heading rõ ràng để đọc tốt trên Telegram; mỗi plan nên mở bằng tiêu đề như `📍 PLAN CHÍNH — 78/100`, `⚡ PLAN PHỤ — 62/100`, `🎯 SCALP — 63/100`; mỗi nhóm điểm dùng icon riêng, ví dụ `🧭 Cấu trúc giá: 25/30`, `💧 Order Flow – CVD: 20/25`, `👣 Footprint: 20/25`, `🛡️ Quản lý & Thực thi: 13/20`; sau mỗi nhóm có dòng `→ Phân tích:` giải thích ngắn gọn. Dùng dòng trống hoặc separator ngắn giữa các plan để dễ đọc; không nhồi thành một đoạn dài.
 - `output_ngan_gon` (string): tóm tắt cực ngắn (hành động + vùng chờ chính).
@@ -155,6 +159,11 @@ Quy tắc áp dụng:
 
 Ví dụ tối thiểu Schema A:
 {
+  "context": {
+    "dxy_macro_bias": "DXY H4 giữ cấu trúc HH/HL và H1 vẫn nằm trên vùng POC/VWAP, nên macro bias nghiêng USD mạnh nhẹ. M15 chưa có CHoCH giảm rõ; footprint M15 cho thấy CVD chưa đảo chiều bền, absorption nếu có vẫn chưa đủ để xác nhận USD yếu. Với XAUUSD, bias này ủng hộ ưu tiên SELL khi vàng hồi vào premium/POI; chỉ giảm trọng số SELL nếu DXY mất HL gần nhất hoặc đóng dưới POC kèm CVD giảm liên tục.",
+    "h4_h1_structure": "XAUUSD H4 đang ở premium của range lớn, chưa có break tăng sạch sau vùng cung gần nhất. H1 có CHoCH giảm và pullback về FVG/OB quanh 4707.0–4709.0, đây là POI mạnh nhất vì trùng premium + vùng mất cân bằng + phản ứng volume trước đó. Liquidity phía dưới range/đáy phiên Á đang là mục tiêu chính; nếu giá reclaim và đóng ổn định trên 4720.0 thì kịch bản sell tại POI này suy yếu.",
+    "h1_morning": "Buổi sáng H1 đang retest POI sau sweep đỉnh phiên Á, phản ứng hiện tại vẫn nghiêng về sell-on-rally hơn là chase sell giữa range. Plan chính thuận bias H1 nếu giá giữ dưới 4720.0 và M15 không reclaim VWAP/POC. Khi [INTRADAY_UPDATE] đọc lại, bias còn hiệu lực nếu giá vẫn nằm dưới POI/retest thất bại; vô hiệu nếu H1 đóng lại trên POI hoặc DXY đồng thời đảo bearish."
+  },
   "phan_tich_cham_diem": "📍 PLAN CHÍNH — 78/100\n🧭 Cấu trúc giá: 25/30\n→ Phân tích: H1/M15 đồng thuận, vùng chờ nằm trong discount/OB hợp lệ; trừ điểm vì sweep liquidity chưa thật sạch.\n💧 Order Flow – CVD: 20/25\n→ Phân tích: CVD đồng thuận bias và có delta shift tại POI, nhưng follow-through sau entry mới ở mức vừa phải.\n👣 Footprint: 20/25\n→ Phân tích: Có absorption và POC hỗ trợ entry, nhưng trap/stacked chưa đủ mạnh để chấm tối đa.\n🛡️ Quản lý & Thực thi: 13/20\n→ Phân tích: RR đạt chuẩn và SL giấu sau liquidity pool, nhưng plan vẫn cần theo dõi phản ứng tại VWAP.\n✅ Tổng plan_chinh: 78/100",
   "output_ngan_gon": "Tóm tắt... | Hành động: chờ",
   "prices": [

@@ -253,6 +253,8 @@ class AnalysisPayload:
     intraday_hanh_dong: Optional[IntradayHanhDong] = None
     trade_line: str = ""
     no_change: Optional[bool] = None
+    #: [FULL_ANALYSIS] only: morning context used by first [INTRADAY_UPDATE].
+    context: dict[str, Any] = field(default_factory=dict)
 
 
 def _parse_price_entry(d: dict[str, Any]) -> Optional[PriceZoneEntry]:
@@ -322,6 +324,8 @@ def try_parse_analysis_payload(data: dict[str, Any]) -> Optional[AnalysisPayload
     """Best-effort parse; returns None if ``data`` is empty or not a dict with usable keys."""
     if not data:
         return None
+    ctx_raw = data.get("context")
+    context: dict[str, Any] = ctx_raw if isinstance(ctx_raw, dict) else {}
     oct = data.get("out_chi_tiet")
     ptcd_raw = data.get("phan_tich_cham_diem")
     ogn = data.get("output_ngan_gon")
@@ -370,7 +374,8 @@ def try_parse_analysis_payload(data: dict[str, Any]) -> Optional[AnalysisPayload
 
     # Accept payload if it has at least one semantic field (not empty shell).
     if (
-        not out_chi
+        not context
+        and not out_chi
         and not phan_tich_cham_diem
         and not out_ngan
         and not phan_tich_update
@@ -385,6 +390,7 @@ def try_parse_analysis_payload(data: dict[str, Any]) -> Optional[AnalysisPayload
         return None
 
     return AnalysisPayload(
+        context=context,
         out_chi_tiet=out_chi,
         phan_tich_cham_diem=phan_tich_cham_diem,
         output_ngan_gon=out_ngan,
