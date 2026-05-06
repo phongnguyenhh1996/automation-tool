@@ -216,7 +216,9 @@ Bắt buộc rà thêm nếu có dữ liệu:
   - plan nào đủ chuẩn limit ngay
   - plan nào chỉ là vùng chờ
 
-### 1.4. Bộ lọc bắt buộc trước khi đề xuất entry
+#### Bước 8 Bắt buộc có điều kiện limit không cần re-check; nếu phải re-check thì quay lại tìm vùng mới xa hơn hoặc chỉ là vùng scalp
+
+### 1.4. Bộ lọc bắt buộc trước khi đề xuất entry (bắt buộc, nếu vi phạm thì tìm chọn vùng khác)
 #### A. Cấu trúc giá
 - H1 – M15 phải rõ xu hướng , Ưu tiên trade theo trend H1 – M15.
 - Đồng thuận xu hướng DXY
