@@ -2987,7 +2987,7 @@ def _tradingview_ensure_required_indicators(page, tv: dict[str, Any]) -> None:
     if not bool(tv.get("required_indicators_enabled", False)):
         return
 
-    verify_timeout_ms = int(tv.get("indicator_verify_timeout_ms", 6000))
+    verify_timeout_ms = int(tv.get("indicator_verify_timeout_ms", 1000))
     groups = _tv_required_indicator_groups(tv)
     forbidden = _tv_forbidden_indicator_groups(tv)
     logging.getLogger("automation_tool").info(
@@ -3063,16 +3063,16 @@ def _tradingview_snapshot_url_capture(
     open_sel = (tv.get("snapshot_open_in_new_tab_selector") or '[data-qa-id="open-image-in-new-tab"]').strip()
     img_sel = (tv.get("snapshot_image_selector") or "img.tv-snapshot-image").strip()
     after_shot_ms = int(tv.get("after_screenshot_button_ms", 600))
-    tab_timeout = int(tv.get("snapshot_new_tab_timeout_ms", 45_000))
+    tab_timeout = int(tv.get("snapshot_new_tab_timeout_ms", 5_000))
     tab_settle_ms = int(tv.get("snapshot_tab_settle_ms", 1000))
     after_esc_ms = int(tv.get("after_snapshot_escape_ms", 500))
 
-    page.locator(shot_sel).first.wait_for(state="visible", timeout=45_000)
-    page.locator(shot_sel).first.click(timeout=15_000)
+    page.locator(shot_sel).first.wait_for(state="visible", timeout=5_000)
+    page.locator(shot_sel).first.click(timeout=5_000)
     page.wait_for_timeout(after_shot_ms)
 
     open_btn = page.locator(open_sel).first
-    open_btn.wait_for(state="visible", timeout=20_000)
+    open_btn.wait_for(state="visible", timeout=5_000)
 
     context = page.context
     with context.expect_page(timeout=tab_timeout) as new_page_info:
@@ -3082,17 +3082,17 @@ def _tradingview_snapshot_url_capture(
     out_url_path = dest_url_path or dest_base.with_suffix(".url")
     out_png_path = dest_base.with_suffix(".png")
     try:
-        snap_page.wait_for_load_state("domcontentloaded", timeout=30_000)
+        snap_page.wait_for_load_state("domcontentloaded", timeout=5_000)
         snap_page.wait_for_timeout(tab_settle_ms)
         loc = snap_page.locator(img_sel).first
-        loc.wait_for(state="visible", timeout=25_000)
+        loc.wait_for(state="visible", timeout=5_000)
         src = (loc.get_attribute("src") or "").strip()
         if src.startswith("https://") or src.startswith("http://"):
             out_url_path.parent.mkdir(parents=True, exist_ok=True)
             out_url_path.write_text(src + "\n", encoding="utf-8")
             return out_url_path
         # blob: or missing: PNG snapshot of the image (OpenAI cannot fetch blob URLs)
-        loc.screenshot(path=str(out_png_path), timeout=30_000)
+        loc.screenshot(path=str(out_png_path), timeout=5_000)
         return out_png_path
     finally:
         try:
@@ -3208,7 +3208,7 @@ def _run_tradingview_multi_shot_flow_v2(
             continue
         _tradingview_ensure_watchlist_open(page, tv)
         _tradingview_select_symbol(page, tv, symbol)
-        toolbar.wait_for(state="visible", timeout=60_000)
+        toolbar.wait_for(state="visible", timeout=5_000)
         sym_key = re.sub(r"[^\w.-]+", "_", symbol).strip("_")[:40] or "sym"
         for it in intervals:
             if not isinstance(it, dict):

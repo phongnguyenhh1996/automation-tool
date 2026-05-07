@@ -242,7 +242,7 @@ tradingview_capture:
   snapshot_open_in_new_tab_selector: '[data-qa-id="open-image-in-new-tab"]'
   snapshot_image_selector: "img.tv-snapshot-image"
   after_screenshot_button_ms: 600
-  snapshot_new_tab_timeout_ms: 45000
+  snapshot_new_tab_timeout_ms: 5000
   snapshot_tab_settle_ms: 1000
   after_snapshot_escape_ms: 500
   multi_shot_enabled: true
@@ -267,7 +267,7 @@ tradingview_capture:
   watchlist_button_aria_label_fallback: "Watchlist, details, and news"
   watchlist_open_ms: 500
   symbol_name_class_prefix: "symbolNameText-"
-  after_symbol_select_ms: 1500
+  after_symbol_select_ms: 500
   after_fullscreen_escape_ms: 800
   # Watchlist realtime price monitor (no alerts): để trống để tự dùng symbol active
   # (data/.main_chart_symbol hoặc env AUTOMATION_MAIN_SYMBOL). Nếu set, phải khớp data-symbol-short trên TradingView.
@@ -299,9 +299,9 @@ tradingview_capture:
   # Dòng giá trong tab Nhật ký: alert-log-item (không dùng alert-item-description — đó là tab Danh sách)
   journal_item_description_selector: 'div[data-name="alert-log-item"] > div:first-child'
   journal_after_tab_ms: 400
-  initial_settle_ms: 3000
-  after_interval_select_ms: 2000
-  fullscreen_settle_ms: 2000
+  initial_settle_ms: 500
+  after_interval_select_ms: 500
+  fullscreen_settle_ms: 500
   fullscreen_screenshot_full_page: true
 
   # Ensure indicators are enabled before capturing any snapshot.
@@ -313,7 +313,7 @@ tradingview_capture:
     - "Xóa 1 chỉ báo"
     - "Xóa 2 chỉ báo"
   after_indicator_clear_ms: 450
-  indicator_verify_timeout_ms: 6000
+  indicator_verify_timeout_ms: 1000
   favorite_indicators_button_selector: 'button[data-name="show-favorite-indicators"]'
   favorite_indicators_parent_selector: "#header-toolbar-indicators"
   favorite_indicator_item_selector_template: 'div[data-role="menuitem"][aria-label="{name}"]'
@@ -354,6 +354,6 @@ viewport_width: 1920
 viewport_height: 1080
 
 # Milliseconds to wait after navigation before screenshots
-settle_ms: 2000
+settle_ms: 500
 # Max charts to capture (0 = no limit) — applies to screenshot loop only
 max_charts: 50
