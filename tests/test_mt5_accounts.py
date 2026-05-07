@@ -15,6 +15,7 @@ from automation_tool.mt5_accounts import (
     LotRuleMaxNotionalUsd,
     filter_mt5_accounts_for_entry_slot,
     load_mt5_accounts_from_path,
+    sync_accounts_scalp_json,
 )
 from automation_tool.mt5_execute import resolve_mt5_trade_symbol
 from automation_tool.mt5_openai_parse import ParsedTrade
@@ -343,6 +344,129 @@ def test_rejects_non_string_terminal_path() -> None:
         )
         with pytest.raises(ValueError, match=r"terminal_path"):
             load_mt5_accounts_from_path(p)
+
+
+def test_sync_accounts_scalp_json_writes_subset_and_strips_flag() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "accounts.json"
+        _write_accounts(
+            p,
+            [
+                {
+                    "id": "full_only",
+                    "terminal_path": "C:/MT5/A/metatrader64.exe",
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                    "lot": {"mode": "fixed", "volume": 0.01},
+                    "update-scalp": False,
+                },
+                {
+                    "id": "scalp_acc",
+                    "terminal_path": "C:/MT5/B/metatrader64.exe",
+                    "login": 2,
+                    "password": "y",
+                    "server": "S",
+                    "primary": False,
+                    "lot": {"mode": "fixed", "volume": 0.02},
+                    "update-scalp": True,
+                },
+            ],
+        )
+        out = sync_accounts_scalp_json(p)
+        assert out is not None
+        dest = Path(td) / "accounts-scalp.json"
+        assert out == dest.resolve()
+        rows = json.loads(dest.read_text(encoding="utf-8"))
+        assert len(rows) == 1
+        assert rows[0]["id"] == "scalp_acc"
+        assert rows[0]["primary"] is True
+        assert "update-scalp" not in rows[0]
+        accs = load_mt5_accounts_from_path(dest)
+        assert len(accs) == 1
+        assert accs[0].id == "scalp_acc"
+        assert accs[0].primary is True
+
+
+def test_sync_accounts_scalp_json_keeps_sole_primary_in_subset() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "accounts.json"
+        _write_accounts(
+            p,
+            [
+                {
+                    "id": "a",
+                    "terminal_path": "C:/MT5/A/metatrader64.exe",
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                    "update-scalp": True,
+                },
+                {
+                    "id": "b",
+                    "terminal_path": "C:/MT5/B/metatrader64.exe",
+                    "login": 2,
+                    "password": "y",
+                    "server": "S",
+                    "primary": False,
+                    "update-scalp": True,
+                },
+            ],
+        )
+        out = sync_accounts_scalp_json(p)
+        assert out is not None
+        dest = Path(td) / "accounts-scalp.json"
+        rows = json.loads(dest.read_text(encoding="utf-8"))
+        assert len(rows) == 2
+        prim = [r for r in rows if r.get("primary") is True]
+        assert len(prim) == 1
+        assert prim[0]["id"] == "a"
+        load_mt5_accounts_from_path(dest)
+
+
+def test_sync_accounts_scalp_json_truthy_string_not_included() -> None:
+    """Chỉ JSON true được coi là bật; chuỗi \"true\" bị bỏ qua."""
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "accounts.json"
+        _write_accounts(
+            p,
+            [
+                {
+                    "id": "a",
+                    "terminal_path": "C:/MT5/A/metatrader64.exe",
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                    "update-scalp": "true",
+                },
+            ],
+        )
+        assert sync_accounts_scalp_json(p) is None
+
+
+def test_sync_accounts_scalp_json_empty_removes_dest() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "accounts.json"
+        _write_accounts(
+            p,
+            [
+                {
+                    "id": "a",
+                    "terminal_path": "C:/MT5/A/metatrader64.exe",
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                },
+            ],
+        )
+        dest = Path(td) / "accounts-scalp.json"
+        dest.write_text("[]\n", encoding="utf-8")
+        assert sync_accounts_scalp_json(p) is None
+        assert not dest.is_file()
 
 
 def test_resolve_mt5_trade_symbol_uses_per_account_map() -> None:

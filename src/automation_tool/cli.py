@@ -113,7 +113,11 @@ from automation_tool.telegram_listen import TelegramListenParams, run_telegram_l
 from automation_tool.telegram_logging import setup_automation_logging
 from automation_tool.config import load_all_dotenv
 from automation_tool.mt5_openai_parse import parse_openai_output_md
-from automation_tool.mt5_accounts import load_mt5_accounts_for_cli
+from automation_tool.mt5_accounts import (
+    load_mt5_accounts_for_cli,
+    resolve_mt5_accounts_path,
+    sync_accounts_scalp_json,
+)
 from automation_tool.mt5_execute import check_mt5_login, execute_trade, format_mt5_execution_for_telegram
 from automation_tool.mt5_multi import execute_trade_all_accounts, format_mt5_multi_for_telegram
 
@@ -716,6 +720,22 @@ def _parser() -> argparse.ArgumentParser:
         help="Thư mục zones (mặc định: data/<SYM>/zones/) — cùng thư mục với zones thông thường",
     )
     ups.add_argument("--model", default=None, metavar="ID", help=_OPENAI_MODEL_HELP)
+    ups.add_argument(
+        "--mt5-accounts-json",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help=(
+            "accounts.json nguồn: ghi accounts-scalp.json (cùng thư mục) chỉ các dòng "
+            '"update-scalp": true; đặt MT5_ACCOUNTS_JSON cho tiến trình này và reconcile. '
+            "Ưu tiên hơn biến môi trường MT5_ACCOUNTS_JSON khi chỉ định."
+        ),
+    )
+    ups.add_argument(
+        "--no-reconcile-daemon-plans",
+        action="store_true",
+        help="Sau khi ghi zones: không gọi reconcile-daemon-plans (mặc định: có gọi).",
+    )
     ups.set_defaults(func=cmd_update_scalp)
 
     wd = sub.add_parser(
@@ -2884,12 +2904,31 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
     - Thread OpenAI riêng (``last_scalp_response_id.txt``).
     - Zone labels dạng ``scalp_<id>`` (ví dụ: ``scalp_1``, ``scalp_2``, ``scalp_3``).
     - Zones lưu vào ``data/<SYM>/zones/`` cùng với zones thông thường.
+    - Nếu có ``accounts.json`` (CLI ``--mt5-accounts-json`` hoặc ``MT5_ACCOUNTS_JSON``):
+      tạo ``accounts-scalp.json`` cạnh file nguồn với các account có ``\"update-scalp\": true``,
+      rồi đặt ``MT5_ACCOUNTS_JSON`` cho tiến trình (reconcile spawn ``daemon-plan`` kế thừa env).
     """
     from automation_tool.images import set_active_main_symbol_file
 
     s = load_settings()
     if getattr(args, "main_symbol", None):
         set_active_main_symbol_file(args.main_symbol)
+    zones_dir = zones_dir_from_cli_path(getattr(args, "zones_json", None))
+    base_acc = resolve_mt5_accounts_path(getattr(args, "mt5_accounts_json", None))
+    if base_acc is not None and base_acc.is_file():
+        try:
+            scalp_acc_path = sync_accounts_scalp_json(base_acc)
+        except Exception as e:
+            raise SystemExit(f"Không tạo accounts-scalp.json từ {base_acc}: {e}") from e
+        if scalp_acc_path is not None:
+            os.environ["MT5_ACCOUNTS_JSON"] = str(scalp_acc_path)
+            _log.info("update-scalp: MT5_ACCOUNTS_JSON → %s (subset update-scalp)", scalp_acc_path)
+        else:
+            _log.info(
+                'update-scalp: không có account nào "update-scalp": true trong %s — '
+                "giữ MT5_ACCOUNTS_JSON như môi trường hiện tại",
+                base_acc,
+            )
     _log.info(
         "update-scalp: bắt đầu | capture_yaml=%s tv_yaml=%s no_tradingview=%s",
         args.config or default_coinmap_update_config_path(),
@@ -3040,7 +3079,6 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
     _log.info("update-scalp: OpenAI follow-up xong | new_response_id=%s", new_id)
 
     update_payload = parse_analysis_from_openai_text(out_text)
-    zones_dir = zones_dir_from_cli_path(getattr(args, "zones_json", None))
 
     def _send_phan_tich_scalp_if_any() -> None:
         if args.no_telegram:
@@ -3092,6 +3130,8 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
             )
 
     _send_phan_tich_scalp_if_any()
+    if not args.no_reconcile_daemon_plans:
+        _reconcile_daemon_plans_after_cli(zones_dir, "update-scalp")
 
 
 def cmd_tv_watchlist_daemon(args: argparse.Namespace) -> None:

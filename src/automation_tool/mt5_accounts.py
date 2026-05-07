@@ -9,6 +9,9 @@ hành vi ``mode: from_trade``). Có ``lot`` thì ``fixed`` / ``max_notional_usd`
 **Entry TP:** bỏ key ``entry_take_profit`` → giữ hành vi cũ là đặt TP2 nếu trade có TP2;
 đặt ``"entry_take_profit": "tp1"`` để account đó chốt TP ở TP1 ngay khi mở lệnh.
 
+**update-scalp:** optional ``\"update-scalp\": true`` trên từng object — :func:`sync_accounts_scalp_json`
+lọc ra ``accounts-scalp.json`` cho luồng ``coinmap-automation update-scalp``.
+
 **Bảo mật:** không commit file chứa mật khẩu; hạn chế quyền đọc (ví dụ ``chmod 600``).
 """
 
@@ -234,6 +237,58 @@ def load_mt5_accounts_from_path(path: Path) -> list[MT5AccountEntry]:
     if len(set(ids)) != len(ids):
         raise ValueError("id các tài khoản phải khác nhau")
     return accounts
+
+
+def sync_accounts_scalp_json(
+    source_accounts_json: Path,
+    *,
+    dest_path: Optional[Path] = None,
+) -> Optional[Path]:
+    """
+    Tạo (hoặc xoá) ``accounts-scalp.json`` cạnh ``accounts.json``: chỉ giữ object có
+    ``\"update-scalp\": true`` (đúng literal ``True`` trong JSON).     Key ``update-scalp`` không
+    ghi vào file đích. Nếu sau lọc không có dòng nào ``primary: true``, gán
+    ``primary: true`` cho phần tử đầu (các dòng còn lại ``false``) để subset vẫn hợp lệ
+    khi tài khoản primary toàn cục không tham gia scalp. Validate giống
+    :func:`load_mt5_accounts_from_path`.
+
+    Trả về đường dẫn tuyệt đối file đích nếu đã ghi và hợp lệ; ``None`` nếu không có
+    tài khoản nào được đánh dấu (file đích bị xoá nếu tồn tại).
+    """
+    src = source_accounts_json.expanduser()
+    if not src.is_file():
+        return None
+    raw = src.read_text(encoding="utf-8")
+    data = json.loads(raw)
+    if not isinstance(data, list):
+        raise ValueError("accounts.json phải là mảng")
+    out_rows: list[dict[str, Any]] = []
+    for i, row in enumerate(data):
+        if not isinstance(row, dict):
+            raise ValueError(f"accounts[{i}] phải là object")
+        if row.get("update-scalp") is not True:
+            continue
+        cleaned = {k: v for k, v in row.items() if k != "update-scalp"}
+        out_rows.append(cleaned)
+    dest = (dest_path or (src.parent / "accounts-scalp.json")).expanduser()
+    if not out_rows:
+        try:
+            if dest.is_file():
+                dest.unlink()
+        except OSError:
+            pass
+        return None
+    n_primary = sum(1 for r in out_rows if r.get("primary") is True)
+    if n_primary == 0:
+        for i, r in enumerate(out_rows):
+            r["primary"] = i == 0
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(
+        json.dumps(out_rows, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    load_mt5_accounts_from_path(dest)
+    return dest.resolve()
 
 
 def default_mt5_accounts_json_path() -> Optional[Path]:

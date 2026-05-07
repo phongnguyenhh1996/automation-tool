@@ -1,5 +1,6 @@
 .env
 accounts.json
+accounts-scalp.json
 .venv/
 __pycache__/
 *.py[cod]
