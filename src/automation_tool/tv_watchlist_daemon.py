@@ -1960,6 +1960,14 @@ def _r1_followup_job(
                 setattr(zone, followup_flag, False)
 
         r_level_text = _r_level_text(reached_r_level)
+        if int(reached_r_level) <= 1:
+            # User rule: mốc 1R không chạy TRADE_MANAGEMENT (không capture, không gọi OpenAI).
+            z0.status = prev_status  # type: ignore[assignment]
+            _reset_followup_flag(z0)
+            z0.last_r_followup_level = max(int(getattr(z0, "last_r_followup_level", 0) or 0), 1)
+            _state_write(params, st0)
+            _send_log(settings, f"[r1] skip TRADE_MANAGEMENT at {r_level_text}R | zone_id={zone_id}")
+            return
         if _skip_scalp_r1_followup_if_needed(z0, settings=settings, params=params):
             z0.status = prev_status  # type: ignore[assignment]
             _state_write(params, st0)
@@ -1979,53 +1987,6 @@ def _r1_followup_job(
 
         tk_check = int(z0.mt5_ticket or 0)
         dry = bool(params.mt5_dry_run)
-        exe = bool(params.mt5_execute)
-        if exe and tk_check > 0:
-            accs_chk = load_mt5_accounts_for_cli(params.mt5_accounts_json)
-            prim_chk = primary_account(accs_chk) if accs_chk else None
-            if prim_chk is None:
-                z0.status = prev_status  # type: ignore[assignment]
-                _reset_followup_flag(z0)
-                _state_write(params, st0)
-                _send_log(
-                    settings,
-                    f"[r1] bỏ qua follow-up {r_level_text}R vì thiếu account primary",
-                )
-                return
-            is_position, ticket_msg = mt5_ticket_is_open_position(
-                tk_check,
-                dry_run=dry,
-                terminal_path=prim_chk.terminal_path,
-                login=prim_chk.login,
-                password=prim_chk.password,
-                server=prim_chk.server,
-            )
-            _send_log(settings, f"[r1] kiểm tra ticket | {ticket_msg}")
-            if not is_position:
-                if "pending" in ticket_msg.lower() or "chưa position" in ticket_msg.lower():
-                    z0.status = prev_status  # type: ignore[assignment]
-                    _reset_followup_flag(z0)
-                    _state_write(params, st0)
-                    _send_log(
-                        settings,
-                        f"[r1] bỏ qua kiểm tra {r_level_text}R vì lệnh chưa khớp | zone_id={zone_id} | {ticket_msg}",
-                    )
-                    return
-                st_done = _state_read(params)
-                if st_done is not None:
-                    z_done = next((z for z in st_done.zones if z.id == zone_id), None)
-                    if z_done is not None:
-                        z_done.status = "done"
-                        z_done.mt5_ticket = None
-                        z_done.mt5_tickets_by_account = None
-                        z_done.tp1_followup_done = True
-                        z_done.r1_followup_done = True
-                        _state_write(params, st_done)
-                _send_log(
-                    settings,
-                    f"[r1] bỏ qua follow-up 1R (ticket đã đóng trên MT5) | zone_id={zone_id} | {ticket_msg}",
-                )
-                return
 
         _send_user_notice(
             settings,

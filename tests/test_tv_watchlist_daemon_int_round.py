@@ -609,7 +609,7 @@ def test_tp1_followup_with_tp2_skips_partial_close_when_has_position_false(monke
     assert openai_calls
 
 
-def test_r1_followup_skips_pending_ticket_before_capture(monkeypatch, tmp_path) -> None:
+def test_r1_followup_at_1r_is_noop_without_trade_management(monkeypatch, tmp_path) -> None:
     shard = tmp_path / "vung_plan_chinh_sang.json"
     write_zones_state_to_shard(
         shard,
@@ -640,18 +640,36 @@ def test_r1_followup_skips_pending_ticket_before_capture(monkeypatch, tmp_path) 
         mt5_execute=True,
     )
 
+    openai_calls: list[dict] = []
+
     monkeypatch.setattr("automation_tool.tv_watchlist_daemon.load_mt5_accounts_for_cli", lambda *_a, **_k: [])
     monkeypatch.setattr(
         "automation_tool.tv_watchlist_daemon.mt5_ticket_is_open_position",
-        lambda *_a, **_k: (False, "ticket=123 vẫn pending (chưa position)"),
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("unexpected 1R position gate")),
     )
     monkeypatch.setattr("automation_tool.tv_watchlist_daemon._send_log", lambda *a, **k: None)
     monkeypatch.setattr("automation_tool.tv_watchlist_daemon._send_user_notice", lambda *a, **k: None)
-
-    def fail_capture(*_args, **_kwargs):
-        raise AssertionError("pending ticket must not capture Coinmap for R1")
-
-    monkeypatch.setattr("automation_tool.coinmap.capture_charts", fail_capture)
+    charts_file = tmp_path / "charts" / "coinmap.json"
+    charts_file.parent.mkdir(parents=True, exist_ok=True)
+    charts_file.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        "automation_tool.coinmap.capture_charts",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("1R must not capture charts")),
+    )
+    monkeypatch.setattr("automation_tool.images.coinmap_xauusd_5m_json_path", lambda _charts_dir: charts_file)
+    monkeypatch.setattr("automation_tool.images.read_main_chart_symbol", lambda _charts_dir: "XAUUSD")
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon.write_openai_coinmap_merged_from_raw_export", lambda p: p)
+    monkeypatch.setattr(
+        "automation_tool.tv_watchlist_daemon.mt5_ticket_current_sltp",
+        lambda *_a, **_k: (99.0, 103.0, "ok"),
+    )
+    monkeypatch.setattr(
+        "automation_tool.tv_watchlist_daemon.run_single_followup_responses",
+        lambda **kwargs: (
+            openai_calls.append(kwargs)
+            or ('{"hanh_dong_quan_ly_lenh":"giu_nguyen","reason":"Theo ke hoach."}', "resp-r1-no-gate")
+        ),
+    )
 
     _r1_followup_job(
         settings=MagicMock(),
@@ -665,6 +683,8 @@ def test_r1_followup_skips_pending_ticket_before_capture(monkeypatch, tmp_path) 
     assert st is not None
     assert st.zones[0].status == "cho_tp1"
     assert st.zones[0].r1_followup_done is False
+    assert st.zones[0].last_r_followup_level == 1
+    assert not openai_calls
 
 
 def test_r1_followup_restores_cho_tp1_after_successful_inplace_change(monkeypatch, tmp_path) -> None:
