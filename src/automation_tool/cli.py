@@ -606,7 +606,10 @@ def _parser() -> argparse.ArgumentParser:
 
     up = sub.add_parser(
         "update",
-        help="Intraday: Coinmap M5 JSON + OpenAI follow-up (same thread); rồi chạy tv-watchlist-monitor",
+        help=(
+            "Intraday: TradingView 15m ICT + 5m rồi Coinmap M5 JSON → OpenAI follow-up (same thread); "
+            "sau đó tv-watchlist-monitor"
+        ),
     )
     up.add_argument("--config", type=Path, default=None, help="Coinmap yaml for capture only (default: coinmap_update.yaml)")
     up.add_argument(
@@ -685,7 +688,7 @@ def _parser() -> argparse.ArgumentParser:
     ups = sub.add_parser(
         "update-scalp",
         help=(
-            "Scalp intraday: Coinmap M5 + OpenAI follow-up tìm 1 plan scalp đẹp nhất; "
+            "Scalp intraday: TradingView 15m ICT + 5m rồi Coinmap M5 → OpenAI follow-up tìm 1 plan scalp; "
             "zones lưu vào data/<SYM>/zones/ với label scalp_<id>."
         ),
     )
@@ -2622,27 +2625,107 @@ def cmd_update(args: argparse.Namespace) -> None:
         title=f"Cập nhật vào lúc {_now_clock_hcm()} bắt đầu chạy",
         no_telegram=args.no_telegram,
     )
-    paths = capture_charts(
-        coinmap_yaml=cfg_cap,
-        charts_dir=args.charts_dir,
-        storage_state_path=storage,
-        email=s.coinmap_email,
-        password=s.coinmap_password,
-        tradingview_password=s.tradingview_password,
-        save_storage_state=not args.no_save_storage,
-        headless=not args.headed,
-        reuse_browser_context=None,
-        main_chart_symbol=args.main_symbol,
-        clear_charts_before_capture=True,
-        coinmap_capture_intervals=("5m",),
-    )
-    charts_dir = args.charts_dir or default_charts_dir()
-    print(f"Captured {len(paths)} file(s) for update run.")
-    stamp = stamp_from_capture_paths(paths)
-    m5 = coinmap_main_pair_interval_json_path(charts_dir, "5m", stamp=stamp)
-    from automation_tool.images import read_main_chart_symbol
+    from automation_tool.images import get_active_main_symbol, read_main_chart_symbol
 
-    main_s = read_main_chart_symbol(charts_dir)
+    charts_dir = args.charts_dir or default_charts_dir()
+    main_for_tv = get_active_main_symbol()
+    paths: list[Path] = []
+    tv_chart_payloads: list[ChartOpenAIPayload] = []
+
+    if not args.no_tradingview:
+        tv_plan = [
+            {
+                "symbol": main_for_tv,
+                "intervals": [
+                    {
+                        "label": "15 phút",
+                        "slug": "15m_ict",
+                        "indicator_profile": "ict_killzones",
+                    },
+                    {"label": "5 phút", "slug": "5m"},
+                ],
+            }
+        ]
+        tv_paths = capture_charts(
+            coinmap_yaml=cfg_tv,
+            charts_dir=args.charts_dir,
+            storage_state_path=storage,
+            email=s.coinmap_email,
+            password=s.coinmap_password,
+            tradingview_password=s.tradingview_password,
+            save_storage_state=not args.no_save_storage,
+            headless=not args.headed,
+            reuse_browser_context=None,
+            main_chart_symbol=args.main_symbol,
+            enable_coinmap=False,
+            enable_tradingview=True,
+            clear_charts_before_capture=True,
+            tradingview_capture_plan=tv_plan,
+            tradingview_force_screenshot=True,
+        )
+        paths.extend(tv_paths)
+        stamp = stamp_from_capture_paths(paths)
+        if not stamp:
+            raise SystemExit(
+                "update: không có stamp sau capture TradingView; kiểm tra tradingview_capture và charts_dir."
+            )
+        main_s = read_main_chart_symbol(charts_dir)
+        cm_paths = capture_charts(
+            coinmap_yaml=cfg_cap,
+            charts_dir=args.charts_dir,
+            storage_state_path=storage,
+            email=s.coinmap_email,
+            password=s.coinmap_password,
+            tradingview_password=s.tradingview_password,
+            save_storage_state=not args.no_save_storage,
+            headless=not args.headed,
+            reuse_browser_context=None,
+            main_chart_symbol=args.main_symbol,
+            enable_coinmap=True,
+            enable_tradingview=False,
+            clear_charts_before_capture=False,
+            stamp_override=stamp,
+            coinmap_capture_intervals=("5m",),
+        )
+        paths.extend(cm_paths)
+        for slug in ("15m_ict", "5m"):
+            tv_chart_payloads.extend(
+                _tradingview_slot_openai_payload(
+                    charts_dir, stamp=stamp, symbol=main_s, interval_slug=slug
+                )
+            )
+        _log.info(
+            "update: TradingView 15m_ict+M5 trước Coinmap | tv_files=%s | stamp=%s | tv_payloads=%s",
+            len(tv_paths),
+            stamp,
+            len(tv_chart_payloads),
+        )
+        if len(tv_chart_payloads) < 2:
+            print(
+                f"Warning: expected 2 TradingView slots (15m_ict, 5m) for OpenAI; "
+                f"got {len(tv_chart_payloads)} payload(s) (stamp={stamp!r}, symbol={main_s}).",
+                file=sys.stderr,
+            )
+    else:
+        paths = capture_charts(
+            coinmap_yaml=cfg_cap,
+            charts_dir=args.charts_dir,
+            storage_state_path=storage,
+            email=s.coinmap_email,
+            password=s.coinmap_password,
+            tradingview_password=s.tradingview_password,
+            save_storage_state=not args.no_save_storage,
+            headless=not args.headed,
+            reuse_browser_context=None,
+            main_chart_symbol=args.main_symbol,
+            clear_charts_before_capture=True,
+            coinmap_capture_intervals=("5m",),
+        )
+        stamp = stamp_from_capture_paths(paths)
+        main_s = read_main_chart_symbol(charts_dir)
+
+    print(f"Captured {len(paths)} file(s) for update run.")
+    m5 = coinmap_main_pair_interval_json_path(charts_dir, "5m", stamp=stamp)
     _log.info(
         "update: capture xong | %s file(s) | stamp=%s | M5=%s (Coinmap M15 không đính kèm OpenAI)",
         len(paths),
@@ -2664,61 +2747,6 @@ def cmd_update(args: argparse.Namespace) -> None:
         "update: M5 raw → coinmap_merged | raw=%s | merged=%s", m5, m5_merged
     )
     coinmap_paths: list[Path] = [m5_merged]
-
-    tv_chart_payloads: list[ChartOpenAIPayload] = []
-    if not args.no_tradingview:
-        if not stamp:
-            _log.warning("update: skip TradingView capture because stamp is missing")
-        else:
-            tv_plan = [
-                {
-                    "symbol": main_s,
-                    "intervals": [
-                        {
-                            "label": "15 phút",
-                            "slug": "15m_ict",
-                            "indicator_profile": "ict_killzones",
-                        },
-                        {"label": "5 phút", "slug": "5m"},
-                    ],
-                }
-            ]
-            tv_paths = capture_charts(
-                coinmap_yaml=cfg_tv,
-                charts_dir=charts_dir,
-                storage_state_path=storage,
-                email=s.coinmap_email,
-                password=s.coinmap_password,
-                tradingview_password=s.tradingview_password,
-                save_storage_state=not args.no_save_storage,
-                headless=not args.headed,
-                reuse_browser_context=None,
-                main_chart_symbol=main_s,
-                enable_coinmap=False,
-                enable_tradingview=True,
-                clear_charts_before_capture=False,
-                stamp_override=stamp,
-                tradingview_capture_plan=tv_plan,
-                tradingview_force_screenshot=True,
-            )
-            paths.extend(tv_paths)
-            for slug in ("15m_ict", "5m"):
-                tv_chart_payloads.extend(
-                    _tradingview_slot_openai_payload(
-                        charts_dir, stamp=stamp, symbol=main_s, interval_slug=slug
-                    )
-                )
-            _log.info(
-                "update: TradingView 15m_ict+M5 capture xong | %s file(s) | payloads=%s",
-                len(tv_paths),
-                len(tv_chart_payloads),
-            )
-            if len(tv_chart_payloads) < 2:
-                print(
-                    f"Warning: expected 2 TradingView slots (15m_ict, 5m) for OpenAI; "
-                    f"got {len(tv_chart_payloads)} payload(s) (stamp={stamp!r}, symbol={main_s}).",
-                    file=sys.stderr,
-                )
 
     require_openai(s)
 
@@ -2960,27 +2988,107 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
         title=f"Scalp update vào lúc {_now_clock_hcm()} bắt đầu chạy",
         no_telegram=args.no_telegram,
     )
-    paths = capture_charts(
-        coinmap_yaml=cfg_cap,
-        charts_dir=args.charts_dir,
-        storage_state_path=storage,
-        email=s.coinmap_email,
-        password=s.coinmap_password,
-        tradingview_password=s.tradingview_password,
-        save_storage_state=not args.no_save_storage,
-        headless=not args.headed,
-        reuse_browser_context=None,
-        main_chart_symbol=args.main_symbol,
-        clear_charts_before_capture=True,
-        coinmap_capture_intervals=("5m",),
-    )
-    charts_dir = args.charts_dir or default_charts_dir()
-    print(f"Captured {len(paths)} file(s) for update-scalp run.")
-    stamp = stamp_from_capture_paths(paths)
-    m5 = coinmap_main_pair_interval_json_path(charts_dir, "5m", stamp=stamp)
-    from automation_tool.images import read_main_chart_symbol
+    from automation_tool.images import get_active_main_symbol, read_main_chart_symbol
 
-    main_s = read_main_chart_symbol(charts_dir)
+    charts_dir = args.charts_dir or default_charts_dir()
+    main_for_tv = get_active_main_symbol()
+    paths: list[Path] = []
+    tv_chart_payloads: list[ChartOpenAIPayload] = []
+
+    if not args.no_tradingview:
+        tv_plan = [
+            {
+                "symbol": main_for_tv,
+                "intervals": [
+                    {
+                        "label": "15 phút",
+                        "slug": "15m_ict",
+                        "indicator_profile": "ict_killzones",
+                    },
+                    {"label": "5 phút", "slug": "5m"},
+                ],
+            }
+        ]
+        tv_paths = capture_charts(
+            coinmap_yaml=cfg_tv,
+            charts_dir=args.charts_dir,
+            storage_state_path=storage,
+            email=s.coinmap_email,
+            password=s.coinmap_password,
+            tradingview_password=s.tradingview_password,
+            save_storage_state=not args.no_save_storage,
+            headless=not args.headed,
+            reuse_browser_context=None,
+            main_chart_symbol=args.main_symbol,
+            enable_coinmap=False,
+            enable_tradingview=True,
+            clear_charts_before_capture=True,
+            tradingview_capture_plan=tv_plan,
+            tradingview_force_screenshot=True,
+        )
+        paths.extend(tv_paths)
+        stamp = stamp_from_capture_paths(paths)
+        if not stamp:
+            raise SystemExit(
+                "update-scalp: không có stamp sau capture TradingView; kiểm tra tradingview_capture và charts_dir."
+            )
+        main_s = read_main_chart_symbol(charts_dir)
+        cm_paths = capture_charts(
+            coinmap_yaml=cfg_cap,
+            charts_dir=args.charts_dir,
+            storage_state_path=storage,
+            email=s.coinmap_email,
+            password=s.coinmap_password,
+            tradingview_password=s.tradingview_password,
+            save_storage_state=not args.no_save_storage,
+            headless=not args.headed,
+            reuse_browser_context=None,
+            main_chart_symbol=args.main_symbol,
+            enable_coinmap=True,
+            enable_tradingview=False,
+            clear_charts_before_capture=False,
+            stamp_override=stamp,
+            coinmap_capture_intervals=("5m",),
+        )
+        paths.extend(cm_paths)
+        for slug in ("15m_ict", "5m"):
+            tv_chart_payloads.extend(
+                _tradingview_slot_openai_payload(
+                    charts_dir, stamp=stamp, symbol=main_s, interval_slug=slug
+                )
+            )
+        _log.info(
+            "update-scalp: TradingView 15m_ict+M5 trước Coinmap | tv_files=%s | stamp=%s | tv_payloads=%s",
+            len(tv_paths),
+            stamp,
+            len(tv_chart_payloads),
+        )
+        if len(tv_chart_payloads) < 2:
+            print(
+                f"Warning: expected 2 TradingView slots (15m_ict, 5m) for OpenAI; "
+                f"got {len(tv_chart_payloads)} payload(s) (stamp={stamp!r}, symbol={main_s}).",
+                file=sys.stderr,
+            )
+    else:
+        paths = capture_charts(
+            coinmap_yaml=cfg_cap,
+            charts_dir=args.charts_dir,
+            storage_state_path=storage,
+            email=s.coinmap_email,
+            password=s.coinmap_password,
+            tradingview_password=s.tradingview_password,
+            save_storage_state=not args.no_save_storage,
+            headless=not args.headed,
+            reuse_browser_context=None,
+            main_chart_symbol=args.main_symbol,
+            clear_charts_before_capture=True,
+            coinmap_capture_intervals=("5m",),
+        )
+        stamp = stamp_from_capture_paths(paths)
+        main_s = read_main_chart_symbol(charts_dir)
+
+    print(f"Captured {len(paths)} file(s) for update-scalp run.")
+    m5 = coinmap_main_pair_interval_json_path(charts_dir, "5m", stamp=stamp)
     _log.info(
         "update-scalp: capture xong | %s file(s) | stamp=%s | M5=%s (Coinmap M15 không đính kèm OpenAI)",
         len(paths),
@@ -3002,61 +3110,6 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
         "update-scalp: M5 raw → coinmap_merged | raw=%s | merged=%s", m5, m5_merged
     )
     coinmap_paths: list[Path] = [m5_merged]
-
-    tv_chart_payloads: list[ChartOpenAIPayload] = []
-    if not args.no_tradingview:
-        if not stamp:
-            _log.warning("update-scalp: skip TradingView capture because stamp is missing")
-        else:
-            tv_plan = [
-                {
-                    "symbol": main_s,
-                    "intervals": [
-                        {
-                            "label": "15 phút",
-                            "slug": "15m_ict",
-                            "indicator_profile": "ict_killzones",
-                        },
-                        {"label": "5 phút", "slug": "5m"},
-                    ],
-                }
-            ]
-            tv_paths = capture_charts(
-                coinmap_yaml=cfg_tv,
-                charts_dir=charts_dir,
-                storage_state_path=storage,
-                email=s.coinmap_email,
-                password=s.coinmap_password,
-                tradingview_password=s.tradingview_password,
-                save_storage_state=not args.no_save_storage,
-                headless=not args.headed,
-                reuse_browser_context=None,
-                main_chart_symbol=main_s,
-                enable_coinmap=False,
-                enable_tradingview=True,
-                clear_charts_before_capture=False,
-                stamp_override=stamp,
-                tradingview_capture_plan=tv_plan,
-                tradingview_force_screenshot=True,
-            )
-            paths.extend(tv_paths)
-            for slug in ("15m_ict", "5m"):
-                tv_chart_payloads.extend(
-                    _tradingview_slot_openai_payload(
-                        charts_dir, stamp=stamp, symbol=main_s, interval_slug=slug
-                    )
-                )
-            _log.info(
-                "update-scalp: TradingView 15m_ict+M5 capture xong | %s file(s) | payloads=%s",
-                len(tv_paths),
-                len(tv_chart_payloads),
-            )
-            if len(tv_chart_payloads) < 2:
-                print(
-                    f"Warning: expected 2 TradingView slots (15m_ict, 5m) for OpenAI; "
-                    f"got {len(tv_chart_payloads)} payload(s) (stamp={stamp!r}, symbol={main_s}).",
-                    file=sys.stderr,
-                )
 
     require_openai(s)
 
