@@ -406,8 +406,9 @@ def _run_update_scalp_pipeline_in_thread(
             if tail:
                 msg += "\n\nLast output:\n" + tail
             _send_status(settings, reply_chat_id, msg)
-    except Exception as e:
-        _send_status(settings, reply_chat_id, f"❌ /tim-scalp crashed: {e!r}")
+    except Exception:
+        # Do not post crash details to TELEGRAM_CHAT_ID (noise / sensitive); see local logs.
+        _log.exception("tim-scalp pipeline crashed")
     finally:
         with _PROC_LOCK:
             _PROCS[:] = [p for p in _PROCS if p.popen.poll() is None]
