@@ -73,6 +73,24 @@ def test_build_intraday_update_user_text_followup_legacy_split_files() -> None:
     assert "hai" in t and "M15" in t and "M5" in t
 
 
+def test_build_intraday_update_user_text_followup_m5_only() -> None:
+    t = build_intraday_update_user_text(first_after_all=False, coinmap_attachment_mode="m5_only")
+    assert "[INTRADAY_UPDATE]" in t
+    assert "một" in t
+    assert "M5" in t
+    assert "không M15" in t
+    assert "merged" not in t.lower()
+
+
+def test_build_intraday_update_user_text_first_after_all_m5_only() -> None:
+    t = build_intraday_update_user_text(first_after_all=True, coinmap_attachment_mode="m5_only")
+    assert "[INTRADAY_UPDATE]" in t
+    assert "hai" in t
+    assert "morning_full_analysis" in t
+    assert "M5" in t
+    assert "không đính kèm M15" in t
+
+
 def test_build_intraday_update_user_text_first_after_all_merged() -> None:
     t = build_intraday_update_user_text(first_after_all=True, coinmap_attachment_mode="merged")
     assert "[INTRADAY_UPDATE]" in t

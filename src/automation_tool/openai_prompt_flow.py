@@ -449,7 +449,8 @@ def run_prompt_two_step_flow(
 
 DEFAULT_UPDATE_PROMPT_TEMPLATE = (
     "[INTRADAY_UPDATE]\n"
-    "Cập nhật intraday: lần đầu sau [FULL_ANALYSIS] kèm morning_full_analysis.json + Coinmap merged (M15+M5).\n"
+    "Cập nhật intraday: lần đầu sau [FULL_ANALYSIS] kèm morning_full_analysis.json + Coinmap M5 "
+    "(CLI ``update`` không đính kèm Coinmap M15; có thể kèm TradingView 15m ICT + TV M5).\n"
 )
 
 _INTRADAY_UPDATE_PLAN_HINT = (
@@ -500,12 +501,34 @@ def build_intraday_update_user_text(
     * ``coinmap_attachment_mode="merged"`` (default): một file ``*_coinmap_<MAIN>_merged.json``
       (schema ``coinmap_merged``: ``frames`` 15m + 5m, ``session_profile`` chung).
     * ``coinmap_attachment_mode="legacy"``: như trước — file M15 và M5 tách riêng.
+    * ``coinmap_attachment_mode="m5_only"``: chỉ footprint Coinmap **M5** (không M15, không merged).
 
     * ``first_after_all=True``: morning JSON + Coinmap (merged hoặc hai file raw).
     * ``first_after_all=False``: chỉ Coinmap (merged hoặc M15+M5); nối chuỗi ``[INTRADAY_UPDATE]``.
     """
     time_line = format_intraday_update_time_line()
-    merged = str(coinmap_attachment_mode or "merged").strip().lower() != "legacy"
+    mode = str(coinmap_attachment_mode or "merged").strip().lower()
+    m5_only = mode == "m5_only"
+    merged = not m5_only and mode != "legacy"
+
+    if m5_only:
+        if first_after_all:
+            return (
+                "[INTRADAY_UPDATE]\n"
+                f"{time_line}"
+                "Phân tích buổi sáng (Schema A) nằm trong file **morning_full_analysis.json** đính kèm đầu tiên.\n"
+                "Đính kèm **hai** file JSON theo thứ tự: **(1)** morning_full_analysis.json, **(2)** một file "
+                "**Coinmap M5** (footprint cặp chính; không đính kèm M15).\n"
+                f"{_MORNING_CONTEXT_HINT}"
+                f"{_INTRADAY_UPDATE_PLAN_HINT}"
+            )
+        return (
+            "[INTRADAY_UPDATE]\n"
+            f"{time_line}"
+            "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
+            "Đính kèm **một** file JSON: **Coinmap M5** (footprint cặp chính; không M15).\n"
+            f"{_INTRADAY_UPDATE_PLAN_HINT}"
+        )
 
     if first_after_all:
         if merged:
@@ -555,7 +578,28 @@ def build_scalp_update_user_text(
     nhưng yêu cầu tìm plan scalp đẹp nhất và dùng label ``scalp_<timeframe>``.
     """
     time_line = format_intraday_update_time_line()
-    merged = str(coinmap_attachment_mode or "merged").strip().lower() != "legacy"
+    mode = str(coinmap_attachment_mode or "merged").strip().lower()
+    m5_only = mode == "m5_only"
+    merged = not m5_only and mode != "legacy"
+
+    if m5_only:
+        if first_after_all:
+            return (
+                "[INTRADAY_UPDATE]\n"
+                f"{time_line}"
+                "Phân tích buổi sáng (Schema A) nằm trong file **morning_full_analysis.json** đính kèm đầu tiên.\n"
+                "Đính kèm **hai** file JSON theo thứ tự: **(1)** morning_full_analysis.json, **(2)** một file "
+                "**Coinmap M5** (footprint cặp chính; không đính kèm M15).\n"
+                f"{_MORNING_CONTEXT_HINT}"
+                f"{_SCALP_UPDATE_PLAN_HINT}"
+            )
+        return (
+            "[INTRADAY_UPDATE]\n"
+            f"{time_line}"
+            "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
+            "Đính kèm **một** file JSON: **Coinmap M5** (footprint cặp chính; không M15).\n"
+            f"{_SCALP_UPDATE_PLAN_HINT}"
+        )
 
     if first_after_all:
         if merged:

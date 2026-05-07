@@ -706,7 +706,7 @@ def _parser() -> argparse.ArgumentParser:
     ups.add_argument(
         "--no-tradingview",
         action="store_true",
-        help="Skip TradingView 15m_ict capture step",
+        help="Skip TradingView 15m ICT + M5 screenshot capture for OpenAI",
     )
     ups.add_argument(
         "--zones-json",
@@ -2614,53 +2614,32 @@ def cmd_update(args: argparse.Namespace) -> None:
         reuse_browser_context=None,
         main_chart_symbol=args.main_symbol,
         clear_charts_before_capture=True,
-        coinmap_capture_intervals=("5m", "15m"),
+        coinmap_capture_intervals=("5m",),
     )
     charts_dir = args.charts_dir or default_charts_dir()
     print(f"Captured {len(paths)} file(s) for update run.")
     stamp = stamp_from_capture_paths(paths)
     m5 = coinmap_main_pair_interval_json_path(charts_dir, "5m", stamp=stamp)
-    m15 = coinmap_main_pair_interval_json_path(charts_dir, "15m", stamp=stamp)
-    from automation_tool.images import coinmap_merged_openai_files, read_main_chart_symbol
+    from automation_tool.images import read_main_chart_symbol
 
     main_s = read_main_chart_symbol(charts_dir)
-    _dxy_m, main_m = coinmap_merged_openai_files(
-        charts_dir, stamp, main_s
-    ) if stamp else (None, None)
     _log.info(
-        "update: capture xong | %s file(s) | stamp=%s | M15=%s | M5=%s | main_merged=%s",
+        "update: capture xong | %s file(s) | stamp=%s | M5=%s (Coinmap M15 không đính kèm OpenAI)",
         len(paths),
         stamp,
-        m15,
         m5,
-        main_m,
     )
-    use_merged_coinmap = main_m is not None and main_m.is_file()
-    coinmap_paths: list[Path]
-    if use_merged_coinmap:
-        coinmap_paths = [main_m]
-    else:
-        if m5 is None:
-            raise SystemExit(
-                f"No 5m Coinmap JSON under {charts_dir} after capture (stamp={stamp!r}). "
-                "Check coinmap_update.yaml capture_plan and api_data_export, or merged export."
-            )
-        if m15 is None:
-            raise SystemExit(
-                f"No 15m Coinmap JSON under {charts_dir} after capture (stamp={stamp!r}). "
-                "Check coinmap_update.yaml capture_plan includes 15m."
-            )
-        print(
-            f"Warning: {charts_dir} has no {stamp}_coinmap_{main_s}_merged.json; "
-            "using raw 15m + 5m JSON (legacy).",
-            file=sys.stderr,
+    if m5 is None:
+        raise SystemExit(
+            f"No 5m Coinmap JSON under {charts_dir} after capture (stamp={stamp!r}). "
+            "Check coinmap_update.yaml capture_plan and api_data_export."
         )
-        coinmap_paths = [m15, m5]
+    coinmap_paths: list[Path] = [m5]
 
-    tv_ict_payloads: list[ChartOpenAIPayload] = []
+    tv_chart_payloads: list[ChartOpenAIPayload] = []
     if not args.no_tradingview:
         if not stamp:
-            _log.warning("update: skip TradingView 15m_ict capture because stamp is missing")
+            _log.warning("update: skip TradingView capture because stamp is missing")
         else:
             tv_plan = [
                 {
@@ -2670,7 +2649,8 @@ def cmd_update(args: argparse.Namespace) -> None:
                             "label": "15 phút",
                             "slug": "15m_ict",
                             "indicator_profile": "ict_killzones",
-                        }
+                        },
+                        {"label": "5 phút", "slug": "5m"},
                     ],
                 }
             ]
@@ -2693,18 +2673,21 @@ def cmd_update(args: argparse.Namespace) -> None:
                 tradingview_force_screenshot=True,
             )
             paths.extend(tv_paths)
-            tv_ict_payloads = _tradingview_slot_openai_payload(
-                charts_dir, stamp=stamp, symbol=main_s, interval_slug="15m_ict"
-            )
+            for slug in ("15m_ict", "5m"):
+                tv_chart_payloads.extend(
+                    _tradingview_slot_openai_payload(
+                        charts_dir, stamp=stamp, symbol=main_s, interval_slug=slug
+                    )
+                )
             _log.info(
-                "update: TradingView 15m_ict capture xong | %s file(s) | payloads=%s",
+                "update: TradingView 15m_ict+M5 capture xong | %s file(s) | payloads=%s",
                 len(tv_paths),
-                len(tv_ict_payloads),
+                len(tv_chart_payloads),
             )
-            if not tv_ict_payloads:
+            if len(tv_chart_payloads) < 2:
                 print(
-                    f"Warning: TradingView 15m_ict was not found for OpenAI attachment "
-                    f"(stamp={stamp!r}, symbol={main_s}).",
+                    f"Warning: expected 2 TradingView slots (15m_ict, 5m) for OpenAI; "
+                    f"got {len(tv_chart_payloads)} payload(s) (stamp={stamp!r}, symbol={main_s}).",
                     file=sys.stderr,
                 )
 
@@ -2727,13 +2710,12 @@ def cmd_update(args: argparse.Namespace) -> None:
 
     user_msg = build_intraday_update_user_text(
         first_after_all=first_after_all,
-        coinmap_attachment_mode="merged" if use_merged_coinmap else "legacy",
+        coinmap_attachment_mode="m5_only",
     )
-    if tv_ict_payloads:
+    if tv_chart_payloads:
         user_msg += (
-            "\nĐính kèm thêm một ảnh TradingView 15m Session Liquidity Check / ICT Killzones "
-            "của cặp chính sau các file JSON Coinmap; dùng để kiểm tra liquidity pool/sweep "
-            "theo phiên.\n"
+            "\nĐính kèm thêm ảnh TradingView cặp chính sau JSON Coinmap: **15m** Session Liquidity Check "
+            "/ ICT Killzones và **5m** khung thường (không ICT).\n"
         )
 
     try:
@@ -2744,7 +2726,7 @@ def cmd_update(args: argparse.Namespace) -> None:
             user_text=user_msg,
             morning_snapshot_path=morning_snapshot,
             coinmap_json_paths=coinmap_paths,
-            extra_chart_payloads=tv_ict_payloads,
+            extra_chart_payloads=tv_chart_payloads,
             previous_response_id=prev_for_openai,
             vector_store_ids=s.openai_vector_store_ids,
             store=s.openai_responses_store,
@@ -2942,49 +2924,32 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
         reuse_browser_context=None,
         main_chart_symbol=args.main_symbol,
         clear_charts_before_capture=True,
-        coinmap_capture_intervals=("5m", "15m"),
+        coinmap_capture_intervals=("5m",),
     )
     charts_dir = args.charts_dir or default_charts_dir()
     print(f"Captured {len(paths)} file(s) for update-scalp run.")
     stamp = stamp_from_capture_paths(paths)
     m5 = coinmap_main_pair_interval_json_path(charts_dir, "5m", stamp=stamp)
-    m15 = coinmap_main_pair_interval_json_path(charts_dir, "15m", stamp=stamp)
-    from automation_tool.images import coinmap_merged_openai_files, read_main_chart_symbol
+    from automation_tool.images import read_main_chart_symbol
 
     main_s = read_main_chart_symbol(charts_dir)
-    _dxy_m, main_m = coinmap_merged_openai_files(
-        charts_dir, stamp, main_s
-    ) if stamp else (None, None)
     _log.info(
-        "update-scalp: capture xong | %s file(s) | stamp=%s | M15=%s | M5=%s | main_merged=%s",
-        len(paths), stamp, m15, m5, main_m,
+        "update-scalp: capture xong | %s file(s) | stamp=%s | M5=%s (Coinmap M15 không đính kèm OpenAI)",
+        len(paths),
+        stamp,
+        m5,
     )
-    use_merged_coinmap = main_m is not None and main_m.is_file()
-    coinmap_paths: list[Path]
-    if use_merged_coinmap:
-        coinmap_paths = [main_m]
-    else:
-        if m5 is None:
-            raise SystemExit(
-                f"No 5m Coinmap JSON under {charts_dir} after capture (stamp={stamp!r}). "
-                "Check coinmap_update.yaml capture_plan and api_data_export, or merged export."
-            )
-        if m15 is None:
-            raise SystemExit(
-                f"No 15m Coinmap JSON under {charts_dir} after capture (stamp={stamp!r}). "
-                "Check coinmap_update.yaml capture_plan includes 15m."
-            )
-        print(
-            f"Warning: {charts_dir} has no {stamp}_coinmap_{main_s}_merged.json; "
-            "using raw 15m + 5m JSON (legacy).",
-            file=sys.stderr,
+    if m5 is None:
+        raise SystemExit(
+            f"No 5m Coinmap JSON under {charts_dir} after capture (stamp={stamp!r}). "
+            "Check coinmap_update.yaml capture_plan and api_data_export."
         )
-        coinmap_paths = [m15, m5]
+    coinmap_paths: list[Path] = [m5]
 
-    tv_ict_payloads: list[ChartOpenAIPayload] = []
+    tv_chart_payloads: list[ChartOpenAIPayload] = []
     if not args.no_tradingview:
         if not stamp:
-            _log.warning("update-scalp: skip TradingView 15m_ict capture because stamp is missing")
+            _log.warning("update-scalp: skip TradingView capture because stamp is missing")
         else:
             tv_plan = [
                 {
@@ -2994,7 +2959,8 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
                             "label": "15 phút",
                             "slug": "15m_ict",
                             "indicator_profile": "ict_killzones",
-                        }
+                        },
+                        {"label": "5 phút", "slug": "5m"},
                     ],
                 }
             ]
@@ -3017,18 +2983,21 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
                 tradingview_force_screenshot=True,
             )
             paths.extend(tv_paths)
-            tv_ict_payloads = _tradingview_slot_openai_payload(
-                charts_dir, stamp=stamp, symbol=main_s, interval_slug="15m_ict"
-            )
+            for slug in ("15m_ict", "5m"):
+                tv_chart_payloads.extend(
+                    _tradingview_slot_openai_payload(
+                        charts_dir, stamp=stamp, symbol=main_s, interval_slug=slug
+                    )
+                )
             _log.info(
-                "update-scalp: TradingView 15m_ict capture xong | %s file(s) | payloads=%s",
+                "update-scalp: TradingView 15m_ict+M5 capture xong | %s file(s) | payloads=%s",
                 len(tv_paths),
-                len(tv_ict_payloads),
+                len(tv_chart_payloads),
             )
-            if not tv_ict_payloads:
+            if len(tv_chart_payloads) < 2:
                 print(
-                    f"Warning: TradingView 15m_ict was not found for OpenAI attachment "
-                    f"(stamp={stamp!r}, symbol={main_s}).",
+                    f"Warning: expected 2 TradingView slots (15m_ict, 5m) for OpenAI; "
+                    f"got {len(tv_chart_payloads)} payload(s) (stamp={stamp!r}, symbol={main_s}).",
                     file=sys.stderr,
                 )
 
@@ -3040,13 +3009,12 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
 
     user_msg = build_scalp_update_user_text(
         first_after_all=True,
-        coinmap_attachment_mode="merged" if use_merged_coinmap else "legacy",
+        coinmap_attachment_mode="m5_only",
     )
-    if tv_ict_payloads:
+    if tv_chart_payloads:
         user_msg += (
-            "\nĐính kèm thêm một ảnh TradingView 15m Session Liquidity Check / ICT Killzones "
-            "của cặp chính sau các file JSON Coinmap; dùng để kiểm tra liquidity pool/sweep "
-            "theo phiên.\n"
+            "\nĐính kèm thêm ảnh TradingView cặp chính sau JSON Coinmap: **15m** Session Liquidity Check "
+            "/ ICT Killzones và **5m** khung thường (không ICT).\n"
         )
 
     try:
@@ -3057,7 +3025,7 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
             user_text=user_msg,
             morning_snapshot_path=morning_snapshot,
             coinmap_json_paths=coinmap_paths,
-            extra_chart_payloads=tv_ict_payloads,
+            extra_chart_payloads=tv_chart_payloads,
             previous_response_id=prev_for_openai,
             vector_store_ids=s.openai_vector_store_ids,
             store=s.openai_responses_store,
