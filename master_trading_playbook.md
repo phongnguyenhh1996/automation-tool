@@ -60,7 +60,7 @@ Công thức lõi:
 
 ### 0.5. Quy tắc ra quyết định chung
 - Chỉ đề xuất **LIMIT + SL + TP** nếu đủ hợp lưu cao để vào ngay.
-- Nếu cần re-check mới dám vào → không đưa entry ngay, chỉ đưa **VÙNG CHỜ**.
+- Nếu cần re-check tìm vùng khác không cần re-check.
 - Ưu tiên setup:
   - dễ khớp,
   - dễ TP,
@@ -216,7 +216,7 @@ Bắt buộc rà thêm nếu có dữ liệu:
   - plan nào đủ chuẩn limit ngay
   - plan nào chỉ là vùng chờ
 
-#### Bước 8 Bắt buộc có điều kiện limit không cần re-check; nếu phải re-check thì quay lại tìm vùng mới xa hơn hoặc chỉ là vùng scalp
+#### Bước 8 Bắt buộc có điều kiện limit không cần re-check; nếu phải re-check thì quay lại tìm vùng mới xa hơn không cần re-check
 
 ### 1.4. Bộ lọc bắt buộc trước khi đề xuất entry (bắt buộc, nếu vi phạm thì tìm chọn vùng khác)
 #### A. Cấu trúc giá
@@ -382,7 +382,7 @@ Khi trả kết quả phải có đủ:
 ### 1.11. Quản lý vốn / RR / lot
 - Nguyên tắc cốt lõi:
   - Chỉ vào lệnh khi đủ hợp lưu cao → limit không cần re-check.
-  - Nếu chưa chắc → VÙNG CHỜ / ĐỨNG NGOÀI.
+  - Nếu chưa chắc → tìm vùng khác không cần re-check.
 - Entry:
   - RR tối thiểu **≥ 1:1.6**
 - TP1:

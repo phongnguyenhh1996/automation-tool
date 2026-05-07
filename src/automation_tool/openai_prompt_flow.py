@@ -459,8 +459,9 @@ _INTRADAY_UPDATE_PLAN_HINT = (
 )
 
 _MORNING_CONTEXT_HINT = (
-    "Bắt buộc đọc object `context` trong morning_full_analysis.json để kế thừa DXY / macro bias, "
-    "cấu trúc H4/H1 và H1 sáng; xem đây là snapshot chi tiết của bias buổi sáng trước khi đánh giá "
+    "Bắt buộc đọc object `context` trong morning_full_analysis.json: nhánh `DXY` "
+    "(H4, H1, M15, Footprint_M15) cho DXY / macro bias; nhánh cặp chính (key = đúng mã symbol, "
+    "vd. `XAUUSD`) với H4 và H1; xem đây là snapshot chi tiết bias buổi sáng trước khi đánh giá "
     "footprint intraday.\n"
 )
 

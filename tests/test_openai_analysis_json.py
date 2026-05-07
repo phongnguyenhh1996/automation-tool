@@ -57,9 +57,16 @@ def test_schema_a_phan_tich_cham_diem_parses_without_out_chi_tiet() -> None:
 def test_schema_a_context_object_parses_for_intraday_update_snapshot() -> None:
     data = {
         "context": {
-            "dxy_macro_bias": "DXY H4/H1 còn bullish, ưu tiên SELL XAUUSD nếu vàng yếu.",
-            "h4_h1_structure": "XAUUSD H4 sideway tại premium, H1 có CHoCH giảm.",
-            "h1_morning": "Buổi sáng H1 đang retest POI, chưa sweep liquidity.",
+            "DXY": {
+                "H4": "Bullish",
+                "H1": "Trên POC",
+                "M15": "Sideway",
+                "Footprint_M15": "CVD chưa đảo",
+            },
+            "XAUUSD": {
+                "H4": "Premium sideway",
+                "H1": "CHoCH giảm, retest POI",
+            },
         },
         "phan_tich_cham_diem": "PLAN CHÍNH",
         "output_ngan_gon": "Tóm tắt.",
