@@ -2654,7 +2654,16 @@ def cmd_update(args: argparse.Namespace) -> None:
             f"No 5m Coinmap JSON under {charts_dir} after capture (stamp={stamp!r}). "
             "Check coinmap_update.yaml capture_plan and api_data_export."
         )
-    coinmap_paths: list[Path] = [m5]
+    try:
+        m5_merged = write_openai_coinmap_merged_from_raw_export(m5)
+    except Exception as e:
+        raise SystemExit(
+            f"update: không build được coinmap_merged từ raw M5 ({m5}): {e}"
+        ) from e
+    _log.info(
+        "update: M5 raw → coinmap_merged | raw=%s | merged=%s", m5, m5_merged
+    )
+    coinmap_paths: list[Path] = [m5_merged]
 
     tv_chart_payloads: list[ChartOpenAIPayload] = []
     if not args.no_tradingview:
@@ -2730,7 +2739,7 @@ def cmd_update(args: argparse.Namespace) -> None:
 
     user_msg = build_intraday_update_user_text(
         first_after_all=first_after_all,
-        coinmap_attachment_mode="m5_only",
+        coinmap_attachment_mode="merged_m5",
     )
     if tv_chart_payloads:
         user_msg += (
@@ -2983,7 +2992,16 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
             f"No 5m Coinmap JSON under {charts_dir} after capture (stamp={stamp!r}). "
             "Check coinmap_update.yaml capture_plan and api_data_export."
         )
-    coinmap_paths: list[Path] = [m5]
+    try:
+        m5_merged = write_openai_coinmap_merged_from_raw_export(m5)
+    except Exception as e:
+        raise SystemExit(
+            f"update-scalp: không build được coinmap_merged từ raw M5 ({m5}): {e}"
+        ) from e
+    _log.info(
+        "update-scalp: M5 raw → coinmap_merged | raw=%s | merged=%s", m5, m5_merged
+    )
+    coinmap_paths: list[Path] = [m5_merged]
 
     tv_chart_payloads: list[ChartOpenAIPayload] = []
     if not args.no_tradingview:
@@ -3048,7 +3066,7 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
 
     user_msg = build_scalp_update_user_text(
         first_after_all=True,
-        coinmap_attachment_mode="m5_only",
+        coinmap_attachment_mode="merged_m5",
     )
     if tv_chart_payloads:
         user_msg += (

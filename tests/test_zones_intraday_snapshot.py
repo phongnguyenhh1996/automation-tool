@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from automation_tool.openai_prompt_flow import build_intraday_update_user_text
+from automation_tool.openai_prompt_flow import (
+    build_intraday_update_user_text,
+    build_scalp_update_user_text,
+)
 from automation_tool.zones_state import (
     Zone,
     ZonesState,
@@ -109,6 +112,74 @@ def test_build_intraday_update_user_text_first_after_all_legacy_three_files() ->
     assert "ba" in t
     assert "morning_full_analysis" in t
     assert "M15" in t and "M5" in t
+
+
+def test_build_intraday_update_user_text_followup_merged_m5() -> None:
+    t = build_intraday_update_user_text(
+        first_after_all=False, coinmap_attachment_mode="merged_m5"
+    )
+    assert "[INTRADAY_UPDATE]" in t
+    assert "một" in t
+    assert "Coinmap merged" in t
+    assert "5m" in t
+    assert "không M15" in t
+    assert "morning_full_analysis" not in t
+
+
+def test_build_intraday_update_user_text_first_after_all_merged_m5() -> None:
+    t = build_intraday_update_user_text(
+        first_after_all=True, coinmap_attachment_mode="merged_m5"
+    )
+    assert "[INTRADAY_UPDATE]" in t
+    assert "hai" in t
+    assert "morning_full_analysis" in t
+    assert "Coinmap merged" in t
+    assert "5m" in t
+    assert "không đính kèm M15" in t
+
+
+def test_build_intraday_update_user_text_merged_m5_only_alias() -> None:
+    a = build_intraday_update_user_text(
+        first_after_all=True, coinmap_attachment_mode="merged_m5"
+    )
+    b = build_intraday_update_user_text(
+        first_after_all=True, coinmap_attachment_mode="merged_m5_only"
+    )
+    assert a == b
+
+
+def test_build_scalp_update_user_text_first_after_all_merged_m5() -> None:
+    t = build_scalp_update_user_text(
+        first_after_all=True, coinmap_attachment_mode="merged_m5"
+    )
+    assert "[INTRADAY_UPDATE]" in t
+    assert "hai" in t
+    assert "morning_full_analysis" in t
+    assert "Coinmap merged" in t
+    assert "5m" in t
+    assert "không đính kèm M15" in t
+
+
+def test_build_scalp_update_user_text_followup_merged_m5() -> None:
+    t = build_scalp_update_user_text(
+        first_after_all=False, coinmap_attachment_mode="merged_m5"
+    )
+    assert "[INTRADAY_UPDATE]" in t
+    assert "một" in t
+    assert "Coinmap merged" in t
+    assert "5m" in t
+    assert "không M15" in t
+    assert "morning_full_analysis" not in t
+
+
+def test_build_scalp_update_user_text_merged_m5_only_alias() -> None:
+    a = build_scalp_update_user_text(
+        first_after_all=True, coinmap_attachment_mode="merged_m5"
+    )
+    b = build_scalp_update_user_text(
+        first_after_all=True, coinmap_attachment_mode="merged_m5_only"
+    )
+    assert a == b
 
 
 def test_format_intraday_update_time_line() -> None:

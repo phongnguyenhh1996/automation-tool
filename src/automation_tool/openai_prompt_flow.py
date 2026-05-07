@@ -501,6 +501,8 @@ def build_intraday_update_user_text(
 
     * ``coinmap_attachment_mode="merged"`` (default): một file ``*_coinmap_<MAIN>_merged.json``
       (schema ``coinmap_merged``: ``frames`` 15m + 5m, ``session_profile`` chung).
+    * ``coinmap_attachment_mode="merged_m5"``: file ``coinmap_merged`` chỉ có khung **5m** trong
+      ``frames`` (build từ raw M5 qua ``write_openai_coinmap_merged_from_raw_export``).
     * ``coinmap_attachment_mode="legacy"``: như trước — file M15 và M5 tách riêng.
     * ``coinmap_attachment_mode="m5_only"``: chỉ footprint Coinmap **M5** (không M15, không merged).
 
@@ -510,7 +512,29 @@ def build_intraday_update_user_text(
     time_line = format_intraday_update_time_line()
     mode = str(coinmap_attachment_mode or "merged").strip().lower()
     m5_only = mode == "m5_only"
-    merged = not m5_only and mode != "legacy"
+    merged_m5 = mode in ("merged_m5", "merged_m5_only")
+    merged = not m5_only and not merged_m5 and mode != "legacy"
+
+    if merged_m5:
+        if first_after_all:
+            return (
+                "[INTRADAY_UPDATE]\n"
+                f"{time_line}"
+                "Phân tích buổi sáng (Schema A) nằm trong file **morning_full_analysis.json** đính kèm đầu tiên.\n"
+                "Đính kèm **hai** file JSON theo thứ tự: **(1)** morning_full_analysis.json, **(2)** một file "
+                "**Coinmap merged** cho cặp chính (cùng schema ``coinmap_merged`` nhưng ``frames`` chỉ có "
+                "khung **5m**; không đính kèm M15).\n"
+                f"{_MORNING_CONTEXT_HINT}"
+                f"{_INTRADAY_UPDATE_PLAN_HINT}"
+            )
+        return (
+            "[INTRADAY_UPDATE]\n"
+            f"{time_line}"
+            "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
+            "Đính kèm **một** file JSON: **Coinmap merged** cho cặp chính (schema ``coinmap_merged`` chỉ có "
+            "khung **5m**; không M15).\n"
+            f"{_INTRADAY_UPDATE_PLAN_HINT}"
+        )
 
     if m5_only:
         if first_after_all:
@@ -577,11 +601,39 @@ def build_scalp_update_user_text(
     """
     User message cho ``coinmap-automation update-scalp``: giống ``build_intraday_update_user_text``
     nhưng yêu cầu tìm plan scalp đẹp nhất và dùng label ``scalp_<timeframe>``.
+
+    * ``coinmap_attachment_mode="merged"`` (default): file ``coinmap_merged`` đa khung (15m + 5m).
+    * ``coinmap_attachment_mode="merged_m5"``: file ``coinmap_merged`` chỉ có khung **5m** trong
+      ``frames`` (build từ raw M5 qua ``write_openai_coinmap_merged_from_raw_export``).
+    * ``coinmap_attachment_mode="m5_only"``: footprint Coinmap **M5** raw (không merged, không M15).
+    * ``coinmap_attachment_mode="legacy"``: file M15 và M5 tách riêng.
     """
     time_line = format_intraday_update_time_line()
     mode = str(coinmap_attachment_mode or "merged").strip().lower()
     m5_only = mode == "m5_only"
-    merged = not m5_only and mode != "legacy"
+    merged_m5 = mode in ("merged_m5", "merged_m5_only")
+    merged = not m5_only and not merged_m5 and mode != "legacy"
+
+    if merged_m5:
+        if first_after_all:
+            return (
+                "[INTRADAY_UPDATE]\n"
+                f"{time_line}"
+                "Phân tích buổi sáng (Schema A) nằm trong file **morning_full_analysis.json** đính kèm đầu tiên.\n"
+                "Đính kèm **hai** file JSON theo thứ tự: **(1)** morning_full_analysis.json, **(2)** một file "
+                "**Coinmap merged** cho cặp chính (cùng schema ``coinmap_merged`` nhưng ``frames`` chỉ có "
+                "khung **5m**; không đính kèm M15).\n"
+                f"{_MORNING_CONTEXT_HINT}"
+                f"{_SCALP_UPDATE_PLAN_HINT}"
+            )
+        return (
+            "[INTRADAY_UPDATE]\n"
+            f"{time_line}"
+            "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
+            "Đính kèm **một** file JSON: **Coinmap merged** cho cặp chính (schema ``coinmap_merged`` chỉ có "
+            "khung **5m**; không M15).\n"
+            f"{_SCALP_UPDATE_PLAN_HINT}"
+        )
 
     if m5_only:
         if first_after_all:
