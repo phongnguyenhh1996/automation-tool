@@ -142,7 +142,7 @@ chart_download:
     auto_from_to_mode: vn_session
     vn_session_timezone: Asia/Ho_Chi_Minh
     vn_session_start_hour: 5
-    auto_countback: 100
+    auto_countback: 150
     auto_time_padding_ms: 0
     # Gộp response khi mode: network_capture (kéo chart → API gọi lại).
     merge_repeated_endpoint_responses: true
