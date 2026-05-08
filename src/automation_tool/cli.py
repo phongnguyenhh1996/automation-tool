@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from automation_tool.coinmap import capture_charts, load_coinmap_yaml
-from automation_tool.coinmap_merged import write_openai_coinmap_merged_from_raw_export
 from automation_tool.config import (
     default_charts_dir,
     default_coinmap_config_path,
@@ -235,8 +234,8 @@ def _parser() -> argparse.ArgumentParser:
         "capture-m5-footprint",
         aliases=["capture-m5-merged"],
         help=(
-            "Capture Coinmap footprint M5 cho cặp chính và transform thành "
-            "coinmap_merged JSON; không gọi OpenAI."
+            "Capture Coinmap footprint M5 cho cặp chính (raw API export); "
+            "không tạo file merged; không gọi OpenAI."
         ),
     )
     cm5.add_argument(
@@ -1609,8 +1608,7 @@ def _first_coinmap_m5_json_path(paths: Sequence[Path]) -> Optional[Path]:
 
 def cmd_capture_m5_footprint(args: argparse.Namespace) -> None:
     """
-    Manual [TRADE_MANAGEMENT]-style data prep:
-    Coinmap M5 raw export -> compact ``coinmap_merged`` JSON, without OpenAI.
+    Manual data prep: capture Coinmap M5 raw API export only (no merged file, no OpenAI).
     """
     s = load_settings()
     cfg = args.config or default_coinmap_update_config_path()
@@ -1639,6 +1637,7 @@ def cmd_capture_m5_footprint(args: argparse.Namespace) -> None:
         clear_charts_before_capture=True,
         require_browser_service=use_service,
         coinmap_capture_intervals=("5m",),
+        write_coinmap_merged_after_capture=False,
     )
     charts_dir = args.charts_dir or default_charts_dir()
     stamp = stamp_from_capture_paths(paths)
@@ -1654,15 +1653,9 @@ def cmd_capture_m5_footprint(args: argparse.Namespace) -> None:
             f"capture-m5-footprint: no Coinmap M5 JSON under {charts_dir} after capture "
             f"(stamp={stamp!r})."
         )
-    merged = write_openai_coinmap_merged_from_raw_export(raw_m5)
-    _log.info(
-        "capture-m5-footprint: xong | raw_m5=%s | merged=%s",
-        raw_m5,
-        merged,
-    )
+    _log.info("capture-m5-footprint: xong | raw_m5=%s", raw_m5)
     print(f"Captured {len(paths)} file(s).")
     print(f"Raw Coinmap M5 JSON: {raw_m5}")
-    print(f"Merged JSON: {merged}")
 
 
 def cmd_tvdatafeed_login(args: argparse.Namespace) -> None:
@@ -1943,6 +1936,7 @@ def _intraday_tv_then_coinmap_m5_capture(
             clear_charts_before_capture=False,
             stamp_override=stamp,
             coinmap_capture_intervals=("5m",),
+            write_coinmap_merged_after_capture=False,
         )
         paths.extend(cm_paths)
         for slug in ("15m_ict", "5m"):
@@ -1978,6 +1972,7 @@ def _intraday_tv_then_coinmap_m5_capture(
             main_chart_symbol=main_chart_symbol,
             clear_charts_before_capture=True,
             coinmap_capture_intervals=("5m",),
+            write_coinmap_merged_after_capture=False,
         )
         stamp = stamp_from_capture_paths(paths)
         main_s = read_main_chart_symbol(charts_dir)
@@ -2438,6 +2433,7 @@ def cmd_all(args: argparse.Namespace) -> None:
         reuse_browser_context=None,
         main_chart_symbol=args.main_symbol,
         tradingview_force_screenshot=True,
+        write_coinmap_merged_after_capture=False,
     )
     charts_dir = args.charts_dir or default_charts_dir()
     n_art = len(paths)
@@ -2765,7 +2761,7 @@ def cmd_update(args: argparse.Namespace) -> None:
     print(f"Captured {len(paths)} file(s) for update run.")
     m5 = coinmap_main_pair_interval_json_path(charts_dir, "5m", stamp=stamp)
     _log.info(
-        "update: capture xong | %s file(s) | stamp=%s | M5=%s (Coinmap M15 không đính kèm OpenAI)",
+        "update: capture xong | %s file(s) | stamp=%s | M5 raw OpenAI=%s",
         len(paths),
         stamp,
         m5,
@@ -2775,16 +2771,7 @@ def cmd_update(args: argparse.Namespace) -> None:
             f"No 5m Coinmap JSON under {charts_dir} after capture (stamp={stamp!r}). "
             "Check coinmap_update.yaml capture_plan and api_data_export."
         )
-    try:
-        m5_merged = write_openai_coinmap_merged_from_raw_export(m5)
-    except Exception as e:
-        raise SystemExit(
-            f"update: không build được coinmap_merged từ raw M5 ({m5}): {e}"
-        ) from e
-    _log.info(
-        "update: M5 raw → coinmap_merged | raw=%s | merged=%s", m5, m5_merged
-    )
-    coinmap_paths: list[Path] = [m5_merged]
+    coinmap_paths: list[Path] = [m5]
 
     require_openai(s)
 
@@ -2805,7 +2792,7 @@ def cmd_update(args: argparse.Namespace) -> None:
 
     user_msg = build_intraday_update_user_text(
         first_after_all=first_after_all,
-        coinmap_attachment_mode="merged_m5",
+        coinmap_attachment_mode="m5_only",
     )
     if tv_chart_payloads:
         user_msg += (
@@ -3045,7 +3032,7 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
     print(f"Captured {len(paths)} file(s) for update-scalp run.")
     m5 = coinmap_main_pair_interval_json_path(charts_dir, "5m", stamp=stamp)
     _log.info(
-        "update-scalp: capture xong | %s file(s) | stamp=%s | M5=%s (OpenAI: merged M5 + TV 15m_ict/5m nếu bật)",
+        "update-scalp: capture xong | %s file(s) | stamp=%s | M5 raw OpenAI=%s (+ TV 15m_ict/5m nếu bật)",
         len(paths),
         stamp,
         m5,
@@ -3055,16 +3042,7 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
             f"No 5m Coinmap JSON under {charts_dir} after capture (stamp={stamp!r}). "
             "Check coinmap_update.yaml capture_plan and api_data_export."
         )
-    try:
-        m5_merged = write_openai_coinmap_merged_from_raw_export(m5)
-    except Exception as e:
-        raise SystemExit(
-            f"update-scalp: không build được coinmap_merged từ raw M5 ({m5}): {e}"
-        ) from e
-    _log.info(
-        "update-scalp: M5 raw → coinmap_merged | raw=%s | merged=%s", m5, m5_merged
-    )
-    coinmap_paths: list[Path] = [m5_merged]
+    coinmap_paths: list[Path] = [m5]
 
     require_openai(s)
 
@@ -3074,7 +3052,7 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
 
     user_msg = build_scalp_update_user_text(
         first_after_all=True,
-        coinmap_attachment_mode="merged_m5",
+        coinmap_attachment_mode="m5_only",
     )
     if tv_chart_payloads:
         user_msg += (

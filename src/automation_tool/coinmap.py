@@ -3345,6 +3345,7 @@ def _capture_charts_in_context(
     progress_hook: Optional[Callable[[], None]] = None,
     coinmap_only_retry_paths: Optional[list[Path]] = None,
     coinmap_capture_intervals: Optional[Sequence[str]] = None,
+    write_coinmap_merged_after_capture: bool = True,
 ) -> list[Path]:
     """
     Run Coinmap (+ optional TradingView) capture using an existing browser context.
@@ -3584,7 +3585,12 @@ def _capture_charts_in_context(
         except Exception:
             pass
 
-    if isinstance(cd, dict) and cd.get("enabled", False) and _api_export_config(cd) is not None:
+    if (
+        write_coinmap_merged_after_capture
+        and isinstance(cd, dict)
+        and cd.get("enabled", False)
+        and _api_export_config(cd) is not None
+    ):
         try:
             from automation_tool.coinmap_merged import run_coinmap_merged_writes
 
@@ -3620,6 +3626,7 @@ def capture_charts(
     coinmap_capture_intervals: Optional[Sequence[str]] = None,
     tradingview_capture_plan: Optional[Sequence[dict[str, Any]]] = None,
     tradingview_force_screenshot: bool = False,
+    write_coinmap_merged_after_capture: bool = True,
 ) -> list[Path]:
     """
     Optionally clear prior images in charts_dir, then log in (if credentials given),
@@ -3635,6 +3642,9 @@ def capture_charts(
 
     If ``coinmap_capture_intervals`` is set (e.g. ``("5m",)``), only those Coinmap
     multi-shot / bearer API steps run; other intervals in the YAML are skipped.
+
+    If ``write_coinmap_merged_after_capture`` is False, skip writing
+    ``*_coinmap_*_merged.json`` after API export (OpenAI step can attach raw exports).
     """
     from automation_tool.config import default_charts_dir
     from automation_tool.images import (
@@ -3734,6 +3744,7 @@ def capture_charts(
             progress_hook=progress_hook,
             coinmap_only_retry_paths=coinmap_only_retry_paths,
             coinmap_capture_intervals=coinmap_capture_intervals,
+            write_coinmap_merged_after_capture=write_coinmap_merged_after_capture,
         )
 
     vw = int(cfg.get("viewport_width", 1920))
@@ -3774,6 +3785,7 @@ def capture_charts(
                 progress_hook=progress_hook,
                 coinmap_only_retry_paths=coinmap_only_retry_paths,
                 coinmap_capture_intervals=coinmap_capture_intervals,
+                write_coinmap_merged_after_capture=write_coinmap_merged_after_capture,
             )
         finally:
             if use_browser_service:
