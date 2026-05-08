@@ -109,7 +109,8 @@ chart_download:
     auto_from_to_mode: vn_session
     vn_session_timezone: Asia/Ho_Chi_Minh
     vn_session_start_hour: 5
-    auto_countback: 100
+    # Chỉ cho update-scalp (file này). Luồng update thường dùng coinmap.yaml → auto_countback: 100.
+    auto_countback: 150
     auto_to_padding_ms: 180000
     auto_time_padding_ms: 0
     merge_repeated_endpoint_responses: true
