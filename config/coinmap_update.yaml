@@ -27,6 +27,8 @@ chart_download:
     - symbol: XAUUSD
       interval: "15m"
       watchlist_category: "forex 1"
+      api_query:
+        countback: "100"
   right_sidebar_container_class_prefix: "ChartDesktopPage_rightSidebar__"
   right_sidebar_toggle_click_force: true
   right_sidebar_action_button_class_prefix: "ChartDesktopPage_actionButton"

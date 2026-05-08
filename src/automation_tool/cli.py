@@ -1874,7 +1874,7 @@ def _intraday_tv_then_coinmap_m5_capture(
 ) -> tuple[list[Path], str | None, str, list[ChartOpenAIPayload]]:
     """
     Shared capture for ``update`` / ``update-scalp``: TradingView 15m ICT + 5m, then
-    Coinmap M5 reusing the same ``stamp``; or Coinmap M5 only when ``no_tradingview``.
+    Coinmap M15 + M5 reusing the same ``stamp``; or Coinmap-only when ``no_tradingview``.
     """
     from automation_tool.images import get_active_main_symbol, read_main_chart_symbol
 
@@ -1935,7 +1935,7 @@ def _intraday_tv_then_coinmap_m5_capture(
             enable_tradingview=False,
             clear_charts_before_capture=False,
             stamp_override=stamp,
-            coinmap_capture_intervals=("5m",),
+            coinmap_capture_intervals=("15m", "5m"),
             write_coinmap_merged_after_capture=False,
         )
         paths.extend(cm_paths)
@@ -1971,7 +1971,7 @@ def _intraday_tv_then_coinmap_m5_capture(
             reuse_browser_context=None,
             main_chart_symbol=main_chart_symbol,
             clear_charts_before_capture=True,
-            coinmap_capture_intervals=("5m",),
+            coinmap_capture_intervals=("15m", "5m"),
             write_coinmap_merged_after_capture=False,
         )
         stamp = stamp_from_capture_paths(paths)
@@ -2759,19 +2759,26 @@ def cmd_update(args: argparse.Namespace) -> None:
     )
 
     print(f"Captured {len(paths)} file(s) for update run.")
+    m15 = coinmap_main_pair_interval_json_path(charts_dir, "15m", stamp=stamp)
     m5 = coinmap_main_pair_interval_json_path(charts_dir, "5m", stamp=stamp)
     _log.info(
-        "update: capture xong | %s file(s) | stamp=%s | M5 raw OpenAI=%s",
+        "update: capture xong | %s file(s) | stamp=%s | M15 raw OpenAI=%s | M5 raw OpenAI=%s",
         len(paths),
         stamp,
+        m15,
         m5,
     )
+    if m15 is None:
+        raise SystemExit(
+            f"No 15m Coinmap JSON under {charts_dir} after capture (stamp={stamp!r}). "
+            "Check coinmap_update.yaml capture_plan and api_data_export."
+        )
     if m5 is None:
         raise SystemExit(
             f"No 5m Coinmap JSON under {charts_dir} after capture (stamp={stamp!r}). "
             "Check coinmap_update.yaml capture_plan and api_data_export."
         )
-    coinmap_paths: list[Path] = [m5]
+    coinmap_paths: list[Path] = [m15, m5]
 
     require_openai(s)
 
@@ -2792,7 +2799,7 @@ def cmd_update(args: argparse.Namespace) -> None:
 
     user_msg = build_intraday_update_user_text(
         first_after_all=first_after_all,
-        coinmap_attachment_mode="m5_only",
+        coinmap_attachment_mode="legacy",
     )
     if tv_chart_payloads:
         user_msg += (
@@ -3030,19 +3037,26 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
     )
 
     print(f"Captured {len(paths)} file(s) for update-scalp run.")
+    m15 = coinmap_main_pair_interval_json_path(charts_dir, "15m", stamp=stamp)
     m5 = coinmap_main_pair_interval_json_path(charts_dir, "5m", stamp=stamp)
     _log.info(
-        "update-scalp: capture xong | %s file(s) | stamp=%s | M5 raw OpenAI=%s (+ TV 15m_ict/5m nếu bật)",
+        "update-scalp: capture xong | %s file(s) | stamp=%s | M15 raw OpenAI=%s | M5 raw OpenAI=%s (+ TV 15m_ict/5m nếu bật)",
         len(paths),
         stamp,
+        m15,
         m5,
     )
+    if m15 is None:
+        raise SystemExit(
+            f"No 15m Coinmap JSON under {charts_dir} after capture (stamp={stamp!r}). "
+            "Check coinmap_update.yaml capture_plan and api_data_export."
+        )
     if m5 is None:
         raise SystemExit(
             f"No 5m Coinmap JSON under {charts_dir} after capture (stamp={stamp!r}). "
             "Check coinmap_update.yaml capture_plan and api_data_export."
         )
-    coinmap_paths: list[Path] = [m5]
+    coinmap_paths: list[Path] = [m15, m5]
 
     require_openai(s)
 
@@ -3052,7 +3066,7 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
 
     user_msg = build_scalp_update_user_text(
         first_after_all=True,
-        coinmap_attachment_mode="m5_only",
+        coinmap_attachment_mode="legacy",
     )
     if tv_chart_payloads:
         user_msg += (
