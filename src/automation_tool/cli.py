@@ -574,7 +574,7 @@ def _parser() -> argparse.ArgumentParser:
         "telegram-listen",
         help=(
             "Listen inbound Telegram messages in a channel/group (poll getUpdates). "
-            "Supports /full, /update, /tim-scalp."
+            "Supports /full, /update, /tim-scalp, /stop, /analyze-many, /ask, /ask-high."
         ),
     )
     tl.add_argument(

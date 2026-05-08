@@ -4,11 +4,20 @@ from types import SimpleNamespace
 
 import pytest
 
-from automation_tool.telegram_listen import TelegramListenParams, _explain_followup_model, run_telegram_listener
+from automation_tool.telegram_listen import (
+    TelegramListenParams,
+    _ASK_HIGH_FOLLOWUP_MODEL,
+    _explain_followup_model,
+    run_telegram_listener,
+)
 
 
 def test_explain_followup_model_uses_mini_even_when_override_is_set() -> None:
     assert _explain_followup_model("gpt-5.4") == "gpt-5.4-mini"
+
+
+def test_ask_high_model_is_full_gpt_54() -> None:
+    assert _ASK_HIGH_FOLLOWUP_MODEL == "gpt-5.4"
 
 
 def test_tim_scalp_command_starts_update_scalp_runner(monkeypatch) -> None:

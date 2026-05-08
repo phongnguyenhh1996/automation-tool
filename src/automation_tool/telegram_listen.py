@@ -21,6 +21,7 @@ from automation_tool.telegram_bot import send_message, send_openai_output_to_tel
 _log = logging.getLogger("automation_tool.telegram_listen")
 
 _EXPLAIN_FOLLOWUP_MODEL = "gpt-5.4-mini"
+_ASK_HIGH_FOLLOWUP_MODEL = "gpt-5.4"
 
 
 @dataclass(frozen=True)
@@ -94,7 +95,7 @@ def _message_thread_id_from_envelope(env: dict[str, Any]) -> Optional[int]:
 
 def _parse_command(text: str) -> tuple[Optional[str], str]:
     """
-    Parse "/full", "/update", "/stop", "/analyze-many", "/full@BotName".
+    Parse "/full", "/update", "/stop", "/analyze-many", "/ask", "/ask-high", "/full@BotName".
     Returns (cmd, args_text) where args_text is the remaining raw text (may be empty).
     """
     t = (text or "").strip()
@@ -163,6 +164,60 @@ def _send_status(settings: Settings, chat_id: str, text: str) -> None:
         )
     except Exception as e:
         _log.warning("Could not send Telegram status: %s", e)
+
+
+def _handle_telegram_ask_followup(
+    *,
+    settings: Settings,
+    listen_chat_id: str,
+    reply_to_message_id: Optional[int],
+    message_thread_id: Optional[int],
+    args_text: str,
+    model: str,
+    cmd_label: str,
+) -> None:
+    openai_response_id, noi_dung = _parse_ask_args(args_text)
+    if not openai_response_id or not noi_dung:
+        _send_status(
+            settings,
+            listen_chat_id,
+            f"Cú pháp: {cmd_label} <openai_response_id> <noi_dung>\n"
+            f"Ví dụ: {cmd_label} resp_abc123 Hãy tóm tắt 3 vùng giá và gợi ý trade_line.",
+        )
+        return
+    ask_body = (noi_dung or "").strip()
+    if not ask_body.upper().startswith("[RETROSPECTIVE"):
+        ask_body = f"[RETROSPECTIVE_ANALYSIS]\n{ask_body}"
+    try:
+        out_text, new_id = run_text_followup_responses(
+            api_key=settings.openai_api_key,
+            prompt_id=settings.openai_prompt_id,
+            prompt_version=settings.openai_prompt_version,
+            user_text=ask_body,
+            previous_response_id=openai_response_id,
+            vector_store_ids=settings.openai_vector_store_ids,
+            store=settings.openai_responses_store,
+            include=settings.openai_responses_include,
+            model=model,
+        )
+        if new_id:
+            out_text = f"(openai_response_id={new_id})\n\n{out_text}".strip()
+        send_openai_output_to_telegram(
+            bot_token=settings.telegram_bot_token,
+            chat_id=listen_chat_id,
+            raw=out_text,
+            default_parse_mode=settings.telegram_parse_mode,
+            summary_chat_id=None,
+            detail_chat_id=None,
+            reply_to_message_id=reply_to_message_id,
+            message_thread_id=message_thread_id,
+        )
+    except Exception as e:
+        _send_status(
+            settings,
+            listen_chat_id,
+            f"❌ {cmd_label} failed: {e!s}",
+        )
 
 
 def _spawn_managed_process(
@@ -526,53 +581,27 @@ def run_telegram_listener(
                     if cmd == "stop":
                         _stop_all_processes(settings, listen_chat_id)
                     elif cmd == "ask":
-                        mid = _message_id_from_envelope(env)
-                        thread_id = _message_thread_id_from_envelope(env)
-                        openai_response_id, noi_dung = _parse_ask_args(args_text)
-                        if not openai_response_id or not noi_dung:
-                            _send_status(
-                                settings,
-                                listen_chat_id,
-                                "Cú pháp: /ask <openai_response_id> <noi_dung>\n"
-                                "Ví dụ: /ask resp_abc123 Hãy tóm tắt 3 vùng giá và gợi ý trade_line.",
-                            )
-                            continue
-                        ask_body = (noi_dung or "").strip()
-                        if not ask_body.upper().startswith("[RETROSPECTIVE"):
-                            ask_body = f"[RETROSPECTIVE_ANALYSIS]\n{ask_body}"
-                        try:
-                            out_text, new_id = run_text_followup_responses(
-                                api_key=settings.openai_api_key,
-                                prompt_id=settings.openai_prompt_id,
-                                prompt_version=settings.openai_prompt_version,
-                                user_text=ask_body,
-                                previous_response_id=openai_response_id,
-                                vector_store_ids=settings.openai_vector_store_ids,
-                                store=settings.openai_responses_store,
-                                include=settings.openai_responses_include,
-                                model=_explain_followup_model(
-                                    resolved_openai_model(settings, params.openai_model)
-                                ),
-                            )
-                            # Best-effort: show the chained response id for traceability.
-                            if new_id:
-                                out_text = f"(openai_response_id={new_id})\n\n{out_text}".strip()
-                            send_openai_output_to_telegram(
-                                bot_token=settings.telegram_bot_token,
-                                chat_id=listen_chat_id,
-                                raw=out_text,
-                                default_parse_mode=settings.telegram_parse_mode,
-                                summary_chat_id=None,
-                                detail_chat_id=None,
-                                reply_to_message_id=mid,
-                                message_thread_id=thread_id,
-                            )
-                        except Exception as e:
-                            _send_status(
-                                settings,
-                                listen_chat_id,
-                                f"❌ /ask failed: {e!s}",
-                            )
+                        _handle_telegram_ask_followup(
+                            settings=settings,
+                            listen_chat_id=listen_chat_id,
+                            reply_to_message_id=_message_id_from_envelope(env),
+                            message_thread_id=_message_thread_id_from_envelope(env),
+                            args_text=args_text,
+                            model=_explain_followup_model(
+                                resolved_openai_model(settings, params.openai_model)
+                            ),
+                            cmd_label="/ask",
+                        )
+                    elif cmd == "ask-high":
+                        _handle_telegram_ask_followup(
+                            settings=settings,
+                            listen_chat_id=listen_chat_id,
+                            reply_to_message_id=_message_id_from_envelope(env),
+                            message_thread_id=_message_thread_id_from_envelope(env),
+                            args_text=args_text,
+                            model=_ASK_HIGH_FOLLOWUP_MODEL,
+                            cmd_label="/ask-high",
+                        )
                     elif cmd == "update":
                         mid = _message_id_from_envelope(env)
                         thread_id = _message_thread_id_from_envelope(env)
