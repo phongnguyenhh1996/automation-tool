@@ -25,7 +25,7 @@ if errorlevel 1 (
 echo [%date% %time%] INFO: Starting coinmap-automation update-scalp
 REM update-scalp: ghi accounts-scalp.json cạnh accounts.json, set MT5_ACCOUNTS_JSON, reconcile daemon-plan.
 REM Thêm --mt5-accounts-json đường dẫn nếu không dùng biến môi trường MT5_ACCOUNTS_JSON.
-coinmap-automation update-scalp --main-symbol XAUUSD %*
+coinmap-automation update-scalp %*
 set "EXIT_CODE=%ERRORLEVEL%"
 echo [%date% %time%] INFO: update-scalp finished with exit code %EXIT_CODE%
 
