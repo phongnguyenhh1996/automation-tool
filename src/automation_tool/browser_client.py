@@ -224,6 +224,28 @@ def is_service_responding() -> bool:
         return False
 
 
+def try_tv_prewarm_reset(main_symbol: Optional[str] = None) -> None:
+    """
+    Best-effort: tell browser_service to re-open TradingView warm tabs for ``main_symbol``.
+    No-op when service is down or RPC fails.
+    """
+    try:
+        from automation_tool.browser_protocol import METHOD_TV_PREWARM_RESET
+
+        if not is_service_responding():
+            return
+        c = BrowserClient.from_state_file()
+        if not c:
+            return
+        c.request(
+            METHOD_TV_PREWARM_RESET,
+            {"main_symbol": (main_symbol or "").strip()},
+            timeout_s=180.0,
+        )
+    except Exception:
+        pass
+
+
 def wait_for_service_ping(*, timeout_s: float = 20.0, poll_s: float = 0.25) -> bool:
     """
     Poll until the control plane answers ping or timeout.

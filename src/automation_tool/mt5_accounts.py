@@ -11,6 +11,8 @@ hành vi ``mode: from_trade``). Có ``lot`` thì ``fixed`` / ``max_notional_usd`
 
 **update-scalp:** optional ``\"update-scalp\": true`` trên từng object — :func:`sync_accounts_scalp_json`
 lọc ra ``accounts-scalp.json`` cho luồng ``coinmap-automation update-scalp``.
+``daemon-plan`` khi vào lệnh zone ``source=update-scalp`` dùng :func:`load_mt5_accounts_for_zone_entry`
+để chỉ đọc ``accounts-scalp.json`` (không fallback full list).
 
 **Bảo mật:** không commit file chứa mật khẩu; hạn chế quyền đọc (ví dụ ``chmod 600``).
 """
@@ -18,11 +20,16 @@ lọc ra ``accounts-scalp.json`` cho luồng ``coinmap-automation update-scalp``
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Optional, Union
+
+_log = logging.getLogger(__name__)
+
+SOURCE_UPDATE_SCALP = "update-scalp"
 
 from automation_tool.mt5_openai_parse import ParsedTrade
 
@@ -314,6 +321,53 @@ def resolve_mt5_accounts_path(cli_path: Optional[Path]) -> Optional[Path]:
 def load_mt5_accounts_for_cli(cli_path: Optional[Path]) -> Optional[list[MT5AccountEntry]]:
     """Tiện ích cho CLI / params: một đường dẫn optional + env."""
     return load_mt5_accounts_optional(resolve_mt5_accounts_path(cli_path))
+
+
+def _is_update_scalp_zone_source(zone_source: str) -> bool:
+    return (zone_source or "").strip().lower() == SOURCE_UPDATE_SCALP
+
+
+def load_mt5_accounts_for_zone_entry(
+    *,
+    zone_source: str,
+    cli_path: Optional[Path],
+) -> Optional[list[MT5AccountEntry]]:
+    """
+    Đọc danh sách account để **đặt lệnh** theo ``Zone.source``.
+
+    Với ``source`` = ``update-scalp``: chỉ dùng ``accounts-scalp.json`` cùng thư mục với file
+    accounts đã resolve (giống :func:`sync_accounts_scalp_json`). Nếu đường dẫn hiện tại đã là
+    ``accounts-scalp.json`` thì giữ nguyên.
+
+    Giá trị trả về:
+
+    - ``None`` — không có file accounts (chế độ một terminal / ``execute_trade`` đơn).
+    - ``[]`` — zone ``update-scalp`` nhưng không có hoặc không đọc được ``accounts-scalp.json``:
+      **không** được fallback sang full ``accounts.json``.
+    - Danh sách khác rỗng — multi-account như cũ.
+    """
+    if not _is_update_scalp_zone_source(zone_source):
+        return load_mt5_accounts_for_cli(cli_path)
+
+    base = resolve_mt5_accounts_path(cli_path)
+    if base is None or not base.is_file():
+        return load_mt5_accounts_for_cli(cli_path)
+
+    path_to_load = (
+        base if base.name.lower() == "accounts-scalp.json" else base.parent / "accounts-scalp.json"
+    )
+    if not path_to_load.is_file():
+        return []
+
+    try:
+        return load_mt5_accounts_from_path(path_to_load)
+    except ValueError as e:
+        _log.warning(
+            "load_mt5_accounts_for_zone_entry: invalid %s: %s",
+            path_to_load,
+            e,
+        )
+        return []
 
 
 def primary_account(accounts: list[MT5AccountEntry]) -> MT5AccountEntry:

@@ -180,6 +180,7 @@ chart_download:
 # Second browser tab after Coinmap chart step: [TradingView Vietnam XAUUSD](https://vn.tradingview.com/chart/?symbol=OANDA%3AXAUUSD)
 tradingview_capture:
   enabled: true
+  prewarm_enabled: true
   # data_source: browser | tvdatafeed — tvdatafeed = OHLC JSON (library tvdatafeed), không mở tab TradingView trong capture
   data_source: tvdatafeed
   tvdatafeed:

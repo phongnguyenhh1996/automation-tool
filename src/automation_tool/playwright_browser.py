@@ -67,6 +67,8 @@ def launch_chrome_context(
     it can feel like “another browser”.
     """
     viewport = {"width": viewport_width, "height": viewport_height}
+    launch_args = ["--start-maximized"] if not headless else None
+    context_viewport = None if not headless else viewport
 
     channel = (os.getenv("PLAYWRIGHT_CHANNEL") or _CHROME_CHANNEL).strip()
     user_data = chrome_user_data_dir_from_env()
@@ -79,7 +81,8 @@ def launch_chrome_context(
                 str(user_data),
                 channel=channel,
                 headless=headless,
-                viewport=viewport,
+                args=launch_args,
+                viewport=context_viewport,
             )
         except PlaywrightError as exc:
             print(
@@ -91,13 +94,14 @@ def launch_chrome_context(
             ctx = p.chromium.launch_persistent_context(
                 str(user_data),
                 headless=headless,
-                viewport=viewport,
+                args=launch_args,
+                viewport=context_viewport,
             )
         return None, ctx
 
     ss = str(storage_state_path) if storage_state_path and storage_state_path.exists() else None
     try:
-        browser = p.chromium.launch(channel=channel, headless=headless)
+        browser = p.chromium.launch(channel=channel, headless=headless, args=launch_args)
     except PlaywrightError as exc:
         print(
             f"[playwright_browser] channel='{channel}' unavailable; "
@@ -105,8 +109,8 @@ def launch_chrome_context(
             file=sys.stderr,
             flush=True,
         )
-        browser = p.chromium.launch(headless=headless)
-    ctx = browser.new_context(viewport=viewport, storage_state=ss)
+        browser = p.chromium.launch(headless=headless, args=launch_args)
+    ctx = browser.new_context(viewport=context_viewport, storage_state=ss)
     return browser, ctx
 
 

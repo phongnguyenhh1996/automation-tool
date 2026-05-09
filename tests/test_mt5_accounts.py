@@ -13,8 +13,10 @@ from automation_tool.mt5_accounts import (
     LotRuleFromTrade,
     LotRuleMaxLossUsd,
     LotRuleMaxNotionalUsd,
+    SOURCE_UPDATE_SCALP,
     filter_mt5_accounts_for_entry_slot,
     load_mt5_accounts_from_path,
+    load_mt5_accounts_for_zone_entry,
     sync_accounts_scalp_json,
 )
 from automation_tool.mt5_execute import resolve_mt5_trade_symbol
@@ -445,6 +447,83 @@ def test_sync_accounts_scalp_json_truthy_string_not_included() -> None:
             ],
         )
         assert sync_accounts_scalp_json(p) is None
+
+
+def test_load_mt5_accounts_for_zone_entry_non_scalp_uses_cli(monkeypatch) -> None:
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "accounts.json"
+        _write_accounts(
+            p,
+            [
+                {
+                    "id": "a",
+                    "terminal_path": "C:/MT5/A/metatrader64.exe",
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                    "lot": {"mode": "fixed", "volume": 0.01},
+                },
+            ],
+        )
+        monkeypatch.delenv("MT5_ACCOUNTS_JSON", raising=False)
+        accs = load_mt5_accounts_for_zone_entry(zone_source="all", cli_path=p)
+        assert accs is not None and len(accs) == 1 and accs[0].id == "a"
+
+
+def test_load_mt5_accounts_for_zone_entry_scalp_prefers_sibling_file(monkeypatch) -> None:
+    with tempfile.TemporaryDirectory() as td:
+        full_p = Path(td) / "accounts.json"
+        _write_accounts(
+            full_p,
+            [
+                {
+                    "id": "full_only",
+                    "terminal_path": "C:/MT5/A/metatrader64.exe",
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                    "lot": {"mode": "fixed", "volume": 0.01},
+                },
+                {
+                    "id": "scalp_acc",
+                    "terminal_path": "C:/MT5/B/metatrader64.exe",
+                    "login": 2,
+                    "password": "y",
+                    "server": "S",
+                    "primary": False,
+                    "lot": {"mode": "fixed", "volume": 0.02},
+                    "update-scalp": True,
+                },
+            ],
+        )
+        sync_accounts_scalp_json(full_p)
+        monkeypatch.delenv("MT5_ACCOUNTS_JSON", raising=False)
+        accs = load_mt5_accounts_for_zone_entry(zone_source=SOURCE_UPDATE_SCALP, cli_path=full_p)
+        assert accs is not None and len(accs) == 1 and accs[0].id == "scalp_acc"
+
+
+def test_load_mt5_accounts_for_zone_entry_scalp_missing_sibling_empty(monkeypatch) -> None:
+    with tempfile.TemporaryDirectory() as td:
+        full_p = Path(td) / "accounts.json"
+        _write_accounts(
+            full_p,
+            [
+                {
+                    "id": "a",
+                    "terminal_path": "C:/MT5/A/metatrader64.exe",
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                    "lot": {"mode": "fixed", "volume": 0.01},
+                },
+            ],
+        )
+        monkeypatch.delenv("MT5_ACCOUNTS_JSON", raising=False)
+        accs = load_mt5_accounts_for_zone_entry(zone_source=SOURCE_UPDATE_SCALP, cli_path=full_p)
+        assert accs == []
 
 
 def test_sync_accounts_scalp_json_empty_removes_dest() -> None:

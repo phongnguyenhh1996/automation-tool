@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 
 import httpx
 import yaml
-from playwright.sync_api import BrowserContext, Playwright, sync_playwright
+from playwright.sync_api import BrowserContext, Page, Playwright, sync_playwright
 
 from automation_tool.coinmap_openai_slim import slim_coinmap_export_for_openai
 from automation_tool.config import default_coinmap_bearer_cache_path
@@ -1237,6 +1237,65 @@ def _login_form_is_visible(page, email_sel: str, password_sel: str, timeout_ms: 
         return False
 
 
+def _coinmap_fill_and_submit_login(
+    page,
+    *,
+    email: str,
+    password: str,
+    email_sel: str,
+    password_sel: str,
+    submit_sel: str,
+    settle_ms: int,
+) -> None:
+    """
+    Fill email + password and submit the Coinmap login form.
+
+    The Ant Design form re-renders the submit button as fields validate, which routinely makes
+    Playwright's stability check fail with "element was detached from the DOM". We mitigate by:
+      1. Filling fields then waiting briefly so client-side validation settles.
+      2. Trying ``click()`` once.
+      3. On any error (timeout/detach/disabled), pressing Enter on the password field
+         — Ant Design's <Form> submits on Enter, sidestepping the detached <button>.
+      4. If the form is gone after either action, treat it as success.
+    """
+    page.locator(email_sel).first.fill(email, timeout=15_000)
+    page.locator(password_sel).first.fill(password, timeout=15_000)
+    page.wait_for_timeout(300)
+
+    submit_ok = False
+    try:
+        page.locator(submit_sel).first.click(timeout=8_000)
+        submit_ok = True
+    except Exception:
+        submit_ok = False
+
+    if not submit_ok:
+        try:
+            page.locator(password_sel).first.press("Enter", timeout=5_000)
+        except Exception:
+            pass
+
+    try:
+        page.wait_for_load_state("networkidle", timeout=60_000)
+    except Exception:
+        pass
+    page.wait_for_timeout(settle_ms)
+
+    if _login_form_is_visible(page, email_sel, password_sel, timeout_ms=2_000):
+        try:
+            page.locator(submit_sel).first.click(timeout=8_000, force=True)
+        except Exception:
+            try:
+                page.locator(password_sel).first.press("Enter", timeout=5_000)
+            except Exception:
+                pass
+        try:
+            page.wait_for_load_state("networkidle", timeout=60_000)
+        except Exception:
+            pass
+        page.wait_for_timeout(settle_ms)
+
+
 def _coinmap_maybe_relogin_if_login_form_visible(
     page,
     cd: dict[str, Any],
@@ -1259,11 +1318,15 @@ def _coinmap_maybe_relogin_if_login_form_visible(
     form_timeout = int(base.get("mid_flow_login_form_detect_timeout_ms", 4_000))
     if not _login_form_is_visible(page, email_sel, password_sel, timeout_ms=form_timeout):
         return
-    page.locator(email_sel).first.fill(email, timeout=15_000)
-    page.locator(password_sel).first.fill(password, timeout=15_000)
-    page.locator(submit_sel).first.click(timeout=15_000)
-    page.wait_for_load_state("networkidle", timeout=60_000)
-    page.wait_for_timeout(settle_ms)
+    _coinmap_fill_and_submit_login(
+        page,
+        email=email,
+        password=password,
+        email_sel=email_sel,
+        password_sel=password_sel,
+        submit_sel=submit_sel,
+        settle_ms=settle_ms,
+    )
     post_wait = (base.get("post_login_wait_selector") or "").strip()
     if post_wait:
         try:
@@ -2349,32 +2412,44 @@ def _maybe_tradingview_login(
             fl = page.frame_locator(iframe_sel)
             if login_method_sel:
                 method_loc = fl.locator(login_method_sel).first
-                method_loc.wait_for(state="visible", timeout=method_timeout)
-                method_loc.click(timeout=15_000)
-                if after_method_ms > 0:
-                    page.wait_for_timeout(after_method_ms)
+                try:
+                    method_loc.wait_for(state="visible", timeout=method_timeout)
+                    method_loc.click(timeout=15_000)
+                    if after_method_ms > 0:
+                        page.wait_for_timeout(after_method_ms)
+                except Exception:
+                    pass
             elif login_method_text:
                 method_loc = fl.get_by_text(login_method_text, exact=True).first
-                method_loc.wait_for(state="visible", timeout=method_timeout)
-                method_loc.click(timeout=15_000)
-                if after_method_ms > 0:
-                    page.wait_for_timeout(after_method_ms)
+                try:
+                    method_loc.wait_for(state="visible", timeout=method_timeout)
+                    method_loc.click(timeout=15_000)
+                    if after_method_ms > 0:
+                        page.wait_for_timeout(after_method_ms)
+                except Exception:
+                    pass
             email_loc = fl.locator(email_sel).first
             pass_loc = fl.locator(pass_sel).first
             sub_loc = fl.locator(submit_sel).first
         else:
             if login_method_sel:
                 method_loc = page.locator(login_method_sel).first
-                method_loc.wait_for(state="visible", timeout=method_timeout)
-                method_loc.click(timeout=15_000)
-                if after_method_ms > 0:
-                    page.wait_for_timeout(after_method_ms)
+                try:
+                    method_loc.wait_for(state="visible", timeout=method_timeout)
+                    method_loc.click(timeout=15_000)
+                    if after_method_ms > 0:
+                        page.wait_for_timeout(after_method_ms)
+                except Exception:
+                    pass
             elif login_method_text:
                 method_loc = page.get_by_text(login_method_text, exact=True).first
-                method_loc.wait_for(state="visible", timeout=method_timeout)
-                method_loc.click(timeout=15_000)
-                if after_method_ms > 0:
-                    page.wait_for_timeout(after_method_ms)
+                try:
+                    method_loc.wait_for(state="visible", timeout=method_timeout)
+                    method_loc.click(timeout=15_000)
+                    if after_method_ms > 0:
+                        page.wait_for_timeout(after_method_ms)
+                except Exception:
+                    pass
             email_loc = page.locator(email_sel).first
             pass_loc = page.locator(pass_sel).first
             sub_loc = page.locator(submit_sel).first
@@ -3229,6 +3304,58 @@ def _run_tradingview_multi_shot_flow_v2(
     return written
 
 
+def _run_tradingview_via_browser_service(
+    *,
+    tv: dict[str, Any],
+    charts_dir: Path,
+    stamp: str,
+    settle_ms: int,
+) -> Optional[list[Path]]:
+    """
+    Fast path: long-lived browser_service warm tabs + ``tv_capture_plan`` RPC.
+    Returns ``None`` when service is down, plan is legacy-only, or RPC fails (caller uses sync flow).
+    """
+    plan_v2 = _tradingview_resolve_capture_plan_v2(tv)
+    if not plan_v2:
+        return None
+    try:
+        from automation_tool.browser_client import BrowserClient, is_service_responding
+        from automation_tool.browser_protocol import METHOD_TV_CAPTURE_PLAN
+        from automation_tool.images import get_active_main_symbol
+    except Exception:
+        return None
+    if not is_service_responding():
+        return None
+    c = BrowserClient.from_state_file()
+    if not c:
+        return None
+    main_sym = get_active_main_symbol()
+    try:
+        resp = c.request(
+            METHOD_TV_CAPTURE_PLAN,
+            {
+                "tv": tv,
+                "plan": plan_v2,
+                "charts_dir": str(charts_dir),
+                "stamp": stamp,
+                "main_symbol": main_sym,
+                "settle_ms": settle_ms,
+            },
+            timeout_s=900.0,
+        )
+    except OSError:
+        return None
+    if not resp.get("ok"):
+        return None
+    result = resp.get("result") or {}
+    paths_raw = result.get("paths") or []
+    out: list[Path] = []
+    for p in paths_raw:
+        if isinstance(p, str) and p.strip():
+            out.append(Path(p))
+    return out if out else None
+
+
 def _wait_tradingview_fullscreen_notice_gone(page, tv: dict[str, Any]) -> None:
     """After TV fullscreen, wait for the 'panels hidden' toast container to disappear before screenshot."""
     notice_sel = (tv.get("tradingview_fullscreen_notice_selector") or "").strip()
@@ -3267,7 +3394,8 @@ def _run_tradingview_screenshot_flow(
     """
     tw = int(tv.get("viewport_width", 0) or 0)
     th = int(tv.get("viewport_height", 0) or 0)
-    if tw > 0 and th > 0:
+    # Keep headed/no-viewport contexts tied to the real browser window size.
+    if tw > 0 and th > 0 and page.viewport_size is not None:
         page.set_viewport_size({"width": tw, "height": th})
 
     url = tv.get("chart_url") or "https://vn.tradingview.com/chart/?symbol=OANDA%3AXAUUSD"
@@ -3349,7 +3477,15 @@ def _capture_charts_in_context(
 ) -> list[Path]:
     """
     Run Coinmap (+ optional TradingView) capture using an existing browser context.
-    Opens a dedicated page for Coinmap and closes it before return; does not close ``context``.
+    When only ``tradingview_capture`` is enabled (``chart_download.enabled`` false), skips
+    Coinmap login/navigation so the browser goes straight to TradingView (``update`` /
+    ``update-scalp`` TV phase).
+
+    When a bearer token cache hit already ran API-only JSON export (no chart UI), skips
+    Coinmap login/navigation unless ``coinmap_only_retry_paths`` requires a browser retry.
+
+    Otherwise opens a dedicated Coinmap page and closes it before return; does not close
+    ``context``.
     """
     login_url = cfg.get("login_url") or "https://coinmap.tech/login"
     post_wait = (cfg.get("post_login_wait_selector") or "").strip()
@@ -3414,82 +3550,103 @@ def _capture_charts_in_context(
                         f"Bearer token cache probe failed ({e!r}); falling back to browser",
                     )
 
-    page = context.new_page()
+    tv_cfg = cfg.get("tradingview_capture") or {}
+    if not isinstance(tv_cfg, dict):
+        tv_cfg = {}
+    tv_enabled = bool(tv_cfg.get("enabled", False))
+    cm_chart_enabled = bool(cd.get("enabled", False))
+    skip_coinmap_ui = tv_enabled and not cm_chart_enabled and not coinmap_only_retry_paths
+    skip_coinmap_nav = skip_coinmap_ui or (
+        coinmap_bearer_satisfied_from_cache and not coinmap_only_retry_paths
+    )
+    if coinmap_bearer_satisfied_from_cache and not skip_coinmap_ui:
+        _coinmap_bearer_log(
+            api_cd_cache,
+            "Skipping Coinmap browser navigation — JSON export already finished via API-only cache",
+        )
+
+    page: Page | None = None
     bearer_capture: Optional[CoinmapBearerCapture] = None
-    cd_pre = cfg.get("chart_download")
-    if (
-        not coinmap_bearer_satisfied_from_cache
-        and isinstance(cd_pre, dict)
-        and cd_pre.get("enabled", False)
-    ):
-        api_pre = _api_export_config(cd_pre)
-        if api_pre is not None and _api_export_mode(api_pre) == "bearer_request":
-            bearer_capture = CoinmapBearerCapture(page, api_pre)
-            bearer_capture.install()
+    if not skip_coinmap_nav:
+        page = context.new_page()
+        cd_pre = cfg.get("chart_download")
+        if (
+            not coinmap_bearer_satisfied_from_cache
+            and isinstance(cd_pre, dict)
+            and cd_pre.get("enabled", False)
+        ):
+            api_pre = _api_export_config(cd_pre)
+            if api_pre is not None and _api_export_mode(api_pre) == "bearer_request":
+                bearer_capture = CoinmapBearerCapture(page, api_pre)
+                bearer_capture.install()
     try:
-        if progress_hook is not None:
-            progress_hook()
-        page.goto(login_url, wait_until="domcontentloaded", timeout=60_000)
-        page.wait_for_timeout(settle_ms)
-        if progress_hook is not None:
-            progress_hook()
+        if page is not None:
+            if progress_hook is not None:
+                progress_hook()
+            page.goto(login_url, wait_until="domcontentloaded", timeout=60_000)
+            page.wait_for_timeout(settle_ms)
+            if progress_hook is not None:
+                progress_hook()
 
-        if email and password:
-            if _login_form_is_visible(page, email_sel, password_sel):
-                page.locator(email_sel).first.fill(email, timeout=15_000)
-                page.locator(password_sel).first.fill(password, timeout=15_000)
-                page.locator(submit_sel).first.click(timeout=15_000)
-                page.wait_for_load_state("networkidle", timeout=60_000)
-                page.wait_for_timeout(settle_ms)
-                if progress_hook is not None:
-                    progress_hook()
-            else:
-                print(
-                    "Already logged in (no login form visible); skipping credential submit.",
-                    flush=True,
-                )
+            if email and password:
+                if _login_form_is_visible(page, email_sel, password_sel):
+                    _coinmap_fill_and_submit_login(
+                        page,
+                        email=email,
+                        password=password,
+                        email_sel=email_sel,
+                        password_sel=password_sel,
+                        submit_sel=submit_sel,
+                        settle_ms=settle_ms,
+                    )
+                    if progress_hook is not None:
+                        progress_hook()
+                else:
+                    print(
+                        "Already logged in (no login form visible); skipping credential submit.",
+                        flush=True,
+                    )
 
-        if post_wait:
-            try:
-                page.locator(post_wait).first.wait_for(state="visible", timeout=30_000)
-            except Exception:
-                pass
+            if post_wait:
+                try:
+                    page.locator(post_wait).first.wait_for(state="visible", timeout=30_000)
+                except Exception:
+                    pass
 
-        if cd.get("enabled", False) and not coinmap_bearer_satisfied_from_cache:
-            try:
-                if progress_hook is not None:
-                    progress_hook()
-                dl_paths = _run_chart_screenshot_flow(
-                    page,
-                    charts_dir=charts_dir,
-                    stamp=stamp,
-                    settle_ms=settle_ms,
-                    cd=cd,
-                    coinmap_email=email,
-                    coinmap_password=password,
-                    coinmap_login_cfg=cfg,
-                    bearer_capture=bearer_capture,
-                    coinmap_bearer_only_retry_paths=coinmap_only_retry_paths,
-                    coinmap_capture_intervals=coinmap_capture_intervals,
-                )
-                written.extend(dl_paths)
-                if progress_hook is not None:
-                    progress_hook()
-            except Exception as e:
-                raise SystemExit(
-                    "chart_download flow failed. Check selectors in config/coinmap.yaml "
-                    f"(multi_shot sidebar/watchlist/interval or single fullscreen). Error: {e}."
-                ) from e
+            if cd.get("enabled", False) and not coinmap_bearer_satisfied_from_cache:
+                try:
+                    if progress_hook is not None:
+                        progress_hook()
+                    dl_paths = _run_chart_screenshot_flow(
+                        page,
+                        charts_dir=charts_dir,
+                        stamp=stamp,
+                        settle_ms=settle_ms,
+                        cd=cd,
+                        coinmap_email=email,
+                        coinmap_password=password,
+                        coinmap_login_cfg=cfg,
+                        bearer_capture=bearer_capture,
+                        coinmap_bearer_only_retry_paths=coinmap_only_retry_paths,
+                        coinmap_capture_intervals=coinmap_capture_intervals,
+                    )
+                    written.extend(dl_paths)
+                    if progress_hook is not None:
+                        progress_hook()
+                except Exception as e:
+                    raise SystemExit(
+                        "chart_download flow failed. Check selectors in config/coinmap.yaml "
+                        f"(multi_shot sidebar/watchlist/interval or single fullscreen). Error: {e}."
+                    ) from e
 
-        if coinmap_only_retry_paths:
-            if save_storage_state and storage_state_path:
-                _ensure_dir(storage_state_path.parent)
-                context.storage_state(path=str(storage_state_path))
-            return written
+            if coinmap_only_retry_paths:
+                if save_storage_state and storage_state_path:
+                    _ensure_dir(storage_state_path.parent)
+                    context.storage_state(path=str(storage_state_path))
+                return written
 
-        tv = cfg.get("tradingview_capture") or {}
-        if isinstance(tv, dict) and tv.get("enabled", False):
-            tv_ds = str(tv.get("data_source") or "browser").strip().lower()
+        if tv_enabled:
+            tv_ds = str(tv_cfg.get("data_source") or "browser").strip().lower()
             if tradingview_force_screenshot and tv_ds == "tvdatafeed":
                 tv_ds = "browser"
             if tv_ds == "tvdatafeed":
@@ -3499,7 +3656,7 @@ def _capture_charts_in_context(
                     if progress_hook is not None:
                         progress_hook()
                     tv_paths = run_tvdatafeed_export(
-                        tv=tv,
+                        tv=tv_cfg,
                         charts_dir=charts_dir,
                         stamp=stamp,
                         tradingview_username=email,
@@ -3514,62 +3671,76 @@ def _capture_charts_in_context(
                         f"tradingview_capture.tvdatafeed (exchange, symbol_exchanges, interval_map). Error: {e}"
                     ) from e
             else:
-                tv_page = context.new_page()
-                try:
+                svc_paths = _run_tradingview_via_browser_service(
+                    tv=tv_cfg,
+                    charts_dir=charts_dir,
+                    stamp=stamp,
+                    settle_ms=settle_ms,
+                )
+                if svc_paths is not None:
                     if progress_hook is not None:
                         progress_hook()
-                    tv_paths = _run_tradingview_screenshot_flow(
-                        tv_page,
-                        charts_dir=charts_dir,
-                        stamp=stamp,
-                        settle_ms=settle_ms,
-                        tv=tv,
-                        coinmap_email=email,
-                        tradingview_password=tradingview_password,
-                    )
-                    written.extend(tv_paths)
+                    written.extend(svc_paths)
                     if progress_hook is not None:
                         progress_hook()
-                except Exception as e:
-                    raise SystemExit(
-                        "tradingview_capture failed. Check config/coinmap.yaml "
-                        f"(capture_plan, watchlist, symbols, intervals, fullscreen). Error: {e}."
-                    ) from e
-                finally:
-                    tv_page.close()
-
-        screenshot_after = bool(cfg.get("screenshot_after_chart_download", True))
-        skip_canvas = bool(cd.get("enabled")) and not screenshot_after
-        if coinmap_bearer_satisfied_from_cache:
-            # Chart page was never opened; avoid canvas/fullpage shots of the wrong view.
-            skip_canvas = True
-
-        if not skip_canvas:
-            idx = 0
-            for sel in chart_selectors:
-                if max_charts and idx >= max_charts:
-                    break
-                locs = page.locator(sel)
-                n = locs.count()
-                for i in range(n):
-                    if max_charts and idx >= max_charts:
-                        break
-                    path = charts_dir / f"{stamp}_chart_{idx:03d}.png"
+                else:
+                    tv_page = context.new_page()
                     try:
-                        locs.nth(i).screenshot(path=str(path), timeout=20_000)
-                        written.append(path)
-                        idx += 1
                         if progress_hook is not None:
                             progress_hook()
-                    except Exception:
-                        continue
+                        tv_paths = _run_tradingview_screenshot_flow(
+                            tv_page,
+                            charts_dir=charts_dir,
+                            stamp=stamp,
+                            settle_ms=settle_ms,
+                            tv=tv_cfg,
+                            coinmap_email=email,
+                            tradingview_password=tradingview_password,
+                        )
+                        written.extend(tv_paths)
+                        if progress_hook is not None:
+                            progress_hook()
+                    except Exception as e:
+                        raise SystemExit(
+                            "tradingview_capture failed. Check config/coinmap.yaml "
+                            f"(capture_plan, watchlist, symbols, intervals, fullscreen). Error: {e}."
+                        ) from e
+                    finally:
+                        tv_page.close()
 
-            if not written and fallback_full:
-                path = charts_dir / f"{stamp}_fullpage.png"
-                page.screenshot(path=str(path), full_page=True)
-                written.append(path)
-                if progress_hook is not None:
-                    progress_hook()
+        if page is not None:
+            screenshot_after = bool(cfg.get("screenshot_after_chart_download", True))
+            skip_canvas = bool(cd.get("enabled")) and not screenshot_after
+            if coinmap_bearer_satisfied_from_cache:
+                # Chart page was never opened; avoid canvas/fullpage shots of the wrong view.
+                skip_canvas = True
+
+            if not skip_canvas:
+                idx = 0
+                for sel in chart_selectors:
+                    if max_charts and idx >= max_charts:
+                        break
+                    locs = page.locator(sel)
+                    n = locs.count()
+                    for i in range(n):
+                        if max_charts and idx >= max_charts:
+                            break
+                        path = charts_dir / f"{stamp}_chart_{idx:03d}.png"
+                        try:
+                            locs.nth(i).screenshot(path=str(path), timeout=20_000)
+                            written.append(path)
+                            idx += 1
+                            if progress_hook is not None:
+                                progress_hook()
+                        except Exception:
+                            continue
+
+                if not written and fallback_full:
+                    path = charts_dir / f"{stamp}_fullpage.png"
+                    page.screenshot(path=str(path), full_page=True)
+                    written.append(path)
+                    if progress_hook is not None:
+                        progress_hook()
 
         if save_storage_state and storage_state_path:
             _ensure_dir(storage_state_path.parent)
@@ -3580,10 +3751,11 @@ def _capture_charts_in_context(
                 bearer_capture.uninstall()
             except Exception:
                 pass
-        try:
-            page.close()
-        except Exception:
-            pass
+        if page is not None:
+            try:
+                page.close()
+            except Exception:
+                pass
 
     if (
         write_coinmap_merged_after_capture
@@ -3723,6 +3895,12 @@ def capture_charts(
     _ensure_dir(charts_dir)
     if main_chart_symbol is not None and str(main_chart_symbol).strip():
         write_main_chart_symbol_marker(charts_dir, normalize_main_chart_symbol(main_chart_symbol))
+        try:
+            from automation_tool.browser_client import try_tv_prewarm_reset
+
+            try_tv_prewarm_reset(normalize_main_chart_symbol(main_chart_symbol))
+        except Exception:
+            pass
     else:
         write_main_chart_symbol_marker(charts_dir, get_active_main_symbol())
     if bool(cfg.get("clear_charts_before_capture", True)):

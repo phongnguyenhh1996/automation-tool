@@ -687,7 +687,7 @@ def _parser() -> argparse.ArgumentParser:
     ups = sub.add_parser(
         "update-scalp",
         help=(
-            "Scalp intraday: TradingView 15m ICT + 5m rồi Coinmap M5 → OpenAI follow-up tìm plan scalp; "
+            "Scalp intraday: TradingView 15m ICT + 5m rồi chỉ Coinmap M5 → OpenAI follow-up tìm plan scalp; "
             "zones lưu vào data/<SYM>/zones/ với label scalp_<id>."
         ),
     )
@@ -712,7 +712,7 @@ def _parser() -> argparse.ArgumentParser:
     ups.add_argument(
         "--no-tradingview",
         action="store_true",
-        help="Bỏ qua chụp TradingView (15m ICT + 5m) trước Coinmap M5; chỉ export Coinmap",
+        help="Bỏ qua chụp TradingView (15m ICT + 5m); chỉ export Coinmap M5",
     )
     ups.add_argument(
         "--zones-json",
@@ -1871,10 +1871,12 @@ def _intraday_tv_then_coinmap_m5_capture(
     main_chart_symbol: Optional[str],
     no_tradingview: bool,
     flow_label: str,
+    coinmap_capture_intervals: tuple[str, ...] = ("15m", "5m"),
 ) -> tuple[list[Path], str | None, str, list[ChartOpenAIPayload]]:
     """
     Shared capture for ``update`` / ``update-scalp``: TradingView 15m ICT + 5m, then
-    Coinmap M15 + M5 reusing the same ``stamp``; or Coinmap-only when ``no_tradingview``.
+    Coinmap export(s) reusing the same ``stamp`` (default M15+M5; ``update-scalp`` may pass chỉ ``5m``);
+    or Coinmap-only when ``no_tradingview``.
     """
     from automation_tool.images import get_active_main_symbol, read_main_chart_symbol
 
@@ -1935,7 +1937,7 @@ def _intraday_tv_then_coinmap_m5_capture(
             enable_tradingview=False,
             clear_charts_before_capture=False,
             stamp_override=stamp,
-            coinmap_capture_intervals=("15m", "5m"),
+            coinmap_capture_intervals=coinmap_capture_intervals,
             write_coinmap_merged_after_capture=False,
         )
         paths.extend(cm_paths)
@@ -1971,7 +1973,7 @@ def _intraday_tv_then_coinmap_m5_capture(
             reuse_browser_context=None,
             main_chart_symbol=main_chart_symbol,
             clear_charts_before_capture=True,
-            coinmap_capture_intervals=("15m", "5m"),
+            coinmap_capture_intervals=coinmap_capture_intervals,
             write_coinmap_merged_after_capture=False,
         )
         stamp = stamp_from_capture_paths(paths)
@@ -2969,7 +2971,7 @@ def cmd_update(args: argparse.Namespace) -> None:
 
 def cmd_update_scalp(args: argparse.Namespace) -> None:
     """
-    Luồng ``update-scalp``: Coinmap M5 → OpenAI, yêu cầu tìm plan scalp đẹp nhất.
+    Luồng ``update-scalp``: chỉ capture và gửi Coinmap **M5** → OpenAI, yêu cầu tìm plan scalp đẹp nhất.
     - Thread OpenAI riêng (``last_scalp_response_id.txt``).
     - Zone labels dạng ``scalp_<id>`` (ví dụ: ``scalp_1``, ``scalp_2``, ``scalp_3``).
     - Zones lưu vào ``data/<SYM>/zones/`` cùng với zones thông thường.
@@ -3034,29 +3036,23 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
         main_chart_symbol=args.main_symbol,
         no_tradingview=args.no_tradingview,
         flow_label="update-scalp",
+        coinmap_capture_intervals=("5m",),
     )
 
     print(f"Captured {len(paths)} file(s) for update-scalp run.")
-    m15 = coinmap_main_pair_interval_json_path(charts_dir, "15m", stamp=stamp)
     m5 = coinmap_main_pair_interval_json_path(charts_dir, "5m", stamp=stamp)
     _log.info(
-        "update-scalp: capture xong | %s file(s) | stamp=%s | M15 raw OpenAI=%s | M5 raw OpenAI=%s (+ TV 15m_ict/5m nếu bật)",
+        "update-scalp: capture xong | %s file(s) | stamp=%s | M5 raw OpenAI=%s (+ TV 15m_ict/5m nếu bật)",
         len(paths),
         stamp,
-        m15,
         m5,
     )
-    if m15 is None:
-        raise SystemExit(
-            f"No 15m Coinmap JSON under {charts_dir} after capture (stamp={stamp!r}). "
-            "Check coinmap_update.yaml capture_plan and api_data_export."
-        )
     if m5 is None:
         raise SystemExit(
             f"No 5m Coinmap JSON under {charts_dir} after capture (stamp={stamp!r}). "
             "Check coinmap_update.yaml capture_plan and api_data_export."
         )
-    coinmap_paths: list[Path] = [m15, m5]
+    coinmap_paths: list[Path] = [m5]
 
     require_openai(s)
 
@@ -3066,7 +3062,7 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
 
     user_msg = build_scalp_update_user_text(
         first_after_all=True,
-        coinmap_attachment_mode="legacy",
+        coinmap_attachment_mode="m5_only",
     )
     if tv_chart_payloads:
         user_msg += (

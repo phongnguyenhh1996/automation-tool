@@ -84,6 +84,12 @@ def set_active_main_symbol_file(main_chart_symbol: Optional[str]) -> None:
         sym = normalize_main_chart_symbol(main_chart_symbol)
         root.mkdir(parents=True, exist_ok=True)
         marker.write_text(sym + "\n", encoding="utf-8")
+        try:
+            from automation_tool.browser_client import try_tv_prewarm_reset
+
+            try_tv_prewarm_reset(sym)
+        except Exception:
+            pass
     else:
         try:
             marker.unlink()

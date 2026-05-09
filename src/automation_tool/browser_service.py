@@ -12,10 +12,12 @@ import asyncio
 import json
 import logging
 import os
+import re
 import signal
 import socket
 import sys
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -32,12 +34,15 @@ from automation_tool.browser_protocol import (
     METHOD_QUERY_TEXT,
     METHOD_SHUTDOWN,
     METHOD_SUBSCRIBE_DOM,
+    METHOD_TV_CAPTURE_FRAME,
+    METHOD_TV_CAPTURE_PLAN,
+    METHOD_TV_PREWARM_RESET,
     METHOD_TV_WATCHLIST_INIT,
     METHOD_TV_WATCHLIST_POLL,
     METHOD_UNSUBSCRIBE,
     decode_message_line,
 )
-from automation_tool.config import default_data_dir
+from automation_tool.config import default_coinmap_config_path, default_data_dir
 
 _log = logging.getLogger("automation_tool.browser_service")
 
@@ -221,6 +226,14 @@ def _fallback_user_data_dir() -> Path:
     return d
 
 
+@dataclass
+class _TvWarmTab:
+    page: Any
+    profile_key: str
+    current_symbol: str
+    current_interval_label: str
+
+
 class BrowserServiceState:
     def __init__(self) -> None:
         self._playwright: Any = None
@@ -230,6 +243,11 @@ class BrowserServiceState:
         self._subs: dict[str, asyncio.Task] = {}
         self._closing = False
         self._user_data_dir_used: Optional[Path] = None
+        self._tv_warm: dict[str, _TvWarmTab] = {}
+        self._tv_lock_ict = asyncio.Lock()
+        self._tv_lock_default = asyncio.Lock()
+        self._tv_settle_ms: int = 2000
+        self._tv_main_symbol: str = ""
 
     async def start(self, *, headless: bool, cdp_port: int) -> str:
         self._playwright = await async_playwright().start()
@@ -290,6 +308,11 @@ class BrowserServiceState:
                 self._browser = await p.chromium.launch(headless=headless, args=args)
                 self._context = await self._browser.new_context(viewport=viewport)
 
+        try:
+            await self._prewarm_tradingview_tabs_async()
+        except Exception as e:
+            _log.warning("TV prewarm non-fatal: %s", e)
+
         return f"http://127.0.0.1:{cdp_port}"
 
     async def shutdown(self) -> None:
@@ -303,6 +326,12 @@ class BrowserServiceState:
             except Exception:
                 pass
         self._tabs.clear()
+        for wt in list(self._tv_warm.values()):
+            try:
+                await wt.page.close()
+            except Exception:
+                pass
+        self._tv_warm.clear()
         if self._context is not None:
             try:
                 await self._context.close()
@@ -321,6 +350,373 @@ class BrowserServiceState:
             except Exception:
                 pass
             self._playwright = None
+
+    async def _dispose_tv_warm_tabs_async(self) -> None:
+        for wt in list(self._tv_warm.values()):
+            try:
+                await wt.page.close()
+            except Exception:
+                pass
+        self._tv_warm.clear()
+
+    async def _prewarm_tradingview_tabs_async(self, *, main_symbol_override: Optional[str] = None) -> None:
+        from automation_tool.coinmap import (
+            _tv_apply_indicator_profile,
+            apply_main_chart_symbol_to_config,
+            load_coinmap_yaml,
+        )
+        from automation_tool.coinmap_tradingview_async import tv_warmup_tab_async
+        from automation_tool.images import get_active_main_symbol
+
+        cfg_path = default_coinmap_config_path()
+        try:
+            cfg = load_coinmap_yaml(cfg_path)
+        except Exception as e:
+            _log.warning("TV prewarm skipped: cannot load yaml %s: %s", cfg_path, e)
+            return
+
+        tv_root = cfg.get("tradingview_capture")
+        if not isinstance(tv_root, dict) or not tv_root.get("enabled", False):
+            _log.info("TV prewarm skipped: tradingview_capture disabled or missing")
+            return
+        if tv_root.get("prewarm_enabled") is False:
+            _log.info("TV prewarm skipped: tradingview_capture.prewarm_enabled is false")
+            return
+
+        main_sym = (main_symbol_override or "").strip() or get_active_main_symbol()
+        cfg_m = apply_main_chart_symbol_to_config(cfg, main_sym)
+        tv_m = cfg_m.get("tradingview_capture")
+        if not isinstance(tv_m, dict):
+            return
+        settle_ms = int(cfg_m.get("settle_ms", 2000))
+
+        email = (os.getenv("COINMAP_EMAIL") or "").strip() or None
+        password = (os.getenv("TRADINGVIEW_PASSWORD") or "").strip() or None
+
+        await self._dispose_tv_warm_tabs_async()
+
+        ctx = self._require_context()
+        page_ict = await ctx.new_page()
+        page_def = await ctx.new_page()
+
+        ict_tv = _tv_apply_indicator_profile(tv_m, "ict_killzones")
+
+        try:
+            await tv_warmup_tab_async(
+                page_ict,
+                ict_tv,
+                symbol=main_sym,
+                interval_label="15 phút",
+                settle_ms=settle_ms,
+                login_email=email,
+                login_password=password,
+            )
+            await tv_warmup_tab_async(
+                page_def,
+                dict(tv_m),
+                symbol=main_sym,
+                interval_label="15 phút",
+                settle_ms=settle_ms,
+                login_email=email,
+                login_password=password,
+            )
+        except Exception as e:
+            _log.exception("TV prewarm failed: %s", e)
+            try:
+                await page_ict.close()
+            except Exception:
+                pass
+            try:
+                await page_def.close()
+            except Exception:
+                pass
+            return
+
+        self._tv_warm["ict"] = _TvWarmTab(page_ict, "ict_killzones", main_sym, "15 phút")
+        self._tv_warm["default"] = _TvWarmTab(page_def, "default", main_sym, "15 phút")
+        self._tv_settle_ms = settle_ms
+        self._tv_main_symbol = main_sym
+        _log.info("TV prewarm ok | main=%s | tabs=ict+default", main_sym)
+
+    async def _ensure_tv_warm_tabs(self) -> None:
+        need = False
+        for key in ("ict", "default"):
+            wt = self._tv_warm.get(key)
+            if wt is None:
+                need = True
+                break
+            try:
+                if wt.page.is_closed():
+                    need = True
+                    break
+            except Exception:
+                need = True
+                break
+        if need:
+            await self._prewarm_tradingview_tabs_async()
+
+    async def tv_prewarm_reset(self, *, main_symbol: Optional[str] = None) -> dict[str, Any]:
+        ms = (main_symbol or "").strip() or None
+        await self._prewarm_tradingview_tabs_async(main_symbol_override=ms)
+        return {"prewarmed": True, "main_symbol": self._tv_main_symbol}
+
+    async def tv_capture_plan(
+        self,
+        *,
+        tv: dict[str, Any],
+        plan: list[Any],
+        charts_dir: Path,
+        stamp: str,
+        main_symbol: str,
+        settle_ms: Optional[int] = None,
+    ) -> dict[str, Any]:
+        from automation_tool.coinmap import _tv_apply_indicator_profile, _tradingview_interval_slug
+        from automation_tool.coinmap_tradingview_async import (
+            tv_capture_one_chart_frame_async,
+            tv_reset_chart_position_async,
+            tv_select_interval_async,
+            tv_select_symbol_async,
+            tv_ensure_required_indicators_async,
+        )
+
+        await self._ensure_tv_warm_tabs()
+
+        sm = int(settle_ms if settle_ms is not None else self._tv_settle_ms)
+        main_u = main_symbol.strip().upper()
+        written: list[str] = []
+
+        for row in plan:
+            if not isinstance(row, dict):
+                continue
+            sym = str(row.get("symbol") or "").strip()
+            intervals = row.get("intervals")
+            if not sym or not isinstance(intervals, list):
+                continue
+            sym_key = re.sub(r"[^\w.-]+", "_", sym).strip("_")[:40] or "sym"
+            is_main = sym.upper() == main_u
+
+            if not is_main:
+                async with self._tv_lock_default:
+                    await self._ensure_tv_warm_tabs()
+                    wt_def = self._tv_warm["default"]
+                    page_d = wt_def.page
+                    if wt_def.current_symbol.upper() != sym.upper():
+                        await tv_select_symbol_async(page_d, tv, sym)
+                        wt_def.current_symbol = sym
+
+                for it in intervals:
+                    if isinstance(it, str) and it.strip():
+                        label = it.strip()
+                        slug = _tradingview_interval_slug(label, tv)
+                        prof = ""
+                    elif isinstance(it, dict):
+                        label = str(it.get("label") or "").strip()
+                        if not label:
+                            continue
+                        slug = (
+                            str(it.get("slug") or "").strip()
+                            or _tradingview_interval_slug(label, tv)
+                        )
+                        prof = str(it.get("indicator_profile") or "").strip()
+                    else:
+                        continue
+
+                    if prof == "ict_killzones":
+                        async with self._tv_lock_ict:
+                            await self._ensure_tv_warm_tabs()
+                            wt_i = self._tv_warm["ict"]
+                            tv_i = _tv_apply_indicator_profile(tv, "ict_killzones")
+                            if wt_i.current_symbol.upper() != sym.upper():
+                                await tv_select_symbol_async(wt_i.page, tv_i, sym)
+                                wt_i.current_symbol = sym
+                            if wt_i.current_interval_label != label:
+                                await tv_select_interval_async(wt_i.page, tv_i, label, sm)
+                                wt_i.current_interval_label = label
+                            await tv_reset_chart_position_async(wt_i.page, tv_i)
+                            await tv_ensure_required_indicators_async(wt_i.page, tv_i)
+                            path = await tv_capture_one_chart_frame_async(
+                                wt_i.page,
+                                tv_i,
+                                charts_dir,
+                                stamp,
+                                sym_key,
+                                slug,
+                            )
+                            written.append(str(path))
+                    else:
+                        async with self._tv_lock_default:
+                            await self._ensure_tv_warm_tabs()
+                            wt_def = self._tv_warm["default"]
+                            page_d = wt_def.page
+                            tv_eff = _tv_apply_indicator_profile(tv, prof) if prof else tv
+                            if wt_def.current_symbol.upper() != sym.upper():
+                                await tv_select_symbol_async(page_d, tv_eff, sym)
+                                wt_def.current_symbol = sym
+                            if wt_def.current_interval_label != label:
+                                await tv_select_interval_async(page_d, tv_eff, label, sm)
+                                wt_def.current_interval_label = label
+                            await tv_reset_chart_position_async(page_d, tv_eff)
+                            await tv_ensure_required_indicators_async(page_d, tv_eff)
+                            path = await tv_capture_one_chart_frame_async(
+                                page_d,
+                                tv_eff,
+                                charts_dir,
+                                stamp,
+                                sym_key,
+                                slug,
+                            )
+                            written.append(str(path))
+
+                async with self._tv_lock_default:
+                    await self._ensure_tv_warm_tabs()
+                    wt_def = self._tv_warm["default"]
+                    page_d = wt_def.page
+                    if wt_def.current_symbol.upper() != main_u:
+                        await tv_select_symbol_async(page_d, tv, main_symbol.strip())
+                        wt_def.current_symbol = main_symbol.strip()
+                continue
+
+            async with self._tv_lock_default:
+                await self._ensure_tv_warm_tabs()
+                wt_def = self._tv_warm["default"]
+                page_d = wt_def.page
+                if wt_def.current_symbol.upper() != sym.upper():
+                    await tv_select_symbol_async(page_d, tv, sym)
+                    wt_def.current_symbol = sym
+
+            for it in intervals:
+                if isinstance(it, str) and it.strip():
+                    label = it.strip()
+                    slug = _tradingview_interval_slug(label, tv)
+                    prof = ""
+                elif isinstance(it, dict):
+                    label = str(it.get("label") or "").strip()
+                    if not label:
+                        continue
+                    slug = (
+                        str(it.get("slug") or "").strip()
+                        or _tradingview_interval_slug(label, tv)
+                    )
+                    prof = str(it.get("indicator_profile") or "").strip()
+                else:
+                    continue
+
+                if prof == "ict_killzones":
+                    async with self._tv_lock_ict:
+                        await self._ensure_tv_warm_tabs()
+                        wt_i = self._tv_warm["ict"]
+                        tv_i = _tv_apply_indicator_profile(tv, "ict_killzones")
+                        if wt_i.current_symbol.upper() != sym.upper():
+                            await tv_select_symbol_async(wt_i.page, tv_i, sym)
+                            wt_i.current_symbol = sym
+                        if wt_i.current_interval_label != label:
+                            await tv_select_interval_async(wt_i.page, tv_i, label, sm)
+                            wt_i.current_interval_label = label
+                        await tv_reset_chart_position_async(wt_i.page, tv_i)
+                        await tv_ensure_required_indicators_async(wt_i.page, tv_i)
+                        path = await tv_capture_one_chart_frame_async(
+                            wt_i.page,
+                            tv_i,
+                            charts_dir,
+                            stamp,
+                            sym_key,
+                            slug,
+                        )
+                        written.append(str(path))
+                else:
+                    async with self._tv_lock_default:
+                        await self._ensure_tv_warm_tabs()
+                        wt_def = self._tv_warm["default"]
+                        page_d = wt_def.page
+                        tv_eff = _tv_apply_indicator_profile(tv, prof) if prof else tv
+                        if wt_def.current_symbol.upper() != sym.upper():
+                            await tv_select_symbol_async(page_d, tv_eff, sym)
+                            wt_def.current_symbol = sym
+                        if wt_def.current_interval_label != label:
+                            await tv_select_interval_async(page_d, tv_eff, label, sm)
+                            wt_def.current_interval_label = label
+                        await tv_reset_chart_position_async(page_d, tv_eff)
+                        await tv_ensure_required_indicators_async(page_d, tv_eff)
+                        path = await tv_capture_one_chart_frame_async(
+                            page_d,
+                            tv_eff,
+                            charts_dir,
+                            stamp,
+                            sym_key,
+                            slug,
+                        )
+                        written.append(str(path))
+
+        return {"paths": written}
+
+    async def tv_capture_frame(
+        self,
+        *,
+        tv: dict[str, Any],
+        charts_dir: Path,
+        stamp: str,
+        symbol: str,
+        interval_label: str,
+        slug: str,
+        indicator_profile: str,
+        settle_ms: Optional[int] = None,
+    ) -> dict[str, Any]:
+        from automation_tool.coinmap import _tv_apply_indicator_profile
+        from automation_tool.coinmap_tradingview_async import (
+            tv_capture_one_chart_frame_async,
+            tv_reset_chart_position_async,
+            tv_select_interval_async,
+            tv_select_symbol_async,
+            tv_ensure_required_indicators_async,
+        )
+
+        await self._ensure_tv_warm_tabs()
+        sm = int(settle_ms if settle_ms is not None else self._tv_settle_ms)
+        sym_key = re.sub(r"[^\w.-]+", "_", symbol).strip("_")[:40] or "sym"
+        prof = (indicator_profile or "").strip()
+
+        if prof == "ict_killzones":
+            async with self._tv_lock_ict:
+                wt = self._tv_warm["ict"]
+                tv_i = _tv_apply_indicator_profile(tv, "ict_killzones")
+                if wt.current_symbol.upper() != symbol.upper():
+                    await tv_select_symbol_async(wt.page, tv_i, symbol)
+                    wt.current_symbol = symbol
+                if wt.current_interval_label != interval_label:
+                    await tv_select_interval_async(wt.page, tv_i, interval_label, sm)
+                    wt.current_interval_label = interval_label
+                await tv_reset_chart_position_async(wt.page, tv_i)
+                await tv_ensure_required_indicators_async(wt.page, tv_i)
+                path = await tv_capture_one_chart_frame_async(
+                    wt.page,
+                    tv_i,
+                    charts_dir,
+                    stamp,
+                    sym_key,
+                    slug,
+                )
+                return {"path": str(path)}
+
+        async with self._tv_lock_default:
+            wt = self._tv_warm["default"]
+            tv_eff = _tv_apply_indicator_profile(tv, prof) if prof else tv
+            if wt.current_symbol.upper() != symbol.upper():
+                await tv_select_symbol_async(wt.page, tv_eff, symbol)
+                wt.current_symbol = symbol
+            if wt.current_interval_label != interval_label:
+                await tv_select_interval_async(wt.page, tv_eff, interval_label, sm)
+                wt.current_interval_label = interval_label
+            await tv_reset_chart_position_async(wt.page, tv_eff)
+            await tv_ensure_required_indicators_async(wt.page, tv_eff)
+            path = await tv_capture_one_chart_frame_async(
+                wt.page,
+                tv_eff,
+                charts_dir,
+                stamp,
+                sym_key,
+                slug,
+            )
+            return {"path": str(path)}
 
     def _require_context(self) -> BrowserContext:
         if self._context is None:
@@ -495,6 +891,57 @@ async def _handle_one_request(
             timeout_ms=int(params.get("timeout_ms") or 10_000),
             poll_ms=int(params.get("poll_ms") or 250),
         )
+        return {"type": "response", "request_id": rid, "ok": True, "result": r, "error": None}
+
+    if method == METHOD_TV_CAPTURE_PLAN:
+        tv_raw = params.get("tv")
+        if not isinstance(tv_raw, dict):
+            raise ValueError("tv_capture_plan requires params.tv as object")
+        plan_raw = params.get("plan")
+        if not isinstance(plan_raw, list):
+            raise ValueError("tv_capture_plan requires params.plan as array")
+        charts_dir = Path(str(params.get("charts_dir") or "")).expanduser()
+        stamp = str(params.get("stamp") or "").strip()
+        main_symbol = str(params.get("main_symbol") or "").strip()
+        sm_raw = params.get("settle_ms")
+        settle_ms = int(sm_raw) if sm_raw is not None else None
+        r = await st.tv_capture_plan(
+            tv=tv_raw,
+            plan=plan_raw,
+            charts_dir=charts_dir,
+            stamp=stamp,
+            main_symbol=main_symbol,
+            settle_ms=settle_ms,
+        )
+        return {"type": "response", "request_id": rid, "ok": True, "result": r, "error": None}
+
+    if method == METHOD_TV_CAPTURE_FRAME:
+        tv_raw = params.get("tv")
+        if not isinstance(tv_raw, dict):
+            raise ValueError("tv_capture_frame requires params.tv as object")
+        charts_dir = Path(str(params.get("charts_dir") or "")).expanduser()
+        stamp = str(params.get("stamp") or "").strip()
+        symbol = str(params.get("symbol") or "").strip()
+        interval_label = str(params.get("interval_label") or "").strip()
+        slug = str(params.get("slug") or "").strip()
+        indicator_profile = str(params.get("indicator_profile") or "").strip()
+        sm_raw = params.get("settle_ms")
+        settle_ms = int(sm_raw) if sm_raw is not None else None
+        r = await st.tv_capture_frame(
+            tv=tv_raw,
+            charts_dir=charts_dir,
+            stamp=stamp,
+            symbol=symbol,
+            interval_label=interval_label,
+            slug=slug,
+            indicator_profile=indicator_profile,
+            settle_ms=settle_ms,
+        )
+        return {"type": "response", "request_id": rid, "ok": True, "result": r, "error": None}
+
+    if method == METHOD_TV_PREWARM_RESET:
+        ms = str(params.get("main_symbol") or "").strip() or None
+        r = await st.tv_prewarm_reset(main_symbol=ms)
         return {"type": "response", "request_id": rid, "ok": True, "result": r, "error": None}
 
     if method == METHOD_CAPTURE_CHARTS:

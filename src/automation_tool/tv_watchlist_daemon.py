@@ -35,6 +35,7 @@ from automation_tool.mt5_accounts import (
     MT5AccountEntry,
     filter_mt5_accounts_for_entry_slot,
     load_mt5_accounts_for_cli,
+    load_mt5_accounts_for_zone_entry,
     primary_account,
 )
 from automation_tool.mt5_execute import (
@@ -2365,7 +2366,33 @@ def _auto_entry_job(
             )
             return
 
-        accs_ae = load_mt5_accounts_for_cli(params.mt5_accounts_json)
+        accs_ae = load_mt5_accounts_for_zone_entry(
+            zone_source=(z0.source or ""),
+            cli_path=params.mt5_accounts_json,
+        )
+        if accs_ae is not None and len(accs_ae) == 0:
+            st_z = _state_read(params)
+            if st_z is not None:
+                for z in st_z.zones:
+                    if z.id == zone_id:
+                        z.status = "cham"
+                        z.auto_entry_retry_after = ""
+                        z.auto_entry_mt5_failed = False
+                        break
+                _state_write(params, st_z)
+            _send_log(
+                settings,
+                "[auto-entry] update-scalp zone requires accounts-scalp.json beside accounts file "
+                f"| zone_id={zone_id}",
+            )
+            _send_user_notice(
+                settings,
+                "Tự động vào lệnh: thiếu accounts-scalp.json.",
+                "Vùng update-scalp cần file accounts-scalp.json cạnh accounts.json (chạy update-scalp hoặc tạo subset).",
+                zone=z0,
+                params=params,
+            )
+            return
         if accs_ae:
             exec_accs_ae, slot_ae, blocked_ae = _filter_entry_accounts_for_zone(accs_ae, z0, params)
             if blocked_ae:
@@ -2790,7 +2817,34 @@ def _zone_touch_job(
             )
             return
 
-        accs_zt = load_mt5_accounts_for_cli(params.mt5_accounts_json)
+        accs_zt = load_mt5_accounts_for_zone_entry(
+            zone_source=(z1.source or ""),
+            cli_path=params.mt5_accounts_json,
+        )
+        if accs_zt is not None and len(accs_zt) == 0:
+            st_block_scalp = _state_read(params)
+            if st_block_scalp is not None:
+                for z in st_block_scalp.zones:
+                    if z.id == zone_id:
+                        z.status = "cham"
+                        z.retry_at = ""
+                        z.mt5_ticket = None
+                        z.mt5_tickets_by_account = None
+                        break
+                _state_write(params, st_block_scalp)
+            _send_log(
+                settings,
+                "[zone-touch] update-scalp requires accounts-scalp.json beside accounts file "
+                f"| zone_id={zone_id}",
+            )
+            _send_user_notice(
+                settings,
+                "Vào lệnh: thiếu accounts-scalp.json.",
+                "Vùng update-scalp cần file accounts-scalp.json cạnh accounts.json (chạy update-scalp hoặc tạo subset).",
+                zone=z1,
+                params=params,
+            )
+            return
         if accs_zt:
             exec_accs_zt, slot_zt, blocked_zt = _filter_entry_accounts_for_zone(accs_zt, z1, params)
             if blocked_zt:

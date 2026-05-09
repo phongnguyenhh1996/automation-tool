@@ -6,11 +6,21 @@ Duplicated from sync helpers in coinmap.py / tradingview_last_price.py with awai
 
 from __future__ import annotations
 
+import logging
 import re
 import time
+from pathlib import Path
 from typing import Any, Optional
 
-from playwright.async_api import Page
+from playwright.async_api import Locator, Page
+
+from automation_tool.coinmap import (
+    _tradingview_interval_slug,
+    _tradingview_is_delete_indicator_label,
+    _tv_apply_indicator_profile,
+    _tv_forbidden_indicator_groups,
+    _tv_required_indicator_groups,
+)
 
 _FLOAT_RE = re.compile(r"-?\d+(?:\.\d+)?")
 
@@ -187,32 +197,44 @@ async def maybe_tradingview_login_async(
             fl = page.frame_locator(iframe_sel)
             if login_method_sel:
                 method_loc = fl.locator(login_method_sel).first
-                await method_loc.wait_for(state="visible", timeout=method_timeout)
-                await method_loc.click(timeout=15_000)
-                if after_method_ms > 0:
-                    await page.wait_for_timeout(after_method_ms)
+                try:
+                    await method_loc.wait_for(state="visible", timeout=method_timeout)
+                    await method_loc.click(timeout=15_000)
+                    if after_method_ms > 0:
+                        await page.wait_for_timeout(after_method_ms)
+                except Exception:
+                    pass
             elif login_method_text:
                 method_loc = fl.get_by_text(login_method_text, exact=True).first
-                await method_loc.wait_for(state="visible", timeout=method_timeout)
-                await method_loc.click(timeout=15_000)
-                if after_method_ms > 0:
-                    await page.wait_for_timeout(after_method_ms)
+                try:
+                    await method_loc.wait_for(state="visible", timeout=method_timeout)
+                    await method_loc.click(timeout=15_000)
+                    if after_method_ms > 0:
+                        await page.wait_for_timeout(after_method_ms)
+                except Exception:
+                    pass
             email_loc = fl.locator(email_sel).first
             pass_loc = fl.locator(pass_sel).first
             sub_loc = fl.locator(submit_sel).first
         else:
             if login_method_sel:
                 method_loc = page.locator(login_method_sel).first
-                await method_loc.wait_for(state="visible", timeout=method_timeout)
-                await method_loc.click(timeout=15_000)
-                if after_method_ms > 0:
-                    await page.wait_for_timeout(after_method_ms)
+                try:
+                    await method_loc.wait_for(state="visible", timeout=method_timeout)
+                    await method_loc.click(timeout=15_000)
+                    if after_method_ms > 0:
+                        await page.wait_for_timeout(after_method_ms)
+                except Exception:
+                    pass
             elif login_method_text:
                 method_loc = page.get_by_text(login_method_text, exact=True).first
-                await method_loc.wait_for(state="visible", timeout=method_timeout)
-                await method_loc.click(timeout=15_000)
-                if after_method_ms > 0:
-                    await page.wait_for_timeout(after_method_ms)
+                try:
+                    await method_loc.wait_for(state="visible", timeout=method_timeout)
+                    await method_loc.click(timeout=15_000)
+                    if after_method_ms > 0:
+                        await page.wait_for_timeout(after_method_ms)
+                except Exception:
+                    pass
             email_loc = page.locator(email_sel).first
             pass_loc = page.locator(pass_sel).first
             sub_loc = page.locator(submit_sel).first
@@ -257,3 +279,490 @@ async def tradingview_ensure_watchlist_open_async(page: Page, tv: dict[str, Any]
     if pressed != "true":
         await btn.click(timeout=15_000)
         await page.wait_for_timeout(ms)
+
+
+_log_tv = logging.getLogger("automation_tool.coinmap_tradingview_async")
+
+
+async def tv_select_symbol_async(page: Page, tv: dict[str, Any], symbol: str) -> None:
+    custom = (tv.get("symbol_list_item_selector") or "").strip()
+    if custom:
+        loc = page.locator(custom.format(symbol=symbol)).first
+    else:
+        prefix = (tv.get("symbol_name_class_prefix") or "symbolNameText-").strip()
+        loc = page.locator(f'[class*="{prefix}"]').get_by_text(symbol, exact=True).first
+    await loc.wait_for(state="visible", timeout=25_000)
+    await loc.click(timeout=15_000)
+    await page.wait_for_timeout(int(tv.get("after_symbol_select_ms", 1_500)))
+
+
+async def tv_select_interval_async(
+    page: Page,
+    tv: dict[str, Any],
+    interval_aria: str,
+    settle_ms: int,
+) -> None:
+    intervals_id = (tv.get("intervals_toolbar_id") or "header-toolbar-intervals").strip()
+    toolbar = page.locator(f"#{intervals_id}")
+    interval_btn = toolbar.locator(f'button[aria-label="{interval_aria}"]').first
+    await interval_btn.wait_for(state="attached", timeout=30_000)
+    use_force = bool(tv.get("interval_button_click_force", True))
+    await interval_btn.click(timeout=15_000, force=use_force)
+    await page.wait_for_timeout(int(tv.get("after_interval_select_ms", settle_ms)))
+
+
+async def tv_reset_chart_position_async(page: Page, tv: dict[str, Any]) -> None:
+    shortcut = (tv.get("tradingview_reset_shortcut") or "Alt+R").strip()
+    wait_ms = int(tv.get("after_tradingview_reset_ms", 400))
+    if not shortcut:
+        return
+    try:
+        await page.keyboard.press(shortcut)
+        if wait_ms > 0:
+            await page.wait_for_timeout(wait_ms)
+    except Exception:
+        pass
+
+
+async def tv_list_legend_item_texts_async(page: Page, tv: dict[str, Any]) -> list[str]:
+    sel = (tv.get("legend_item_selector") or '[data-qa-id="legend-source-item"]').strip()
+    loc = page.locator(sel)
+    n = await loc.count()
+    out: list[str] = []
+    for i in range(int(n or 0)):
+        try:
+            t = (await loc.nth(i).inner_text(timeout=1500) or "").strip()
+        except Exception:
+            t = ""
+        if t:
+            out.append(t)
+    return out
+
+
+def tv_has_required_indicators_async_logic(page_texts: list[str], tv: dict[str, Any]) -> bool:
+    groups = _tv_required_indicator_groups(tv)
+    forbidden = _tv_forbidden_indicator_groups(tv)
+    if not page_texts:
+        return False
+    hay = "\n".join(page_texts).lower()
+
+    def _has_any(names: list[str]) -> bool:
+        for nm in names:
+            if nm and nm.lower() in hay:
+                return True
+        return False
+
+    if not groups:
+        return True
+    for fg in forbidden:
+        if _has_any(list(fg or [])):
+            return False
+    for g in groups:
+        if not _has_any(list(g or [])):
+            return False
+    return True
+
+
+async def tv_chart_center_xy_async(page: Page, tv: dict[str, Any]) -> tuple[float, float]:
+    y_ratio = float(tv.get("chart_context_click_y_ratio", 0.10) or 0.10)
+    y_ratio = min(1.0, max(0.0, y_ratio))
+    raw = tv.get("chart_center_click_selector")
+    sels: list[str] = []
+    if isinstance(raw, str) and raw.strip():
+        sels.append(raw.strip())
+    elif isinstance(raw, list):
+        sels.extend([str(x).strip() for x in raw if str(x).strip()])
+    sels.extend(
+        [
+            'div[data-name="pane"]',
+            '[data-qa-id="chart-container"]',
+            "div.chart-container",
+            "div.tv-chart",
+        ]
+    )
+    for sel in sels:
+        try:
+            loc = page.locator(sel).first
+            await loc.wait_for(state="visible", timeout=1500)
+            bb = await loc.bounding_box()
+            if bb and bb.get("width", 0) and bb.get("height", 0):
+                x = float(bb["x"]) + float(bb["width"]) / 2.0
+                y = float(bb["y"]) + float(bb["height"]) * y_ratio
+                return x, y
+        except Exception:
+            continue
+    vp = page.viewport_size or {"width": 1600, "height": 900}
+    return float(vp["width"]) / 2.0, float(vp["height"]) * y_ratio
+
+
+def tv_shifted_context_click_xy_async(
+    page_vp: dict[str, float],
+    tv: dict[str, Any],
+    base_x: float,
+    base_y: float,
+    attempt_index: int,
+) -> tuple[float, float]:
+    w = float(page_vp.get("width") or 1600)
+    h = float(page_vp.get("height") or 900)
+    step = float(tv.get("indicator_clear_retry_offset_ratio", 0.10) or 0.10)
+    step = min(0.5, max(0.0, step))
+    margin = 8.0
+    x = base_x - (w * step * attempt_index)
+    y = base_y + (h * step * attempt_index)
+    return min(max(x, margin), w - margin), min(max(y, margin), h - margin)
+
+
+async def tv_open_context_menu_and_clear_indicators_async(page: Page, tv: dict[str, Any]) -> None:
+    _log_tv.info("tv: clear indicators | open context menu")
+    texts = tv.get("context_menu_delete_indicators_texts")
+    if isinstance(texts, list) and texts:
+        candidates = [str(x).strip() for x in texts if str(x).strip()]
+    else:
+        candidates = ["Xóa 1 chỉ báo", "Xóa 2 chỉ báo"]
+
+    attempts = int(tv.get("indicator_clear_retry_attempts", 8) or 8)
+    click_timeout_ms = int(tv.get("indicator_clear_click_timeout_ms", 3000) or 3000)
+    visible_timeout_ms = int(tv.get("indicator_clear_visible_timeout_ms", 1500) or 1500)
+    menu_settle_ms = int(tv.get("indicator_clear_menu_settle_ms", 150) or 150)
+
+    last_err: Optional[BaseException] = None
+    last_legend: list[str] = []
+    base_x, base_y = await tv_chart_center_xy_async(page, tv)
+    vp = page.viewport_size or {"width": 1600.0, "height": 900.0}
+    page_vp = {"width": float(vp.get("width") or 1600), "height": float(vp.get("height") or 900)}
+
+    for i in range(max(1, attempts)):
+        x, y = tv_shifted_context_click_xy_async(page_vp, tv, base_x, base_y, i)
+        _log_tv.info(
+            "tv: clear indicators | context click attempt %s/%s at x=%.1f y=%.1f",
+            i + 1,
+            attempts,
+            x,
+            y,
+        )
+        await page.mouse.click(x, y, button="right")
+        if menu_settle_ms > 0:
+            await page.wait_for_timeout(menu_settle_ms)
+        clicked = False
+
+        labels = page.locator('[data-role="menuitem"] [data-label="true"]')
+        try:
+            n = int(await labels.count() or 0)
+        except Exception:
+            n = 0
+        for j in range(n):
+            try:
+                item = labels.nth(j)
+                label = (await item.inner_text(timeout=500) or "").strip()
+                if not _tradingview_is_delete_indicator_label(label):
+                    continue
+                await item.wait_for(state="visible", timeout=visible_timeout_ms)
+                row = item.locator('xpath=ancestor::*[@data-role="menuitem"][1]')
+                await row.click(timeout=click_timeout_ms, force=True)
+                _log_tv.info(
+                    "tv: clear indicators | clicked %r (attempt %s/%s)",
+                    label,
+                    i + 1,
+                    attempts,
+                )
+                clicked = True
+                break
+            except Exception as e:
+                last_err = e
+                continue
+
+        for t in candidates:
+            if clicked:
+                break
+            try:
+                item = page.locator(
+                    '[data-role="menuitem"] [data-label="true"]',
+                    has_text=t,
+                ).first
+                await item.wait_for(state="visible", timeout=visible_timeout_ms)
+                row = item.locator('xpath=ancestor::*[@data-role="menuitem"][1]')
+                await row.click(timeout=click_timeout_ms, force=True)
+                _log_tv.info(
+                    "tv: clear indicators | clicked %r (attempt %s/%s)",
+                    t,
+                    i + 1,
+                    attempts,
+                )
+                clicked = True
+                break
+            except Exception as e:
+                last_err = e
+                continue
+
+        if clicked:
+            await page.wait_for_timeout(int(tv.get("after_indicator_clear_ms", 450)))
+            last_legend = await tv_list_legend_item_texts_async(page, tv)
+            if not last_legend:
+                _log_tv.info("tv: clear indicators | no legend indicators remain")
+                return
+            _log_tv.info(
+                "tv: clear indicators | indicators remain after delete: %r",
+                last_legend,
+            )
+            continue
+
+        try:
+            await page.keyboard.press("Escape")
+        except Exception:
+            pass
+        await page.wait_for_timeout(300)
+
+    msg = f"tv: clear indicators failed after {attempts} attempt(s)"
+    if last_legend:
+        msg += f"; indicators still present: {last_legend!r}"
+    if last_err is not None:
+        msg += f" ({last_err})"
+    raise SystemExit(msg)
+
+
+async def tv_add_required_indicators_from_favorites_async(page: Page, tv: dict[str, Any]) -> None:
+    btn_sel = (
+        tv.get("favorite_indicators_button_selector") or 'button[data-name="show-favorite-indicators"]'
+    ).strip()
+    tpl = (
+        tv.get("favorite_indicator_item_selector_template")
+        or 'div[data-role="menuitem"][aria-label="{name}"]'
+    ).strip()
+    parent_sel = (tv.get("favorite_indicators_parent_selector") or "").strip()
+    names = tv.get("favorite_indicator_names")
+    if isinstance(names, list) and names:
+        favs = [str(x).strip() for x in names if str(x).strip()]
+    else:
+        inferred: list[str] = []
+        raw_req = tv.get("required_indicators")
+        if isinstance(raw_req, list):
+            for row in raw_req:
+                if not isinstance(row, dict):
+                    continue
+                fn = str(row.get("favorite_name") or "").strip()
+                if fn:
+                    inferred.append(fn)
+        favs = inferred or ["Smart Money Concepts (SMC) [LuxAlgo]", "VSA Volume"]
+
+    after_add = int(tv.get("after_indicator_add_ms", 500))
+
+    root: Locator | Page = page.locator(parent_sel).first if parent_sel else page
+    if parent_sel:
+        try:
+            await root.wait_for(state="visible", timeout=20_000)
+        except Exception:
+            root = page
+
+    btn = root.locator(btn_sel).first
+
+    async def _open_favorites_menu() -> None:
+        _log_tv.info("tv: favorites | open menu")
+        try:
+            await btn.wait_for(state="visible", timeout=4000)
+            await btn.click(timeout=10_000)
+            return
+        except Exception:
+            pass
+        try:
+            await btn.click(timeout=10_000, force=True)
+            return
+        except Exception:
+            pass
+        child = btn.locator(":scope div").first
+        await child.wait_for(state="attached", timeout=10_000)
+        await child.click(timeout=10_000, force=True)
+
+    for nm in favs:
+        await _open_favorites_menu()
+        _log_tv.info("tv: favorites | add indicator=%r", nm)
+        sel = tpl.format(name=nm)
+        it = page.locator(sel).first
+        await it.wait_for(state="visible", timeout=10_000)
+        await it.click(timeout=10_000)
+        if after_add > 0:
+            await page.wait_for_timeout(after_add)
+
+
+async def tv_ensure_required_indicators_async(page: Page, tv: dict[str, Any]) -> None:
+    if not bool(tv.get("required_indicators_enabled", False)):
+        return
+
+    verify_timeout_ms = int(tv.get("indicator_verify_timeout_ms", 1000))
+    groups = _tv_required_indicator_groups(tv)
+    forbidden = _tv_forbidden_indicator_groups(tv)
+    _log_tv.info(
+        "tv: ensure indicators | required=%s",
+        [[x for x in g if x] for g in (groups or [])],
+    )
+    if forbidden:
+        _log_tv.info(
+            "tv: ensure indicators | forbidden=%s",
+            [[x for x in g if x] for g in (forbidden or [])],
+        )
+    deadline = time.monotonic() + max(0, verify_timeout_ms) / 1000.0
+    while time.monotonic() < deadline:
+        texts = await tv_list_legend_item_texts_async(page, tv)
+        if tv_has_required_indicators_async_logic(texts, tv):
+            _log_tv.info("tv: ensure indicators | ok")
+            return
+        await page.wait_for_timeout(200)
+
+    legend_now = await tv_list_legend_item_texts_async(page, tv)
+    if not legend_now:
+        _log_tv.info("tv: ensure indicators | legend empty -> add-only recover")
+        await tv_add_required_indicators_from_favorites_async(page, tv)
+    else:
+        _log_tv.info("tv: ensure indicators | missing -> recover")
+        await tv_open_context_menu_and_clear_indicators_async(page, tv)
+        await tv_add_required_indicators_from_favorites_async(page, tv)
+
+    deadline2 = time.monotonic() + max(0, verify_timeout_ms) / 1000.0
+    while time.monotonic() < deadline2:
+        texts = await tv_list_legend_item_texts_async(page, tv)
+        if tv_has_required_indicators_async_logic(texts, tv):
+            _log_tv.info("tv: ensure indicators | ok after recover")
+            return
+        await page.wait_for_timeout(200)
+
+    got = await tv_list_legend_item_texts_async(page, tv)
+    if not got:
+        _log_tv.info("tv: ensure indicators | legend still empty after recover; skip hard-fail")
+        return
+    _log_tv.info(
+        "tv: ensure indicators | failed after recover | legend_items=%r",
+        got,
+    )
+    raise SystemExit(
+        "TradingView required indicators missing after recovery. "
+        f"Expected VSA+SMC, got legend items: {got!r}"
+    )
+
+
+async def tv_snapshot_url_capture_async(
+    page: Page,
+    tv: dict[str, Any],
+    charts_dir: Path,
+    stamp: str,
+    symbol_key: str,
+    interval_slug: str,
+    *,
+    dest_url_path: Optional[Path] = None,
+) -> Path:
+    shot_sel = (tv.get("screenshot_button_selector") or "#header-toolbar-screenshot").strip()
+    open_sel = (tv.get("snapshot_open_in_new_tab_selector") or '[data-qa-id="open-image-in-new-tab"]').strip()
+    img_sel = (tv.get("snapshot_image_selector") or "img.tv-snapshot-image").strip()
+    after_shot_ms = int(tv.get("after_screenshot_button_ms", 600))
+    tab_timeout = int(tv.get("snapshot_new_tab_timeout_ms", 5_000))
+    tab_settle_ms = int(tv.get("snapshot_tab_settle_ms", 1000))
+    after_esc_ms = int(tv.get("after_snapshot_escape_ms", 500))
+
+    await page.locator(shot_sel).first.wait_for(state="visible", timeout=5_000)
+    await page.locator(shot_sel).first.click(timeout=5_000)
+    await page.wait_for_timeout(after_shot_ms)
+
+    open_btn = page.locator(open_sel).first
+    await open_btn.wait_for(state="visible", timeout=5_000)
+
+    context = page.context
+    async with context.expect_page(timeout=tab_timeout) as new_page_info:
+        await open_btn.click(timeout=15_000)
+    snap_page = await new_page_info.value
+    dest_base = charts_dir / f"{stamp}_tradingview_{symbol_key}_{interval_slug}"
+    out_url_path = dest_url_path or dest_base.with_suffix(".url")
+    out_png_path = dest_base.with_suffix(".png")
+    try:
+        await snap_page.wait_for_load_state("domcontentloaded", timeout=5_000)
+        await snap_page.wait_for_timeout(tab_settle_ms)
+        loc = snap_page.locator(img_sel).first
+        await loc.wait_for(state="visible", timeout=5_000)
+        src = (await loc.get_attribute("src") or "").strip()
+        if src.startswith("https://") or src.startswith("http://"):
+            out_url_path.parent.mkdir(parents=True, exist_ok=True)
+            out_url_path.write_text(src + "\n", encoding="utf-8")
+            return out_url_path
+        await loc.screenshot(path=str(out_png_path), timeout=5_000)
+        return out_png_path
+    finally:
+        try:
+            await snap_page.close()
+        except Exception:
+            pass
+        await page.keyboard.press("Escape")
+        await page.wait_for_timeout(after_esc_ms)
+
+
+async def tv_capture_one_chart_frame_async(
+    page: Page,
+    tv: dict[str, Any],
+    charts_dir: Path,
+    stamp: str,
+    symbol_key: str,
+    interval_slug: str,
+    *,
+    dest_url_path: Optional[Path] = None,
+) -> Path:
+    if bool(tv.get("tradingview_snapshot_url_flow", True)):
+        return await tv_snapshot_url_capture_async(
+            page,
+            tv,
+            charts_dir,
+            stamp,
+            symbol_key,
+            interval_slug,
+            dest_url_path=dest_url_path,
+        )
+    fs_sel = (tv.get("fullscreen_button_selector") or "#header-toolbar-fullscreen").strip()
+    await page.locator(fs_sel).first.wait_for(state="visible", timeout=45_000)
+    await page.locator(fs_sel).first.click(timeout=15_000)
+    fs_wait = int(tv.get("fullscreen_settle_ms", 2000))
+    await page.wait_for_timeout(fs_wait)
+    full_page = bool(tv.get("fullscreen_screenshot_full_page", True))
+    dest = charts_dir / f"{stamp}_tradingview_{symbol_key}_{interval_slug}.png"
+    await page.screenshot(path=str(dest), full_page=full_page)
+    await page.keyboard.press("Escape")
+    await page.wait_for_timeout(int(tv.get("after_fullscreen_escape_ms", 800)))
+    return dest
+
+
+async def tv_warmup_tab_async(
+    page: Page,
+    tv: dict[str, Any],
+    *,
+    symbol: str,
+    interval_label: str,
+    settle_ms: int,
+    login_email: Optional[str],
+    login_password: Optional[str],
+) -> None:
+    tw = int(tv.get("viewport_width", 0) or 0)
+    th = int(tv.get("viewport_height", 0) or 0)
+    if tw > 0 and th > 0 and page.viewport_size is not None:
+        await page.set_viewport_size({"width": tw, "height": th})
+
+    url = tv.get("chart_url") or "https://vn.tradingview.com/chart/?symbol=OANDA%3AXAUUSD"
+    await page.goto(str(url), wait_until="domcontentloaded", timeout=120_000)
+    init_wait = int(tv.get("initial_settle_ms", settle_ms))
+    await page.wait_for_timeout(init_wait)
+
+    await maybe_tradingview_login_async(page, tv, login_email, login_password)
+
+    intervals_id = (tv.get("intervals_toolbar_id") or "header-toolbar-intervals").strip()
+    toolbar = page.locator(f"#{intervals_id}")
+    await toolbar.wait_for(state="visible", timeout=90_000)
+
+    await maybe_tradingview_dark_mode_async(page, tv)
+
+    await tradingview_ensure_watchlist_open_async(page, tv)
+    await tv_select_symbol_async(page, tv, symbol)
+    await tv_select_interval_async(page, tv, interval_label, settle_ms)
+    await tv_reset_chart_position_async(page, tv)
+    await tv_ensure_required_indicators_async(page, tv)
+
+
+def tv_apply_profile(tv: dict[str, Any], profile: str) -> dict[str, Any]:
+    """Shallow merge indicator profile (same as coinmap._tv_apply_indicator_profile)."""
+    return _tv_apply_indicator_profile(tv, profile)
+
+
+def tv_interval_slug_from_label(label: str, tv: dict[str, Any]) -> str:
+    return _tradingview_interval_slug(label, tv)
