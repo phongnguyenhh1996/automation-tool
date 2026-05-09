@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, Optional
@@ -13,6 +13,7 @@ from automation_tool.openai_analysis_json import (
     AnalysisPayload,
     PriceZoneEntry,
     ZONE_LABELS_ORDER,
+    is_scalp_label,
     parse_vung_cho_bounds,
 )
 from automation_tool.state_files import (
@@ -26,6 +27,7 @@ from automation_tool.zones_paths import (
     default_last_price_path,
     default_zones_dir,
     iter_shard_paths,
+    label_from_shard_stem,
     manifest_path,
     resolve_zones_directory,
     session_slot_from_shard_path,
@@ -971,6 +973,69 @@ def zones_from_scalp_payload(
             zone_from_price_entry(lab=lab, pe=pe, source=source, session_slot=session_slot)
         )
     return zones
+
+
+def _existing_scalp_labels_for_slot(zones_dir: Path, slot: SessionSlot) -> set[str]:
+    """Labels scalp (``scalp``, ``scalp_1``, …) đã có file shard cho ``slot``."""
+    out: set[str] = set()
+    if not zones_dir.is_dir():
+        return out
+    for p in zones_dir.glob("vung_*.json"):
+        if session_slot_from_shard_path(p) != slot:
+            continue
+        lab = label_from_shard_stem(p.stem)
+        if lab and is_scalp_label(lab):
+            out.add(lab.strip().lower())
+    return out
+
+
+def _next_free_numeric_scalp_label(
+    occupied: set[str],
+    zones_dir: Path,
+    slot: SessionSlot,
+) -> str:
+    """``scalp_1``, ``scalp_2``, … nhỏ nhất chưa có trong ``occupied`` và chưa có file."""
+    n = 1
+    while True:
+        cand = f"scalp_{n}"
+        if cand not in occupied and not shard_path(zones_dir, cand, slot).is_file():
+            return cand
+        n += 1
+
+
+def remap_scalp_zones_avoiding_shard_collision(
+    zones: list[Zone],
+    *,
+    zones_dir: Path,
+    slot: SessionSlot,
+) -> list[Zone]:
+    """
+    Trước khi ghi shard ``update-scalp``: nếu label model trùng file shard đã có cho ``slot``,
+    đổi sang ``scalp_<n>`` tiếp theo còn trống (model hay lặp ``scalp_1`` → không đè zone cũ).
+    """
+    occupied = _existing_scalp_labels_for_slot(zones_dir, slot)
+    out: list[Zone] = []
+    for z in zones:
+        lab = (z.label or "").strip().lower()
+        if not is_scalp_label(lab):
+            out.append(z)
+            continue
+        cand = lab
+        while cand in occupied or shard_path(zones_dir, cand, slot).is_file():
+            cand = _next_free_numeric_scalp_label(occupied, zones_dir, slot)
+        occupied.add(cand)
+        if cand != lab:
+            out.append(
+                replace(
+                    z,
+                    label=cand,
+                    id=zone_id_for_shard(cand, slot),
+                    session_slot=slot,
+                )
+            )
+        else:
+            out.append(z)
+    return out
 
 
 def zones_from_analysis_payload_merged(

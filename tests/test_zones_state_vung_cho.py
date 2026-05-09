@@ -11,11 +11,14 @@ from automation_tool.zones_state import (
     _parse_zone,
     can_apply_old_price_loai,
     read_zones_state,
+    remap_scalp_zones_avoiding_shard_collision,
     remove_zones_state_file,
     zones_from_analysis_payload,
     zones_from_analysis_payload_merged,
+    zone_from_price_entry,
 )
 from automation_tool.openai_analysis_json import AnalysisPayload, PriceZoneEntry
+from automation_tool.zones_paths import shard_path
 
 
 def test_parse_zone_legacy_range_migrates_to_vung_cho() -> None:
@@ -156,3 +159,55 @@ def test_parse_zone_reads_has_position_flag() -> None:
     assert z.managed_sl == 99.5
     assert z.managed_tp == 103.0
     assert z.last_r_followup_level == 2
+
+
+def test_remap_scalp_keeps_label_when_shard_missing(tmp_path: Path) -> None:
+    z = zone_from_price_entry(
+        lab="scalp_1",
+        pe=PriceZoneEntry(label="scalp_1", value=100.0, hop_luu=60, trade_line="BUY LIMIT 100"),
+        source="update-scalp",
+        session_slot="sang",
+    )
+    out = remap_scalp_zones_avoiding_shard_collision([z], zones_dir=tmp_path, slot="sang")
+    assert len(out) == 1
+    assert out[0].label == "scalp_1"
+    assert out[0].id == "scalp_1__sang"
+
+
+def test_remap_scalp_bumps_when_shard_file_exists(tmp_path: Path) -> None:
+    zones_dir = tmp_path
+    shard_path(zones_dir, "scalp_1", "sang").write_text(
+        '{"symbol":"X","slot":"sang","zone":{"id":"x","label":"scalp_1","vung_cho":"1–2","side":"BUY"}}',
+        encoding="utf-8",
+    )
+    z = zone_from_price_entry(
+        lab="scalp_1",
+        pe=PriceZoneEntry(label="scalp_1", value=200.0, hop_luu=60, trade_line="SELL LIMIT 200"),
+        source="update-scalp",
+        session_slot="sang",
+    )
+    out = remap_scalp_zones_avoiding_shard_collision([z], zones_dir=zones_dir, slot="sang")
+    assert out[0].label == "scalp_2"
+    assert out[0].id == "scalp_2__sang"
+
+
+def test_remap_scalp_second_zone_avoids_double_booking_same_batch(tmp_path: Path) -> None:
+    zones_dir = tmp_path
+    shard_path(zones_dir, "scalp_1", "sang").write_text(
+        '{"symbol":"X","slot":"sang","zone":{"id":"x","label":"scalp_1","vung_cho":"1–2","side":"BUY"}}',
+        encoding="utf-8",
+    )
+    z1 = zone_from_price_entry(
+        lab="scalp_1",
+        pe=PriceZoneEntry(label="scalp_1", value=1.0, hop_luu=60, trade_line="BUY"),
+        source="update-scalp",
+        session_slot="sang",
+    )
+    z2 = zone_from_price_entry(
+        lab="scalp_2",
+        pe=PriceZoneEntry(label="scalp_2", value=2.0, hop_luu=60, trade_line="BUY"),
+        source="update-scalp",
+        session_slot="sang",
+    )
+    out = remap_scalp_zones_avoiding_shard_collision([z1, z2], zones_dir=zones_dir, slot="sang")
+    assert [z.label for z in out] == ["scalp_2", "scalp_3"]

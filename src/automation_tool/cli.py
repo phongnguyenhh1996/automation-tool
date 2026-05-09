@@ -96,6 +96,7 @@ from automation_tool.zones_paths import SessionSlot, session_slot_now_hcm
 from automation_tool.zones_state import (
     clear_zones_directory,
     migrate_legacy_zones_state_if_needed,
+    remap_scalp_zones_avoiding_shard_collision,
     write_zones_for_slot,
     zones_from_analysis_payload,
     zones_from_scalp_payload,
@@ -3128,6 +3129,11 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
             session_slot=slot,
         )
         if scalp_zones:
+            scalp_zones = remap_scalp_zones_avoiding_shard_collision(
+                scalp_zones,
+                zones_dir=zones_dir,
+                slot=slot,
+            )
             write_zones_for_slot(
                 symbol=sym,
                 zones=scalp_zones,
