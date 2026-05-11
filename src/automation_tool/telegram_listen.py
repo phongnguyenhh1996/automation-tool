@@ -521,6 +521,63 @@ def _run_analyze_many_pipeline_in_thread(
         with _PROC_LOCK:
             _PROCS[:] = [p for p in _PROCS if p.popen.poll() is None]
 
+def _browser_command_for_action(action: str) -> list[str]:
+    root = _project_root()
+    if sys.platform == "win32":
+        script = "browser_up.bat" if action == "up" else "browser_down.bat"
+        return ["cmd", "/c", str(root / script)]
+    return [
+        sys.executable,
+        "-m",
+        "automation_tool.cli",
+        "browser",
+        action,
+    ]
+
+
+def _run_browser_command_in_thread(
+    *,
+    settings: Settings,
+    reply_chat_id: str,
+    action: str,
+    trigger_message_id: Optional[int],
+) -> None:
+    root = _project_root()
+    cmd_label = f"/browser-{action}"
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    ref = f"(msg_id={trigger_message_id})" if trigger_message_id else ""
+    _send_status(
+        settings,
+        reply_chat_id,
+        f"▶️ {cmd_label} received {ref}\nRunning browser {action} at {stamp}.",
+    )
+
+    try:
+        mp = _spawn_managed_process(
+            name=f"browser-{action}",
+            cmd=_browser_command_for_action(action),
+            cwd=root,
+        )
+        out, _ = mp.popen.communicate()
+        code = int(mp.popen.returncode or 0)
+        tail = (out or "").strip()
+        if len(tail) > 1500:
+            tail = tail[-1500:]
+
+        if code == 0:
+            msg = f"✅ {cmd_label} finished successfully (exit code 0)."
+        else:
+            msg = f"❌ {cmd_label} failed (exit code {code})."
+        if tail:
+            msg += "\n\nOutput:\n" + tail
+        _send_status(settings, reply_chat_id, msg)
+    except Exception as e:
+        _send_status(settings, reply_chat_id, f"❌ {cmd_label} crashed: {e!r}")
+    finally:
+        with _PROC_LOCK:
+            _PROCS[:] = [p for p in _PROCS if p.popen.poll() is None]
+
+
 def run_telegram_listener(
     *,
     settings: Settings,
@@ -666,6 +723,21 @@ def run_telegram_listener(
                             },
                             daemon=True,
                             name="telegram-analyze-many-runner",
+                        )
+                        t.start()
+                    elif cmd in ("browser-up", "browser-down"):
+                        mid = _message_id_from_envelope(env)
+                        action = "up" if cmd == "browser-up" else "down"
+                        t = threading.Thread(
+                            target=_run_browser_command_in_thread,
+                            kwargs={
+                                "settings": settings,
+                                "reply_chat_id": listen_chat_id,
+                                "action": action,
+                                "trigger_message_id": mid,
+                            },
+                            daemon=True,
+                            name=f"telegram-browser-{action}-runner",
                         )
                         t.start()
                     elif cmd == "loai":
