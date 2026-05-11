@@ -55,7 +55,7 @@ def test_plan_chinh_overwrites_plan_phu_same_side_buy() -> None:
     )
     assert payload["buy"]["mode"] == "trade"
     assert payload["buy"]["low"] == 2700.0
-    assert payload["buy"]["high"] == 2720.0
+    assert payload["buy"]["high"] == 2730.0
     assert payload["buy"]["sl"] == 2690.0
     assert payload["sell"]["mode"] == "off"
 
@@ -121,3 +121,21 @@ def test_market_entry_uses_midpoint_sl_tp1() -> None:
     assert payload["buy"]["low"] == (2640.0 + 2660.0) / 2.0
     assert payload["buy"]["high"] == 2660.0
     assert payload["buy"]["sl"] == 2640.0
+
+
+def test_high_uses_tp2_when_present() -> None:
+    z = _zone(
+        label="plan_chinh",
+        trade_line="SELL LIMIT 2680.0 | SL 2690.0 | TP1 2660.0 | TP2 2650.0 | Lot 0.01",
+        side="SELL",
+    )
+    st = ZonesState(symbol="XAUUSD", zones=[z])
+    payload = build_neverdie_payload(
+        zones_dir=Path("/tmp"),
+        symbol="XAUUSD",
+        state=st,
+        manifest_slot="sang",
+    )
+    assert payload["sell"]["low"] == 2680.0
+    assert payload["sell"]["high"] == 2650.0
+    assert payload["sell"]["sl"] == 2690.0

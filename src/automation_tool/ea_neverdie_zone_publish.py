@@ -78,6 +78,11 @@ def entry_low_from_parsed(parsed: ParsedTrade) -> float:
     return float(parsed.price)
 
 
+def target_high_from_parsed(parsed: ParsedTrade) -> float:
+    """EA ``high`` = TP2 when available, otherwise TP1."""
+    return float(parsed.tp2) if parsed.tp2 is not None else float(parsed.tp1)
+
+
 def _side_bucket(side: str) -> Optional[Literal["buy", "sell"]]:
     s = (side or "").strip().upper()
     if s == "BUY":
@@ -154,7 +159,7 @@ def build_neverdie_payload(
         if bucket is None:
             continue
         low = entry_low_from_parsed(parsed)
-        high = float(parsed.tp1)
+        high = target_high_from_parsed(parsed)
         sl = float(parsed.sl)
         block = _trade_side(low, high, sl)
         if bucket == "buy":
