@@ -515,59 +515,26 @@ class BrowserServiceState:
         if need:
             await self._prewarm_tradingview_tabs_async()
 
-    async def _reload_tv_warm_page_before_capture(
-        self,
-        *,
-        key: str,
-        tv: dict[str, Any],
-        settle_ms: int,
-    ) -> None:
-        from automation_tool.coinmap_tradingview_async import tradingview_ensure_watchlist_open_async
+    async def _prepare_tv_warm_tab_for_use(self, wt: _TvWarmTab) -> None:
+        selector = (
+            '#overlap-manager-root button[data-overflow-tooltip-text="Kết nối"], '
+            '#overlap-manager-root button:has-text("Kết nối")'
+        )
+        try:
+            connect_btn = wt.page.locator(selector).first
+            count = await connect_btn.count()
+        except Exception as e:
+            _log.debug("TV warm tab reconnect check skipped | profile=%s | error=%s", wt.profile_key, e)
+            return
+        if count <= 0:
+            return
 
-        wt = self._tv_warm[key]
-        page = wt.page
-        _log.info("TV warm reload before capture | tab=%s", key)
-        await page.reload(wait_until="domcontentloaded", timeout=120_000)
-
-        intervals_id = (tv.get("intervals_toolbar_id") or "header-toolbar-intervals").strip()
-        await page.locator(f"#{intervals_id}").first.wait_for(state="visible", timeout=90_000)
-
-        wait_ms = int(tv.get("after_reload_chart_ready_ms", tv.get("initial_settle_ms", settle_ms)))
-        if wait_ms > 0:
-            await page.wait_for_timeout(wait_ms)
-
-        await tradingview_ensure_watchlist_open_async(page, tv)
-
-        # A reload can restore the saved chart layout instead of the cached in-memory state.
-        # Force the capture path to re-select the requested symbol/interval after reload.
-        wt.current_symbol = ""
-        wt.current_interval_label = ""
-
-    async def _reload_tv_warm_tabs_before_capture(
-        self,
-        *,
-        tv: dict[str, Any],
-        settle_ms: int,
-    ) -> None:
-        from automation_tool.coinmap import _tv_apply_indicator_profile
-
-        await self._ensure_tv_warm_tabs()
-
-        async with self._tv_lock_ict:
-            await self._ensure_tv_warm_tabs()
-            await self._reload_tv_warm_page_before_capture(
-                key="ict",
-                tv=_tv_apply_indicator_profile(tv, "ict_killzones"),
-                settle_ms=settle_ms,
-            )
-
-        async with self._tv_lock_default:
-            await self._ensure_tv_warm_tabs()
-            await self._reload_tv_warm_page_before_capture(
-                key="default",
-                tv=tv,
-                settle_ms=settle_ms,
-            )
+        await connect_btn.click(timeout=10_000)
+        try:
+            await connect_btn.wait_for(state="hidden", timeout=15_000)
+        except Exception:
+            pass
+        _log.info("TV warm tab reconnected | profile=%s", wt.profile_key)
 
     async def tv_prewarm_reset(self, *, main_symbol: Optional[str] = None) -> dict[str, Any]:
         ms = (main_symbol or "").strip() or None
@@ -593,8 +560,9 @@ class BrowserServiceState:
             tv_ensure_required_indicators_async,
         )
 
+        await self._ensure_tv_warm_tabs()
+
         sm = int(settle_ms if settle_ms is not None else self._tv_settle_ms)
-        await self._reload_tv_warm_tabs_before_capture(tv=tv, settle_ms=sm)
         main_u = main_symbol.strip().upper()
         written: list[str] = []
 
@@ -612,6 +580,7 @@ class BrowserServiceState:
                 async with self._tv_lock_default:
                     await self._ensure_tv_warm_tabs()
                     wt_def = self._tv_warm["default"]
+                    await self._prepare_tv_warm_tab_for_use(wt_def)
                     page_d = wt_def.page
                     if wt_def.current_symbol.upper() != sym.upper():
                         await tv_select_symbol_async(page_d, tv, sym)
@@ -638,6 +607,7 @@ class BrowserServiceState:
                         async with self._tv_lock_ict:
                             await self._ensure_tv_warm_tabs()
                             wt_i = self._tv_warm["ict"]
+                            await self._prepare_tv_warm_tab_for_use(wt_i)
                             tv_i = _tv_apply_indicator_profile(tv, "ict_killzones")
                             if wt_i.current_symbol.upper() != sym.upper():
                                 await tv_select_symbol_async(wt_i.page, tv_i, sym)
@@ -660,6 +630,7 @@ class BrowserServiceState:
                         async with self._tv_lock_default:
                             await self._ensure_tv_warm_tabs()
                             wt_def = self._tv_warm["default"]
+                            await self._prepare_tv_warm_tab_for_use(wt_def)
                             page_d = wt_def.page
                             tv_eff = _tv_apply_indicator_profile(tv, prof) if prof else tv
                             if wt_def.current_symbol.upper() != sym.upper():
@@ -683,6 +654,7 @@ class BrowserServiceState:
                 async with self._tv_lock_default:
                     await self._ensure_tv_warm_tabs()
                     wt_def = self._tv_warm["default"]
+                    await self._prepare_tv_warm_tab_for_use(wt_def)
                     page_d = wt_def.page
                     if wt_def.current_symbol.upper() != main_u:
                         await tv_select_symbol_async(page_d, tv, main_symbol.strip())
@@ -692,6 +664,7 @@ class BrowserServiceState:
             async with self._tv_lock_default:
                 await self._ensure_tv_warm_tabs()
                 wt_def = self._tv_warm["default"]
+                await self._prepare_tv_warm_tab_for_use(wt_def)
                 page_d = wt_def.page
                 if wt_def.current_symbol.upper() != sym.upper():
                     await tv_select_symbol_async(page_d, tv, sym)
@@ -718,6 +691,7 @@ class BrowserServiceState:
                     async with self._tv_lock_ict:
                         await self._ensure_tv_warm_tabs()
                         wt_i = self._tv_warm["ict"]
+                        await self._prepare_tv_warm_tab_for_use(wt_i)
                         tv_i = _tv_apply_indicator_profile(tv, "ict_killzones")
                         if wt_i.current_symbol.upper() != sym.upper():
                             await tv_select_symbol_async(wt_i.page, tv_i, sym)
@@ -740,6 +714,7 @@ class BrowserServiceState:
                     async with self._tv_lock_default:
                         await self._ensure_tv_warm_tabs()
                         wt_def = self._tv_warm["default"]
+                        await self._prepare_tv_warm_tab_for_use(wt_def)
                         page_d = wt_def.page
                         tv_eff = _tv_apply_indicator_profile(tv, prof) if prof else tv
                         if wt_def.current_symbol.upper() != sym.upper():
@@ -783,14 +758,15 @@ class BrowserServiceState:
             tv_ensure_required_indicators_async,
         )
 
+        await self._ensure_tv_warm_tabs()
         sm = int(settle_ms if settle_ms is not None else self._tv_settle_ms)
-        await self._reload_tv_warm_tabs_before_capture(tv=tv, settle_ms=sm)
         sym_key = re.sub(r"[^\w.-]+", "_", symbol).strip("_")[:40] or "sym"
         prof = (indicator_profile or "").strip()
 
         if prof == "ict_killzones":
             async with self._tv_lock_ict:
                 wt = self._tv_warm["ict"]
+                await self._prepare_tv_warm_tab_for_use(wt)
                 tv_i = _tv_apply_indicator_profile(tv, "ict_killzones")
                 if wt.current_symbol.upper() != symbol.upper():
                     await tv_select_symbol_async(wt.page, tv_i, symbol)
@@ -812,6 +788,7 @@ class BrowserServiceState:
 
         async with self._tv_lock_default:
             wt = self._tv_warm["default"]
+            await self._prepare_tv_warm_tab_for_use(wt)
             tv_eff = _tv_apply_indicator_profile(tv, prof) if prof else tv
             if wt.current_symbol.upper() != symbol.upper():
                 await tv_select_symbol_async(wt.page, tv_eff, symbol)

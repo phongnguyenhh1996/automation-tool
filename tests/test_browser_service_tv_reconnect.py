@@ -1,0 +1,89 @@
+import asyncio
+from pathlib import Path
+
+from automation_tool import coinmap_tradingview_async
+from automation_tool.browser_service import BrowserServiceState, _TvWarmTab
+
+
+class _FakeReconnectButton:
+    def __init__(self, calls: list[str], visible_count: int = 1) -> None:
+        self._calls = calls
+        self._visible_count = visible_count
+
+    @property
+    def first(self):
+        return self
+
+    async def count(self) -> int:
+        return self._visible_count
+
+    async def click(self, **_kwargs) -> None:
+        self._calls.append("connect")
+
+
+class _FakePage:
+    def __init__(self, calls: list[str], visible_count: int = 1) -> None:
+        self._button = _FakeReconnectButton(calls, visible_count=visible_count)
+
+    def is_closed(self) -> bool:
+        return False
+
+    def locator(self, selector: str):
+        assert "overlap-manager-root" in selector
+        assert "Kết nối" in selector
+        return self._button
+
+
+def test_tv_capture_frame_clicks_reconnect_dialog_before_using_warm_tab(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[str] = []
+    service = BrowserServiceState()
+    service._tv_warm["default"] = _TvWarmTab(
+        _FakePage(calls),
+        "default",
+        "BTCUSD",
+        "15 phút",
+    )
+
+    async def noop_ensure() -> None:
+        return None
+
+    async def fake_select_symbol(_page, _tv, symbol: str) -> None:
+        calls.append(f"select:{symbol}")
+
+    async def fake_reset(_page, _tv) -> None:
+        calls.append("reset")
+
+    async def fake_ensure_indicators(_page, _tv) -> None:
+        calls.append("ensure_indicators")
+
+    async def fake_capture(_page, _tv, charts_dir, stamp, sym_key, slug):
+        calls.append("capture")
+        return tmp_path / "chart.png"
+
+    service._ensure_tv_warm_tabs = noop_ensure  # type: ignore[method-assign]
+    monkeypatch.setattr(coinmap_tradingview_async, "tv_select_symbol_async", fake_select_symbol)
+    monkeypatch.setattr(coinmap_tradingview_async, "tv_reset_chart_position_async", fake_reset)
+    monkeypatch.setattr(
+        coinmap_tradingview_async,
+        "tv_ensure_required_indicators_async",
+        fake_ensure_indicators,
+    )
+    monkeypatch.setattr(coinmap_tradingview_async, "tv_capture_one_chart_frame_async", fake_capture)
+
+    result = asyncio.run(
+        service.tv_capture_frame(
+            tv={},
+            charts_dir=tmp_path,
+            stamp="s",
+            symbol="ETHUSD",
+            interval_label="15 phút",
+            slug="15m",
+            indicator_profile="",
+        )
+    )
+
+    assert result == {"path": str(tmp_path / "chart.png")}
+    assert calls == ["connect", "select:ETHUSD", "reset", "ensure_indicators", "capture"]
