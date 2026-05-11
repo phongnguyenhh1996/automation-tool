@@ -294,6 +294,37 @@ def _is_retry_due(retry_at: str) -> bool:
         return False
 
 
+def _zone_touch_notify_cooldown_active(zone: Zone) -> bool:
+    """True khi chưa hết cooldown sau lần báo chạm vùng (chế độ tắt OpenAI)."""
+    raw = (getattr(zone, "zone_touch_notify_cooldown_until", "") or "").strip()
+    if not raw:
+        return False
+    try:
+        dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return _now_utc() < dt
+    except Exception:
+        return False
+
+
+def _settings_skip_intraday_alert_openai(settings: Any) -> bool:
+    """Chỉ ``True`` thật (tránh object mock truthy trong test)."""
+    return getattr(settings, "skip_intraday_alert_openai", False) is True
+
+
+def _settings_skip_intraday_alert_cooldown_seconds(settings: Any) -> int:
+    raw = getattr(settings, "skip_intraday_alert_cooldown_seconds", 120)
+    if isinstance(raw, bool):
+        return 120
+    if type(raw) is int:
+        return max(0, raw)
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return 120
+
+
 @dataclass(frozen=True)
 class WatchlistDaemonParams:
     coinmap_tv_yaml: Path
@@ -1030,13 +1061,22 @@ def _mark_initial_zone_touch_dispatch(
         f"[zone-touch] initial_touch_dispatch | zone_id={touched_zone.id} "
         f"last={last_price} -> status=dang_thuc_thi retry_at={touched_zone.retry_at}",
     )
-    _send_user_notice(
-        settings,
-        "Giá đã chạm vùng chờ.",
-        "Hệ thống sẽ lấy dữ liệu tại mốc M5 kế tiếp rồi gửi AI phân tích.",
-        zone=touched_zone,
-        params=params,
-    )
+    if _settings_skip_intraday_alert_openai(settings):
+        _send_user_notice(
+            settings,
+            "Giá đã chạm vùng chờ.",
+            "Chế độ tạm: không gọi OpenAI [INTRADAY_ALERT] — chỉ báo Telegram rồi đưa vùng về trạng thái chờ.",
+            zone=touched_zone,
+            params=params,
+        )
+    else:
+        _send_user_notice(
+            settings,
+            "Giá đã chạm vùng chờ.",
+            "Hệ thống sẽ lấy dữ liệu tại mốc M5 kế tiếp rồi gửi AI phân tích.",
+            zone=touched_zone,
+            params=params,
+        )
     return invalidated
 
 
@@ -2576,20 +2616,6 @@ def _zone_touch_job(
             f"[zone-touch] start | zone_id={zone_id} label={zone.label} "
             f"vung_cho={zone.vung_cho} bounds={lo}–{hi} last={last_price}",
         )
-        side_vn = "mua" if (zone.side or "").strip().upper() == "BUY" else "bán"
-        _chart_tf = "M1" if _is_scalp_zone(zone) else "M5"
-        _touch_title = (
-            _zone_touch_after_retry_title(zone)
-            if after_retry_wait
-            else "Giá đã chạm vùng chờ."
-        )
-        _send_user_notice(
-            settings,
-            _touch_title,
-            f"Đang lấy dữ liệu biểu đồ {_chart_tf} và phân tích lại với AI.",
-            zone=zone,
-            params=params,
-        )
 
         loai_confirm_rounds = _ZONE_TOUCH_LOAI_CONFIRM_ROUNDS
 
@@ -2604,6 +2630,58 @@ def _zone_touch_job(
             _send_log(settings, f"[zone-touch] stop: zone already terminal ({zc.status}) | zone_id={zone_id}")
             return
         zone = zc
+
+        if _settings_skip_intraday_alert_openai(settings):
+            _send_log(
+                settings,
+                f"[zone-touch] skip_openai | zone_id={zone_id} "
+                f"cooldown_s={_settings_skip_intraday_alert_cooldown_seconds(settings)}",
+            )
+            side_vn = "mua" if (zone.side or "").strip().upper() == "BUY" else "bán"
+            _touch_title = (
+                _zone_touch_after_retry_title(zone)
+                if after_retry_wait
+                else "Giá đã chạm vùng chờ."
+            )
+            _send_user_notice(
+                settings,
+                _touch_title,
+                (
+                    f"Last≈{last_price} ({side_vn}). Vùng chờ: {zone.vung_cho}.\n"
+                    "OpenAI [INTRADAY_ALERT] đang tắt (SKIP_INTRADAY_ALERT_OPENAI) — không gọi Coinmap/AI."
+                ).strip(),
+                zone=zone,
+                params=params,
+            )
+            cd_sec = _settings_skip_intraday_alert_cooldown_seconds(settings)
+            until = ""
+            if cd_sec > 0:
+                until = (_now_utc() + timedelta(seconds=cd_sec)).isoformat()
+            zone.status = "vung_cho"
+            zone.retry_at = ""
+            zone.loai_streak = 0
+            zone.zone_touch_notify_cooldown_until = until
+            _state_write(params, st_check)
+            _send_log(
+                settings,
+                f"[zone-touch] skip_openai done | zone_id={zone_id} -> status=vung_cho "
+                f"cooldown_until={until!r}",
+            )
+            return
+
+        _chart_tf = "M1" if _is_scalp_zone(zone) else "M5"
+        _touch_title = (
+            _zone_touch_after_retry_title(zone)
+            if after_retry_wait
+            else "Giá đã chạm vùng chờ."
+        )
+        _send_user_notice(
+            settings,
+            _touch_title,
+            f"Đang lấy dữ liệu biểu đồ {_chart_tf} và phân tích lại với AI.",
+            zone=zone,
+            params=params,
+        )
 
         # Mark running (anti-spam + visibility). Daemon will handle retries using retry_at.
         zone.status = "dang_thuc_thi"
@@ -3438,6 +3516,8 @@ def _daemon_plan_main_loop(
                 matched: list[Zone] = []
                 for z in st.zones:
                     if z.status != "vung_cho":
+                        continue
+                    if _zone_touch_notify_cooldown_active(z):
                         continue
                     lo, hi = parse_vung_cho_bounds(z.vung_cho)
                     if lo is None or hi is None:

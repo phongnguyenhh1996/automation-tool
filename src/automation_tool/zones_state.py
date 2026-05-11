@@ -165,6 +165,8 @@ class Zone:
     # Mốc R gần nhất đã dispatch follow-up (1R, 2R, 3R...).
     last_r_followup_level: int = 0
     retry_at: str = ""
+    # ISO UTC: sau khi báo chạm vùng (chế độ tắt OpenAI), không dispatch chạm lại cho tới mốc này.
+    zone_touch_notify_cooldown_until: str = ""
     # ISO UTC: giữ tương thích state cũ; luồng hiện tại dùng ``auto_entry_mt5_failed`` thay vì cooldown.
     auto_entry_retry_after: str = ""
     # True: auto-entry MT5 đã thất bại — không tự dispatch lại cho đến khi chu kỳ chạm vùng mới (reset trong daemon).
@@ -193,6 +195,7 @@ class Zone:
             "managed_tp": self.managed_tp,
             "last_r_followup_level": self.last_r_followup_level,
             "retry_at": self.retry_at,
+            "zone_touch_notify_cooldown_until": self.zone_touch_notify_cooldown_until,
             "auto_entry_retry_after": self.auto_entry_retry_after,
             "auto_entry_mt5_failed": self.auto_entry_mt5_failed,
             "status": self.status,
@@ -318,6 +321,10 @@ def _parse_zone(d: dict[str, Any]) -> Optional[Zone]:
         last_r_followup_level = 0
     ra_raw = d.get("retry_at")
     retry_at = ra_raw.strip() if isinstance(ra_raw, str) else ""
+    ztc_raw = d.get("zone_touch_notify_cooldown_until")
+    zone_touch_notify_cooldown_until = (
+        ztc_raw.strip() if isinstance(ztc_raw, str) else ""
+    )
     aer_raw = d.get("auto_entry_retry_after")
     auto_entry_retry_after = aer_raw.strip() if isinstance(aer_raw, str) else ""
     aemf_raw = d.get("auto_entry_mt5_failed")
@@ -358,6 +365,7 @@ def _parse_zone(d: dict[str, Any]) -> Optional[Zone]:
         managed_tp=mt_raw,
         last_r_followup_level=last_r_followup_level,
         retry_at=retry_at,
+        zone_touch_notify_cooldown_until=zone_touch_notify_cooldown_until,
         auto_entry_retry_after=auto_entry_retry_after,
         auto_entry_mt5_failed=auto_entry_mt5_failed,
         status=st,  # type: ignore[assignment]
@@ -435,6 +443,7 @@ def write_zones_for_slot(
                 managed_tp=z.managed_tp,
                 last_r_followup_level=z.last_r_followup_level,
                 retry_at=z.retry_at,
+                zone_touch_notify_cooldown_until=z.zone_touch_notify_cooldown_until,
                 auto_entry_retry_after=z.auto_entry_retry_after,
                 auto_entry_mt5_failed=z.auto_entry_mt5_failed,
                 status=z.status,

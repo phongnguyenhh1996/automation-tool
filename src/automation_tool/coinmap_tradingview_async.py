@@ -733,6 +733,8 @@ async def tv_warmup_tab_async(
     settle_ms: int,
     login_email: Optional[str],
     login_password: Optional[str],
+    skip_login: bool = False,
+    skip_dark_mode: bool = False,
 ) -> None:
     tw = int(tv.get("viewport_width", 0) or 0)
     th = int(tv.get("viewport_height", 0) or 0)
@@ -744,13 +746,15 @@ async def tv_warmup_tab_async(
     init_wait = int(tv.get("initial_settle_ms", settle_ms))
     await page.wait_for_timeout(init_wait)
 
-    await maybe_tradingview_login_async(page, tv, login_email, login_password)
+    if not skip_login:
+        await maybe_tradingview_login_async(page, tv, login_email, login_password)
 
     intervals_id = (tv.get("intervals_toolbar_id") or "header-toolbar-intervals").strip()
     toolbar = page.locator(f"#{intervals_id}")
     await toolbar.wait_for(state="visible", timeout=90_000)
 
-    await maybe_tradingview_dark_mode_async(page, tv)
+    if not skip_dark_mode:
+        await maybe_tradingview_dark_mode_async(page, tv)
 
     await tradingview_ensure_watchlist_open_async(page, tv)
     await tv_select_symbol_async(page, tv, symbol)

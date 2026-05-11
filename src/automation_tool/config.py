@@ -31,6 +31,16 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        return int(str(raw).strip())
+    except ValueError:
+        return default
+
+
 def _parse_include() -> List[str]:
     raw = os.getenv("OPENAI_RESPONSES_INCLUDE")
     if raw is None or not raw.strip():
@@ -71,6 +81,9 @@ class Settings:
     # Telegram sendMessage parse_mode: None = plain text. Use Markdown, MarkdownV2, or HTML for formatting.
     telegram_parse_mode: Optional[str]
     coinmap_base_url: str
+    # Zone-touch [INTRADAY_ALERT]: bỏ Coinmap + OpenAI, chỉ Telegram rồi trả zone về ``vung_cho``.
+    skip_intraday_alert_openai: bool = False
+    skip_intraday_alert_cooldown_seconds: int = 120
 
 
 def _root() -> Path:
@@ -168,6 +181,10 @@ def load_settings() -> Settings:
         ),
         telegram_parse_mode=_parse_telegram_parse_mode(),
         coinmap_base_url=os.getenv("COINMAP_BASE_URL", "https://coinmap.tech"),
+        skip_intraday_alert_openai=_env_bool("SKIP_INTRADAY_ALERT_OPENAI", False),
+        skip_intraday_alert_cooldown_seconds=max(
+            0, _env_int("SKIP_INTRADAY_ALERT_COOLDOWN_SECONDS", 120)
+        ),
     )
 
 
