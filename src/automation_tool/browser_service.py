@@ -3,7 +3,8 @@ Browser worker: long-lived Playwright + TCP JSON-lines control plane.
 
 Run: python -m automation_tool.browser_service
 
-Writes data/browser_service_state.json with cdp_http for connect_over_cdp attach.
+Writes data/browser_service_state.json with cdp_http soon after Chrome + CDP port
+accept connections; TradingView tab prewarm runs in the background afterward.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 import re
 import signal
 import socket
@@ -121,6 +123,31 @@ def _state_path() -> Path:
 
 def _lock_path() -> Path:
     return default_data_dir() / _LOCK_FILENAME
+
+
+async def _wait_remote_debug_accepting(host: str, port: int, *, timeout_s: float = 12.0) -> None:
+    """Best-effort: wait until something accepts TCP on the DevTools port."""
+    deadline = time.monotonic() + max(0.2, float(timeout_s))
+    last_exc: Optional[BaseException] = None
+    while time.monotonic() < deadline:
+        try:
+            _r, w = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=0.75)
+            w.close()
+            try:
+                await w.wait_closed()
+            except Exception:
+                pass
+            return
+        except Exception as e:
+            last_exc = e
+            await asyncio.sleep(0.05)
+    _log.warning(
+        "CDP port not accepting within %ss (%s:%s); continuing anyway: %s",
+        timeout_s,
+        host,
+        port,
+        last_exc,
+    )
 
 
 def _pick_free_port() -> int:
@@ -246,6 +273,8 @@ class BrowserServiceState:
         self._tv_warm: dict[str, _TvWarmTab] = {}
         self._tv_lock_ict = asyncio.Lock()
         self._tv_lock_default = asyncio.Lock()
+        self._tv_prewarm_lock = asyncio.Lock()
+        self._prewarm_bg_task: Optional[asyncio.Task] = None
         self._tv_settle_ms: int = 2000
         self._tv_main_symbol: str = ""
 
@@ -308,15 +337,35 @@ class BrowserServiceState:
                 self._browser = await p.chromium.launch(headless=headless, args=args)
                 self._context = await self._browser.new_context(viewport=viewport)
 
-        try:
-            await self._prewarm_tradingview_tabs_async()
-        except Exception as e:
-            _log.warning("TV prewarm non-fatal: %s", e)
-
+        await _wait_remote_debug_accepting("127.0.0.1", cdp_port, timeout_s=15.0)
         return f"http://127.0.0.1:{cdp_port}"
+
+    def schedule_tv_prewarm_background(self) -> None:
+        """Start TV tab prewarm without blocking service readiness (state file / CDP)."""
+        if self._closing:
+            return
+        if self._prewarm_bg_task is not None and not self._prewarm_bg_task.done():
+            return
+
+        async def _runner() -> None:
+            try:
+                await self._prewarm_tradingview_tabs_async()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                _log.warning("TV prewarm background: %s", e)
+
+        self._prewarm_bg_task = asyncio.create_task(_runner())
 
     async def shutdown(self) -> None:
         self._closing = True
+        if self._prewarm_bg_task is not None and not self._prewarm_bg_task.done():
+            self._prewarm_bg_task.cancel()
+            try:
+                await self._prewarm_bg_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._prewarm_bg_task = None
         for t in list(self._subs.values()):
             t.cancel()
         self._subs.clear()
@@ -368,82 +417,86 @@ class BrowserServiceState:
         from automation_tool.coinmap_tradingview_async import tv_warmup_tab_async
         from automation_tool.images import get_active_main_symbol
 
-        cfg_path = default_coinmap_config_path()
-        try:
-            cfg = load_coinmap_yaml(cfg_path)
-        except Exception as e:
-            _log.warning("TV prewarm skipped: cannot load yaml %s: %s", cfg_path, e)
-            return
+        async with self._tv_prewarm_lock:
+            if self._closing:
+                return
 
-        tv_root = cfg.get("tradingview_capture")
-        if not isinstance(tv_root, dict) or not tv_root.get("enabled", False):
-            _log.info("TV prewarm skipped: tradingview_capture disabled or missing")
-            return
-        if tv_root.get("prewarm_enabled") is False:
-            _log.info("TV prewarm skipped: tradingview_capture.prewarm_enabled is false")
-            return
-
-        main_sym = (main_symbol_override or "").strip() or get_active_main_symbol()
-        cfg_m = apply_main_chart_symbol_to_config(cfg, main_sym)
-        tv_m = cfg_m.get("tradingview_capture")
-        if not isinstance(tv_m, dict):
-            return
-        settle_ms = int(cfg_m.get("settle_ms", 2000))
-
-        email = (os.getenv("COINMAP_EMAIL") or "").strip() or None
-        password = (os.getenv("TRADINGVIEW_PASSWORD") or "").strip() or None
-        # Prewarm: profile thường đã có session; bỏ menu login + dark mode để mở tab nhanh hơn.
-        skip_login = bool(tv_m.get("prewarm_skip_login", True))
-        skip_dark = bool(tv_m.get("prewarm_skip_dark_mode", True))
-
-        await self._dispose_tv_warm_tabs_async()
-
-        ctx = self._require_context()
-        page_ict = await ctx.new_page()
-        page_def = await ctx.new_page()
-
-        ict_tv = _tv_apply_indicator_profile(tv_m, "ict_killzones")
-
-        try:
-            await tv_warmup_tab_async(
-                page_ict,
-                ict_tv,
-                symbol=main_sym,
-                interval_label="15 phút",
-                settle_ms=settle_ms,
-                login_email=email,
-                login_password=password,
-                skip_login=skip_login,
-                skip_dark_mode=skip_dark,
-            )
-            await tv_warmup_tab_async(
-                page_def,
-                dict(tv_m),
-                symbol=main_sym,
-                interval_label="15 phút",
-                settle_ms=settle_ms,
-                login_email=email,
-                login_password=password,
-                skip_login=skip_login,
-                skip_dark_mode=skip_dark,
-            )
-        except Exception as e:
-            _log.exception("TV prewarm failed: %s", e)
+            cfg_path = default_coinmap_config_path()
             try:
-                await page_ict.close()
-            except Exception:
-                pass
-            try:
-                await page_def.close()
-            except Exception:
-                pass
-            return
+                cfg = load_coinmap_yaml(cfg_path)
+            except Exception as e:
+                _log.warning("TV prewarm skipped: cannot load yaml %s: %s", cfg_path, e)
+                return
 
-        self._tv_warm["ict"] = _TvWarmTab(page_ict, "ict_killzones", main_sym, "15 phút")
-        self._tv_warm["default"] = _TvWarmTab(page_def, "default", main_sym, "15 phút")
-        self._tv_settle_ms = settle_ms
-        self._tv_main_symbol = main_sym
-        _log.info("TV prewarm ok | main=%s | tabs=ict+default", main_sym)
+            tv_root = cfg.get("tradingview_capture")
+            if not isinstance(tv_root, dict) or not tv_root.get("enabled", False):
+                _log.info("TV prewarm skipped: tradingview_capture disabled or missing")
+                return
+            if tv_root.get("prewarm_enabled") is False:
+                _log.info("TV prewarm skipped: tradingview_capture.prewarm_enabled is false")
+                return
+
+            main_sym = (main_symbol_override or "").strip() or get_active_main_symbol()
+            cfg_m = apply_main_chart_symbol_to_config(cfg, main_sym)
+            tv_m = cfg_m.get("tradingview_capture")
+            if not isinstance(tv_m, dict):
+                return
+            settle_ms = int(cfg_m.get("settle_ms", 2000))
+
+            email = (os.getenv("COINMAP_EMAIL") or "").strip() or None
+            password = (os.getenv("TRADINGVIEW_PASSWORD") or "").strip() or None
+            # Prewarm: profile thường đã có session; bỏ menu login + dark mode để mở tab nhanh hơn.
+            skip_login = bool(tv_m.get("prewarm_skip_login", True))
+            skip_dark = bool(tv_m.get("prewarm_skip_dark_mode", True))
+
+            await self._dispose_tv_warm_tabs_async()
+
+            ctx = self._require_context()
+            page_ict = await ctx.new_page()
+            page_def = await ctx.new_page()
+
+            ict_tv = _tv_apply_indicator_profile(tv_m, "ict_killzones")
+
+            try:
+                await tv_warmup_tab_async(
+                    page_ict,
+                    ict_tv,
+                    symbol=main_sym,
+                    interval_label="15 phút",
+                    settle_ms=settle_ms,
+                    login_email=email,
+                    login_password=password,
+                    skip_login=skip_login,
+                    skip_dark_mode=skip_dark,
+                )
+                await tv_warmup_tab_async(
+                    page_def,
+                    dict(tv_m),
+                    symbol=main_sym,
+                    interval_label="15 phút",
+                    settle_ms=settle_ms,
+                    login_email=email,
+                    login_password=password,
+                    skip_login=skip_login,
+                    skip_dark_mode=skip_dark,
+                )
+            except Exception as e:
+                _log.exception("TV prewarm failed: %s", e)
+                try:
+                    await page_ict.close()
+                except Exception:
+                    pass
+                try:
+                    await page_def.close()
+                except Exception:
+                    pass
+                return
+
+            self._tv_warm["ict"] = _TvWarmTab(page_ict, "ict_killzones", main_sym, "15 phút")
+            self._tv_warm["default"] = _TvWarmTab(page_def, "default", main_sym, "15 phút")
+            self._tv_settle_ms = settle_ms
+            self._tv_main_symbol = main_sym
+            _log.info("TV prewarm ok | main=%s | tabs=ict+default", main_sym)
 
     async def _ensure_tv_warm_tabs(self) -> None:
         need = False
@@ -1085,6 +1138,13 @@ async def _run() -> None:
         _release_lock()
         raise
 
+    server = await asyncio.start_server(
+        lambda r, w: _client_handler(r, w, rt),
+        host="127.0.0.1",
+        port=control_port,
+    )
+    rt.server = server
+
     default_data_dir().mkdir(parents=True, exist_ok=True)
     state_doc = {
         "pid": os.getpid(),
@@ -1102,12 +1162,7 @@ async def _run() -> None:
     }
     print(json.dumps(ready, ensure_ascii=False), flush=True)
 
-    server = await asyncio.start_server(
-        lambda r, w: _client_handler(r, w, rt),
-        host="127.0.0.1",
-        port=control_port,
-    )
-    rt.server = server
+    rt.st.schedule_tv_prewarm_background()
 
     loop = asyncio.get_event_loop()
 
