@@ -583,6 +583,93 @@ def write_zones_state_to_shard(shard_path: Path, state: ZonesState) -> None:
         _write_shard_file(shard_path, state.symbol, slot, z)
 
 
+def mark_zone_status_loai_by_id(
+    zone_id: str,
+    *,
+    symbol: str,
+) -> tuple[bool, str]:
+    """
+    Tìm zone theo ``id`` trong ``data/<SYMBOL>/zones/vung_*.json``; nếu không có shard khớp
+    thì thử ``data/<SYMBOL>/zones_state.json`` (legacy một file nhiều zone).
+
+    Gán ``status=loai``, ``loai_streak=0``, ``retry_at=""`` rồi ghi lại.
+
+    Returns:
+        ``(True, message)`` khi đã cập nhật hoặc zone đã là ``loai``;
+        ``(False, message)`` khi thiếu id / không tìm thấy / lỗi ghi.
+    """
+    want = (zone_id or "").strip()
+    if not want:
+        return False, "Thiếu id zone. Cú pháp: /loai <zone_id> (ví dụ: /loai plan_chinh__sang)."
+
+    sym = (symbol or "XAUUSD").strip().upper()
+    zones_dir = default_zones_dir(sym)
+
+    if zones_dir.is_dir():
+        for sp in sorted(zones_dir.glob("vung_*.json")):
+            if not sp.is_file():
+                continue
+            st = read_zones_state_from_shard(sp)
+            if st is None or not st.zones:
+                continue
+            z = st.zones[0]
+            if (z.id or "").strip() != want:
+                continue
+            if z.status == "loai":
+                return (
+                    True,
+                    f"Zone id={want} đã là loại ({sym}) | label={z.label} | file={sp.name}",
+                )
+            prev = z.status
+            z2 = replace(z, status="loai", loai_streak=0, retry_at="")  # type: ignore[arg-type]
+            st2 = ZonesState(
+                symbol=st.symbol.strip().upper() or sym,
+                zones=[z2],
+                updated_at=st.updated_at,
+            )
+            try:
+                write_zones_state_to_shard(sp, st2)
+            except Exception as e:
+                return False, f"Không ghi được shard {sp.name}: {e!s}"
+            return (
+                True,
+                f"Đã đặt status=loai cho id={want} ({sym}) | label={z.label} | trước đó={prev} | file={sp.name}",
+            )
+
+    legacy = symbol_data_dir(sym) / "zones_state.json"
+    if legacy.is_file():
+        st = read_zones_state(legacy)
+        if st is not None and st.zones:
+            for i, z in enumerate(st.zones):
+                if (z.id or "").strip() != want:
+                    continue
+                if z.status == "loai":
+                    return (
+                        True,
+                        f"Zone id={want} đã là loại ({sym}, legacy) | label={z.label}",
+                    )
+                prev = z.status
+                z2 = replace(z, status="loai", loai_streak=0, retry_at="")  # type: ignore[arg-type]
+                new_zones = list(st.zones)
+                new_zones[i] = z2
+                st2 = ZonesState(
+                    symbol=st.symbol.strip().upper() or sym,
+                    zones=new_zones,
+                    updated_at=st.updated_at,
+                    last_observed=st.last_observed,
+                )
+                try:
+                    write_zones_state(st2, path=legacy)
+                except Exception as e:
+                    return False, f"Không ghi được zones_state.json: {e!s}"
+                return (
+                    True,
+                    f"Đã đặt status=loai cho id={want} ({sym}, legacy) | label={z.label} | trước đó={prev}",
+                )
+
+    return False, f"Không tìm thấy zone id={want} trong {zones_dir} (và không có bản legacy khớp)."
+
+
 def _read_zones_state_unlocked(path: Optional[Path] = None) -> Optional[ZonesState]:
     if path is not None:
         p = path.expanduser().resolve()

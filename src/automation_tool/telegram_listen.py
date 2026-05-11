@@ -15,6 +15,7 @@ from typing import Any, Optional
 import httpx
 
 from automation_tool.config import Settings, resolved_openai_model
+from automation_tool.zones_state import mark_zone_status_loai_by_id
 from automation_tool.openai_prompt_flow import run_text_followup_responses
 from automation_tool.telegram_bot import send_message, send_openai_output_to_telegram
 
@@ -95,7 +96,7 @@ def _message_thread_id_from_envelope(env: dict[str, Any]) -> Optional[int]:
 
 def _parse_command(text: str) -> tuple[Optional[str], str]:
     """
-    Parse "/full", "/update", "/stop", "/analyze-many", "/ask", "/ask-high", "/full@BotName".
+    Parse "/full", "/update", "/loai", "/stop", "/analyze-many", "/ask", "/ask-high", "/full@BotName".
     Returns (cmd, args_text) where args_text is the remaining raw text (may be empty).
     """
     t = (text or "").strip()
@@ -667,6 +668,12 @@ def run_telegram_listener(
                             name="telegram-analyze-many-runner",
                         )
                         t.start()
+                    elif cmd == "loai":
+                        zid = (args_text or "").strip()
+                        main_sym = (params.update_main_symbol or "XAUUSD").strip().upper()
+                        ok, msg = mark_zone_status_loai_by_id(zid, symbol=main_sym)
+                        prefix = "✅" if ok else "❌"
+                        _send_status(settings, listen_chat_id, f"{prefix} /loai\n{msg}")
 
             except httpx.HTTPError as e:
                 _log.warning("telegram-listen: HTTP error: %s", e)

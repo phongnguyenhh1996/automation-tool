@@ -574,7 +574,7 @@ def _parser() -> argparse.ArgumentParser:
         "telegram-listen",
         help=(
             "Listen inbound Telegram messages in a channel/group (poll getUpdates). "
-            "Supports /full, /update, /tim-scalp, /stop, /analyze-many, /ask, /ask-high."
+            "Supports /full, /update, /tim-scalp, /loai, /stop, /analyze-many, /ask, /ask-high."
         ),
     )
     tl.add_argument(
@@ -599,7 +599,10 @@ def _parser() -> argparse.ArgumentParser:
         "--update-main-symbol",
         type=str,
         default="XAUUSD",
-        help="Symbol used when /update triggers (default: XAUUSD). On Windows runs run_update.bat.",
+        help=(
+            "Symbol used when /update and /loai <zone_id> trigger (default: XAUUSD). "
+            "On Windows /update runs run_update.bat."
+        ),
     )
     tl.add_argument("--model", default=None, metavar="ID", help=_OPENAI_MODEL_HELP)
     tl.set_defaults(func=cmd_telegram_listen)
