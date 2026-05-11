@@ -352,6 +352,8 @@ class BrowserServiceState:
                 await self._prewarm_tradingview_tabs_async()
             except asyncio.CancelledError:
                 raise
+            except SystemExit as e:
+                _log.warning("TV prewarm background exited: %s", e)
             except Exception as e:
                 _log.warning("TV prewarm background: %s", e)
 
@@ -480,7 +482,7 @@ class BrowserServiceState:
                     skip_login=skip_login,
                     skip_dark_mode=skip_dark,
                 )
-            except Exception as e:
+            except (Exception, SystemExit) as e:
                 _log.exception("TV prewarm failed: %s", e)
                 try:
                     await page_ict.close()

@@ -87,3 +87,21 @@ def test_tv_capture_frame_clicks_reconnect_dialog_before_using_warm_tab(
 
     assert result == {"path": str(tmp_path / "chart.png")}
     assert calls == ["connect", "select:ETHUSD", "reset", "ensure_indicators", "capture"]
+
+
+def test_tv_prewarm_background_catches_system_exit() -> None:
+    async def run() -> None:
+        service = BrowserServiceState()
+
+        async def fail_prewarm() -> None:
+            raise SystemExit("boom")
+
+        service._prewarm_tradingview_tabs_async = fail_prewarm  # type: ignore[method-assign]
+        service.schedule_tv_prewarm_background()
+        await asyncio.sleep(0)
+
+        assert service._prewarm_bg_task is not None
+        assert service._prewarm_bg_task.done()
+        assert service._prewarm_bg_task.exception() is None
+
+    asyncio.run(run())

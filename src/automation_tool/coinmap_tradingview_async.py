@@ -363,6 +363,27 @@ def tv_has_required_indicators_async_logic(page_texts: list[str], tv: dict[str, 
     return True
 
 
+async def tv_wait_for_legend_empty_after_clear_async(page: Page, tv: dict[str, Any]) -> list[str]:
+    after_ms = int(tv.get("after_indicator_clear_ms", 450) or 450)
+    if after_ms > 0:
+        await page.wait_for_timeout(after_ms)
+
+    last_legend = await tv_list_legend_item_texts_async(page, tv)
+    if not last_legend:
+        return []
+
+    timeout_ms = int(tv.get("indicator_clear_verify_timeout_ms", 2500) or 0)
+    poll_ms = int(tv.get("indicator_clear_verify_poll_ms", 150) or 150)
+    poll_ms = max(50, poll_ms)
+    deadline = time.monotonic() + max(0, timeout_ms) / 1000.0
+    while time.monotonic() < deadline:
+        await page.wait_for_timeout(poll_ms)
+        last_legend = await tv_list_legend_item_texts_async(page, tv)
+        if not last_legend:
+            return []
+    return last_legend
+
+
 async def tv_chart_center_xy_async(page: Page, tv: dict[str, Any]) -> tuple[float, float]:
     y_ratio = float(tv.get("chart_context_click_y_ratio", 0.10) or 0.10)
     y_ratio = min(1.0, max(0.0, y_ratio))
@@ -495,8 +516,7 @@ async def tv_open_context_menu_and_clear_indicators_async(page: Page, tv: dict[s
                 continue
 
         if clicked:
-            await page.wait_for_timeout(int(tv.get("after_indicator_clear_ms", 450)))
-            last_legend = await tv_list_legend_item_texts_async(page, tv)
+            last_legend = await tv_wait_for_legend_empty_after_clear_async(page, tv)
             if not last_legend:
                 _log_tv.info("tv: clear indicators | no legend indicators remain")
                 return
@@ -511,13 +531,27 @@ async def tv_open_context_menu_and_clear_indicators_async(page: Page, tv: dict[s
         except Exception:
             pass
         await page.wait_for_timeout(300)
+        try:
+            last_legend = await tv_list_legend_item_texts_async(page, tv)
+            if not last_legend:
+                _log_tv.info("tv: clear indicators | no legend indicators remain")
+                return
+        except Exception as e:
+            last_err = e
 
+    try:
+        last_legend = await tv_list_legend_item_texts_async(page, tv)
+        if not last_legend:
+            _log_tv.info("tv: clear indicators | no legend indicators remain")
+            return
+    except Exception as e:
+        last_err = e
     msg = f"tv: clear indicators failed after {attempts} attempt(s)"
     if last_legend:
         msg += f"; indicators still present: {last_legend!r}"
     if last_err is not None:
         msg += f" ({last_err})"
-    raise SystemExit(msg)
+    raise RuntimeError(msg)
 
 
 async def tv_add_required_indicators_from_favorites_async(page: Page, tv: dict[str, Any]) -> None:
@@ -632,9 +666,10 @@ async def tv_ensure_required_indicators_async(page: Page, tv: dict[str, Any]) ->
         "tv: ensure indicators | failed after recover | legend_items=%r",
         got,
     )
-    raise SystemExit(
+    expected = [[x for x in g if x] for g in (groups or [])]
+    raise RuntimeError(
         "TradingView required indicators missing after recovery. "
-        f"Expected VSA+SMC, got legend items: {got!r}"
+        f"Expected groups={expected!r}, got legend items: {got!r}"
     )
 
 

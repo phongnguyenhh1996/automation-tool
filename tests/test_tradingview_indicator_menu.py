@@ -120,7 +120,31 @@ def test_clear_indicators_retries_until_legend_has_no_indicators(monkeypatch):
         lambda page, tv: ["remaining indicator"] if page.delete_clicks < 2 else [],
     )
 
-    _tradingview_open_context_menu_and_clear_indicators(page, {})
+    _tradingview_open_context_menu_and_clear_indicators(
+        page,
+        {"indicator_clear_verify_timeout_ms": 0},
+    )
 
     assert page.delete_clicks == 2
+
+
+def test_clear_indicators_polls_after_delete_click_until_legend_clears(monkeypatch):
+    page = _FakeMenuPage(["Xóa 2 chỉ báo"])
+    legend_calls = 0
+
+    def fake_legend(_page, _tv):
+        nonlocal legend_calls
+        legend_calls += 1
+        return ["remaining indicator"] if legend_calls == 1 else []
+
+    monkeypatch.setattr(coinmap, "_tradingview_chart_center_xy", lambda page, tv: (800.0, 120.0))
+    monkeypatch.setattr(coinmap, "_tradingview_list_legend_item_texts", fake_legend)
+
+    _tradingview_open_context_menu_and_clear_indicators(
+        page,
+        {"indicator_clear_verify_timeout_ms": 100},
+    )
+
+    assert page.delete_clicks == 1
+    assert legend_calls >= 2
 

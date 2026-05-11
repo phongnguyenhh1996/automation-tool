@@ -2862,6 +2862,27 @@ def _tradingview_is_delete_indicator_label(label: str) -> bool:
     )
 
 
+def _tradingview_wait_for_legend_empty_after_clear(page, tv: dict[str, Any]) -> list[str]:
+    after_ms = int(tv.get("after_indicator_clear_ms", 450) or 450)
+    if after_ms > 0:
+        page.wait_for_timeout(after_ms)
+
+    last_legend = _tradingview_list_legend_item_texts(page, tv)
+    if not last_legend:
+        return []
+
+    timeout_ms = int(tv.get("indicator_clear_verify_timeout_ms", 2500) or 0)
+    poll_ms = int(tv.get("indicator_clear_verify_poll_ms", 150) or 150)
+    poll_ms = max(50, poll_ms)
+    deadline = time.monotonic() + max(0, timeout_ms) / 1000.0
+    while time.monotonic() < deadline:
+        page.wait_for_timeout(poll_ms)
+        last_legend = _tradingview_list_legend_item_texts(page, tv)
+        if not last_legend:
+            return []
+    return last_legend
+
+
 def _tradingview_shifted_context_click_xy(
     page,
     tv: dict[str, Any],
@@ -2966,8 +2987,7 @@ def _tradingview_open_context_menu_and_clear_indicators(page, tv: dict[str, Any]
                 continue
 
         if clicked:
-            page.wait_for_timeout(int(tv.get("after_indicator_clear_ms", 450)))
-            last_legend = _tradingview_list_legend_item_texts(page, tv)
+            last_legend = _tradingview_wait_for_legend_empty_after_clear(page, tv)
             if not last_legend:
                 logging.getLogger("automation_tool").info(
                     "tv: clear indicators | no legend indicators remain"
@@ -2985,7 +3005,25 @@ def _tradingview_open_context_menu_and_clear_indicators(page, tv: dict[str, Any]
             pass
         # Backoff a bit then retry opening context menu at the next down-left point.
         page.wait_for_timeout(300)
+        try:
+            last_legend = _tradingview_list_legend_item_texts(page, tv)
+            if not last_legend:
+                logging.getLogger("automation_tool").info(
+                    "tv: clear indicators | no legend indicators remain"
+                )
+                return
+        except Exception as e:
+            last_err = e
 
+    try:
+        last_legend = _tradingview_list_legend_item_texts(page, tv)
+        if not last_legend:
+            logging.getLogger("automation_tool").info(
+                "tv: clear indicators | no legend indicators remain"
+            )
+            return
+    except Exception as e:
+        last_err = e
     msg = f"tv: clear indicators failed after {attempts} attempt(s)"
     if last_legend:
         msg += f"; indicators still present: {last_legend!r}"
@@ -3113,9 +3151,10 @@ def _tradingview_ensure_required_indicators(page, tv: dict[str, Any]) -> None:
         "tv: ensure indicators | failed after recover | legend_items=%r",
         got,
     )
+    expected = [[x for x in g if x] for g in (groups or [])]
     raise SystemExit(
         "TradingView required indicators missing after recovery. "
-        f"Expected VSA+SMC, got legend items: {got!r}"
+        f"Expected groups={expected!r}, got legend items: {got!r}"
     )
 
 
