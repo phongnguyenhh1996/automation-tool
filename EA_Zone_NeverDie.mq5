@@ -17,18 +17,8 @@ input int            InpGridStep           = 15000;
 input int            InpTakeProfit         = 5000;
 input int            InpMaxGridLevels      = 50;
 input long           InpMagicNumber        = 20241221;
-
-input group "=== BUY ZONE ==="
-input ENUM_ZONE_MODE InpBuyZoneMode        = ZONE_OFF;
-input double         InpBuyZoneLow         = 0.0;
-input double         InpBuyZoneHigh        = 0.0;
-input double         InpBuyZoneSL          = 0.0;
-
-input group "=== SELL ZONE ==="
-input ENUM_ZONE_MODE InpSellZoneMode       = ZONE_OFF;
-input double         InpSellZoneLow        = 0.0;
-input double         InpSellZoneHigh       = 0.0;
-input double         InpSellZoneSL         = 0.0;
+input ENUM_TIMEFRAMES InpDcaGridTimeframe  = PERIOD_M5; // M5 or M15: DCA only re-checks on new bar of this TF
+input int            InpDcaClosedBarsRequired = 1;     // min closed bars on that TF since last entry (iBarShift >= this)
 
 input group "=== BASKET TRAILING ==="
 input bool           InpUseTrailingStop    = false;
@@ -46,7 +36,6 @@ input string         InpZonesJsonUrl       = "";
 input int            InpZonesPollSeconds   = 15;
 input string         InpZonesBearer        = "";
 
-const int GRID_INTERVAL_SECONDS = 15 * 60;
 const int PANEL_LINE_COUNT      = 28;
 const int PANEL_LINE_HEIGHT     = 14;
 
@@ -63,6 +52,7 @@ struct BasketInfo
   };
 
 CTrade  g_trade;
+datetime g_dcaGridBarOpenSeen = 0; // last InpDcaGridTimeframe bar open time processed (OnInit + OnTick)
 bool    g_buyBlocked       = false;
 bool    g_sellBlocked      = false;
 string  g_buyBlockReason   = "";
@@ -83,18 +73,6 @@ double   g_dynBuySL           = 0.0;
 double   g_dynSellLow         = 0.0;
 double   g_dynSellHigh        = 0.0;
 double   g_dynSellSL          = 0.0;
-
-void SyncDynamicZonesFromInputs()
-  {
-   g_dynBuyMode   = InpBuyZoneMode;
-   g_dynSellMode  = InpSellZoneMode;
-   g_dynBuyLow    = InpBuyZoneLow;
-   g_dynBuyHigh   = InpBuyZoneHigh;
-   g_dynBuySL     = InpBuyZoneSL;
-   g_dynSellLow   = InpSellZoneLow;
-   g_dynSellHigh  = InpSellZoneHigh;
-   g_dynSellSL    = InpSellZoneSL;
-  }
 
 bool NeverdieUseRemoteJson()
   {
@@ -240,7 +218,6 @@ void FetchNeverdieJsonFromUrl()
 
 int OnInit()
   {
-   SyncDynamicZonesFromInputs();
    if(!ValidateInputs())
       return(INIT_PARAMETERS_INCORRECT);
 
@@ -259,6 +236,7 @@ int OnInit()
    else
       RemovePanel();
 
+   g_dcaGridBarOpenSeen = iTime(_Symbol, InpDcaGridTimeframe, 0);
    UpdatePanel();
    return(INIT_SUCCEEDED);
   }
@@ -292,8 +270,17 @@ void OnTick()
      }
 
    ManageZoneStopsAndWatchers();
-   ManageDirection(POSITION_TYPE_BUY);
-   ManageDirection(POSITION_TYPE_SELL);
+
+   bool onFirstTickOfNewDcaBar = false;
+   datetime dcaBarOpen        = iTime(_Symbol, InpDcaGridTimeframe, 0);
+   if(dcaBarOpen > 0 && dcaBarOpen != g_dcaGridBarOpenSeen)
+     {
+      g_dcaGridBarOpenSeen      = dcaBarOpen;
+      onFirstTickOfNewDcaBar = true;
+     }
+
+   ManageDirection(POSITION_TYPE_BUY, onFirstTickOfNewDcaBar);
+   ManageDirection(POSITION_TYPE_SELL, onFirstTickOfNewDcaBar);
    UpdatePanel();
   }
 
@@ -340,6 +327,18 @@ bool ValidateInputs()
 
    if(InpGridStep <= 0 || InpTakeProfit <= 0 || InpMaxGridLevels < 1)
       return(false);
+
+   if(InpDcaGridTimeframe != PERIOD_M5 && InpDcaGridTimeframe != PERIOD_M15)
+     {
+      Print("EA NeverDie: InpDcaGridTimeframe must be M5 or M15");
+      return(false);
+     }
+
+   if(InpDcaClosedBarsRequired < 1)
+     {
+      Print("EA NeverDie: InpDcaClosedBarsRequired must be >= 1");
+      return(false);
+     }
 
    if(StringLen(InpZonesJsonUrl) == 0)
      {
@@ -430,7 +429,7 @@ void ManageZoneStopsAndWatchers()
       BlockSide(POSITION_TYPE_SELL, "BUY watch zone hit");
   }
 
-void ManageDirection(const ENUM_POSITION_TYPE side)
+void ManageDirection(const ENUM_POSITION_TYPE side, const bool onFirstTickOfNewDcaBar)
   {
    BasketInfo basket;
    BuildBasket(side, basket);
@@ -457,7 +456,7 @@ void ManageDirection(const ENUM_POSITION_TYPE side)
       return;
      }
 
-   if(ShouldOpenDca(side, basket))
+   if(ShouldOpenDca(side, basket, onFirstTickOfNewDcaBar))
      {
       double nextVolume = NormalizeVolume(InpLotSize * MathPow(InpMultiplier, basket.count));
       OpenPosition(side, nextVolume, "DCA");
@@ -538,8 +537,11 @@ bool ShouldOpenInitial(const ENUM_POSITION_TYPE side)
    return(IsInsideTradeZone(side, price));
   }
 
-bool ShouldOpenDca(const ENUM_POSITION_TYPE side, const BasketInfo &basket)
+bool ShouldOpenDca(const ENUM_POSITION_TYPE side, const BasketInfo &basket, const bool onFirstTickOfNewDcaBar)
   {
+   if(!onFirstTickOfNewDcaBar)
+      return(false);
+
    if(GetZoneMode(side) != ZONE_TRADE)
       return(false);
 
@@ -552,7 +554,8 @@ bool ShouldOpenDca(const ENUM_POSITION_TYPE side, const BasketInfo &basket)
    if(basket.floatingProfit >= 0.0)
       return(false);
 
-   if((TimeCurrent() - basket.lastOpenTime) < GRID_INTERVAL_SECONDS)
+   int shiftSinceOpen = iBarShift(_Symbol, InpDcaGridTimeframe, basket.lastOpenTime, false);
+   if(shiftSinceOpen < InpDcaClosedBarsRequired)
       return(false);
 
    MqlTick tick;
@@ -817,30 +820,22 @@ bool IsSideBlocked(const ENUM_POSITION_TYPE side)
 
 ENUM_ZONE_MODE GetZoneMode(const ENUM_POSITION_TYPE side)
   {
-   if(NeverdieUseRemoteJson())
-      return(side == POSITION_TYPE_BUY ? g_dynBuyMode : g_dynSellMode);
-   return(side == POSITION_TYPE_BUY ? InpBuyZoneMode : InpSellZoneMode);
+   return(side == POSITION_TYPE_BUY ? g_dynBuyMode : g_dynSellMode);
   }
 
 double GetZoneLow(const ENUM_POSITION_TYPE side)
   {
-   if(NeverdieUseRemoteJson())
-      return(side == POSITION_TYPE_BUY ? g_dynBuyLow : g_dynSellLow);
-   return(side == POSITION_TYPE_BUY ? InpBuyZoneLow : InpSellZoneLow);
+   return(side == POSITION_TYPE_BUY ? g_dynBuyLow : g_dynSellLow);
   }
 
 double GetZoneHigh(const ENUM_POSITION_TYPE side)
   {
-   if(NeverdieUseRemoteJson())
-      return(side == POSITION_TYPE_BUY ? g_dynBuyHigh : g_dynSellHigh);
-   return(side == POSITION_TYPE_BUY ? InpBuyZoneHigh : InpSellZoneHigh);
+   return(side == POSITION_TYPE_BUY ? g_dynBuyHigh : g_dynSellHigh);
   }
 
 double GetZoneStopLoss(const ENUM_POSITION_TYPE side)
   {
-   if(NeverdieUseRemoteJson())
-      return(side == POSITION_TYPE_BUY ? g_dynBuySL : g_dynSellSL);
-   return(side == POSITION_TYPE_BUY ? InpBuyZoneSL : InpSellZoneSL);
+   return(side == POSITION_TYPE_BUY ? g_dynBuySL : g_dynSellSL);
   }
 
 bool HasConfiguredZone(const ENUM_POSITION_TYPE side)
