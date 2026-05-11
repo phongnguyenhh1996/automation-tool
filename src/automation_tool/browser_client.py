@@ -89,7 +89,7 @@ class BrowserClient:
             sock.close()
 
     def ping(self) -> bool:
-        r = self.request("ping", {}, timeout_s=5.0)
+        r = self.request("ping", {}, timeout_s=15.0)
         return bool(r.get("ok")) and (r.get("result") or {}).get("pong") is True
 
     def shutdown(self) -> None:
@@ -246,7 +246,7 @@ def try_tv_prewarm_reset(main_symbol: Optional[str] = None) -> None:
         pass
 
 
-def wait_for_service_ping(*, timeout_s: float = 20.0, poll_s: float = 0.25) -> bool:
+def wait_for_service_ping(*, timeout_s: float = 30.0, poll_s: float = 0.25) -> bool:
     """
     Poll until the control plane answers ping or timeout.
 
