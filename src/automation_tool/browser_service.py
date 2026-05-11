@@ -515,6 +515,60 @@ class BrowserServiceState:
         if need:
             await self._prewarm_tradingview_tabs_async()
 
+    async def _reload_tv_warm_page_before_capture(
+        self,
+        *,
+        key: str,
+        tv: dict[str, Any],
+        settle_ms: int,
+    ) -> None:
+        from automation_tool.coinmap_tradingview_async import tradingview_ensure_watchlist_open_async
+
+        wt = self._tv_warm[key]
+        page = wt.page
+        _log.info("TV warm reload before capture | tab=%s", key)
+        await page.reload(wait_until="domcontentloaded", timeout=120_000)
+
+        intervals_id = (tv.get("intervals_toolbar_id") or "header-toolbar-intervals").strip()
+        await page.locator(f"#{intervals_id}").first.wait_for(state="visible", timeout=90_000)
+
+        wait_ms = int(tv.get("after_reload_chart_ready_ms", tv.get("initial_settle_ms", settle_ms)))
+        if wait_ms > 0:
+            await page.wait_for_timeout(wait_ms)
+
+        await tradingview_ensure_watchlist_open_async(page, tv)
+
+        # A reload can restore the saved chart layout instead of the cached in-memory state.
+        # Force the capture path to re-select the requested symbol/interval after reload.
+        wt.current_symbol = ""
+        wt.current_interval_label = ""
+
+    async def _reload_tv_warm_tabs_before_capture(
+        self,
+        *,
+        tv: dict[str, Any],
+        settle_ms: int,
+    ) -> None:
+        from automation_tool.coinmap import _tv_apply_indicator_profile
+
+        await self._ensure_tv_warm_tabs()
+
+        async with self._tv_lock_ict:
+            await self._ensure_tv_warm_tabs()
+            await self._reload_tv_warm_page_before_capture(
+                key="ict",
+                tv=_tv_apply_indicator_profile(tv, "ict_killzones"),
+                settle_ms=settle_ms,
+            )
+
+        async with self._tv_lock_default:
+            await self._ensure_tv_warm_tabs()
+            await self._reload_tv_warm_page_before_capture(
+                key="default",
+                tv=tv,
+                settle_ms=settle_ms,
+            )
+
     async def tv_prewarm_reset(self, *, main_symbol: Optional[str] = None) -> dict[str, Any]:
         ms = (main_symbol or "").strip() or None
         await self._prewarm_tradingview_tabs_async(main_symbol_override=ms)
@@ -539,9 +593,8 @@ class BrowserServiceState:
             tv_ensure_required_indicators_async,
         )
 
-        await self._ensure_tv_warm_tabs()
-
         sm = int(settle_ms if settle_ms is not None else self._tv_settle_ms)
+        await self._reload_tv_warm_tabs_before_capture(tv=tv, settle_ms=sm)
         main_u = main_symbol.strip().upper()
         written: list[str] = []
 
@@ -730,8 +783,8 @@ class BrowserServiceState:
             tv_ensure_required_indicators_async,
         )
 
-        await self._ensure_tv_warm_tabs()
         sm = int(settle_ms if settle_ms is not None else self._tv_settle_ms)
+        await self._reload_tv_warm_tabs_before_capture(tv=tv, settle_ms=sm)
         sym_key = re.sub(r"[^\w.-]+", "_", symbol).strip("_")[:40] or "sym"
         prof = (indicator_profile or "").strip()
 
