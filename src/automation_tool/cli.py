@@ -1368,7 +1368,7 @@ def cmd_browser_up(args: argparse.Namespace) -> None:
         return
 
     # Concurrent ``browser up`` (e.g. two .bat): peer may be between spawn and first ping.
-    if wait_for_service_ping(timeout_s=60.0):
+    if wait_for_service_ping(timeout_s=20.0):
         print("Browser service already running (ping ok after brief wait).", flush=True)
         st = load_browser_service_state()
         if st:
@@ -1410,7 +1410,7 @@ def cmd_browser_up(args: argparse.Namespace) -> None:
             return
 
     # State file can appear before the TCP control plane accepts connections; wait for ping.
-    if not wait_for_service_ping(timeout_s=120.0):
+    if not wait_for_service_ping(timeout_s=45.0):
         raise SystemExit(
             "Browser service wrote state but control plane did not respond to ping in time."
         )
@@ -1487,7 +1487,7 @@ def cmd_browser_tail(args: argparse.Namespace) -> None:
     try:
         while True:
             try:
-                r = c.request("ping", {}, timeout_s=15.0)
+                r = c.request("ping", {}, timeout_s=5.0)
                 ok = bool(r.get("ok"))
                 print(time.strftime("%H:%M:%S"), "ping", "ok" if ok else "fail", r, flush=True)
             except OSError as e:
