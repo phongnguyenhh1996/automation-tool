@@ -2409,6 +2409,13 @@ def cmd_all(args: argparse.Namespace) -> None:
         n_rm = clear_zones_directory(zones_dir)
         _log.info("all: cleared zones | removed=%s dir=%s", n_rm, zones_dir)
         print(f"Đã dừng daemon-plan (nếu có) và xóa zones/: {zones_dir} ({n_rm} file)", flush=True)
+        from automation_tool.images import get_active_main_symbol as _get_sym_neverdie
+        from automation_tool.ea_neverdie_zone_publish import clear_neverdie_before_all
+
+        try:
+            clear_neverdie_before_all(_get_sym_neverdie().strip().upper())
+        except Exception as e:
+            _log.warning("all: ea-neverdie clear (local/Cloudinary) failed: %s", e)
 
     cfg = args.config or default_coinmap_config_path()
     storage = args.storage_state or default_storage_state_path()
@@ -2569,6 +2576,17 @@ def cmd_all(args: argparse.Namespace) -> None:
                 "Warning: could not parse analysis JSON for zones (no `prices` or empty).",
                 file=sys.stderr,
             )
+
+        from automation_tool.ea_neverdie_zone_publish import maybe_publish_neverdie_after_cli
+        from automation_tool.images import get_active_main_symbol as _get_sym_publish
+
+        try:
+            maybe_publish_neverdie_after_cli(
+                symbol=_get_sym_publish().strip().upper(),
+                zones_dir=zones_dir,
+            )
+        except Exception as e:
+            _log.warning("all: ea-neverdie publish failed: %s", e)
 
 
 def cmd_tv_alerts(args: argparse.Namespace) -> None:
@@ -2925,6 +2943,18 @@ def cmd_update(args: argparse.Namespace) -> None:
                 len(zones),
                 sym,
             )
+
+    if update_payload is not None:
+        from automation_tool.ea_neverdie_zone_publish import maybe_publish_neverdie_after_cli
+        from automation_tool.images import get_active_main_symbol as _sym_up_neverdie
+
+        try:
+            maybe_publish_neverdie_after_cli(
+                symbol=_sym_up_neverdie().strip().upper(),
+                zones_dir=zones_dir,
+            )
+        except Exception as e:
+            _log.warning("update: ea-neverdie publish failed: %s", e)
 
     lap = args.last_alert_json or default_last_alert_prices_path()
 
