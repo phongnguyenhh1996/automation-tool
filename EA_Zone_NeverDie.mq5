@@ -10,6 +10,19 @@ enum ENUM_ZONE_MODE
    ZONE_WATCH = 2
   };
 
+// Only M5/M15 (do not use ENUM_TIMEFRAMES here — MT5 input dialog lists every TF and
+// choosing anything else caused INIT_PARAMETERS_INCORRECT / "incorrect parameters".)
+enum ENUM_ND_DCA_TF
+  {
+   ND_DCA_M5  = 0,
+   ND_DCA_M15 = 1
+  };
+
+ENUM_TIMEFRAMES NdDcaTimeframe(const ENUM_ND_DCA_TF tf)
+  {
+   return(tf == ND_DCA_M15 ? PERIOD_M15 : PERIOD_M5);
+  }
+
 input group "=== TRADE SETTINGS ==="
 input double         InpLotSize            = 0.01;
 input double         InpMultiplier         = 1.20;
@@ -17,7 +30,7 @@ input int            InpGridStep           = 15000;
 input int            InpTakeProfit         = 5000;
 input int            InpMaxGridLevels      = 50;
 input long           InpMagicNumber        = 20241221;
-input ENUM_TIMEFRAMES InpDcaGridTimeframe  = PERIOD_M5; // M5 or M15: DCA only re-checks on new bar of this TF
+input ENUM_ND_DCA_TF InpDcaGridTimeframe    = ND_DCA_M5; // DCA re-checks on new bar of this TF (M5 or M15 only)
 input int            InpDcaClosedBarsRequired = 1;     // min closed bars on that TF since last entry (iBarShift >= this)
 
 input group "=== BASKET TRAILING ==="
@@ -52,7 +65,7 @@ struct BasketInfo
   };
 
 CTrade  g_trade;
-datetime g_dcaGridBarOpenSeen = 0; // last InpDcaGridTimeframe bar open time processed (OnInit + OnTick)
+datetime g_dcaGridBarOpenSeen = 0; // last DCA TF bar open time processed (OnInit + OnTick)
 bool    g_buyBlocked       = false;
 bool    g_sellBlocked      = false;
 string  g_buyBlockReason   = "";
@@ -236,7 +249,7 @@ int OnInit()
    else
       RemovePanel();
 
-   g_dcaGridBarOpenSeen = iTime(_Symbol, InpDcaGridTimeframe, 0);
+   g_dcaGridBarOpenSeen = iTime(_Symbol, NdDcaTimeframe(InpDcaGridTimeframe), 0);
    UpdatePanel();
    return(INIT_SUCCEEDED);
   }
@@ -272,7 +285,7 @@ void OnTick()
    ManageZoneStopsAndWatchers();
 
    bool onFirstTickOfNewDcaBar = false;
-   datetime dcaBarOpen        = iTime(_Symbol, InpDcaGridTimeframe, 0);
+   datetime dcaBarOpen        = iTime(_Symbol, NdDcaTimeframe(InpDcaGridTimeframe), 0);
    if(dcaBarOpen > 0 && dcaBarOpen != g_dcaGridBarOpenSeen)
      {
       g_dcaGridBarOpenSeen      = dcaBarOpen;
@@ -323,14 +336,14 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
 bool ValidateInputs()
   {
    if(InpLotSize <= 0.0 || InpMultiplier < 1.0)
+     {
+      Print("EA NeverDie: InpLotSize must be > 0 and InpMultiplier must be >= 1.0");
       return(false);
+     }
 
    if(InpGridStep <= 0 || InpTakeProfit <= 0 || InpMaxGridLevels < 1)
-      return(false);
-
-   if(InpDcaGridTimeframe != PERIOD_M5 && InpDcaGridTimeframe != PERIOD_M15)
      {
-      Print("EA NeverDie: InpDcaGridTimeframe must be M5 or M15");
+      Print("EA NeverDie: InpGridStep and InpTakeProfit must be > 0; InpMaxGridLevels must be >= 1");
       return(false);
      }
 
@@ -354,6 +367,7 @@ bool ValidateInputs()
 
 bool ValidateZoneConfig(const ENUM_POSITION_TYPE side)
   {
+   const string sideTxt = (side == POSITION_TYPE_BUY ? "BUY" : "SELL");
    ENUM_ZONE_MODE mode = GetZoneMode(side);
    if(mode == ZONE_OFF)
       return(true);
@@ -361,19 +375,32 @@ bool ValidateZoneConfig(const ENUM_POSITION_TYPE side)
    double low  = GetZoneLow(side);
    double high = GetZoneHigh(side);
    if(low <= 0.0 || high <= 0.0)
+     {
+      PrintFormat("EA NeverDie: %s zone low/high must be > 0 (empty InpZonesJsonUrl — load zones from JSON or set URL)",
+                  sideTxt);
       return(false);
+     }
 
    if(mode == ZONE_TRADE)
      {
       double stop = GetZoneStopLoss(side);
       if(stop <= 0.0)
+        {
+         PrintFormat("EA NeverDie: %s ZONE_TRADE requires stop loss (sl) > 0 in static/JSON config", sideTxt);
          return(false);
+        }
 
       if(side == POSITION_TYPE_BUY && stop >= MathMin(low, high))
+        {
+         PrintFormat("EA NeverDie: %s trade zone: SL must be below zone (sl < min(low,high))", sideTxt);
          return(false);
+        }
 
       if(side == POSITION_TYPE_SELL && stop <= MathMax(low, high))
+        {
+         PrintFormat("EA NeverDie: %s trade zone: SL must be above zone (sl > max(low,high))", sideTxt);
          return(false);
+        }
      }
 
    return(true);
@@ -554,7 +581,7 @@ bool ShouldOpenDca(const ENUM_POSITION_TYPE side, const BasketInfo &basket, cons
    if(basket.floatingProfit >= 0.0)
       return(false);
 
-   int shiftSinceOpen = iBarShift(_Symbol, InpDcaGridTimeframe, basket.lastOpenTime, false);
+   int shiftSinceOpen = iBarShift(_Symbol, NdDcaTimeframe(InpDcaGridTimeframe), basket.lastOpenTime, false);
    if(shiftSinceOpen < InpDcaClosedBarsRequired)
       return(false);
 
