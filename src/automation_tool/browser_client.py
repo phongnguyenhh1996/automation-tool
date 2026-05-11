@@ -29,6 +29,14 @@ def browser_service_state_path() -> Path:
     return default_data_dir() / _STATE_FILENAME
 
 
+def browser_service_log_path(*, cwd: Optional[Path] = None) -> Path:
+    raw = os.getenv("BROWSER_SERVICE_LOG_FILE", "").strip()
+    if raw:
+        return Path(raw).expanduser().resolve()
+    base = (cwd or Path.cwd()).expanduser().resolve()
+    return base / "logs" / "browser_service.log"
+
+
 def load_browser_service_state() -> Optional[dict[str, Any]]:
     p = browser_service_state_path()
     if not p.is_file():
@@ -200,18 +208,25 @@ def spawn_browser_service_detached(*, cwd: Optional[Path] = None) -> subprocess.
     inheriting env (PLAYWRIGHT_CHROME_USER_DATA_DIR, etc.).
     """
     cmd = [sys.executable, "-m", "automation_tool.browser_service"]
+    log_path = browser_service_log_path(cwd=cwd)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_fh = log_path.open("ab", buffering=0)
     kwargs: dict[str, Any] = {
         "stdin": subprocess.DEVNULL,
         # Important: do not PIPE here. The service can emit plenty of logs/warnings on startup
         # (Playwright/Chrome), and if nobody drains the pipes it can deadlock and never write
-        # the state file that `browser up` is waiting for.
-        "stdout": subprocess.DEVNULL,
-        "stderr": subprocess.DEVNULL,
+        # the state file that `browser up` is waiting for. Append to a file so startup crashes
+        # are diagnosable even though the service is detached.
+        "stdout": log_fh,
+        "stderr": subprocess.STDOUT,
         "start_new_session": True,
     }
     if cwd is not None:
         kwargs["cwd"] = str(cwd)
-    return subprocess.Popen(cmd, **kwargs)
+    try:
+        return subprocess.Popen(cmd, **kwargs)
+    finally:
+        log_fh.close()
 
 
 def is_service_responding() -> bool:

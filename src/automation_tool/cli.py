@@ -1343,11 +1343,11 @@ def _parse_symbols_arg(raw: str | Sequence[str]) -> list[str]:
 def cmd_browser_up(args: argparse.Namespace) -> None:
     load_all_dotenv()
     from automation_tool.browser_client import (
+        browser_service_log_path,
         is_service_responding,
         load_browser_service_state,
         spawn_browser_service_detached,
         wait_for_service_ping,
-        wait_for_state_file,
     )
 
     def _log_browser_up_ready(st: Optional[dict], *, note: str) -> None:
@@ -1361,6 +1361,25 @@ def cmd_browser_up(args: argparse.Namespace) -> None:
             cdp,
             ctrl,
         )
+
+    def _browser_service_log_tail(log_path: Path, *, limit: int = 4000) -> str:
+        try:
+            raw = log_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return ""
+        return raw[-limit:]
+
+    def _wait_for_state_or_spawn_exit(proc, *, timeout_s: float = 90.0, poll_s: float = 0.25) -> Optional[dict]:
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            st = load_browser_service_state()
+            if st and st.get("cdp_http"):
+                return st
+            if proc.poll() is not None:
+                time.sleep(max(0.05, poll_s))
+                return load_browser_service_state()
+            time.sleep(poll_s)
+        return None
 
     if is_service_responding():
         print("Browser service already running (ping ok).", flush=True)
@@ -1379,16 +1398,12 @@ def cmd_browser_up(args: argparse.Namespace) -> None:
         _log_browser_up_ready(st, note="already_running_after_wait")
         return
 
+    log_path = browser_service_log_path(cwd=Path.cwd())
     proc = spawn_browser_service_detached(cwd=Path.cwd())
-    st = wait_for_state_file(timeout_s=90.0)
+    st = _wait_for_state_or_spawn_exit(proc, timeout_s=90.0)
     if not st:
         proc.kill()
-        err = ""
-        if proc.stderr:
-            try:
-                err = proc.stderr.read().decode("utf-8", errors="replace")[:2000]
-            except Exception:
-                pass
+        err = _browser_service_log_tail(log_path)
         # Lost lock race: another process owns the service; state may still appear.
         if is_service_responding():
             print("Browser service already running (another process holds the lock).", flush=True)
@@ -1399,7 +1414,8 @@ def cmd_browser_up(args: argparse.Namespace) -> None:
             return
         raise SystemExit(
             "Browser service did not write state file in time. "
-            f"Check PLAYWRIGHT_CHROME_USER_DATA_DIR / Playwright install. stderr: {err!r}"
+            f"Check PLAYWRIGHT_CHROME_USER_DATA_DIR / Playwright install. "
+            f"log: {log_path} tail: {err!r}"
         )
 
     # Our subprocess may have lost the exclusive lock and exited; peer still wrote state.
@@ -1415,7 +1431,8 @@ def cmd_browser_up(args: argparse.Namespace) -> None:
     # State file can appear before the TCP control plane accepts connections; wait for ping.
     if not wait_for_service_ping(timeout_s=45.0):
         raise SystemExit(
-            "Browser service wrote state but control plane did not respond to ping in time."
+            "Browser service wrote state but control plane did not respond to ping in time. "
+            f"Check log: {log_path} tail: {_browser_service_log_tail(log_path)!r}"
         )
     st = load_browser_service_state() or st
     print("Browser service ready.", flush=True)
