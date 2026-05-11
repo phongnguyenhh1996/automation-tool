@@ -19,6 +19,7 @@ from automation_tool.mt5_openai_parse import (
 )
 from automation_tool.openai_analysis_json import (
     AUTO_MT5_HOP_LUU_THRESHOLD,
+    AUTO_MT5_HOP_LUU_THRESHOLD_PLAN_PHU,
     AUTO_MT5_HOP_LUU_THRESHOLD_SCALP,
     PriceZoneEntry,
     auto_mt5_hop_luu_threshold_for_label,
@@ -144,7 +145,7 @@ def apply_first_response_vao_lenh(
     Ghi ``last_alert_prices`` khi đủ triple giá.
 
     Auto-MT5 (không dry-run mặc định): ưu tiên vùng với ``hop_luu`` vượt ngưỡng
-    (plan_chinh/plan_phu > 70; scalp > 50) và ``trade_line`` không rỗng.
+    (plan_chinh > 70; plan_phu > 65; scalp > 50) và ``trade_line`` không rỗng.
     Nếu không đủ ngưỡng nhưng JSON có ``intraday_hanh_dong: VÀO LỆNH`` và có ``trade_line``
     khả dụng cho vùng — vẫn vào lệnh (bỏ gate hợp lưu). Ghi ``vao_lenh`` + ``entry_manual`` false.
     Nếu ``auto_mt5_zone_label`` được set (vd. ``plan_chinh``), chỉ xét đúng vùng đó (Nhật ký TV).
@@ -274,7 +275,8 @@ def apply_first_response_vao_lenh(
     if picked is None:
         zhint = f" (chỉ vùng `{zone_filter}`)" if zone_filter else ""
         msg = (
-            f"Đã ghi 3 giá. Ngưỡng auto-MT5: plan_chinh/plan_phu hop_luu > {AUTO_MT5_HOP_LUU_THRESHOLD}, "
+            f"Đã ghi 3 giá. Ngưỡng auto-MT5: plan_chinh hop_luu > {AUTO_MT5_HOP_LUU_THRESHOLD}, "
+            f"plan_phu hop_luu > {AUTO_MT5_HOP_LUU_THRESHOLD_PLAN_PHU}, "
             f"scalp hop_luu > {AUTO_MT5_HOP_LUU_THRESHOLD_SCALP} + trade_line không rỗng{zhint}.\n"
             f"Không có vùng đủ điều kiện — không ghi vao_lenh / không MT5.\n"
             f"Vùng trong JSON:\n{zones_txt}"

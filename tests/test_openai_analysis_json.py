@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from automation_tool.openai_analysis_json import (
     AUTO_MT5_HOP_LUU_THRESHOLD,
+    AUTO_MT5_HOP_LUU_THRESHOLD_PLAN_PHU,
     AUTO_MT5_HOP_LUU_THRESHOLD_SCALP,
     AnalysisPayload,
     PriceZoneEntry,
@@ -107,6 +108,18 @@ def test_select_zone_requires_above_threshold() -> None:
     assert AUTO_MT5_HOP_LUU_THRESHOLD_SCALP == 50
     assert select_zone_for_auto_mt5([PriceZoneEntry("plan_chinh", 1.0, hop_luu=70, trade_line=tl)]) is None
     assert select_zone_for_auto_mt5([PriceZoneEntry("plan_chinh", 1.0, hop_luu=71, trade_line=tl)]) is not None
+
+
+def test_select_zone_plan_phu_uses_above_65_threshold() -> None:
+    tl = "BUY LIMIT 1 | SL 0 | TP1 2 | Lot 0.01"
+    at_65 = [PriceZoneEntry("plan_phu", 1.0, hop_luu=65, trade_line=tl)]
+    above_65 = [PriceZoneEntry("plan_phu", 1.0, hop_luu=66, trade_line=tl)]
+
+    assert AUTO_MT5_HOP_LUU_THRESHOLD_PLAN_PHU == 65
+    assert select_zone_for_auto_mt5(at_65) is None
+    assert select_zone_for_auto_mt5(above_65) == ("plan_phu", 66, tl)
+    assert select_zone_for_auto_mt5_for_label(at_65, "plan_phu") is None
+    assert select_zone_for_auto_mt5_for_label(above_65, "plan_phu") == ("plan_phu", 66, tl)
 
 
 def test_select_zone_scalp_uses_lower_threshold() -> None:

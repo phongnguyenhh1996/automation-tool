@@ -19,16 +19,21 @@ def is_scalp_label(label: str) -> bool:
     return key == "scalp" or key.startswith("scalp_")
 
 
-# Morning auto-MT5: hop_luu must be greater than this value for plan_chinh / plan_phu.
+# Morning auto-MT5: hop_luu must be greater than this value for plan_chinh.
 AUTO_MT5_HOP_LUU_THRESHOLD = 70
+# Plan phụ được vào sớm hơn plan chính khi hợp lưu vượt 65.
+AUTO_MT5_HOP_LUU_THRESHOLD_PLAN_PHU = 65
 # Scalp: hop_luu must be greater than this value.
 AUTO_MT5_HOP_LUU_THRESHOLD_SCALP = 50
 
 
 def auto_mt5_hop_luu_threshold_for_label(label: str) -> int:
     """Ngưỡng hop_luu cho auto-MT5 theo label; đủ điều kiện khi ``hop_luu > ngưỡng``."""
+    key = (label or "").strip().lower()
     if is_scalp_label(label):
         return AUTO_MT5_HOP_LUU_THRESHOLD_SCALP
+    if key == "plan_phu":
+        return AUTO_MT5_HOP_LUU_THRESHOLD_PLAN_PHU
     return AUTO_MT5_HOP_LUU_THRESHOLD
 
 
@@ -424,7 +429,8 @@ def select_zone_for_auto_mt5(
 ) -> Optional[tuple[str, int, str]]:
     """
     Chọn một vùng để auto-MT5 sáng: ``hop_luu`` vượt ngưỡng theo vùng
-    (``hop_luu >`` :data:`AUTO_MT5_HOP_LUU_THRESHOLD` cho plan_chinh/plan_phu,
+    (``hop_luu >`` :data:`AUTO_MT5_HOP_LUU_THRESHOLD` cho plan_chinh,
+    ``hop_luu >`` :data:`AUTO_MT5_HOP_LUU_THRESHOLD_PLAN_PHU` cho plan_phu,
     ``hop_luu >`` :data:`AUTO_MT5_HOP_LUU_THRESHOLD_SCALP` cho scalp), có ``trade_line`` không rỗng.
 
     Nhiều vùng hợp lệ: **điểm cao nhất**; hòa điểm: thứ tự ``plan_chinh`` → ``plan_phu`` → ``scalp``.
