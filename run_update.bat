@@ -19,7 +19,7 @@ if errorlevel 1 (
 )
 
 echo [%date% %time%] INFO: Starting coinmap-automation update
-coinmap-automation update --main-symbol XAUUSD
+coinmap-automation update
 set "EXIT_CODE=%ERRORLEVEL%"
 echo [%date% %time%] INFO: Finished with exit code %EXIT_CODE%
 

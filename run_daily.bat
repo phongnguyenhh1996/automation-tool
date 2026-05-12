@@ -21,7 +21,7 @@ if errorlevel 1 (
 
 REM Run full pipeline (headless by default to save memory; add --headed manually if needed)
 echo [%date% %time%] INFO: Starting coinmap-automation all
-coinmap-automation all --main-symbol XAUUSD
+coinmap-automation all
 set "EXIT_CODE=%ERRORLEVEL%"
 echo [%date% %time%] INFO: Finished with exit code %EXIT_CODE%
 
