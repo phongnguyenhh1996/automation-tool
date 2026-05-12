@@ -23,13 +23,13 @@ ENUM_TIMEFRAMES NdDcaTimeframe(const ENUM_ND_DCA_TF tf)
   }
 
 input group "=== TRADE SETTINGS ==="
-input double         InpLotSize             = 0.01;
-input double         InpMultiplier          = 1.20;
-input int            InpGridStep            = 15000;
-input int            InpTakeProfit          = 5000;
+input double         InpLotSize             = 0.05;      
+input double         InpMultiplier          = 1.25;      
+input int            InpGridStep            = 3000;      
+input int            InpTakeProfit          = 4000;      
 input int            InpMaxGridLevels       = 50;
-input long           InpMagicNumber         = 20241221; // Base magic. Zones use offsets up to +999999
-input ENUM_ND_DCA_TF InpDcaGridTimeframe    = ND_DCA_M5;
+input long           InpMagicNumber         = 20241221;  
+input ENUM_ND_DCA_TF InpDcaGridTimeframe    = ND_DCA_M15; 
 input int            InpDcaClosedBarsRequired = 1;
 
 input group "=== BASKET TRAILING ==="
@@ -44,12 +44,12 @@ input group "=== DISPLAY ==="
 input bool           InpShowPanel          = true;
 
 input group "=== REMOTE ZONES JSON (Cloudinary / HTTPS) ==="
-input string         InpZonesJsonUrl       = "";
-input int            InpZonesPollSeconds   = 15;
+input string         InpZonesJsonUrl       = "https://res.cloudinary.com/easy-toeic/raw/upload/automation_tool/ea_neverdie/neverdie_XAUUSD.json"; // URL đã được cập nhật mặc định
+input int            InpZonesPollSeconds   = 300;
 input string         InpZonesBearer        = "";
 
 const int PANEL_LINE_COUNT      = 28;
-const int PANEL_LINE_HEIGHT     = 14;
+const int PANEL_LINE_HEIGHT     = 16;
 
 // --- DYNAMIC ZONE STRUCTURE ---
 struct ZoneData
@@ -805,15 +805,17 @@ void CreatePanel()
    if(ObjectFind(0, bg) == -1) ObjectCreate(0, bg, OBJ_RECTANGLE_LABEL, 0, 0, 0);
    ObjectSetInteger(0, bg, OBJPROP_CORNER, CORNER_LEFT_UPPER);
    ObjectSetInteger(0, bg, OBJPROP_XDISTANCE, 12); ObjectSetInteger(0, bg, OBJPROP_YDISTANCE, 30);
-   ObjectSetInteger(0, bg, OBJPROP_XSIZE, 230); ObjectSetInteger(0, bg, OBJPROP_YSIZE, 450);
+   ObjectSetInteger(0, bg, OBJPROP_XSIZE, 220); ObjectSetInteger(0, bg, OBJPROP_YSIZE, 470); // Kéo dài background một chút
    ObjectSetInteger(0, bg, OBJPROP_BGCOLOR, clrWhiteSmoke); ObjectSetInteger(0, bg, OBJPROP_COLOR, clrBlack);
    ObjectSetInteger(0, bg, OBJPROP_SELECTABLE, false); ObjectSetInteger(0, bg, OBJPROP_HIDDEN, true);
 
    if(ObjectFind(0, title) == -1) ObjectCreate(0, title, OBJ_LABEL, 0, 0, 0);
    ObjectSetInteger(0, title, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-   ObjectSetInteger(0, title, OBJPROP_XDISTANCE, 58); ObjectSetInteger(0, title, OBJPROP_YDISTANCE, 38);
-   ObjectSetInteger(0, title, OBJPROP_COLOR, clrBlack); ObjectSetInteger(0, title, OBJPROP_FONTSIZE, 12);
-   ObjectSetString(0, title, OBJPROP_FONT, "Tahoma Bold"); ObjectSetString(0, title, OBJPROP_TEXT, "EA Zone NeverDie Multi");
+   ObjectSetInteger(0, title, OBJPROP_XDISTANCE, 45); // Căn giữa lại do title ngắn đi
+   ObjectSetInteger(0, title, OBJPROP_YDISTANCE, 40);
+   ObjectSetInteger(0, title, OBJPROP_COLOR, clrBlack); ObjectSetInteger(0, title, OBJPROP_FONTSIZE, 11);
+   ObjectSetString(0, title, OBJPROP_FONT, "Tahoma Bold"); 
+   ObjectSetString(0, title, OBJPROP_TEXT, "EA Zone NeverDie"); // Title rút gọn theo ý bạn
    ObjectSetInteger(0, title, OBJPROP_SELECTABLE, false); ObjectSetInteger(0, title, OBJPROP_HIDDEN, true);
 
    for(int i = 0; i < PANEL_LINE_COUNT; i++) CreatePanelLine(i);
@@ -824,10 +826,12 @@ void CreatePanelLine(const int index)
    string name = g_panelPrefix + "_LINE_" + IntegerToString(index);
    if(ObjectFind(0, name) == -1) ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
    ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, 22); ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 76 + index * PANEL_LINE_HEIGHT);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, 22); 
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, 70 + index * PANEL_LINE_HEIGHT); // Chỉnh lại tọa độ Y cho cân đối
    ObjectSetInteger(0, name, OBJPROP_COLOR, clrBlack); ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 9);
    ObjectSetString(0, name, OBJPROP_FONT, "Tahoma"); ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+   ObjectSetString(0, name, OBJPROP_TEXT, " "); // Khởi tạo text bằng khoảng trắng để diệt lỗi "Label"
   }
 
 void RemovePanel()
@@ -843,7 +847,9 @@ void UpdatePanel()
 
    string lines[]; color colors[];
    ArrayResize(lines, PANEL_LINE_COUNT); ArrayResize(colors, PANEL_LINE_COUNT);
-   for(int i = 0; i < PANEL_LINE_COUNT; i++) { lines[i] = ""; colors[i] = clrBlack; }
+   
+   // Diệt lỗi "Label" triệt để ở mảng động
+   for(int i = 0; i < PANEL_LINE_COUNT; i++) { lines[i] = " "; colors[i] = clrBlack; }
 
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
@@ -858,11 +864,11 @@ void UpdatePanel()
    AddPanelRow(lines, colors, row, "Balance: " + DoubleToString(balance, 2), clrBlack);
    AddPanelRow(lines, colors, row, "Equity:  " + DoubleToString(equity, 2), clrBlack);
    AddPanelRow(lines, colors, row, "DD:      " + DoubleToString(ddPercent, 1) + "%", clrBlack);
-   AddPanelRow(lines, colors, row, "", clrBlack);
+   AddPanelRow(lines, colors, row, " ", clrBlack); // Dùng " " thay vì ""
 
    AddPanelRow(lines, colors, row, "------ " + _Symbol + " ------", clrDimGray);
    AddPanelRow(lines, colors, row, "Total Orders: " + IntegerToString(TotalOpenPositions(POSITION_TYPE_BUY)+TotalOpenPositions(POSITION_TYPE_SELL)), clrBlack);
-   AddPanelRow(lines, colors, row, "", clrBlack);
+   AddPanelRow(lines, colors, row, " ", clrBlack); // Dùng " " thay vì ""
 
    AddPanelRow(lines, colors, row, "------- Status -------", clrDimGray);
    AddPanelRow(lines, colors, row, "Buy Mode:  " + ZoneModeText(lBuy.mode), ModeColor(lBuy.mode));
@@ -870,12 +876,15 @@ void UpdatePanel()
    AddPanelRow(lines, colors, row, "Buy SL:    " + ZoneStopText(POSITION_TYPE_BUY), clrBlack);
    AddPanelRow(lines, colors, row, "Buy State: " + SideStatusText(POSITION_TYPE_BUY), StateColor(POSITION_TYPE_BUY, lBuy.mode));
    AddPanelRow(lines, colors, row, "Buy Note:  " + SideReasonText(POSITION_TYPE_BUY), clrBlack);
+   AddPanelRow(lines, colors, row, " ", clrBlack); // Tạo khoảng cách nhỏ giữa Buy và Sell
    
    AddPanelRow(lines, colors, row, "Sell Mode: " + ZoneModeText(lSell.mode), ModeColor(lSell.mode));
    AddPanelRow(lines, colors, row, "Sell Zone: " + ZoneRangeText(POSITION_TYPE_SELL), clrBlack);
    AddPanelRow(lines, colors, row, "Sell SL:   " + ZoneStopText(POSITION_TYPE_SELL), clrBlack);
    AddPanelRow(lines, colors, row, "Sell State:" + " " + SideStatusText(POSITION_TYPE_SELL), StateColor(POSITION_TYPE_SELL, lSell.mode));
    AddPanelRow(lines, colors, row, "Sell Note: " + SideReasonText(POSITION_TYPE_SELL), clrBlack);
+   AddPanelRow(lines, colors, row, " ", clrBlack);
+   
    AddPanelRow(lines, colors, row, "Status:    " + OverallStatusText(), clrDarkGreen);
 
    for(int i = 0; i < PANEL_LINE_COUNT; i++)
