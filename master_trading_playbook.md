@@ -333,7 +333,7 @@ Khi trả kết quả phải có đủ:
   - **1 plan chính**: ưu tiên hướng được H4, H1, DXY và Footprint đồng thuận mạnh.
   - **1 plan phụ**: bias ngược tại vùng sweep đối diện, TP ngắn hơn.
   - **1 scalp plan**: BUY khi có HL + absorption + stacked BID M5; SELL khi ở premium M15 + stacked ASK + CD giảm.
-- Scalp XAUUSD ưu tiên TP **7–10 giá**, có thể kéo TP dài hơn nếu tín hiệu tốt.
+- Scalp XAUUSD ưu tiên TP **7–10 giá**.
 - Entry ưu tiên ở vùng có hợp lưu:
   - VWAP–POC
   - VAH/VAL
@@ -642,7 +642,7 @@ Nếu mất nhiều xác nhận:
 TP1 (50% khối lượng):
 - VWAP / HL/LH gần nhất / LVN gần nhất.
 - Mục tiêu: dễ đạt; plan chính / plan phụ ưu tiên RR ≥ 1:1.6.
-- Riêng scalp XAUUSD: ưu tiên TP 5–10 giá theo vùng dễ đạt, có thể kéo TP dài hơn nếu tính hiệu tốt.
+- Riêng scalp XAUUSD: ưu tiên TP 7–10 giá theo vùng dễ đạt.
 
 TP2 (30% khối lượng):
 - POC / VAH / VAL / OB/FVG đối diện.
