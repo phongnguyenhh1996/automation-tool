@@ -23,6 +23,7 @@ from automation_tool.openai_analysis_json import (
     AUTO_MT5_HOP_LUU_THRESHOLD_SCALP,
     PriceZoneEntry,
     auto_mt5_hop_luu_threshold_for_label,
+    is_scalp_label,
     parse_analysis_from_openai_text,
     select_zone_for_auto_mt5,
     select_zone_for_auto_mt5_for_label,
@@ -144,8 +145,8 @@ def apply_first_response_vao_lenh(
     """
     Ghi ``last_alert_prices`` khi đủ triple giá.
 
-    Auto-MT5 (không dry-run mặc định): ưu tiên vùng với ``hop_luu`` vượt ngưỡng
-    (plan_chinh > 70; plan_phu > 65; scalp > 50) và ``trade_line`` không rỗng.
+    Auto-MT5 (không dry-run mặc định): ưu tiên vùng với ``hop_luu`` đủ ngưỡng
+    (plan_chinh > 70; plan_phu > 65; scalp >= 60) và ``trade_line`` không rỗng.
     Nếu không đủ ngưỡng nhưng JSON có ``intraday_hanh_dong: VÀO LỆNH`` và có ``trade_line``
     khả dụng cho vùng — vẫn vào lệnh (bỏ gate hợp lưu). Ghi ``vao_lenh`` + ``entry_manual`` false.
     Nếu ``auto_mt5_zone_label`` được set (vd. ``plan_chinh``), chỉ xét đúng vùng đó (Nhật ký TV).
@@ -277,7 +278,7 @@ def apply_first_response_vao_lenh(
         msg = (
             f"Đã ghi 3 giá. Ngưỡng auto-MT5: plan_chinh hop_luu > {AUTO_MT5_HOP_LUU_THRESHOLD}, "
             f"plan_phu hop_luu > {AUTO_MT5_HOP_LUU_THRESHOLD_PLAN_PHU}, "
-            f"scalp hop_luu > {AUTO_MT5_HOP_LUU_THRESHOLD_SCALP} + trade_line không rỗng{zhint}.\n"
+            f"scalp hop_luu >= {AUTO_MT5_HOP_LUU_THRESHOLD_SCALP} + trade_line không rỗng{zhint}.\n"
             f"Không có vùng đủ điều kiện — không ghi vao_lenh / không MT5.\n"
             f"Vùng trong JSON:\n{zones_txt}"
         )
@@ -330,10 +331,12 @@ def apply_first_response_vao_lenh(
         parsed = replace(parsed, tp2=None)
 
     _thr = auto_mt5_hop_luu_threshold_for_label(label)
+    _op = ">=" if is_scalp_label(label) else ">"
     _log.info(
-        "first_response: chọn vùng %s hop_luu=%s (>%s) — parse trade_line OK → ghi %s",
+        "first_response: chọn vùng %s hop_luu=%s (%s%s) — parse trade_line OK → ghi %s",
         label,
         hop,
+        _op,
         _thr,
         VAO_LENH,
     )
@@ -391,7 +394,7 @@ def apply_first_response_vao_lenh(
     )
 
     summary = (
-        f"Vùng chọn: {label} | hop_luu={hop} (ngưỡng >{auto_mt5_hop_luu_threshold_for_label(label)})\n"
+        f"Vùng chọn: {label} | hop_luu={hop} (ngưỡng {_op}{auto_mt5_hop_luu_threshold_for_label(label)})\n"
         f"last_alert: {last_alert_path}\n"
         f"MT5 symbol override: {mt5_symbol or '(từ lệnh)'}\n"
         "Đã ghi vao_lenh (entry_manual=false)."

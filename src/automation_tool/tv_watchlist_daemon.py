@@ -3486,7 +3486,7 @@ def _daemon_plan_main_loop(
                         _state_write(params, st_auto)
                         _send_log(
                             settings,
-                            f"[auto-entry] dispatch | zone_id={z.id} label={z.label} hop_luu={z.hop_luu} thr(>)={thr}",
+                            f"[auto-entry] dispatch | zone_id={z.id} label={z.label} hop_luu={z.hop_luu} thr({'>' if not is_scalp_label(z.label) else '>='})={thr}",
                         )
                         _auto_entry_job(settings=settings, params=params, zone_id=z.id)
 

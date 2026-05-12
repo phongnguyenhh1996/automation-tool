@@ -101,7 +101,7 @@ Mọi phản hồi phải nằm trong khối ```json. KHÔNG CÓ VĂN BẢN TH�
 
 <field_definitions>
 ## Quy ước chung
-- `hop_luu`: điểm hợp lưu 0–100. Quy tắc vào lệnh: chỉ xem xét "VÀO LỆNH" khi hop_luu > 75 (plan_chinh / plan_phu) và đủ 3 yếu tố (Cấu trúc + CVD + Footprint), đối với scalp chỉ cần > 60.
+- `hop_luu`: điểm hợp lưu 0–100. Quy tắc vào lệnh: chỉ xem xét "VÀO LỆNH" khi hop_luu > 75 (plan_chinh / plan_phu) và đủ 3 yếu tố (Cấu trúc + CVD + Footprint), đối với scalp cần >= 60.
 - `label`: tên vùng/plan. Khuyến nghị dùng ổn định 3 label: `plan_chinh`, `plan_phu`, `scalp`.
 - `value`: giá “alert_price”/giá mốc để theo dõi (float).
 - `vung_cho`: chuỗi vùng giá (dùng dấu gạch giữa hai số). Ví dụ `"4762.0–4766.0"`.

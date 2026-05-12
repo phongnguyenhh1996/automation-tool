@@ -23,8 +23,8 @@ def is_scalp_label(label: str) -> bool:
 AUTO_MT5_HOP_LUU_THRESHOLD = 70
 # Plan phụ được vào sớm hơn plan chính khi hợp lưu vượt 65.
 AUTO_MT5_HOP_LUU_THRESHOLD_PLAN_PHU = 65
-# Scalp: hop_luu must be greater than this value.
-AUTO_MT5_HOP_LUU_THRESHOLD_SCALP = 50
+# Scalp: hop_luu must be at least this value.
+AUTO_MT5_HOP_LUU_THRESHOLD_SCALP = 60
 
 
 def auto_mt5_hop_luu_threshold_for_label(label: str) -> int:
@@ -38,10 +38,13 @@ def auto_mt5_hop_luu_threshold_for_label(label: str) -> int:
 
 
 def auto_mt5_hop_luu_passes_for_label(label: str, hop_luu: Optional[int]) -> bool:
-    """True khi ``hop_luu`` vượt ngưỡng auto-MT5 của label."""
+    """True khi ``hop_luu`` đủ ngưỡng auto-MT5 của label."""
     if hop_luu is None:
         return False
-    return int(hop_luu) > auto_mt5_hop_luu_threshold_for_label(label)
+    threshold = auto_mt5_hop_luu_threshold_for_label(label)
+    if is_scalp_label(label):
+        return int(hop_luu) >= threshold
+    return int(hop_luu) > threshold
 
 
 # TP1 arm (vao_lenh → cho_tp1): độ rộng dải |last − ref| so với ref vùng (BUY/SELL).
@@ -428,10 +431,10 @@ def select_zone_for_auto_mt5(
     prices: list[PriceZoneEntry],
 ) -> Optional[tuple[str, int, str]]:
     """
-    Chọn một vùng để auto-MT5 sáng: ``hop_luu`` vượt ngưỡng theo vùng
+    Chọn một vùng để auto-MT5 sáng: ``hop_luu`` đủ ngưỡng theo vùng
     (``hop_luu >`` :data:`AUTO_MT5_HOP_LUU_THRESHOLD` cho plan_chinh,
     ``hop_luu >`` :data:`AUTO_MT5_HOP_LUU_THRESHOLD_PLAN_PHU` cho plan_phu,
-    ``hop_luu >`` :data:`AUTO_MT5_HOP_LUU_THRESHOLD_SCALP` cho scalp), có ``trade_line`` không rỗng.
+    ``hop_luu >=`` :data:`AUTO_MT5_HOP_LUU_THRESHOLD_SCALP` cho scalp), có ``trade_line`` không rỗng.
 
     Nhiều vùng hợp lệ: **điểm cao nhất**; hòa điểm: thứ tự ``plan_chinh`` → ``plan_phu`` → ``scalp``.
 
