@@ -418,6 +418,21 @@ int GetActiveZoneIndex(ENUM_POSITION_TYPE side, double price)
    return -1;
   }
 
+int GetEntryTouchedZoneIndex(ENUM_POSITION_TYPE side, double price)
+  {
+   if(side == POSITION_TYPE_BUY)
+     {
+      for(int i = ArraySize(g_buyZones) - 1; i >= 0; i--)
+         if(g_buyZones[i].mode == ZONE_TRADE && price <= g_buyZones[i].low) return i;
+     }
+   else
+     {
+      for(int i = ArraySize(g_sellZones) - 1; i >= 0; i--)
+         if(g_sellZones[i].mode == ZONE_TRADE && price >= g_sellZones[i].high) return i;
+     }
+   return -1;
+  }
+
 void ManageZoneStopsAndWatchers()
   {
    MqlTick tick;
@@ -458,7 +473,7 @@ void ManageAllZones(const ENUM_POSITION_TYPE side, const bool onFirstTickDca)
    MqlTick tick;
    if(!SymbolInfoTick(_Symbol, tick)) return;
    double price = GetSideOpenPrice(side, tick);
-   int newestActiveIdx = GetActiveZoneIndex(side, price);
+   int newestEntryTouchedIdx = GetEntryTouchedZoneIndex(side, price);
    int totalZones = (side == POSITION_TYPE_BUY) ? ArraySize(g_buyZones) : ArraySize(g_sellZones);
 
    for(int i = 0; i < totalZones; i++)
@@ -479,8 +494,8 @@ void ManageAllZones(const ENUM_POSITION_TYPE side, const bool onFirstTickDca)
         }
       else
         {
-         // Chỉ mở lệnh Initial nếu Zone này là Zone mới nhất thỏa mãn điều kiện
-         if(i == newestActiveIdx && ShouldOpenInitial(side, zone, price))
+         // Chỉ mở Initial khi giá chạm entry của Zone mới nhất: BUY=low, SELL=high.
+         if(i == newestEntryTouchedIdx && ShouldOpenInitial(side, zone, price))
            {
             zone.trailArmed = false;
             zone.trailExtreme = 0.0;
@@ -539,7 +554,8 @@ bool ShouldOpenInitial(const ENUM_POSITION_TYPE side, const ZoneData &zone, doub
    if(side == POSITION_TYPE_BUY && zone.sl > 0 && price <= zone.sl) return(false);
    if(side == POSITION_TYPE_SELL && zone.sl > 0 && price >= zone.sl) return(false);
 
-   return(price >= zone.low && price <= zone.high);
+   if(side == POSITION_TYPE_BUY) return(price <= zone.low);
+   return(price >= zone.high);
   }
 
 bool ShouldOpenDca(const ENUM_POSITION_TYPE side, const ZoneData &zone, const BasketInfo &basket, const bool onFirstTick)
