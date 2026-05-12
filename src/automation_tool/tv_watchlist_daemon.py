@@ -37,6 +37,7 @@ from automation_tool.mt5_accounts import (
     load_mt5_accounts_for_cli,
     load_mt5_accounts_for_zone_entry,
     primary_account,
+    trade_with_update_scalp_entry_lot_default,
 )
 from automation_tool.mt5_execute import (
     DaemonPlanMt5PriceSession,
@@ -2405,6 +2406,12 @@ def _auto_entry_job(
                 params=params,
             )
             return
+        parsed = trade_with_update_scalp_entry_lot_default(
+            parsed,
+            zone_source=(z0.source or ""),
+        )
+        if parsed.raw_line:
+            z0.trade_line = parsed.raw_line.strip()
 
         accs_ae = load_mt5_accounts_for_zone_entry(
             zone_source=(z0.source or ""),
@@ -2864,6 +2871,10 @@ def _zone_touch_job(
             )
             return
 
+        parsed = trade_with_update_scalp_entry_lot_default(
+            parsed,
+            zone_source=(z1.source or ""),
+        )
         z1.trade_line = (parsed.raw_line or "").strip()
         z1.status = "vao_lenh"
         z1.tp1_followup_done = False

@@ -4,7 +4,8 @@ Cấu hình nhiều tài khoản MT5 từ ``accounts.json`` (mảng object).
 Đường dẫn mặc định: biến môi trường ``MT5_ACCOUNTS_JSON`` hoặc tham số CLI ``--mt5-accounts-json``.
 
 **Lot:** bỏ key ``lot`` hoặc ``"lot": null`` → dùng khối lượng đã parse từ ``trade_line`` (cùng
-hành vi ``mode: from_trade``). Có ``lot`` thì ``fixed`` / ``max_notional_usd`` như cũ.
+hành vi ``mode: from_trade``). Riêng zone ``source=update-scalp`` khi vào lệnh qua
+``accounts-scalp.json`` luôn ép fixed ``0.01``, bất kể account khai báo rule lot nào.
 
 **Entry TP:** bỏ key ``entry_take_profit`` → giữ hành vi cũ là đặt TP2 nếu trade có TP2;
 đặt ``"entry_take_profit": "tp1"`` để account đó chốt TP ở TP1 ngay khi mở lệnh.
@@ -23,13 +24,15 @@ import json
 import logging
 import math
 import os
-from dataclasses import dataclass, field
+import re
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, Optional, Union
 
 _log = logging.getLogger(__name__)
 
 SOURCE_UPDATE_SCALP = "update-scalp"
+UPDATE_SCALP_DEFAULT_LOT = 0.01
 
 from automation_tool.mt5_openai_parse import ParsedTrade
 
@@ -163,7 +166,12 @@ def _parse_entry_slots(obj: Any, index: int) -> Optional[tuple[EntrySlot, ...]]:
     return tuple(out)
 
 
-def _parse_one(obj: Any, index: int) -> MT5AccountEntry:
+def _parse_one(
+    obj: Any,
+    index: int,
+    *,
+    default_lot_rule: Optional[LotRule] = None,
+) -> MT5AccountEntry:
     if not isinstance(obj, dict):
         raise ValueError(f"accounts[{index}] phải là object")
     acc_id = str(obj.get("id") or "").strip()
@@ -189,7 +197,7 @@ def _parse_one(obj: Any, index: int) -> MT5AccountEntry:
     primary = bool(obj.get("primary", False))
     lot_raw = obj.get("lot")
     if lot_raw is None:
-        lot: LotRule = LotRuleFromTrade()
+        lot: LotRule = default_lot_rule if default_lot_rule is not None else LotRuleFromTrade()
     else:
         lot = _parse_lot(lot_raw)
     entry_tp = _parse_entry_take_profit(obj.get("entry_take_profit"), index)
@@ -228,13 +236,17 @@ def filter_mt5_accounts_for_entry_slot(
     return [a for a in accounts if mt5_account_allows_entry_slot(a, slot)]
 
 
-def load_mt5_accounts_from_path(path: Path) -> list[MT5AccountEntry]:
+def load_mt5_accounts_from_path(
+    path: Path,
+    *,
+    default_lot_rule: Optional[LotRule] = None,
+) -> list[MT5AccountEntry]:
     """Đọc và validate mảng account; đúng một ``primary: true``."""
     raw = path.read_text(encoding="utf-8")
     data = json.loads(raw)
     if not isinstance(data, list) or len(data) == 0:
         raise ValueError("accounts.json phải là mảng không rỗng")
-    accounts = [_parse_one(x, i) for i, x in enumerate(data)]
+    accounts = [_parse_one(x, i, default_lot_rule=default_lot_rule) for i, x in enumerate(data)]
     primaries = [a for a in accounts if a.primary]
     if len(primaries) != 1:
         raise ValueError(
@@ -276,6 +288,7 @@ def sync_accounts_scalp_json(
         if row.get("update-scalp") is not True:
             continue
         cleaned = {k: v for k, v in row.items() if k != "update-scalp"}
+        cleaned["lot"] = {"mode": "fixed", "volume": UPDATE_SCALP_DEFAULT_LOT}
         out_rows.append(cleaned)
     dest = (dest_path or (src.parent / "accounts-scalp.json")).expanduser()
     if not out_rows:
@@ -327,6 +340,34 @@ def _is_update_scalp_zone_source(zone_source: str) -> bool:
     return (zone_source or "").strip().lower() == SOURCE_UPDATE_SCALP
 
 
+def _replace_trade_line_lot(raw_line: str, lot: float) -> str:
+    lot_s = f"{float(lot):.2f}"
+    return re.sub(
+        r"(\|\s*Lot\s+)[\d.]+",
+        rf"\g<1>{lot_s}",
+        raw_line or "",
+        count=1,
+        flags=re.IGNORECASE,
+    )
+
+
+def trade_with_update_scalp_entry_lot_default(
+    trade: ParsedTrade,
+    *,
+    zone_source: str,
+) -> ParsedTrade:
+    """For ``source=update-scalp`` entries, default the executable trade volume to 0.01 lot."""
+    if not _is_update_scalp_zone_source(zone_source):
+        return trade
+    raw_line = _replace_trade_line_lot(trade.raw_line, UPDATE_SCALP_DEFAULT_LOT)
+    return replace(trade, lot=UPDATE_SCALP_DEFAULT_LOT, raw_line=raw_line)
+
+
+def _force_update_scalp_account_lot(accounts: list[MT5AccountEntry]) -> list[MT5AccountEntry]:
+    fixed = LotRuleFixed(volume=UPDATE_SCALP_DEFAULT_LOT)
+    return [replace(acc, lot=fixed) for acc in accounts]
+
+
 def load_mt5_accounts_for_zone_entry(
     *,
     zone_source: str,
@@ -360,7 +401,11 @@ def load_mt5_accounts_for_zone_entry(
         return []
 
     try:
-        return load_mt5_accounts_from_path(path_to_load)
+        accounts = load_mt5_accounts_from_path(
+            path_to_load,
+            default_lot_rule=LotRuleFixed(volume=UPDATE_SCALP_DEFAULT_LOT),
+        )
+        return _force_update_scalp_account_lot(accounts)
     except ValueError as e:
         _log.warning(
             "load_mt5_accounts_for_zone_entry: invalid %s: %s",

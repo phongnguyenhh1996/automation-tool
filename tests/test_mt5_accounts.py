@@ -17,6 +17,7 @@ from automation_tool.mt5_accounts import (
     filter_mt5_accounts_for_entry_slot,
     load_mt5_accounts_from_path,
     load_mt5_accounts_for_zone_entry,
+    trade_with_update_scalp_entry_lot_default,
     sync_accounts_scalp_json,
 )
 from automation_tool.mt5_execute import resolve_mt5_trade_symbol
@@ -471,7 +472,9 @@ def test_load_mt5_accounts_for_zone_entry_non_scalp_uses_cli(monkeypatch) -> Non
         assert accs is not None and len(accs) == 1 and accs[0].id == "a"
 
 
-def test_load_mt5_accounts_for_zone_entry_scalp_prefers_sibling_file(monkeypatch) -> None:
+def test_load_mt5_accounts_for_zone_entry_scalp_prefers_sibling_file_and_forces_001(
+    monkeypatch,
+) -> None:
     with tempfile.TemporaryDirectory() as td:
         full_p = Path(td) / "accounts.json"
         _write_accounts(
@@ -502,6 +505,96 @@ def test_load_mt5_accounts_for_zone_entry_scalp_prefers_sibling_file(monkeypatch
         monkeypatch.delenv("MT5_ACCOUNTS_JSON", raising=False)
         accs = load_mt5_accounts_for_zone_entry(zone_source=SOURCE_UPDATE_SCALP, cli_path=full_p)
         assert accs is not None and len(accs) == 1 and accs[0].id == "scalp_acc"
+        assert isinstance(accs[0].lot, LotRuleFixed)
+        assert accs[0].lot.volume == 0.01
+
+
+def test_load_mt5_accounts_for_zone_entry_scalp_forces_manual_sibling_lot_to_001(
+    monkeypatch,
+) -> None:
+    with tempfile.TemporaryDirectory() as td:
+        full_p = Path(td) / "accounts.json"
+        scalp_p = Path(td) / "accounts-scalp.json"
+        _write_accounts(
+            full_p,
+            [
+                {
+                    "id": "full_only",
+                    "terminal_path": "C:/MT5/A/metatrader64.exe",
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                },
+            ],
+        )
+        _write_accounts(
+            scalp_p,
+            [
+                {
+                    "id": "scalp_acc",
+                    "terminal_path": "C:/MT5/B/metatrader64.exe",
+                    "login": 2,
+                    "password": "y",
+                    "server": "S",
+                    "primary": True,
+                    "lot": {"mode": "max_loss_usd", "max_usd": 100},
+                },
+            ],
+        )
+        monkeypatch.delenv("MT5_ACCOUNTS_JSON", raising=False)
+
+        accs = load_mt5_accounts_for_zone_entry(zone_source=SOURCE_UPDATE_SCALP, cli_path=full_p)
+
+        assert accs is not None and len(accs) == 1
+        assert isinstance(accs[0].lot, LotRuleFixed)
+        assert accs[0].lot.volume == 0.01
+
+
+def test_load_mt5_accounts_for_zone_entry_scalp_defaults_missing_lot_to_001(monkeypatch) -> None:
+    with tempfile.TemporaryDirectory() as td:
+        full_p = Path(td) / "accounts.json"
+        _write_accounts(
+            full_p,
+            [
+                {
+                    "id": "scalp_acc",
+                    "terminal_path": "C:/MT5/B/metatrader64.exe",
+                    "login": 2,
+                    "password": "y",
+                    "server": "S",
+                    "primary": True,
+                    "update-scalp": True,
+                },
+            ],
+        )
+        sync_accounts_scalp_json(full_p)
+        monkeypatch.delenv("MT5_ACCOUNTS_JSON", raising=False)
+
+        accs = load_mt5_accounts_for_zone_entry(zone_source=SOURCE_UPDATE_SCALP, cli_path=full_p)
+
+        assert accs is not None and len(accs) == 1
+        assert isinstance(accs[0].lot, LotRuleFixed)
+        assert accs[0].lot.volume == 0.01
+
+
+def test_update_scalp_entry_trade_defaults_lot_to_001() -> None:
+    trade = ParsedTrade(
+        symbol="XAUUSD",
+        side="BUY",
+        kind="LIMIT",
+        price=2600.0,
+        sl=2590.0,
+        tp1=2610.0,
+        tp2=None,
+        lot=0.04,
+        raw_line="BUY LIMIT 2600.0 | SL 2590.0 | TP1 2610.0 | Lot 0.04",
+    )
+
+    out = trade_with_update_scalp_entry_lot_default(trade, zone_source=SOURCE_UPDATE_SCALP)
+
+    assert out.lot == 0.01
+    assert out.raw_line.endswith("Lot 0.01")
 
 
 def test_load_mt5_accounts_for_zone_entry_scalp_missing_sibling_empty(monkeypatch) -> None:
