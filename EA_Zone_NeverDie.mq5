@@ -26,11 +26,12 @@ input group "=== TRADE SETTINGS ==="
 input double         InpLotSize             = 0.05;      
 input double         InpMultiplier          = 1.25;      
 input int            InpGridStep            = 3000;      
-input int            InpTakeProfit          = 4000;      
+input int            InpTakeProfit          = 3000;
 input int            InpMaxGridLevels       = 50;
 input long           InpMagicNumber         = 20241221;  
 input ENUM_ND_DCA_TF InpDcaGridTimeframe    = ND_DCA_M15; 
 input int            InpDcaClosedBarsRequired = 1;
+input double         InpZoneActivateBand    = 3.0;
 
 input group "=== BASKET TRAILING ==="
 input bool           InpUseTrailingStop    = false;
@@ -48,7 +49,7 @@ input string         InpZonesJsonUrl       = "https://res.cloudinary.com/easy-to
 input int            InpZonesPollSeconds   = 300;
 input string         InpZonesBearer        = "";
 
-const int PANEL_LINE_COUNT      = 28;
+const int PANEL_LINE_COUNT      = 40;
 const int PANEL_LINE_HEIGHT     = 16;
 
 // --- DYNAMIC ZONE STRUCTURE ---
@@ -204,8 +205,9 @@ void AddZoneIfNotExists(ENUM_POSITION_TYPE side, ENUM_ZONE_MODE mode, double low
         {
          if(g_buyZones[i].low == minPrice && g_buyZones[i].high == maxPrice)
            {
-            // Cập nhật Mode và SL nếu có thay đổi từ Server
-            g_buyZones[i].mode = mode;
+            // JSON chỉ nạp zone ở trạng thái WATCH; TRADE do giá kích hoạt.
+            if(mode == ZONE_OFF) g_buyZones[i].mode = ZONE_OFF;
+            else if(g_buyZones[i].mode != ZONE_TRADE) g_buyZones[i].mode = ZONE_WATCH;
             g_buyZones[i].sl = sl;
             return;
            }
@@ -214,7 +216,7 @@ void AddZoneIfNotExists(ENUM_POSITION_TYPE side, ENUM_ZONE_MODE mode, double low
       
       int size = ArraySize(g_buyZones);
       ArrayResize(g_buyZones, size + 1);
-      g_buyZones[size].mode = mode;
+      g_buyZones[size].mode = ZONE_WATCH;
       g_buyZones[size].low = minPrice;
       g_buyZones[size].high = maxPrice;
       g_buyZones[size].sl = sl;
@@ -229,7 +231,8 @@ void AddZoneIfNotExists(ENUM_POSITION_TYPE side, ENUM_ZONE_MODE mode, double low
         {
          if(g_sellZones[i].low == minPrice && g_sellZones[i].high == maxPrice)
            {
-            g_sellZones[i].mode = mode;
+            if(mode == ZONE_OFF) g_sellZones[i].mode = ZONE_OFF;
+            else if(g_sellZones[i].mode != ZONE_TRADE) g_sellZones[i].mode = ZONE_WATCH;
             g_sellZones[i].sl = sl;
             return;
            }
@@ -238,7 +241,7 @@ void AddZoneIfNotExists(ENUM_POSITION_TYPE side, ENUM_ZONE_MODE mode, double low
       
       int size = ArraySize(g_sellZones);
       ArrayResize(g_sellZones, size + 1);
-      g_sellZones[size].mode = mode;
+      g_sellZones[size].mode = ZONE_WATCH;
       g_sellZones[size].low = minPrice;
       g_sellZones[size].high = maxPrice;
       g_sellZones[size].sl = sl;
@@ -319,6 +322,7 @@ void OnTick()
    if(ManageRiskCutLoss()) { UpdatePanel(); return; }
 
    CleanupExpiredZones();
+   ActivateWatchZones();
    ManageZoneStopsAndWatchers();
 
    bool onFirstTickOfNewDcaBar = false;
@@ -377,6 +381,20 @@ int TotalOpenPositions(ENUM_POSITION_TYPE side)
    return count;
   }
 
+double SideFloatingProfit(ENUM_POSITION_TYPE side)
+  {
+   double totalProfit = 0.0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket > 0 && PositionGetString(POSITION_SYMBOL) == _Symbol &&
+         (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == side &&
+         IsOurMagic(PositionGetInteger(POSITION_MAGIC)))
+         totalProfit += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+     }
+   return totalProfit;
+  }
+
 bool HasOpenPositions(long magic)
   {
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -418,17 +436,63 @@ int GetActiveZoneIndex(ENUM_POSITION_TYPE side, double price)
    return -1;
   }
 
-int GetEntryTouchedZoneIndex(ENUM_POSITION_TYPE side, double price)
+bool IsPriceInZone(const ZoneData &zone, const double price)
+  {
+   return(price >= zone.low && price <= zone.high);
+  }
+
+double ZoneActivationTriggerPrice(const ENUM_POSITION_TYPE side, const ZoneData &zone)
+  {
+   return(side == POSITION_TYPE_BUY ? zone.high : zone.low);
+  }
+
+double ZoneActivationDistance(const ENUM_POSITION_TYPE side, const ZoneData &zone, const double price)
+  {
+   return(MathAbs(price - ZoneActivationTriggerPrice(side, zone)));
+  }
+
+bool ShouldActivateWatchZone(const ENUM_POSITION_TYPE side, const ZoneData &zone, const double price)
+  {
+   if(zone.mode != ZONE_WATCH) return(false);
+   return(ZoneActivationDistance(side, zone, price) <= InpZoneActivateBand);
+  }
+
+void ActivateWatchZones()
+  {
+   MqlTick tick;
+   if(!SymbolInfoTick(_Symbol, tick)) return;
+   double price = MidPrice(tick);
+
+   for(int i = 0; i < ArraySize(g_buyZones); i++)
+     {
+      if(ShouldActivateWatchZone(POSITION_TYPE_BUY, g_buyZones[i], price))
+        {
+         g_buyZones[i].mode = ZONE_TRADE;
+         PrintFormat("BUY zone activated: %.2f - %.2f", g_buyZones[i].low, g_buyZones[i].high);
+        }
+     }
+
+   for(int i = 0; i < ArraySize(g_sellZones); i++)
+     {
+      if(ShouldActivateWatchZone(POSITION_TYPE_SELL, g_sellZones[i], price))
+        {
+         g_sellZones[i].mode = ZONE_TRADE;
+         PrintFormat("SELL zone activated: %.2f - %.2f", g_sellZones[i].low, g_sellZones[i].high);
+        }
+     }
+  }
+
+int GetTradableZoneIndex(ENUM_POSITION_TYPE side, double price)
   {
    if(side == POSITION_TYPE_BUY)
      {
       for(int i = ArraySize(g_buyZones) - 1; i >= 0; i--)
-         if(g_buyZones[i].mode == ZONE_TRADE && price <= g_buyZones[i].low) return i;
+         if(g_buyZones[i].mode == ZONE_TRADE && IsPriceInZone(g_buyZones[i], price)) return i;
      }
    else
      {
       for(int i = ArraySize(g_sellZones) - 1; i >= 0; i--)
-         if(g_sellZones[i].mode == ZONE_TRADE && price >= g_sellZones[i].high) return i;
+         if(g_sellZones[i].mode == ZONE_TRADE && IsPriceInZone(g_sellZones[i], price)) return i;
      }
    return -1;
   }
@@ -473,7 +537,7 @@ void ManageAllZones(const ENUM_POSITION_TYPE side, const bool onFirstTickDca)
    MqlTick tick;
    if(!SymbolInfoTick(_Symbol, tick)) return;
    double price = GetSideOpenPrice(side, tick);
-   int newestEntryTouchedIdx = GetEntryTouchedZoneIndex(side, price);
+   int newestTradableIdx = GetTradableZoneIndex(side, price);
    int totalZones = (side == POSITION_TYPE_BUY) ? ArraySize(g_buyZones) : ArraySize(g_sellZones);
 
    for(int i = 0; i < totalZones; i++)
@@ -494,8 +558,8 @@ void ManageAllZones(const ENUM_POSITION_TYPE side, const bool onFirstTickDca)
         }
       else
         {
-         // Chỉ mở Initial khi giá chạm entry của Zone mới nhất: BUY=low, SELL=high.
-         if(i == newestEntryTouchedIdx && ShouldOpenInitial(side, zone, price))
+         // Mở Initial khi giá nằm trong zone TRADE mới nhất.
+         if(i == newestTradableIdx && ShouldOpenInitial(side, zone, price))
            {
             zone.trailArmed = false;
             zone.trailExtreme = 0.0;
@@ -554,8 +618,7 @@ bool ShouldOpenInitial(const ENUM_POSITION_TYPE side, const ZoneData &zone, doub
    if(side == POSITION_TYPE_BUY && zone.sl > 0 && price <= zone.sl) return(false);
    if(side == POSITION_TYPE_SELL && zone.sl > 0 && price >= zone.sl) return(false);
 
-   if(side == POSITION_TYPE_BUY) return(price <= zone.low);
-   return(price >= zone.high);
+   return(IsPriceInZone(zone, price));
   }
 
 bool ShouldOpenDca(const ENUM_POSITION_TYPE side, const ZoneData &zone, const BasketInfo &basket, const bool onFirstTick)
@@ -725,6 +788,7 @@ bool ValidateInputs()
    if(InpLotSize <= 0.0 || InpMultiplier < 1.0) return(false);
    if(InpGridStep <= 0 || InpTakeProfit <= 0 || InpMaxGridLevels < 1) return(false);
    if(InpDcaClosedBarsRequired < 1) return(false);
+   if(InpZoneActivateBand < 0.0) return(false);
    return(true);
   }
 
@@ -796,14 +860,73 @@ string OverallStatusText()
    return("Trading");
   }
 
-string ZoneRangeText(const ENUM_POSITION_TYPE side)
+string ZoneProximityText(const ENUM_POSITION_TYPE side, const ZoneData &zone, const double price, const bool hasPrice)
+  {
+   if(!hasPrice) return("price n/a");
+
+   double triggerPrice = ZoneActivationTriggerPrice(side, zone);
+   double distance = ZoneActivationDistance(side, zone, price);
+
+   if(IsPriceInZone(zone, price)) return(StringFormat("IN ZONE, trg %.2f", triggerPrice));
+   if(zone.mode == ZONE_WATCH && distance <= InpZoneActivateBand)
+      return(StringFormat("TOUCHING, %.2f away", distance));
+
+   if(price < triggerPrice)
+      return(StringFormat("need +%.2f to %.2f", triggerPrice - price, triggerPrice));
+   return(StringFormat("need -%.2f to %.2f", price - triggerPrice, triggerPrice));
+  }
+
+string ZoneDetailText(const ENUM_POSITION_TYPE side, const ZoneData &zone, const double price, const bool hasPrice)
+  {
+   string text = StringFormat("%.2f - %.2f [%s]", zone.low, zone.high, ZoneModeText(zone.mode));
+   if(zone.sl > 0.0) text += " SL " + DoubleToString(zone.sl, _Digits);
+   text += " | " + ZoneProximityText(side, zone, price, hasPrice);
+   return(text);
+  }
+
+void AddZoneDetailRows(string &lines[], color &colors[], int &row, const ENUM_POSITION_TYPE side, const string prefix, const double price, const bool hasPrice)
   {
    int count = (side == POSITION_TYPE_BUY) ? ArraySize(g_buyZones) : ArraySize(g_sellZones);
-   if(count == 0) return("OFF");
-   ZoneData z = GetLatestZone(side);
-   string txt = StringFormat("%.2f - %.2f", z.low, z.high);
-   if(count > 1) txt += StringFormat(" (+%d zones)", count - 1);
-   return txt;
+   if(count == 0)
+     {
+      AddPanelRow(lines, colors, row, prefix + " Zone:  OFF", clrBlack);
+      return;
+     }
+
+   bool displayed[];
+   ArrayResize(displayed, count);
+   for(int i = 0; i < count; i++) displayed[i] = false;
+
+   for(int rank = 0; rank < count; rank++)
+     {
+      int bestIndex = -1;
+      double bestDistance = 1.0e100;
+
+      for(int i = 0; i < count; i++)
+        {
+         if(displayed[i]) continue;
+         ZoneData candidate = (side == POSITION_TYPE_BUY) ? g_buyZones[i] : g_sellZones[i];
+         double distance = hasPrice ? ZoneActivationDistance(side, candidate, price) : (double)i;
+         if(bestIndex < 0 || distance < bestDistance)
+           {
+            bestIndex = i;
+            bestDistance = distance;
+           }
+        }
+
+      if(bestIndex < 0) return;
+      displayed[bestIndex] = true;
+
+      ZoneData zone = (side == POSITION_TYPE_BUY) ? g_buyZones[bestIndex] : g_sellZones[bestIndex];
+      BasketInfo basket;
+      BuildBasket(side, zone.magic, basket);
+
+      string label = prefix + " Zone " + IntegerToString(bestIndex + 1) + ": ";
+      string detail = ZoneDetailText(side, zone, price, hasPrice);
+      if(basket.count > 0)
+         detail += StringFormat(" | Orders %d | P/L %.2f", basket.count, basket.floatingProfit);
+      AddPanelRow(lines, colors, row, label + detail, basket.count > 0 ? ProfitColor(basket.floatingProfit) : ModeColor(zone.mode));
+     }
   }
 
 string ZoneStopText(const ENUM_POSITION_TYPE side)
@@ -821,7 +944,7 @@ void CreatePanel()
    if(ObjectFind(0, bg) == -1) ObjectCreate(0, bg, OBJ_RECTANGLE_LABEL, 0, 0, 0);
    ObjectSetInteger(0, bg, OBJPROP_CORNER, CORNER_LEFT_UPPER);
    ObjectSetInteger(0, bg, OBJPROP_XDISTANCE, 12); ObjectSetInteger(0, bg, OBJPROP_YDISTANCE, 30);
-   ObjectSetInteger(0, bg, OBJPROP_XSIZE, 220); ObjectSetInteger(0, bg, OBJPROP_YSIZE, 470); // Kéo dài background một chút
+   ObjectSetInteger(0, bg, OBJPROP_XSIZE, 460); ObjectSetInteger(0, bg, OBJPROP_YSIZE, 670); // Kéo dài background để đủ chỗ hiển thị zone
    ObjectSetInteger(0, bg, OBJPROP_BGCOLOR, clrWhiteSmoke); ObjectSetInteger(0, bg, OBJPROP_COLOR, clrBlack);
    ObjectSetInteger(0, bg, OBJPROP_SELECTABLE, false); ObjectSetInteger(0, bg, OBJPROP_HIDDEN, true);
 
@@ -871,6 +994,13 @@ void UpdatePanel()
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
    double ddPercent = (balance > 0) ? ((balance - equity) / balance) * 100.0 : 0.0;
    if(ddPercent < 0) ddPercent = 0.0;
+   double buyProfit = SideFloatingProfit(POSITION_TYPE_BUY);
+   double sellProfit = SideFloatingProfit(POSITION_TYPE_SELL);
+   double netProfit = buyProfit + sellProfit;
+
+   MqlTick displayTick;
+   bool hasDisplayPrice = SymbolInfoTick(_Symbol, displayTick);
+   double displayPrice = hasDisplayPrice ? MidPrice(displayTick) : 0.0;
 
    ZoneData lBuy = GetLatestZone(POSITION_TYPE_BUY);
    ZoneData lSell = GetLatestZone(POSITION_TYPE_SELL);
@@ -883,19 +1013,23 @@ void UpdatePanel()
    AddPanelRow(lines, colors, row, " ", clrBlack); // Dùng " " thay vì ""
 
    AddPanelRow(lines, colors, row, "------ " + _Symbol + " ------", clrDimGray);
+   AddPanelRow(lines, colors, row, "Price: " + (hasDisplayPrice ? DoubleToString(displayPrice, _Digits) : "-"), clrBlack);
    AddPanelRow(lines, colors, row, "Total Orders: " + IntegerToString(TotalOpenPositions(POSITION_TYPE_BUY)+TotalOpenPositions(POSITION_TYPE_SELL)), clrBlack);
+   AddPanelRow(lines, colors, row, "Buy Profit:  " + DoubleToString(buyProfit, 2), ProfitColor(buyProfit));
+   AddPanelRow(lines, colors, row, "Sell Profit: " + DoubleToString(sellProfit, 2), ProfitColor(sellProfit));
+   AddPanelRow(lines, colors, row, "Net Profit:  " + DoubleToString(netProfit, 2), ProfitColor(netProfit));
    AddPanelRow(lines, colors, row, " ", clrBlack); // Dùng " " thay vì ""
 
    AddPanelRow(lines, colors, row, "------- Status -------", clrDimGray);
    AddPanelRow(lines, colors, row, "Buy Mode:  " + ZoneModeText(lBuy.mode), ModeColor(lBuy.mode));
-   AddPanelRow(lines, colors, row, "Buy Zone:  " + ZoneRangeText(POSITION_TYPE_BUY), clrBlack);
+   AddZoneDetailRows(lines, colors, row, POSITION_TYPE_BUY, "Buy", displayPrice, hasDisplayPrice);
    AddPanelRow(lines, colors, row, "Buy SL:    " + ZoneStopText(POSITION_TYPE_BUY), clrBlack);
    AddPanelRow(lines, colors, row, "Buy State: " + SideStatusText(POSITION_TYPE_BUY), StateColor(POSITION_TYPE_BUY, lBuy.mode));
    AddPanelRow(lines, colors, row, "Buy Note:  " + SideReasonText(POSITION_TYPE_BUY), clrBlack);
    AddPanelRow(lines, colors, row, " ", clrBlack); // Tạo khoảng cách nhỏ giữa Buy và Sell
    
    AddPanelRow(lines, colors, row, "Sell Mode: " + ZoneModeText(lSell.mode), ModeColor(lSell.mode));
-   AddPanelRow(lines, colors, row, "Sell Zone: " + ZoneRangeText(POSITION_TYPE_SELL), clrBlack);
+   AddZoneDetailRows(lines, colors, row, POSITION_TYPE_SELL, "Sell", displayPrice, hasDisplayPrice);
    AddPanelRow(lines, colors, row, "Sell SL:   " + ZoneStopText(POSITION_TYPE_SELL), clrBlack);
    AddPanelRow(lines, colors, row, "Sell State:" + " " + SideStatusText(POSITION_TYPE_SELL), StateColor(POSITION_TYPE_SELL, lSell.mode));
    AddPanelRow(lines, colors, row, "Sell Note: " + SideReasonText(POSITION_TYPE_SELL), clrBlack);
@@ -922,6 +1056,13 @@ color ModeColor(const ENUM_ZONE_MODE mode)
    if(mode == ZONE_TRADE) return(clrDodgerBlue);
    if(mode == ZONE_WATCH) return(clrDarkOrange);
    return(clrGray);
+  }
+
+color ProfitColor(const double profit)
+  {
+   if(profit > 0.0) return(clrForestGreen);
+   if(profit < 0.0) return(clrTomato);
+   return(clrBlack);
   }
 
 color StateColor(const ENUM_POSITION_TYPE side, const ENUM_ZONE_MODE mode)

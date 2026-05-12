@@ -447,8 +447,9 @@ class BrowserServiceState:
 
             email = (os.getenv("COINMAP_EMAIL") or "").strip() or None
             password = (os.getenv("TRADINGVIEW_PASSWORD") or "").strip() or None
-            # Prewarm: profile thường đã có session; bỏ menu login + dark mode để mở tab nhanh hơn.
-            skip_login = bool(tv_m.get("prewarm_skip_login", True))
+            # Prewarm: check/login on the first warm tab when needed; the second tab reuses
+            # the same browser context session.
+            skip_login = bool(tv_m.get("prewarm_skip_login", False))
             skip_dark = bool(tv_m.get("prewarm_skip_dark_mode", True))
 
             await self._dispose_tv_warm_tabs_async()
@@ -479,7 +480,7 @@ class BrowserServiceState:
                     settle_ms=settle_ms,
                     login_email=email,
                     login_password=password,
-                    skip_login=skip_login,
+                    skip_login=True,
                     skip_dark_mode=skip_dark,
                 )
             except (Exception, SystemExit) as e:

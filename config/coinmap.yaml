@@ -181,9 +181,9 @@ chart_download:
 tradingview_capture:
   enabled: true
   prewarm_enabled: true
-  # Hai tab warm (browser_service): mặc định bỏ login + menu dark mode — dùng session profile (PLAYWRIGHT_CHROME_USER_DATA_DIR).
-  # Đặt false nếu cần ép đăng nhập / theme khi prewarm.
-  prewarm_skip_login: true
+  # Hai tab warm (browser_service): tab đầu kiểm tra login và chỉ đăng nhập nếu menu còn "Đăng nhập";
+  # tab thứ hai dùng lại session trong cùng browser context. Đặt true nếu muốn bỏ hẳn bước kiểm tra login.
+  prewarm_skip_login: false
   prewarm_skip_dark_mode: true
   # data_source: browser | tvdatafeed — tvdatafeed = OHLC JSON (library tvdatafeed), không mở tab TradingView trong capture
   data_source: tvdatafeed

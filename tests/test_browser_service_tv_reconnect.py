@@ -1,7 +1,11 @@
 import asyncio
 from pathlib import Path
+from typing import Optional
 
+from automation_tool import browser_service as browser_service_mod
+from automation_tool import coinmap
 from automation_tool import coinmap_tradingview_async
+from automation_tool import images
 from automation_tool.browser_service import BrowserServiceState, _TvWarmTab
 
 
@@ -105,3 +109,75 @@ def test_tv_prewarm_background_catches_system_exit() -> None:
         assert service._prewarm_bg_task.exception() is None
 
     asyncio.run(run())
+
+
+def test_tv_prewarm_login_check_runs_on_first_warm_tab_only(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    class _FakeContext:
+        def __init__(self) -> None:
+            self.pages = [_FakeWarmPage("ict"), _FakeWarmPage("default")]
+            self.index = 0
+
+        async def new_page(self):
+            page = self.pages[self.index]
+            self.index += 1
+            return page
+
+    class _FakeWarmPage:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+    calls: list[tuple[str, str, bool, Optional[str], Optional[str]]] = []
+    cfg = {
+        "settle_ms": 1234,
+        "tradingview_capture": {
+            "enabled": True,
+            "prewarm_enabled": True,
+            "prewarm_skip_dark_mode": True,
+        },
+    }
+
+    def fake_apply_profile(tv: dict, profile: str) -> dict:
+        return {**tv, "_profile": profile}
+
+    async def fake_warmup(
+        page,
+        tv: dict,
+        *,
+        symbol: str,
+        interval_label: str,
+        settle_ms: int,
+        login_email: Optional[str],
+        login_password: Optional[str],
+        skip_login: bool = False,
+        skip_dark_mode: bool = False,
+    ) -> None:
+        calls.append((page.name, tv.get("_profile", "default"), skip_login, login_email, login_password))
+        assert symbol == "XAUUSD"
+        assert interval_label == "15 phút"
+        assert settle_ms == 1234
+        assert skip_dark_mode is True
+
+    monkeypatch.setenv("COINMAP_EMAIL", "user@example.com")
+    monkeypatch.setenv("TRADINGVIEW_PASSWORD", "secret")
+    monkeypatch.setattr(browser_service_mod, "default_coinmap_config_path", lambda: tmp_path / "coinmap.yaml")
+    monkeypatch.setattr(coinmap, "load_coinmap_yaml", lambda _path: cfg)
+    monkeypatch.setattr(coinmap, "apply_main_chart_symbol_to_config", lambda cfg_in, _sym: cfg_in)
+    monkeypatch.setattr(coinmap, "_tv_apply_indicator_profile", fake_apply_profile)
+    monkeypatch.setattr(images, "get_active_main_symbol", lambda: "XAUUSD")
+    monkeypatch.setattr(coinmap_tradingview_async, "tv_warmup_tab_async", fake_warmup)
+
+    async def run() -> None:
+        service = BrowserServiceState()
+        service._context = _FakeContext()  # type: ignore[assignment]
+
+        await service._prewarm_tradingview_tabs_async()
+
+    asyncio.run(run())
+
+    assert calls == [
+        ("ict", "ict_killzones", False, "user@example.com", "secret"),
+        ("default", "default", True, "user@example.com", "secret"),
+    ]
