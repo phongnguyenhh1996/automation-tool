@@ -45,14 +45,17 @@ input int            InpZonesPollSeconds   = 300;
 input string         InpZonesBearer        = "";
 input double         InpZonesSlBuffer      = 3.0;
 
-const int PANEL_LINE_COUNT      = 34;
-const int PANEL_LINE_HEIGHT     = 15;
-const int PANEL_LEFT            = 8;
-const int PANEL_TOP             = 30;
-const int PANEL_WIDTH           = 220;
-const int PANEL_HEIGHT          = 370;
-const int PANEL_TEXT_X          = 42;
-const int PANEL_TITLE_X         = 54;
+const int PANEL_LINE_COUNT      = 60;
+const int PANEL_LINE_HEIGHT     = 16;
+const int PANEL_X               = 12;
+const int PANEL_Y               = 30;
+const int PANEL_MIN_WIDTH       = 230;
+const int PANEL_MAX_WIDTH       = 360;
+const int PANEL_HORIZONTAL_PAD  = 28;
+const int PANEL_TITLE_Y_OFFSET  = 10;
+const int PANEL_LINES_Y_OFFSET  = 40;
+const int PANEL_BOTTOM_PAD      = 14;
+const int PANEL_CHAR_WIDTH      = 7;
 
 // --- DYNAMIC ZONE STRUCTURE ---
 struct ZoneData
@@ -793,16 +796,6 @@ ZoneData GetLatestZone(ENUM_POSITION_TYPE side)
   }
 
 string ZoneModeText(const ENUM_ZONE_MODE mode) { return(mode == ZONE_TRADE ? "TRADE" : (mode == ZONE_WATCH ? "WATCH" : "OFF")); }
-string ZoneModeShortText(const ENUM_ZONE_MODE mode) { return(mode == ZONE_TRADE ? "T" : (mode == ZONE_WATCH ? "W" : "OFF")); }
-
-string PanelTrendText(const ZoneData &buyZone, const ZoneData &sellZone)
-  {
-   if(buyZone.mode == ZONE_TRADE) return("BUY");
-   if(sellZone.mode == ZONE_TRADE) return("SELL");
-   if(buyZone.mode == ZONE_WATCH) return("BUY Watch");
-   if(sellZone.mode == ZONE_WATCH) return("SELL Watch");
-   return("-");
-  }
 
 string SideStatusText(const ENUM_POSITION_TYPE side)
   {
@@ -844,24 +837,10 @@ string ZoneProximityText(const ENUM_POSITION_TYPE side, const ZoneData &zone, co
    return(StringFormat("need -%.2f to %.2f", price - triggerPrice, triggerPrice));
   }
 
-string ZoneProximityShortText(const ENUM_POSITION_TYPE side, const ZoneData &zone, const double price, const bool hasPrice)
-  {
-   if(!hasPrice) return("-");
-
-   double triggerPrice = ZoneActivationTriggerPrice(side, zone);
-   double distance = ZoneActivationDistance(side, zone, price);
-
-   if(IsPriceInZone(zone, price)) return("IN ZONE");
-   if(zone.mode == ZONE_WATCH && distance <= InpZoneActivateBand) return("TOUCH");
-
-   if(price < triggerPrice)
-      return(StringFormat("+%.2f -> %.2f", triggerPrice - price, triggerPrice));
-   return(StringFormat("-%.2f -> %.2f", price - triggerPrice, triggerPrice));
-  }
-
 string ZoneDetailText(const ENUM_POSITION_TYPE side, const ZoneData &zone, const double price, const bool hasPrice)
   {
-   string text = StringFormat("%.2f-%.2f %s", zone.low, zone.high, ZoneModeShortText(zone.mode));
+   string text = StringFormat("%.2f - %.2f [%s]", zone.low, zone.high, ZoneModeText(zone.mode));
+   if(zone.sl > 0.0) text += " SL " + DoubleToString(zone.sl, _Digits);
    return(text);
   }
 
@@ -878,8 +857,7 @@ void AddZoneDetailRows(string &lines[], color &colors[], int &row, const ENUM_PO
    ArrayResize(displayed, count);
    for(int i = 0; i < count; i++) displayed[i] = false;
 
-   int maxVisibleZones = (count < 1) ? count : 1;
-   for(int rank = 0; rank < maxVisibleZones; rank++)
+   for(int rank = 0; rank < count; rank++)
      {
       int bestIndex = -1;
       double bestDistance = 1.0e100;
@@ -903,15 +881,15 @@ void AddZoneDetailRows(string &lines[], color &colors[], int &row, const ENUM_PO
       BasketInfo basket;
       BuildBasket(side, zone.magic, basket);
 
-      string label = StringSubstr(prefix, 0, 1) + IntegerToString(bestIndex + 1) + ": ";
+      string label = prefix + " Zone " + IntegerToString(bestIndex + 1) + ": ";
       string detail = ZoneDetailText(side, zone, price, hasPrice);
       color rowColor = basket.count > 0 ? ProfitColor(basket.floatingProfit) : ModeColor(zone.mode);
 
       AddPanelRow(lines, colors, row, label + detail, rowColor);
 
-      string distanceText = "   " + ZoneProximityShortText(side, zone, price, hasPrice);
+      string distanceText = "   Distance: " + ZoneProximityText(side, zone, price, hasPrice);
       if(basket.count > 0)
-         distanceText += StringFormat(" | %d | %.2f", basket.count, basket.floatingProfit);
+         distanceText += StringFormat(" | Orders %d | P/L %.2f", basket.count, basket.floatingProfit);
       AddPanelRow(lines, colors, row, distanceText, rowColor);
      }
   }
@@ -930,18 +908,19 @@ void CreatePanel()
 
    if(ObjectFind(0, bg) == -1) ObjectCreate(0, bg, OBJ_RECTANGLE_LABEL, 0, 0, 0);
    ObjectSetInteger(0, bg, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-   ObjectSetInteger(0, bg, OBJPROP_XDISTANCE, PANEL_LEFT); ObjectSetInteger(0, bg, OBJPROP_YDISTANCE, PANEL_TOP);
-   ObjectSetInteger(0, bg, OBJPROP_XSIZE, PANEL_WIDTH); ObjectSetInteger(0, bg, OBJPROP_YSIZE, PANEL_HEIGHT);
+   ObjectSetInteger(0, bg, OBJPROP_XDISTANCE, PANEL_X); ObjectSetInteger(0, bg, OBJPROP_YDISTANCE, PANEL_Y);
+   ObjectSetInteger(0, bg, OBJPROP_XSIZE, PANEL_MIN_WIDTH); ObjectSetInteger(0, bg, OBJPROP_YSIZE, 120);
    ObjectSetInteger(0, bg, OBJPROP_BGCOLOR, clrWhiteSmoke); ObjectSetInteger(0, bg, OBJPROP_COLOR, clrBlack);
    ObjectSetInteger(0, bg, OBJPROP_SELECTABLE, false); ObjectSetInteger(0, bg, OBJPROP_HIDDEN, true);
 
    if(ObjectFind(0, title) == -1) ObjectCreate(0, title, OBJ_LABEL, 0, 0, 0);
    ObjectSetInteger(0, title, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-   ObjectSetInteger(0, title, OBJPROP_XDISTANCE, PANEL_TITLE_X);
-   ObjectSetInteger(0, title, OBJPROP_YDISTANCE, PANEL_TOP + 10);
-   ObjectSetInteger(0, title, OBJPROP_COLOR, clrBlack); ObjectSetInteger(0, title, OBJPROP_FONTSIZE, 10);
+   ObjectSetInteger(0, title, OBJPROP_XDISTANCE, PANEL_X + PANEL_MIN_WIDTH / 2);
+   ObjectSetInteger(0, title, OBJPROP_YDISTANCE, PANEL_Y + PANEL_TITLE_Y_OFFSET);
+   ObjectSetInteger(0, title, OBJPROP_ANCHOR, ANCHOR_UPPER);
+   ObjectSetInteger(0, title, OBJPROP_COLOR, clrBlack); ObjectSetInteger(0, title, OBJPROP_FONTSIZE, 11);
    ObjectSetString(0, title, OBJPROP_FONT, "Tahoma Bold"); 
-   ObjectSetString(0, title, OBJPROP_TEXT, "Crowconcept V1.6");
+   ObjectSetString(0, title, OBJPROP_TEXT, "EA Zone NeverDie");
    ObjectSetInteger(0, title, OBJPROP_SELECTABLE, false); ObjectSetInteger(0, title, OBJPROP_HIDDEN, true);
 
    for(int i = 0; i < PANEL_LINE_COUNT; i++) CreatePanelLine(i);
@@ -952,12 +931,13 @@ void CreatePanelLine(const int index)
    string name = g_panelPrefix + "_LINE_" + IntegerToString(index);
    if(ObjectFind(0, name) == -1) ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
    ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, PANEL_TEXT_X); 
-   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, PANEL_TOP + 34 + index * PANEL_LINE_HEIGHT);
-   ObjectSetInteger(0, name, OBJPROP_COLOR, clrBlack); ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 8);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, PANEL_X + PANEL_MIN_WIDTH / 2);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, PANEL_Y + PANEL_LINES_Y_OFFSET + index * PANEL_LINE_HEIGHT);
+   ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clrBlack); ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 9);
    ObjectSetString(0, name, OBJPROP_FONT, "Tahoma"); ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
-   ObjectSetString(0, name, OBJPROP_TEXT, " "); // Khởi tạo text bằng khoảng trắng để diệt lỗi "Label"
+   ObjectSetString(0, name, OBJPROP_TEXT, " ");
   }
 
 void RemovePanel()
@@ -996,27 +976,35 @@ void UpdatePanel()
    AddPanelRow(lines, colors, row, "---- Account Data ----", clrDimGray);
    AddPanelRow(lines, colors, row, "Balance: " + DoubleToString(balance, 2), clrBlack);
    AddPanelRow(lines, colors, row, "Equity:  " + DoubleToString(equity, 2), clrBlack);
-   AddPanelRow(lines, colors, row, "Profit:  " + DoubleToString(netProfit, 2), ProfitColor(netProfit));
-   AddPanelRow(lines, colors, row, " ", clrBlack);
-
-   AddPanelRow(lines, colors, row, "------- Profit -------", clrDimGray);
-   AddPanelRow(lines, colors, row, "Buy:  " + DoubleToString(buyProfit, 2), ProfitColor(buyProfit));
-   AddPanelRow(lines, colors, row, "Sell: " + DoubleToString(sellProfit, 2), ProfitColor(sellProfit));
-   AddPanelRow(lines, colors, row, "Net:  " + DoubleToString(netProfit, 2), ProfitColor(netProfit));
-   AddPanelRow(lines, colors, row, " ", clrBlack);
+   AddPanelRow(lines, colors, row, "DD:      " + DoubleToString(ddPercent, 1) + "%", clrBlack);
+   AddPanelRow(lines, colors, row, " ", clrBlack); // Dùng " " thay vì ""
 
    AddPanelRow(lines, colors, row, "------ " + _Symbol + " ------", clrDimGray);
-   AddPanelRow(lines, colors, row, "Price:  " + (hasDisplayPrice ? DoubleToString(displayPrice, _Digits) : "-"), clrBlack);
-   AddPanelRow(lines, colors, row, "DD:     " + DoubleToString(ddPercent, 1) + "%", clrBlack);
-   AddPanelRow(lines, colors, row, "Orders: " + IntegerToString(TotalOpenPositions(POSITION_TYPE_BUY)+TotalOpenPositions(POSITION_TYPE_SELL)), clrBlack);
-   AddPanelRow(lines, colors, row, " ", clrBlack);
+   AddPanelRow(lines, colors, row, "Price: " + (hasDisplayPrice ? DoubleToString(displayPrice, _Digits) : "-"), clrBlack);
+   AddPanelRow(lines, colors, row, "Total Orders: " + IntegerToString(TotalOpenPositions(POSITION_TYPE_BUY)+TotalOpenPositions(POSITION_TYPE_SELL)), clrBlack);
+   AddPanelRow(lines, colors, row, "Buy Profit:  " + DoubleToString(buyProfit, 2), ProfitColor(buyProfit));
+   AddPanelRow(lines, colors, row, "Sell Profit: " + DoubleToString(sellProfit, 2), ProfitColor(sellProfit));
+   AddPanelRow(lines, colors, row, "Net Profit:  " + DoubleToString(netProfit, 2), ProfitColor(netProfit));
+   AddPanelRow(lines, colors, row, " ", clrBlack); // Dùng " " thay vì ""
 
    AddPanelRow(lines, colors, row, "------- Status -------", clrDimGray);
-   AddPanelRow(lines, colors, row, "Mode: AUTO", clrBlack);
-   AddPanelRow(lines, colors, row, "Trend: " + PanelTrendText(lBuy, lSell), clrDarkGreen);
-   AddPanelRow(lines, colors, row, "Buy:  " + ZoneModeText(lBuy.mode), ModeColor(lBuy.mode));
-   AddPanelRow(lines, colors, row, "Sell: " + ZoneModeText(lSell.mode), ModeColor(lSell.mode));
-   AddPanelRow(lines, colors, row, "Status: " + OverallStatusText(), clrDarkGreen);
+   AddPanelRow(lines, colors, row, "Buy Mode:  " + ZoneModeText(lBuy.mode), ModeColor(lBuy.mode));
+   AddZoneDetailRows(lines, colors, row, POSITION_TYPE_BUY, "Buy", displayPrice, hasDisplayPrice);
+   AddPanelRow(lines, colors, row, "Buy SL:    " + ZoneStopText(POSITION_TYPE_BUY), clrBlack);
+   AddPanelRow(lines, colors, row, "Buy State: " + SideStatusText(POSITION_TYPE_BUY), StateColor(POSITION_TYPE_BUY, lBuy.mode));
+   AddPanelRow(lines, colors, row, "Buy Note:  " + SideReasonText(POSITION_TYPE_BUY), clrBlack);
+   AddPanelRow(lines, colors, row, " ", clrBlack); // Tạo khoảng cách nhỏ giữa Buy và Sell
+
+   AddPanelRow(lines, colors, row, "Sell Mode: " + ZoneModeText(lSell.mode), ModeColor(lSell.mode));
+   AddZoneDetailRows(lines, colors, row, POSITION_TYPE_SELL, "Sell", displayPrice, hasDisplayPrice);
+   AddPanelRow(lines, colors, row, "Sell SL:   " + ZoneStopText(POSITION_TYPE_SELL), clrBlack);
+   AddPanelRow(lines, colors, row, "Sell State:" + " " + SideStatusText(POSITION_TYPE_SELL), StateColor(POSITION_TYPE_SELL, lSell.mode));
+   AddPanelRow(lines, colors, row, "Sell Note: " + SideReasonText(POSITION_TYPE_SELL), clrBlack);
+   AddPanelRow(lines, colors, row, " ", clrBlack);
+
+   AddPanelRow(lines, colors, row, "Status:    " + OverallStatusText(), clrDarkGreen);
+
+   ResizePanelForContent(lines, row);
 
    for(int i = 0; i < PANEL_LINE_COUNT; i++)
      {
@@ -1030,6 +1018,44 @@ void AddPanelRow(string &lines[], color &colors[], int &row, const string text, 
   {
    if(row >= ArraySize(lines)) return;
    lines[row] = text; colors[row] = lineColor; row++;
+  }
+
+int ClampPanelWidth(const int width)
+  {
+   if(width < PANEL_MIN_WIDTH) return(PANEL_MIN_WIDTH);
+   if(width > PANEL_MAX_WIDTH) return(PANEL_MAX_WIDTH);
+   return(width);
+  }
+
+int PanelTextWidth(const string text)
+  {
+   return(StringLen(text) * PANEL_CHAR_WIDTH + PANEL_HORIZONTAL_PAD * 2);
+  }
+
+void ResizePanelForContent(const string &lines[], const int usedRows)
+  {
+   int panelWidth = PanelTextWidth("EA Zone NeverDie");
+   for(int i = 0; i < usedRows && i < ArraySize(lines); i++)
+      if(StringLen(lines[i]) > 1)
+        {
+         int lineWidth = PanelTextWidth(lines[i]);
+         if(lineWidth > panelWidth) panelWidth = lineWidth;
+        }
+
+   panelWidth = ClampPanelWidth(panelWidth);
+   int visibleRows = usedRows > 1 ? usedRows : 1;
+   int panelHeight = PANEL_LINES_Y_OFFSET + visibleRows * PANEL_LINE_HEIGHT + PANEL_BOTTOM_PAD;
+   int panelCenterX = PANEL_X + panelWidth / 2;
+
+   ObjectSetInteger(0, g_panelPrefix + "_BG", OBJPROP_XSIZE, panelWidth);
+   ObjectSetInteger(0, g_panelPrefix + "_BG", OBJPROP_YSIZE, panelHeight);
+   ObjectSetInteger(0, g_panelPrefix + "_TITLE", OBJPROP_XDISTANCE, panelCenterX);
+
+   for(int i = 0; i < PANEL_LINE_COUNT; i++)
+     {
+      string name = g_panelPrefix + "_LINE_" + IntegerToString(i);
+      ObjectSetInteger(0, name, OBJPROP_XDISTANCE, panelCenterX);
+     }
   }
 
 color ModeColor(const ENUM_ZONE_MODE mode)
