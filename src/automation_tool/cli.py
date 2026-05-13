@@ -477,7 +477,7 @@ def _parser() -> argparse.ArgumentParser:
     al = sub.add_parser(
         "all",
         help=(
-            "đầu phiên: xóa zones_state.json (trừ --no-clear-zones-state) → capture → OpenAI → "
+            "full analysis: chỉ reset zones khi slot sáng (trừ --no-clear-zones-state) → capture → OpenAI → "
             "ghi last_response_id + Telegram + zones_state.json "
             "(không ghi morning_baseline / last_alert_prices)"
         ),
@@ -555,7 +555,7 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         metavar="FILE",
         help=(
-            "Đầu phiên all: xóa file zones_state này trước capture "
+            "all slot sáng: xóa file/thư mục zones này trước capture "
             "(mặc định: data/<SYM>/zones_state.json theo cặp active sau --main-symbol / env)"
         ),
     )
@@ -564,7 +564,7 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Không xóa zones_state.json trước capture/phân tích "
-            "(mặc định: xóa để phiên all không kế thừa zone/status cũ)"
+            "(mặc định: chỉ xóa khi `all` chạy trong slot sáng)"
         ),
     )
     al.add_argument("--model", default=None, metavar="ID", help=_OPENAI_MODEL_HELP)
@@ -2424,10 +2424,11 @@ def cmd_all(args: argparse.Namespace) -> None:
         set_active_main_symbol_file(args.main_symbol)
 
     zones_dir = zones_dir_from_cli_path(args.zones_json)
-    if not args.no_clear_zones_state:
+    run_slot: SessionSlot = session_slot_now_hcm()
+    if not args.no_clear_zones_state and run_slot == "sang":
         stop_daemon_plans_in_zones(zones_dir)
         n_rm = clear_zones_directory(zones_dir)
-        _log.info("all: cleared zones | removed=%s dir=%s", n_rm, zones_dir)
+        _log.info("all: cleared zones | slot=%s removed=%s dir=%s", run_slot, n_rm, zones_dir)
         print(f"Đã dừng daemon-plan (nếu có) và xóa zones/: {zones_dir} ({n_rm} file)", flush=True)
         from automation_tool.images import get_active_main_symbol as _get_sym_neverdie
         from automation_tool.ea_neverdie_zone_publish import clear_neverdie_before_all
@@ -2436,6 +2437,10 @@ def cmd_all(args: argparse.Namespace) -> None:
             clear_neverdie_before_all(_get_sym_neverdie().strip().upper())
         except Exception as e:
             _log.warning("all: ea-neverdie clear (local/Cloudinary) failed: %s", e)
+    elif args.no_clear_zones_state:
+        _log.info("all: skip clearing zones | --no-clear-zones-state | slot=%s dir=%s", run_slot, zones_dir)
+    else:
+        _log.info("all: skip clearing zones | slot=%s dir=%s", run_slot, zones_dir)
 
     cfg = args.config or default_coinmap_config_path()
     storage = args.storage_state or default_storage_state_path()
@@ -2448,7 +2453,7 @@ def cmd_all(args: argparse.Namespace) -> None:
     )
     _send_python_bot_job_started(
         s,
-        title="Phân tích đầu ngày bắt đầu chạy",
+        title=f"Phân tích vào lúc {_now_clock_hcm()} bắt đầu chạy",
         no_telegram=args.no_telegram,
     )
     paths = capture_charts(
@@ -2577,7 +2582,7 @@ def cmd_all(args: argparse.Namespace) -> None:
             from automation_tool.images import get_active_main_symbol
 
             sym = get_active_main_symbol().strip().upper()
-            slot: SessionSlot = session_slot_now_hcm()
+            slot: SessionSlot = run_slot
             zones = zones_from_analysis_payload(
                 symbol=sym, payload=payload, source="all", session_slot=slot
             )
