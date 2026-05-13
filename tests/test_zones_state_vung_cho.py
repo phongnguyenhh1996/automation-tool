@@ -10,9 +10,12 @@ from automation_tool.zones_state import (
     ZonesState,
     _parse_zone,
     can_apply_old_price_loai,
+    read_zones_state_from_shard,
     read_zones_state,
     remap_scalp_zones_avoiding_shard_collision,
     remove_zones_state_file,
+    write_zones_state_to_shard,
+    write_zones_for_slot,
     zones_from_analysis_payload,
     zones_from_analysis_payload_merged,
     zone_from_price_entry,
@@ -150,6 +153,48 @@ def test_remove_zones_state_file(tmp_path: Path) -> None:
     p.write_text("{}", encoding="utf-8")
     assert remove_zones_state_file(p) is True
     assert remove_zones_state_file(p) is False
+
+
+def test_write_zones_for_slot_offsets_trade_line_tp1_before_persisting(tmp_path: Path) -> None:
+    write_zones_for_slot(
+        symbol="XAUUSD",
+        slot="sang",
+        zones=[
+            Zone(
+                id="buy",
+                label="plan_chinh",
+                vung_cho="4708–4710",
+                side="BUY",
+                trade_line="BUY LIMIT 4709.0 | SL 4699.0 | TP1 4720.0 | Lot 0.02",
+            ),
+            Zone(
+                id="sell",
+                label="plan_phu",
+                vung_cho="4728–4730",
+                side="SELL",
+                trade_line="SELL LIMIT 4729.0 | SL 4739.0 | TP1 4718.0 | Lot 0.02",
+            ),
+        ],
+        zones_dir=tmp_path,
+    )
+
+    buy_data = json.loads(shard_path(tmp_path, "plan_chinh", "sang").read_text())
+    sell_data = json.loads(shard_path(tmp_path, "plan_phu", "sang").read_text())
+
+    assert buy_data["zone"]["trade_line"] == (
+        "BUY LIMIT 4709.0 | SL 4699.0 | TP1 4718.5 | Lot 0.02"
+    )
+    assert buy_data["zone"]["tp1_write_adjusted"] is True
+    assert sell_data["zone"]["trade_line"] == (
+        "SELL LIMIT 4729.0 | SL 4739.0 | TP1 4719.5 | Lot 0.02"
+    )
+
+    buy_shard = shard_path(tmp_path, "plan_chinh", "sang")
+    written_state = read_zones_state_from_shard(buy_shard)
+    assert written_state is not None
+    write_zones_state_to_shard(buy_shard, written_state)
+    rewritten_data = json.loads(buy_shard.read_text())
+    assert rewritten_data["zone"]["trade_line"] == buy_data["zone"]["trade_line"]
 
 
 def test_parse_zone_reads_has_position_flag() -> None:

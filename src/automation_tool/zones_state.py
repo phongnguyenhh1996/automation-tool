@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 from dataclasses import dataclass, field, replace
+from decimal import Decimal, InvalidOperation
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, Optional
@@ -110,6 +112,43 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+_RE_TRADE_LINE_TP1 = re.compile(r"\bTP1\s+(?P<tp1>\d+(?:\.\d+)?)", re.IGNORECASE)
+_TP1_WRITE_OFFSET = Decimal("1.5")
+
+
+def _format_adjusted_tp1(value: Decimal, original_token: str) -> str:
+    decimals = len(original_token.split(".", 1)[1]) if "." in original_token else 1
+    return f"{value:.{decimals}f}"
+
+
+def _offset_trade_line_tp1_for_file_write(
+    trade_line: str,
+    side: Literal["BUY", "SELL"],
+) -> str:
+    tl = (trade_line or "").strip()
+    if not tl:
+        return tl
+    m = _RE_TRADE_LINE_TP1.search(tl)
+    if not m:
+        return tl
+    token = m.group("tp1")
+    try:
+        tp1 = Decimal(token)
+    except InvalidOperation:
+        return tl
+    adjusted = tp1 - _TP1_WRITE_OFFSET if side == "BUY" else tp1 + _TP1_WRITE_OFFSET
+    return tl[: m.start("tp1")] + _format_adjusted_tp1(adjusted, token) + tl[m.end("tp1") :]
+
+
+def _zone_for_file_write(zone: "Zone") -> "Zone":
+    if zone.tp1_write_adjusted or zone.status != "vung_cho":
+        return zone
+    trade_line = _offset_trade_line_tp1_for_file_write(zone.trade_line, zone.side)
+    if trade_line == zone.trade_line:
+        return zone
+    return replace(zone, trade_line=trade_line, tp1_write_adjusted=True)
+
+
 def _as_float(x: Any) -> Optional[float]:
     if isinstance(x, bool):
         return None
@@ -171,6 +210,8 @@ class Zone:
     auto_entry_retry_after: str = ""
     # True: auto-entry MT5 đã thất bại — không tự dispatch lại cho đến khi chu kỳ chạm vùng mới (reset trong daemon).
     auto_entry_mt5_failed: bool = False
+    # True khi TP1 trong trade_line đã được dịch +/- 1.5 trước lúc ghi zone ra file.
+    tp1_write_adjusted: bool = False
     status: ZoneStatus = "vung_cho"
     source: str = ""
     # Sharded storage: ``sang`` | ``chieu`` | ``toi``; ``None`` = legacy single-file state.
@@ -198,6 +239,7 @@ class Zone:
             "zone_touch_notify_cooldown_until": self.zone_touch_notify_cooldown_until,
             "auto_entry_retry_after": self.auto_entry_retry_after,
             "auto_entry_mt5_failed": self.auto_entry_mt5_failed,
+            "tp1_write_adjusted": self.tp1_write_adjusted,
             "status": self.status,
             "source": self.source,
         }
@@ -329,6 +371,8 @@ def _parse_zone(d: dict[str, Any]) -> Optional[Zone]:
     auto_entry_retry_after = aer_raw.strip() if isinstance(aer_raw, str) else ""
     aemf_raw = d.get("auto_entry_mt5_failed")
     auto_entry_mt5_failed = bool(aemf_raw) if isinstance(aemf_raw, bool) else False
+    twa_raw = d.get("tp1_write_adjusted")
+    tp1_write_adjusted = bool(twa_raw) if isinstance(twa_raw, bool) else False
     st = str(d.get("status") or "").strip()
     if st not in (
         "vung_cho",
@@ -368,6 +412,7 @@ def _parse_zone(d: dict[str, Any]) -> Optional[Zone]:
         zone_touch_notify_cooldown_until=zone_touch_notify_cooldown_until,
         auto_entry_retry_after=auto_entry_retry_after,
         auto_entry_mt5_failed=auto_entry_mt5_failed,
+        tp1_write_adjusted=tp1_write_adjusted,
         status=st,  # type: ignore[assignment]
         source=src,
         session_slot=session_slot,
@@ -392,11 +437,12 @@ def read_zone_shard_file(shard_path: Path) -> Optional[Zone]:
 
 def _write_shard_file(shard_path: Path, symbol: str, slot: SessionSlot, zone: Zone) -> None:
     shard_path.parent.mkdir(parents=True, exist_ok=True)
+    zone_out = _zone_for_file_write(zone)
     payload = {
         "symbol": symbol,
         "slot": slot,
         "updated_at": _now_iso(),
-        "zone": zone.to_json_dict(),
+        "zone": zone_out.to_json_dict(),
     }
     _atomic_write_json(shard_path, payload)
 
@@ -446,6 +492,7 @@ def write_zones_for_slot(
                 zone_touch_notify_cooldown_until=z.zone_touch_notify_cooldown_until,
                 auto_entry_retry_after=z.auto_entry_retry_after,
                 auto_entry_mt5_failed=z.auto_entry_mt5_failed,
+                tp1_write_adjusted=z.tp1_write_adjusted,
                 status=z.status,
                 source=z.source,
                 session_slot=slot,
@@ -777,7 +824,7 @@ def write_zones_state(state: ZonesState, path: Optional[Path] = None) -> None:
         p.parent.mkdir(parents=True, exist_ok=True)
         st = ZonesState(
             symbol=state.symbol,
-            zones=list(state.zones),
+            zones=[_zone_for_file_write(z) for z in state.zones],
             updated_at=_now_iso(),
             last_observed=state.last_observed,
         )
