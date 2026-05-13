@@ -451,7 +451,7 @@ bool IsPriceInZone(const ZoneData &zone, const double price)
 
 double ZoneActivationTriggerPrice(const ENUM_POSITION_TYPE side, const ZoneData &zone)
   {
-   return(side == POSITION_TYPE_BUY ? zone.high : zone.low);
+   return(side == POSITION_TYPE_BUY ? zone.low : zone.high);
   }
 
 double ZoneActivationDistance(const ENUM_POSITION_TYPE side, const ZoneData &zone, const double price)
