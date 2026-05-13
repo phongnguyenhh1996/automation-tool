@@ -467,7 +467,8 @@ _MORNING_CONTEXT_HINT = (
 
 _SCALP_UPDATE_PLAN_HINT = (
     "Nhiệm vụ chính: tìm **1 plan scalp đẹp nhất** trong phiên hiện tại (hop_luu >= 60, "
-    "có đủ hợp lưu M5 để vào lệnh nhanh, RR tối thiểu 1:1.5). "
+    "có đủ hợp lưu M5 để vào lệnh nhanh). "
+    "Không cần đánh giá lại plan cũ; chỉ tập trung vào setup scalp mới đủ chất lượng. "
     "Nếu có 2–3 setup scalp đủ chất lượng thì có thể trả thêm, nhưng không bắt buộc. "
     "Bắt buộc dùng label dạng `scalp_<id>` cho mỗi plan trong `prices` "
     "(ví dụ: `scalp_1`, `scalp_2`, `scalp_3`). "
