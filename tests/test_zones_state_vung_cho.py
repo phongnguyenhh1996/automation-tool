@@ -86,6 +86,20 @@ def test_zones_from_analysis_prefers_pe_vung_cho() -> None:
     assert by_id["plan_chinh"].vung_cho == "4707.0–4709.0"
 
 
+def test_zones_from_analysis_skips_scalp_for_all_and_update_sources() -> None:
+    payload = AnalysisPayload(
+        prices=[
+            PriceZoneEntry("plan_chinh", 100.0, hop_luu=70, trade_line="BUY LIMIT 100"),
+            PriceZoneEntry("plan_phu", 101.0, hop_luu=65, trade_line="BUY LIMIT 101"),
+            PriceZoneEntry("scalp", 102.0, hop_luu=60, trade_line="BUY LIMIT 102"),
+        ]
+    )
+
+    for source in ("all", "update"):
+        zones = zones_from_analysis_payload(symbol="XAUUSD", payload=payload, source=source)
+        assert [z.label for z in zones] == ["plan_chinh", "plan_phu"]
+
+
 def test_zones_from_analysis_merged_keeps_zone_when_no_change_true() -> None:
     existing = ZonesState(
         symbol="XAUUSD",

@@ -1036,6 +1036,8 @@ def zones_from_analysis_payload(
 
     zones: list[Zone] = []
     for lab in ZONE_LABELS_ORDER:
+        if source in {"all", "update"} and is_scalp_label(lab):
+            continue
         pe = by_label.get(lab)
         if pe is None:
             continue
