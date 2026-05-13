@@ -36,6 +36,7 @@ def test_upload_retries_once_on_cloudinary_error() -> None:
         url = cj.upload_json_bytes_for_responses(b"{}", "f.json")
     assert url == "https://res.cloudinary.com/demo/raw/upload/v1/x.json"
     assert up.call_count == 2
+    assert up.call_args.kwargs["invalidate"] is True
 
 
 def test_upload_raises_after_second_cloudinary_error() -> None:

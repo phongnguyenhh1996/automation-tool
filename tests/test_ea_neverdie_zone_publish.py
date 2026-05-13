@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+from unittest.mock import patch
 
-from automation_tool.ea_neverdie_zone_publish import build_neverdie_payload
+import automation_tool.cloudinary_json as cj
+from automation_tool.ea_neverdie_zone_publish import (
+    build_neverdie_payload,
+    upload_neverdie_json,
+)
 from automation_tool.zones_state import Zone, ZonesState
 
 
@@ -139,3 +145,27 @@ def test_high_uses_tp2_when_present() -> None:
     assert payload["sell"]["low"] == 2680.0
     assert payload["sell"]["high"] == 2650.0
     assert payload["sell"]["sl"] == 2690.0
+
+
+def test_upload_neverdie_json_invalidates_cloudinary_cache() -> None:
+    cj._configured = False
+    with patch.dict(
+        os.environ,
+        {
+            "CLOUDINARY_CLOUD_NAME": "demo",
+            "CLOUDINARY_API_KEY": "k",
+            "CLOUDINARY_API_SECRET": "secret",
+        },
+    ), patch(
+        "automation_tool.ea_neverdie_zone_publish.cloudinary.uploader.upload",
+    ) as up:
+        up.return_value = {
+            "secure_url": "https://res.cloudinary.com/demo/raw/upload/x.json"
+        }
+
+        url = upload_neverdie_json(b"{}", "XAUUSD")
+
+    assert url == "https://res.cloudinary.com/demo/raw/upload/x.json"
+    assert up.call_args.kwargs["overwrite"] is True
+    assert up.call_args.kwargs["invalidate"] is True
+    cj._configured = False

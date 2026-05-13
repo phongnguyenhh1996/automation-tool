@@ -45,6 +45,9 @@ input int            InpZonesPollSeconds   = 300;
 input string         InpZonesBearer        = "";
 input double         InpZonesSlBuffer      = 3.0;
 
+const int JSON_FETCH_WINDOW_MINUTES = 30;
+const int JSON_FETCH_SLOT_COUNT     = 3;
+
 const int PANEL_LINE_COUNT      = 60;
 const int PANEL_LINE_HEIGHT     = 16;
 const int PANEL_X               = 12;
@@ -89,6 +92,7 @@ string   g_sellBlockReason    = "";
 datetime g_buyBlockedAt       = 0;
 datetime g_sellBlockedAt      = 0;
 string   g_panelPrefix        = "ZoneNeverDiePanel";
+int      g_completedJsonFetchWindowKey = -1;
 
 // --- ZONE ARRAYS ---
 ZoneData g_buyZones[];
@@ -130,6 +134,45 @@ bool NeverdieUseRemoteJson()
    if(MQLInfoInteger(MQL_TESTER)) return(false);
    if(InpZonesPollSeconds <= 0) return(false);
    return(StringLen(InpZonesJsonUrl) > 0);
+  }
+
+int DateKeyFromTime(const datetime t)
+  {
+   MqlDateTime tm;
+   TimeToStruct(t, tm);
+   return(tm.year * 10000 + tm.mon * 100 + tm.day);
+  }
+
+int JsonFetchSlotStartMinute(const int slot)
+  {
+   // Requested VN times converted to UTC: 09:50, 14:45, 21:15 GMT+7.
+   if(slot == 0) return(2 * 60 + 50);
+   if(slot == 1) return(7 * 60 + 45);
+   if(slot == 2) return(14 * 60 + 15);
+   return(-1);
+  }
+
+int CurrentJsonFetchWindowKey(const datetime utcNow)
+  {
+   MqlDateTime tm;
+   TimeToStruct(utcNow, tm);
+   int currentMinute = tm.hour * 60 + tm.min;
+
+   for(int slot = 0; slot < JSON_FETCH_SLOT_COUNT; slot++)
+     {
+      int startMinute = JsonFetchSlotStartMinute(slot);
+      if(currentMinute >= startMinute && currentMinute < startMinute + JSON_FETCH_WINDOW_MINUTES)
+         return(DateKeyFromTime(utcNow) * 10 + slot);
+     }
+
+   return(-1);
+  }
+
+bool ShouldFetchNeverdieJsonNow(int &windowKey)
+  {
+   windowKey = CurrentJsonFetchWindowKey(TimeGMT());
+   if(windowKey < 0) return(false);
+   return(windowKey != g_completedJsonFetchWindowKey);
   }
 
 bool ExtractJsonObjectForKey(const string j, const string key, string &outObj)
@@ -205,7 +248,7 @@ bool ParseNeverdieSide(const string json, const string key, ENUM_ZONE_MODE &mode
    return(true);
   }
 
-void AddZoneIfNotExists(ENUM_POSITION_TYPE side, ENUM_ZONE_MODE mode, double low, double high, double sl)
+bool AddZoneIfNotExists(ENUM_POSITION_TYPE side, ENUM_ZONE_MODE mode, double low, double high, double sl)
   {
    double minPrice = MathMin(low, high);
    double maxPrice = MathMax(low, high);
@@ -221,10 +264,10 @@ void AddZoneIfNotExists(ENUM_POSITION_TYPE side, ENUM_ZONE_MODE mode, double low
             if(mode == ZONE_OFF) g_buyZones[i].mode = ZONE_OFF;
             else if(g_buyZones[i].mode != ZONE_TRADE) g_buyZones[i].mode = ZONE_WATCH;
             g_buyZones[i].sl = stopLoss;
-            return;
+            return(false);
            }
         }
-      if(mode == ZONE_OFF) return; // Không thêm mới nếu đang tắt
+      if(mode == ZONE_OFF) return(false); // Không thêm mới nếu đang tắt
       
       int size = ArraySize(g_buyZones);
       ArrayResize(g_buyZones, size + 1);
@@ -234,6 +277,7 @@ void AddZoneIfNotExists(ENUM_POSITION_TYPE side, ENUM_ZONE_MODE mode, double low
       g_buyZones[size].sl = stopLoss;
       g_buyZones[size].expireTime = GetNext2AM();
       g_buyZones[size].magic = GetZoneMagic(minPrice, maxPrice);
+      return(true);
      }
    else
      {
@@ -244,10 +288,10 @@ void AddZoneIfNotExists(ENUM_POSITION_TYPE side, ENUM_ZONE_MODE mode, double low
             if(mode == ZONE_OFF) g_sellZones[i].mode = ZONE_OFF;
             else if(g_sellZones[i].mode != ZONE_TRADE) g_sellZones[i].mode = ZONE_WATCH;
             g_sellZones[i].sl = stopLoss;
-            return;
+            return(false);
            }
         }
-      if(mode == ZONE_OFF) return;
+      if(mode == ZONE_OFF) return(false);
       
       int size = ArraySize(g_sellZones);
       ArrayResize(g_sellZones, size + 1);
@@ -257,21 +301,34 @@ void AddZoneIfNotExists(ENUM_POSITION_TYPE side, ENUM_ZONE_MODE mode, double low
       g_sellZones[size].sl = stopLoss;
       g_sellZones[size].expireTime = GetNext2AM();
       g_sellZones[size].magic = GetZoneMagic(minPrice, maxPrice);
+      return(true);
      }
+
+   return(false);
   }
 
-bool ApplyNeverdieJson(const string json)
+bool ApplyNeverdieJson(const string json, bool &addedNewZone)
   {
+   addedNewZone = false;
+   bool parsed = false;
    ENUM_ZONE_MODE bm, sm;
    double bl, bh, bs, sl, sh, ss;
    if(ParseNeverdieSide(json, "buy", bm, bl, bh, bs))
-      AddZoneIfNotExists(POSITION_TYPE_BUY, bm, bl, bh, bs);
+     {
+      parsed = true;
+      if(AddZoneIfNotExists(POSITION_TYPE_BUY, bm, bl, bh, bs))
+         addedNewZone = true;
+     }
    if(ParseNeverdieSide(json, "sell", sm, sl, sh, ss))
-      AddZoneIfNotExists(POSITION_TYPE_SELL, sm, sl, sh, ss);
-   return(true);
+     {
+      parsed = true;
+      if(AddZoneIfNotExists(POSITION_TYPE_SELL, sm, sl, sh, ss))
+         addedNewZone = true;
+     }
+   return(parsed);
   }
 
-void FetchNeverdieJsonFromUrl()
+bool FetchNeverdieJsonFromUrl()
   {
    uchar req[], res[];
    string headers_out;
@@ -280,17 +337,45 @@ void FetchNeverdieJsonFromUrl()
    PrintFormat("EA NeverDie: Fetch zones URL=[%s]", InpZonesJsonUrl);
    int code = WebRequest("GET", InpZonesJsonUrl, hdr, 15000, req, res, headers_out);
    
-   if(code == -1) { PrintFormat("EA NeverDie: WebRequest failed (Err: %d) - Check URL settings", GetLastError()); return; }
+   if(code == -1) { PrintFormat("EA NeverDie: WebRequest failed (Err: %d) - Check URL settings", GetLastError()); return(false); }
    if(code != 200)
      {
       PrintFormat("EA NeverDie: HTTP %d from URL=[%s]", code, InpZonesJsonUrl);
       PrintFormat("EA NeverDie: Response headers=[%s]", headers_out);
       PrintFormat("EA NeverDie: Response body=[%s]", CharArrayToString(res));
-      return;
+      return(false);
      }
    
    string body = CharArrayToString(res);
-   if(!ApplyNeverdieJson(body)) PrintFormat("EA NeverDie: JSON parse failed. Body=[%s]", body);
+   bool addedNewZone = false;
+   if(!ApplyNeverdieJson(body, addedNewZone))
+     {
+      PrintFormat("EA NeverDie: JSON parse failed. Body=[%s]", body);
+      return(false);
+     }
+   return(addedNewZone);
+  }
+
+void FetchNeverdieJsonOnSchedule()
+  {
+   int windowKey = -1;
+   if(!ShouldFetchNeverdieJsonNow(windowKey)) return;
+
+   if(FetchNeverdieJsonFromUrl())
+     {
+      g_completedJsonFetchWindowKey = windowKey;
+      PrintFormat("EA NeverDie: New JSON zone found; fetch window %d completed", windowKey);
+     }
+  }
+
+void FetchNeverdieJsonOnInit()
+  {
+   bool addedNewZone = FetchNeverdieJsonFromUrl();
+   if(!addedNewZone) return;
+
+   int windowKey = CurrentJsonFetchWindowKey(TimeGMT());
+   if(windowKey >= 0)
+      g_completedJsonFetchWindowKey = windowKey;
   }
 
 // =======================================================================
@@ -307,7 +392,7 @@ int OnInit()
    if(NeverdieUseRemoteJson())
      {
       EventSetTimer(InpZonesPollSeconds);
-      FetchNeverdieJsonFromUrl();
+      FetchNeverdieJsonOnInit();
      }
 
    if(InpShowPanel) CreatePanel();
@@ -327,7 +412,7 @@ void OnDeinit(const int reason)
 void OnTimer()
   {
    if(!NeverdieUseRemoteJson()) return;
-   FetchNeverdieJsonFromUrl();
+   FetchNeverdieJsonOnSchedule();
    UpdatePanel();
   }
 

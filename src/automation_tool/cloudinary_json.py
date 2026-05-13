@@ -73,6 +73,7 @@ def upload_json_bytes_for_responses(body: bytes, filename_hint: str) -> str:
                 public_id=public_id,
                 use_filename=False,
                 unique_filename=False,
+                invalidate=True,
             )
         except CloudinaryError as e:
             if attempt == 0:
