@@ -277,13 +277,20 @@ void FetchNeverdieJsonFromUrl()
    string headers_out;
    string hdr = (StringLen(InpZonesBearer) > 0) ? "Authorization: Bearer " + InpZonesBearer + "\r\n" : "";
    ResetLastError();
+   PrintFormat("EA NeverDie: Fetch zones URL=[%s]", InpZonesJsonUrl);
    int code = WebRequest("GET", InpZonesJsonUrl, hdr, 15000, req, res, headers_out);
    
    if(code == -1) { PrintFormat("EA NeverDie: WebRequest failed (Err: %d) - Check URL settings", GetLastError()); return; }
-   if(code != 200) { PrintFormat("EA NeverDie: HTTP %d from URL", code); return; }
+   if(code != 200)
+     {
+      PrintFormat("EA NeverDie: HTTP %d from URL=[%s]", code, InpZonesJsonUrl);
+      PrintFormat("EA NeverDie: Response headers=[%s]", headers_out);
+      PrintFormat("EA NeverDie: Response body=[%s]", CharArrayToString(res));
+      return;
+     }
    
    string body = CharArrayToString(res);
-   if(!ApplyNeverdieJson(body)) Print("EA NeverDie: JSON parse failed");
+   if(!ApplyNeverdieJson(body)) PrintFormat("EA NeverDie: JSON parse failed. Body=[%s]", body);
   }
 
 // =======================================================================
