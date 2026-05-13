@@ -33,11 +33,6 @@ input ENUM_ND_DCA_TF InpDcaGridTimeframe    = ND_DCA_M15;
 input int            InpDcaClosedBarsRequired = 1;
 input double         InpZoneActivateBand    = 3.0;
 
-input group "=== BASKET TRAILING ==="
-input bool           InpUseTrailingStop    = false;
-input int            InpTrailingDistance   = 800;
-input int            InpTrailingStep       = 200;
-
 input group "=== RISK ==="
 input double         InpCutLossFullCloseAt = 90.0;
 
@@ -48,8 +43,9 @@ input group "=== REMOTE ZONES JSON (Cloudinary / HTTPS) ==="
 input string         InpZonesJsonUrl       = "https://res.cloudinary.com/easy-toeic/raw/upload/automation_tool/ea_neverdie/neverdie_XAUUSD.json"; // URL đã được cập nhật mặc định
 input int            InpZonesPollSeconds   = 300;
 input string         InpZonesBearer        = "";
+input double         InpZonesSlBuffer      = 3.0;
 
-const int PANEL_LINE_COUNT      = 40;
+const int PANEL_LINE_COUNT      = 60;
 const int PANEL_LINE_HEIGHT     = 16;
 
 // --- DYNAMIC ZONE STRUCTURE ---
@@ -61,8 +57,6 @@ struct ZoneData
    double         sl;
    datetime       expireTime;
    long           magic;
-   bool           trailArmed;
-   double         trailExtreme;
   };
 
 struct BasketInfo
@@ -183,6 +177,14 @@ ENUM_ZONE_MODE ModeFromJsonString(const string m)
    return(ZONE_OFF);
   }
 
+double BufferedJsonStopLoss(const ENUM_POSITION_TYPE side, const double sl)
+  {
+   if(sl <= 0.0) return(0.0);
+   double buffer = MathMax(InpZonesSlBuffer, 0.0);
+   if(side == POSITION_TYPE_BUY) return(NormalizeDouble(sl - buffer, _Digits));
+   return(NormalizeDouble(sl + buffer, _Digits));
+  }
+
 bool ParseNeverdieSide(const string json, const string key, ENUM_ZONE_MODE &mode, double &lo, double &hi, double &sl)
   {
    string o;
@@ -198,6 +200,7 @@ void AddZoneIfNotExists(ENUM_POSITION_TYPE side, ENUM_ZONE_MODE mode, double low
   {
    double minPrice = MathMin(low, high);
    double maxPrice = MathMax(low, high);
+   double stopLoss = BufferedJsonStopLoss(side, sl);
    
    if(side == POSITION_TYPE_BUY)
      {
@@ -208,7 +211,7 @@ void AddZoneIfNotExists(ENUM_POSITION_TYPE side, ENUM_ZONE_MODE mode, double low
             // JSON chỉ nạp zone ở trạng thái WATCH; TRADE do giá kích hoạt.
             if(mode == ZONE_OFF) g_buyZones[i].mode = ZONE_OFF;
             else if(g_buyZones[i].mode != ZONE_TRADE) g_buyZones[i].mode = ZONE_WATCH;
-            g_buyZones[i].sl = sl;
+            g_buyZones[i].sl = stopLoss;
             return;
            }
         }
@@ -219,11 +222,9 @@ void AddZoneIfNotExists(ENUM_POSITION_TYPE side, ENUM_ZONE_MODE mode, double low
       g_buyZones[size].mode = ZONE_WATCH;
       g_buyZones[size].low = minPrice;
       g_buyZones[size].high = maxPrice;
-      g_buyZones[size].sl = sl;
+      g_buyZones[size].sl = stopLoss;
       g_buyZones[size].expireTime = GetNext2AM();
       g_buyZones[size].magic = GetZoneMagic(minPrice, maxPrice);
-      g_buyZones[size].trailArmed = false;
-      g_buyZones[size].trailExtreme = 0.0;
      }
    else
      {
@@ -233,7 +234,7 @@ void AddZoneIfNotExists(ENUM_POSITION_TYPE side, ENUM_ZONE_MODE mode, double low
            {
             if(mode == ZONE_OFF) g_sellZones[i].mode = ZONE_OFF;
             else if(g_sellZones[i].mode != ZONE_TRADE) g_sellZones[i].mode = ZONE_WATCH;
-            g_sellZones[i].sl = sl;
+            g_sellZones[i].sl = stopLoss;
             return;
            }
         }
@@ -244,11 +245,9 @@ void AddZoneIfNotExists(ENUM_POSITION_TYPE side, ENUM_ZONE_MODE mode, double low
       g_sellZones[size].mode = ZONE_WATCH;
       g_sellZones[size].low = minPrice;
       g_sellZones[size].high = maxPrice;
-      g_sellZones[size].sl = sl;
+      g_sellZones[size].sl = stopLoss;
       g_sellZones[size].expireTime = GetNext2AM();
       g_sellZones[size].magic = GetZoneMagic(minPrice, maxPrice);
-      g_sellZones[size].trailArmed = false;
-      g_sellZones[size].trailExtreme = 0.0;
      }
   }
 
@@ -510,7 +509,6 @@ void ManageZoneStopsAndWatchers()
         {
          BlockSide(POSITION_TYPE_BUY, "SL price touched");
          CloseBasket(POSITION_TYPE_BUY, g_buyZones[i].magic);
-         g_buyZones[i].trailArmed = false;
         }
      }
 
@@ -520,7 +518,6 @@ void ManageZoneStopsAndWatchers()
         {
          BlockSide(POSITION_TYPE_SELL, "SL price touched");
          CloseBasket(POSITION_TYPE_SELL, g_sellZones[i].magic);
-         g_sellZones[i].trailArmed = false;
         }
      }
 
@@ -548,8 +545,7 @@ void ManageAllZones(const ENUM_POSITION_TYPE side, const bool onFirstTickDca)
 
       if(basket.count > 0)
         {
-         if(ShouldCloseBasketByTakeProfit(side, basket)) { CloseBasket(side, zone.magic); zone.trailArmed = false; }
-         else if(ShouldCloseBasketByTrailing(side, zone, basket)) { CloseBasket(side, zone.magic); zone.trailArmed = false; }
+         if(ShouldCloseBasketByTakeProfit(side, basket)) CloseBasket(side, zone.magic);
          else if(ShouldOpenDca(side, zone, basket, onFirstTickDca))
            {
             double nextVolume = NormalizeVolume(InpLotSize * MathPow(InpMultiplier, basket.count));
@@ -561,15 +557,9 @@ void ManageAllZones(const ENUM_POSITION_TYPE side, const bool onFirstTickDca)
          // Mở Initial khi giá nằm trong zone TRADE mới nhất.
          if(i == newestTradableIdx && ShouldOpenInitial(side, zone, price))
            {
-            zone.trailArmed = false;
-            zone.trailExtreme = 0.0;
             OpenPosition(side, zone, NormalizeVolume(InpLotSize), "START");
            }
         }
-
-      // Ghi lại thay đổi state (Trail state)
-      if(side == POSITION_TYPE_BUY) g_buyZones[i] = zone;
-      else g_sellZones[i] = zone;
      }
   }
 
@@ -661,42 +651,6 @@ bool ShouldCloseBasketByTakeProfit(const ENUM_POSITION_TYPE side, const BasketIn
    return(false);
   }
 
-bool ShouldCloseBasketByTrailing(const ENUM_POSITION_TYPE side, ZoneData &zone, const BasketInfo &basket)
-  {
-   if(!InpUseTrailingStop || basket.count <= 0)
-     {
-      zone.trailArmed = false;
-      return(false);
-     }
-
-   MqlTick tick;
-   if(!SymbolInfoTick(_Symbol, tick)) return(false);
-
-   double currentPrice = GetSideClosePrice(side, tick);
-   double activateAt = basket.averagePrice + DirectionMultiplier(side) * InpTrailingDistance * _Point;
-   double retrace = InpTrailingStep * _Point;
-
-   if(side == POSITION_TYPE_BUY)
-     {
-      if(currentPrice >= activateAt)
-        {
-         if(!zone.trailArmed) { zone.trailArmed = true; zone.trailExtreme = currentPrice; }
-         else if(currentPrice > zone.trailExtreme) zone.trailExtreme = currentPrice;
-        }
-      if(zone.trailArmed && currentPrice <= zone.trailExtreme - retrace && basket.floatingProfit > 0.0) return(true);
-     }
-   else
-     {
-      if(currentPrice <= activateAt)
-        {
-         if(!zone.trailArmed) { zone.trailArmed = true; zone.trailExtreme = currentPrice; }
-         else if(currentPrice < zone.trailExtreme) zone.trailExtreme = currentPrice;
-        }
-      if(zone.trailArmed && currentPrice >= zone.trailExtreme + retrace && basket.floatingProfit > 0.0) return(true);
-     }
-   return(false);
-  }
-
 bool OpenPosition(const ENUM_POSITION_TYPE side, const ZoneData &zone, const double volume, const string tag)
   {
    double sl = NormalizeDouble(zone.sl, _Digits);
@@ -762,8 +716,6 @@ void CloseAllEaPositions()
       if(ticket > 0 && PositionGetString(POSITION_SYMBOL) == _Symbol && IsOurMagic(PositionGetInteger(POSITION_MAGIC)))
          g_trade.PositionClose(ticket);
      }
-   for(int i = 0; i < ArraySize(g_buyZones); i++) g_buyZones[i].trailArmed = false;
-   for(int i = 0; i < ArraySize(g_sellZones); i++) g_sellZones[i].trailArmed = false;
   }
 
 void BlockSide(const ENUM_POSITION_TYPE side, const string reason)
@@ -880,7 +832,6 @@ string ZoneDetailText(const ENUM_POSITION_TYPE side, const ZoneData &zone, const
   {
    string text = StringFormat("%.2f - %.2f [%s]", zone.low, zone.high, ZoneModeText(zone.mode));
    if(zone.sl > 0.0) text += " SL " + DoubleToString(zone.sl, _Digits);
-   text += " | " + ZoneProximityText(side, zone, price, hasPrice);
    return(text);
   }
 
@@ -923,9 +874,14 @@ void AddZoneDetailRows(string &lines[], color &colors[], int &row, const ENUM_PO
 
       string label = prefix + " Zone " + IntegerToString(bestIndex + 1) + ": ";
       string detail = ZoneDetailText(side, zone, price, hasPrice);
+      color rowColor = basket.count > 0 ? ProfitColor(basket.floatingProfit) : ModeColor(zone.mode);
+
+      AddPanelRow(lines, colors, row, label + detail, rowColor);
+
+      string distanceText = "   Distance: " + ZoneProximityText(side, zone, price, hasPrice);
       if(basket.count > 0)
-         detail += StringFormat(" | Orders %d | P/L %.2f", basket.count, basket.floatingProfit);
-      AddPanelRow(lines, colors, row, label + detail, basket.count > 0 ? ProfitColor(basket.floatingProfit) : ModeColor(zone.mode));
+         distanceText += StringFormat(" | Orders %d | P/L %.2f", basket.count, basket.floatingProfit);
+      AddPanelRow(lines, colors, row, distanceText, rowColor);
      }
   }
 
@@ -944,7 +900,7 @@ void CreatePanel()
    if(ObjectFind(0, bg) == -1) ObjectCreate(0, bg, OBJ_RECTANGLE_LABEL, 0, 0, 0);
    ObjectSetInteger(0, bg, OBJPROP_CORNER, CORNER_LEFT_UPPER);
    ObjectSetInteger(0, bg, OBJPROP_XDISTANCE, 12); ObjectSetInteger(0, bg, OBJPROP_YDISTANCE, 30);
-   ObjectSetInteger(0, bg, OBJPROP_XSIZE, 460); ObjectSetInteger(0, bg, OBJPROP_YSIZE, 670); // Kéo dài background để đủ chỗ hiển thị zone
+   ObjectSetInteger(0, bg, OBJPROP_XSIZE, 460); ObjectSetInteger(0, bg, OBJPROP_YSIZE, 1010); // Kéo dài background để đủ chỗ hiển thị zone
    ObjectSetInteger(0, bg, OBJPROP_BGCOLOR, clrWhiteSmoke); ObjectSetInteger(0, bg, OBJPROP_COLOR, clrBlack);
    ObjectSetInteger(0, bg, OBJPROP_SELECTABLE, false); ObjectSetInteger(0, bg, OBJPROP_HIDDEN, true);
 
