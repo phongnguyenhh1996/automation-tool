@@ -698,8 +698,9 @@ void ManageAllZones(const ENUM_POSITION_TYPE side, const bool onFirstTickDca)
         {
          if(ShouldCloseBasketByTakeProfit(side, zone, basket))
            {
-            CloseBasket(side, zone.magic);
-            DeactivateZoneByMagic(side, zone.magic);
+            bool basketClosed = CloseBasket(side, zone.magic);
+            if(basketClosed && ShouldDeactivateAfterBasketTakeProfit(side, zone, GetSideClosePrice(side, tick)))
+               DeactivateZoneByMagic(side, zone.magic);
            }
          else if(ShouldOpenDca(side, zone, basket, onFirstTickDca))
            {
@@ -787,6 +788,13 @@ bool ShouldOpenDca(const ENUM_POSITION_TYPE side, const ZoneData &zone, const Ba
    if(side == POSITION_TYPE_SELL && zone.sl > 0 && price >= zone.sl) return(false);
 
    return(true);
+  }
+
+bool ShouldDeactivateAfterBasketTakeProfit(const ENUM_POSITION_TYPE side, const ZoneData &zone, const double closePrice)
+  {
+   if(side == POSITION_TYPE_BUY && zone.sl > 0.0 && closePrice <= zone.sl) return(true);
+   if(side == POSITION_TYPE_SELL && zone.sl > 0.0 && closePrice >= zone.sl) return(true);
+   return(!IsPriceInZone(zone, closePrice));
   }
 
 bool ShouldCloseBasketByTakeProfit(const ENUM_POSITION_TYPE side, const ZoneData &zone, const BasketInfo &basket)

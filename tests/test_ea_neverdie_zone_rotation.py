@@ -51,7 +51,7 @@ def test_watch_zone_activation_allows_only_one_trade_zone_globally() -> None:
     assert "ActivateSideWatchZones(" not in source
 
 
-def test_zone_turns_off_after_stop_loss_or_take_profit() -> None:
+def test_zone_turns_off_after_stop_loss_but_not_unconditionally_after_take_profit() -> None:
     source = _source()
     stops_body = _function_body(source, "ManageZoneStopsAndWatchers")
     trade_tx_body = _function_body(source, "OnTradeTransaction")
@@ -62,7 +62,17 @@ def test_zone_turns_off_after_stop_loss_or_take_profit() -> None:
     assert "DeactivateZoneByMagic(POSITION_TYPE_SELL, g_sellZones[i].magic)" in stops_body
     assert "DeactivateZoneByMagic(POSITION_TYPE_BUY, magic)" in trade_tx_body
     assert "DeactivateZoneByMagic(POSITION_TYPE_SELL, magic)" in trade_tx_body
-    assert "DeactivateZoneByMagic(side, zone.magic)" in manage_body
+    assert "ShouldDeactivateAfterBasketTakeProfit(side, zone, GetSideClosePrice(side, tick))" in manage_body
+    assert "CloseBasket(side, zone.magic);\n            DeactivateZoneByMagic(side, zone.magic);" not in manage_body
+
+
+def test_take_profit_deactivates_only_outside_zone_or_after_stop_loss() -> None:
+    source = _source()
+    after_tp_body = _function_body(source, "ShouldDeactivateAfterBasketTakeProfit")
+
+    assert "closePrice <= zone.sl" in after_tp_body
+    assert "closePrice >= zone.sl" in after_tp_body
+    assert "!IsPriceInZone(zone, closePrice)" in after_tp_body
 
 
 def test_basket_take_profit_uses_configured_average_price_offset() -> None:
