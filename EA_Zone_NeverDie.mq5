@@ -696,7 +696,7 @@ void ManageAllZones(const ENUM_POSITION_TYPE side, const bool onFirstTickDca)
 
       if(basket.count > 0)
         {
-         if(ShouldCloseBasketByTakeProfit(side, basket))
+         if(ShouldCloseBasketByTakeProfit(side, zone, basket))
            {
             CloseBasket(side, zone.magic);
             DeactivateZoneByMagic(side, zone.magic);
@@ -790,14 +790,15 @@ bool ShouldOpenDca(const ENUM_POSITION_TYPE side, const ZoneData &zone, const Ba
    return(true);
   }
 
-bool ShouldCloseBasketByTakeProfit(const ENUM_POSITION_TYPE side, const BasketInfo &basket)
+bool ShouldCloseBasketByTakeProfit(const ENUM_POSITION_TYPE side, const ZoneData &zone, const BasketInfo &basket)
   {
    if(basket.count <= 0 || basket.totalVolume <= 0.0) return(false);
    MqlTick tick;
    if(!SymbolInfoTick(_Symbol, tick)) return(false);
    
    double currentPrice = GetSideClosePrice(side, tick);
-   double targetPrice = basket.averagePrice + DirectionMultiplier(side) * InpTakeProfit * _Point;
+   double targetPrice = zone.low;
+   if(side == POSITION_TYPE_BUY) targetPrice = zone.high;
 
    if(side == POSITION_TYPE_BUY && currentPrice >= targetPrice && basket.floatingProfit > 0.0) return(true);
    if(side == POSITION_TYPE_SELL && currentPrice <= targetPrice && basket.floatingProfit > 0.0) return(true);

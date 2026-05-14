@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -9,8 +10,10 @@ def _source() -> str:
 
 
 def _function_body(source: str, name: str) -> str:
-    marker = f"void {name}("
-    start = source.index(marker)
+    match = re.search(rf"(?m)^[A-Za-z_][A-Za-z0-9_<>&:\s*]*\b{name}\(", source)
+    if match is None:
+        raise AssertionError(f"Could not find function definition for {name}")
+    start = match.start()
     brace_start = source.index("{", start)
     depth = 0
 
@@ -60,6 +63,18 @@ def test_zone_turns_off_after_stop_loss_or_take_profit() -> None:
     assert "DeactivateZoneByMagic(POSITION_TYPE_BUY, magic)" in trade_tx_body
     assert "DeactivateZoneByMagic(POSITION_TYPE_SELL, magic)" in trade_tx_body
     assert "DeactivateZoneByMagic(side, zone.magic)" in manage_body
+
+
+def test_basket_take_profit_uses_zone_boundary_not_average_price_offset() -> None:
+    source = _source()
+    should_close_body = _function_body(source, "ShouldCloseBasketByTakeProfit")
+    manage_body = _function_body(source, "ManageAllZones")
+
+    assert "const ZoneData &zone" in source
+    assert "ShouldCloseBasketByTakeProfit(side, zone, basket)" in manage_body
+    assert "targetPrice = zone.high" in should_close_body
+    assert "targetPrice = zone.low" in should_close_body
+    assert "basket.averagePrice + DirectionMultiplier(side) * InpTakeProfit * _Point" not in should_close_body
 
 
 def test_ea_draws_two_zone_lines_with_zone_color() -> None:
