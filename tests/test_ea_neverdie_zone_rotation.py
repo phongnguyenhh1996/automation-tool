@@ -51,6 +51,25 @@ def test_watch_zone_activation_allows_only_one_trade_zone_globally() -> None:
     assert "ActivateSideWatchZones(" not in source
 
 
+def test_watch_zone_activation_only_triggers_when_entering_activation_band() -> None:
+    source = _source()
+    should_activate_body = _function_body(source, "ShouldActivateWatchZone")
+    refresh_body = _function_body(source, "RefreshActivationBandState")
+    activate_body = _function_body(source, "ActivateWatchZones")
+
+    assert "bool           wasInActivationBand;" in source
+    assert "if(zone.wasInActivationBand) return(false);" in should_activate_body
+    assert (
+        "g_buyZones[i].wasInActivationBand = "
+        "IsPriceInActivationBand(POSITION_TYPE_BUY, g_buyZones[i], price);"
+    ) in refresh_body
+    assert (
+        "g_sellZones[i].wasInActivationBand = "
+        "IsPriceInActivationBand(POSITION_TYPE_SELL, g_sellZones[i], price);"
+    ) in refresh_body
+    assert "RefreshActivationBandState(price);" in activate_body
+
+
 def test_zone_is_removed_after_stop_loss_but_not_unconditionally_after_take_profit() -> None:
     source = _source()
     stops_body = _function_body(source, "ManageZoneStopsAndWatchers")

@@ -69,6 +69,7 @@ struct ZoneData
    double         sl;
    datetime       expireTime;
    long           magic;
+   bool           wasInActivationBand;
   };
 
 struct BasketInfo
@@ -276,6 +277,7 @@ bool AddZoneIfNotExists(ENUM_POSITION_TYPE side, ENUM_ZONE_MODE mode, double low
       g_buyZones[size].sl = stopLoss;
       g_buyZones[size].expireTime = GetNext2AM();
       g_buyZones[size].magic = GetZoneMagic(minPrice, maxPrice);
+      g_buyZones[size].wasInActivationBand = false;
       return(true);
      }
    else
@@ -304,6 +306,7 @@ bool AddZoneIfNotExists(ENUM_POSITION_TYPE side, ENUM_ZONE_MODE mode, double low
       g_sellZones[size].sl = stopLoss;
       g_sellZones[size].expireTime = GetNext2AM();
       g_sellZones[size].magic = GetZoneMagic(minPrice, maxPrice);
+      g_sellZones[size].wasInActivationBand = false;
       return(true);
      }
 
@@ -583,12 +586,22 @@ double ZoneActivationDistance(const ENUM_POSITION_TYPE side, const ZoneData &zon
 bool ShouldActivateWatchZone(const ENUM_POSITION_TYPE side, const ZoneData &zone, const double price)
   {
    if(zone.mode != ZONE_WATCH) return(false);
+   if(zone.wasInActivationBand) return(false);
    return(IsPriceInActivationBand(side, zone, price));
   }
 
 bool IsPriceInActivationBand(const ENUM_POSITION_TYPE side, const ZoneData &zone, const double price)
   {
    return(IsPriceInZone(zone, price) || ZoneActivationDistance(side, zone, price) <= InpZoneActivateBand);
+  }
+
+void RefreshActivationBandState(const double price)
+  {
+   for(int i = 0; i < ArraySize(g_buyZones); i++)
+      g_buyZones[i].wasInActivationBand = IsPriceInActivationBand(POSITION_TYPE_BUY, g_buyZones[i], price);
+
+   for(int i = 0; i < ArraySize(g_sellZones); i++)
+      g_sellZones[i].wasInActivationBand = IsPriceInActivationBand(POSITION_TYPE_SELL, g_sellZones[i], price);
   }
 
 void ActivateSingleWatchZone(const ENUM_POSITION_TYPE side, const int index)
@@ -642,7 +655,11 @@ void ActivateWatchZones()
         }
      }
 
-   if(activatedIndex < 0) return;
+   if(activatedIndex < 0)
+     {
+      RefreshActivationBandState(price);
+      return;
+     }
 
    for(int i = 0; i < ArraySize(g_buyZones); i++)
       if(g_buyZones[i].mode == ZONE_TRADE) g_buyZones[i].mode = ZONE_WATCH;
@@ -651,6 +668,7 @@ void ActivateWatchZones()
       if(g_sellZones[i].mode == ZONE_TRADE) g_sellZones[i].mode = ZONE_WATCH;
 
    ActivateSingleWatchZone(activatedSide, activatedIndex);
+   RefreshActivationBandState(price);
   }
 
 int GetTradableZoneIndex(ENUM_POSITION_TYPE side, double price)
@@ -936,7 +954,7 @@ double MidPrice(const MqlTick &tick) { return((tick.bid + tick.ask) / 2.0); }
 // =======================================================================
 ZoneData GetLatestZone(ENUM_POSITION_TYPE side)
   {
-   ZoneData empty; empty.mode = ZONE_OFF; empty.low = 0; empty.high = 0; empty.sl = 0;
+   ZoneData empty; empty.mode = ZONE_OFF; empty.low = 0; empty.high = 0; empty.sl = 0; empty.wasInActivationBand = false;
    int count = (side == POSITION_TYPE_BUY) ? ArraySize(g_buyZones) : ArraySize(g_sellZones);
    if(count == 0) return empty;
    return (side == POSITION_TYPE_BUY) ? g_buyZones[count-1] : g_sellZones[count-1];
