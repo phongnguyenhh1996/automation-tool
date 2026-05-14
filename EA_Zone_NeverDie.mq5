@@ -86,6 +86,7 @@ struct BasketInfo
 CTrade   g_trade;
 datetime g_dcaGridBarOpenSeen = 0;
 string   g_panelPrefix        = "ZoneNeverDiePanel";
+string   g_zoneLinePrefix     = "ZoneNeverDieZoneLine";
 int      g_completedJsonFetchWindowKey = -1;
 
 // --- ZONE ARRAYS ---
@@ -401,6 +402,7 @@ void OnDeinit(const int reason)
   {
    EventKillTimer();
    RemovePanel();
+   RemoveZoneChartObjects();
   }
 
 void OnTimer()
@@ -1068,6 +1070,8 @@ void RemovePanel()
 
 void UpdatePanel()
   {
+   UpdateZoneChartObjects();
+
    if(!InpShowPanel) { RemovePanel(); return; }
    if(ObjectFind(0, g_panelPrefix + "_BG") == -1) CreatePanel();
 
@@ -1175,6 +1179,89 @@ void ResizePanelForContent(const string &lines[], const int usedRows)
      {
       string name = g_panelPrefix + "_LINE_" + IntegerToString(i);
       ObjectSetInteger(0, name, OBJPROP_XDISTANCE, panelCenterX);
+     }
+  }
+
+color ZoneDisplayColor(const int globalIndex)
+  {
+   int slot = globalIndex % 12;
+   if(slot == 0) return(C'30,144,255');   // Dodger blue
+   if(slot == 1) return(C'255,140,0');    // Dark orange
+   if(slot == 2) return(C'50,205,50');    // Lime green
+   if(slot == 3) return(C'220,20,60');    // Crimson
+   if(slot == 4) return(C'148,0,211');    // Violet
+   if(slot == 5) return(C'0,191,255');    // Deep sky blue
+   if(slot == 6) return(C'255,215,0');    // Gold
+   if(slot == 7) return(C'255,105,180');  // Hot pink
+   if(slot == 8) return(C'0,128,128');    // Teal
+   if(slot == 9) return(C'178,34,34');    // Firebrick
+   if(slot == 10) return(C'46,139,87');   // Sea green
+   return(C'123,104,238');                // Medium slate blue
+  }
+
+string ZoneSideName(const ENUM_POSITION_TYPE side)
+  {
+   return(side == POSITION_TYPE_BUY ? "BUY" : "SELL");
+  }
+
+string ZoneLineName(const ENUM_POSITION_TYPE side, const ZoneData &zone, const int index, const string edge)
+  {
+   return(g_zoneLinePrefix + "_" + ZoneSideName(side) + "_" + IntegerToString(index + 1) + "_" + IntegerToString(zone.magic) + "_" + edge);
+  }
+
+void RemoveZoneChartObjects()
+  {
+   for(int i = ObjectsTotal(0, -1, -1) - 1; i >= 0; i--)
+     {
+      string name = ObjectName(0, i, -1, -1);
+      if(StringFind(name, g_zoneLinePrefix) == 0)
+         ObjectDelete(0, name);
+     }
+  }
+
+void DrawZoneLine(const string name, const double price, const color zoneColor, const string text)
+  {
+   if(ObjectFind(0, name) == -1) ObjectCreate(0, name, OBJ_HLINE, 0, 0, price);
+   ObjectSetDouble(0, name, OBJPROP_PRICE, price);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, zoneColor);
+   ObjectSetInteger(0, name, OBJPROP_STYLE, STYLE_SOLID);
+   ObjectSetInteger(0, name, OBJPROP_WIDTH, 2);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_HIDDEN, false);
+   ObjectSetString(0, name, OBJPROP_TEXT, text);
+  }
+
+void DrawZoneLines(const ENUM_POSITION_TYPE side, const ZoneData &zone, const int index, const int globalIndex)
+  {
+   color zoneColor = ZoneDisplayColor(globalIndex);
+   string sideName = ZoneSideName(side);
+   string zoneLabel = sideName + " Zone " + IntegerToString(index + 1);
+   string lowName = ZoneLineName(side, zone, index, "LOW");
+   string highName = ZoneLineName(side, zone, index, "HIGH");
+
+   DrawZoneLine(lowName, zone.low, zoneColor, zoneLabel + " LOW " + DoubleToString(zone.low, _Digits));
+   DrawZoneLine(highName, zone.high, zoneColor, zoneLabel + " HIGH " + DoubleToString(zone.high, _Digits));
+   ObjectSetInteger(0, lowName, OBJPROP_COLOR, zoneColor);
+   ObjectSetInteger(0, highName, OBJPROP_COLOR, zoneColor);
+  }
+
+void UpdateZoneChartObjects()
+  {
+   RemoveZoneChartObjects();
+
+   int globalIndex = 0;
+   for(int i = 0; i < ArraySize(g_buyZones); i++)
+     {
+      if(g_buyZones[i].mode == ZONE_OFF) continue;
+      DrawZoneLines(POSITION_TYPE_BUY, g_buyZones[i], i, globalIndex);
+      globalIndex++;
+     }
+
+   for(int i = 0; i < ArraySize(g_sellZones); i++)
+     {
+      if(g_sellZones[i].mode == ZONE_OFF) continue;
+      DrawZoneLines(POSITION_TYPE_SELL, g_sellZones[i], i, globalIndex);
+      globalIndex++;
      }
   }
 

@@ -60,3 +60,28 @@ def test_zone_turns_off_after_stop_loss_or_take_profit() -> None:
     assert "DeactivateZoneByMagic(POSITION_TYPE_BUY, magic)" in trade_tx_body
     assert "DeactivateZoneByMagic(POSITION_TYPE_SELL, magic)" in trade_tx_body
     assert "DeactivateZoneByMagic(side, zone.magic)" in manage_body
+
+
+def test_ea_draws_two_zone_lines_with_zone_color() -> None:
+    source = _source()
+    update_chart_body = _function_body(source, "UpdateZoneChartObjects")
+    draw_body = _function_body(source, "DrawZoneLines")
+    line_body = _function_body(source, "DrawZoneLine")
+
+    assert 'OBJ_HLINE' in line_body
+    assert 'OBJPROP_PRICE' in line_body
+    assert 'DrawZoneLine(lowName, zone.low, zoneColor' in draw_body
+    assert 'DrawZoneLine(highName, zone.high, zoneColor' in draw_body
+    assert 'ObjectSetInteger(0, lowName, OBJPROP_COLOR, zoneColor)' in draw_body
+    assert 'ObjectSetInteger(0, highName, OBJPROP_COLOR, zoneColor)' in draw_body
+    assert 'DrawZoneLines(POSITION_TYPE_BUY, g_buyZones[i], i, globalIndex)' in update_chart_body
+    assert 'DrawZoneLines(POSITION_TYPE_SELL, g_sellZones[i], i, globalIndex)' in update_chart_body
+
+
+def test_ea_refreshes_zone_chart_objects_during_lifecycle() -> None:
+    source = _source()
+    deinit_body = _function_body(source, "OnDeinit")
+    update_panel_body = _function_body(source, "UpdatePanel")
+
+    assert 'UpdateZoneChartObjects();' in update_panel_body
+    assert 'RemoveZoneChartObjects();' in deinit_body
