@@ -65,16 +65,16 @@ def test_zone_turns_off_after_stop_loss_or_take_profit() -> None:
     assert "DeactivateZoneByMagic(side, zone.magic)" in manage_body
 
 
-def test_basket_take_profit_uses_zone_boundary_not_average_price_offset() -> None:
+def test_basket_take_profit_uses_configured_average_price_offset() -> None:
     source = _source()
     should_close_body = _function_body(source, "ShouldCloseBasketByTakeProfit")
     manage_body = _function_body(source, "ManageAllZones")
 
     assert "const ZoneData &zone" in source
     assert "ShouldCloseBasketByTakeProfit(side, zone, basket)" in manage_body
-    assert "targetPrice = zone.high" in should_close_body
-    assert "targetPrice = zone.low" in should_close_body
-    assert "basket.averagePrice + DirectionMultiplier(side) * InpTakeProfit * _Point" not in should_close_body
+    assert "basket.averagePrice + DirectionMultiplier(side) * InpTakeProfit * _Point" in should_close_body
+    assert "targetPrice = zone.high" not in should_close_body
+    assert "targetPrice = zone.low" not in should_close_body
 
 
 def test_open_basket_dca_continues_even_after_zone_rotation() -> None:

@@ -796,8 +796,7 @@ bool ShouldCloseBasketByTakeProfit(const ENUM_POSITION_TYPE side, const ZoneData
    if(!SymbolInfoTick(_Symbol, tick)) return(false);
    
    double currentPrice = GetSideClosePrice(side, tick);
-   double targetPrice = zone.low;
-   if(side == POSITION_TYPE_BUY) targetPrice = zone.high;
+   double targetPrice = basket.averagePrice + DirectionMultiplier(side) * InpTakeProfit * _Point;
 
    if(side == POSITION_TYPE_BUY && currentPrice >= targetPrice && basket.floatingProfit > 0.0) return(true);
    if(side == POSITION_TYPE_SELL && currentPrice <= targetPrice && basket.floatingProfit > 0.0) return(true);
