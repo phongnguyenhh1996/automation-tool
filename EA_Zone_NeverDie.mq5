@@ -768,7 +768,6 @@ bool ShouldOpenInitial(const ENUM_POSITION_TYPE side, const ZoneData &zone, doub
 bool ShouldOpenDca(const ENUM_POSITION_TYPE side, const ZoneData &zone, const BasketInfo &basket, const bool onFirstTick)
   {
    if(!onFirstTick) return(false);
-   if(zone.mode != ZONE_TRADE) return(false);
    if(basket.count <= 0 || basket.count >= InpMaxGridLevels) return(false);
    if(basket.floatingProfit >= 0.0) return(false);
 

@@ -77,6 +77,15 @@ def test_basket_take_profit_uses_zone_boundary_not_average_price_offset() -> Non
     assert "basket.averagePrice + DirectionMultiplier(side) * InpTakeProfit * _Point" not in should_close_body
 
 
+def test_open_basket_dca_continues_even_after_zone_rotation() -> None:
+    source = _source()
+    should_dca_body = _function_body(source, "ShouldOpenDca")
+    manage_body = _function_body(source, "ManageAllZones")
+
+    assert "ShouldOpenDca(side, zone, basket, onFirstTickDca)" in manage_body
+    assert "zone.mode != ZONE_TRADE" not in should_dca_body
+
+
 def test_ea_draws_two_zone_lines_with_zone_color() -> None:
     source = _source()
     update_chart_body = _function_body(source, "UpdateZoneChartObjects")
