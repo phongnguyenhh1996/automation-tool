@@ -72,10 +72,20 @@ def test_ea_draws_two_zone_lines_with_zone_color() -> None:
     assert 'OBJPROP_PRICE' in line_body
     assert 'DrawZoneLine(lowName, zone.low, zoneColor' in draw_body
     assert 'DrawZoneLine(highName, zone.high, zoneColor' in draw_body
+    assert 'DrawZoneLineLabel(lowLabelName, zone.low, zoneColor' in draw_body
+    assert 'DrawZoneLineLabel(highLabelName, zone.high, zoneColor' in draw_body
     assert 'ObjectSetInteger(0, lowName, OBJPROP_COLOR, zoneColor)' in draw_body
     assert 'ObjectSetInteger(0, highName, OBJPROP_COLOR, zoneColor)' in draw_body
-    assert 'DrawZoneLines(POSITION_TYPE_BUY, g_buyZones[i], i, globalIndex)' in update_chart_body
-    assert 'DrawZoneLines(POSITION_TYPE_SELL, g_sellZones[i], i, globalIndex)' in update_chart_body
+    assert 'DrawZoneLines(POSITION_TYPE_BUY, g_buyZones[i], i, ZoneGlobalIndex(POSITION_TYPE_BUY, i))' in update_chart_body
+    assert 'DrawZoneLines(POSITION_TYPE_SELL, g_sellZones[i], i, ZoneGlobalIndex(POSITION_TYPE_SELL, i))' in update_chart_body
+    assert 'ChartRedraw(0)' in update_chart_body
+
+
+def test_ea_uses_zone_color_for_panel_rows() -> None:
+    source = _source()
+    rows_body = _function_body(source, "AddZoneDetailRows")
+
+    assert 'color rowColor = ZoneDisplayColor(ZoneGlobalIndex(side, bestIndex));' in rows_body
 
 
 def test_ea_refreshes_zone_chart_objects_during_lifecycle() -> None:

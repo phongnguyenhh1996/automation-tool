@@ -966,6 +966,12 @@ string ZoneDetailText(const ENUM_POSITION_TYPE side, const ZoneData &zone, const
    return(text);
   }
 
+int ZoneGlobalIndex(const ENUM_POSITION_TYPE side, const int index)
+  {
+   if(side == POSITION_TYPE_BUY) return(index);
+   return(ArraySize(g_buyZones) + index);
+  }
+
 void AddZoneDetailRows(string &lines[], color &colors[], int &row, const ENUM_POSITION_TYPE side, const string prefix, const double price, const bool hasPrice)
   {
    int count = (side == POSITION_TYPE_BUY) ? ArraySize(g_buyZones) : ArraySize(g_sellZones);
@@ -1005,7 +1011,7 @@ void AddZoneDetailRows(string &lines[], color &colors[], int &row, const ENUM_PO
 
       string label = prefix + " Zone " + IntegerToString(bestIndex + 1) + ": ";
       string detail = ZoneDetailText(side, zone, price, hasPrice);
-      color rowColor = basket.count > 0 ? ProfitColor(basket.floatingProfit) : ModeColor(zone.mode);
+      color rowColor = ZoneDisplayColor(ZoneGlobalIndex(side, bestIndex));
 
       AddPanelRow(lines, colors, row, label + detail, rowColor);
 
@@ -1231,6 +1237,22 @@ void DrawZoneLine(const string name, const double price, const color zoneColor, 
    ObjectSetString(0, name, OBJPROP_TEXT, text);
   }
 
+void DrawZoneLineLabel(const string name, const double price, const color zoneColor, const string text)
+  {
+   datetime labelTime = iTime(_Symbol, _Period, 0);
+   if(labelTime <= 0) labelTime = TimeCurrent();
+
+   if(ObjectFind(0, name) == -1) ObjectCreate(0, name, OBJ_TEXT, 0, labelTime, price);
+   ObjectMove(0, name, 0, labelTime, price);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, zoneColor);
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 9);
+   ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_LEFT);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_HIDDEN, false);
+   ObjectSetString(0, name, OBJPROP_FONT, "Tahoma Bold");
+   ObjectSetString(0, name, OBJPROP_TEXT, text);
+  }
+
 void DrawZoneLines(const ENUM_POSITION_TYPE side, const ZoneData &zone, const int index, const int globalIndex)
   {
    color zoneColor = ZoneDisplayColor(globalIndex);
@@ -1238,9 +1260,13 @@ void DrawZoneLines(const ENUM_POSITION_TYPE side, const ZoneData &zone, const in
    string zoneLabel = sideName + " Zone " + IntegerToString(index + 1);
    string lowName = ZoneLineName(side, zone, index, "LOW");
    string highName = ZoneLineName(side, zone, index, "HIGH");
+   string lowLabelName = ZoneLineName(side, zone, index, "LOW_LABEL");
+   string highLabelName = ZoneLineName(side, zone, index, "HIGH_LABEL");
 
    DrawZoneLine(lowName, zone.low, zoneColor, zoneLabel + " LOW " + DoubleToString(zone.low, _Digits));
    DrawZoneLine(highName, zone.high, zoneColor, zoneLabel + " HIGH " + DoubleToString(zone.high, _Digits));
+   DrawZoneLineLabel(lowLabelName, zone.low, zoneColor, zoneLabel + " LOW");
+   DrawZoneLineLabel(highLabelName, zone.high, zoneColor, zoneLabel + " HIGH");
    ObjectSetInteger(0, lowName, OBJPROP_COLOR, zoneColor);
    ObjectSetInteger(0, highName, OBJPROP_COLOR, zoneColor);
   }
@@ -1249,20 +1275,19 @@ void UpdateZoneChartObjects()
   {
    RemoveZoneChartObjects();
 
-   int globalIndex = 0;
    for(int i = 0; i < ArraySize(g_buyZones); i++)
      {
       if(g_buyZones[i].mode == ZONE_OFF) continue;
-      DrawZoneLines(POSITION_TYPE_BUY, g_buyZones[i], i, globalIndex);
-      globalIndex++;
+      DrawZoneLines(POSITION_TYPE_BUY, g_buyZones[i], i, ZoneGlobalIndex(POSITION_TYPE_BUY, i));
      }
 
    for(int i = 0; i < ArraySize(g_sellZones); i++)
      {
       if(g_sellZones[i].mode == ZONE_OFF) continue;
-      DrawZoneLines(POSITION_TYPE_SELL, g_sellZones[i], i, globalIndex);
-      globalIndex++;
+      DrawZoneLines(POSITION_TYPE_SELL, g_sellZones[i], i, ZoneGlobalIndex(POSITION_TYPE_SELL, i));
      }
+
+   ChartRedraw(0);
   }
 
 color ModeColor(const ENUM_ZONE_MODE mode)
