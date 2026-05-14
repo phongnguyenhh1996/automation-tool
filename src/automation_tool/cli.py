@@ -2430,13 +2430,6 @@ def cmd_all(args: argparse.Namespace) -> None:
         n_rm = clear_zones_directory(zones_dir)
         _log.info("all: cleared zones | slot=%s removed=%s dir=%s", run_slot, n_rm, zones_dir)
         print(f"Đã dừng daemon-plan (nếu có) và xóa zones/: {zones_dir} ({n_rm} file)", flush=True)
-        from automation_tool.images import get_active_main_symbol as _get_sym_neverdie
-        from automation_tool.ea_neverdie_zone_publish import clear_neverdie_before_all
-
-        try:
-            clear_neverdie_before_all(_get_sym_neverdie().strip().upper())
-        except Exception as e:
-            _log.warning("all: ea-neverdie clear (local/Cloudinary) failed: %s", e)
     elif args.no_clear_zones_state:
         _log.info("all: skip clearing zones | --no-clear-zones-state | slot=%s dir=%s", run_slot, zones_dir)
     else:
@@ -2536,7 +2529,6 @@ def cmd_all(args: argparse.Namespace) -> None:
             args.max_images_per_call,
             chart_payloads=payloads,
             on_first_model_text=None,
-            purge_json_attachment_storage=True,
             model=resolved_openai_model(s, getattr(args, "model", None)),
         )
     except Exception as e:
