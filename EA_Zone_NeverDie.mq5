@@ -256,7 +256,11 @@ bool AddZoneIfNotExists(ENUM_POSITION_TYPE side, ENUM_ZONE_MODE mode, double low
          if(g_buyZones[i].low == minPrice && g_buyZones[i].high == maxPrice)
            {
             // JSON chỉ nạp zone ở trạng thái WATCH; TRADE do giá kích hoạt.
-            if(mode == ZONE_OFF) g_buyZones[i].mode = ZONE_OFF;
+            if(mode == ZONE_OFF)
+              {
+               ArrayRemove(g_buyZones, i, 1);
+               return(false);
+              }
             else if(g_buyZones[i].mode != ZONE_TRADE) g_buyZones[i].mode = ZONE_WATCH;
             g_buyZones[i].sl = stopLoss;
             return(false);
@@ -280,7 +284,11 @@ bool AddZoneIfNotExists(ENUM_POSITION_TYPE side, ENUM_ZONE_MODE mode, double low
         {
          if(g_sellZones[i].low == minPrice && g_sellZones[i].high == maxPrice)
            {
-            if(mode == ZONE_OFF) g_sellZones[i].mode = ZONE_OFF;
+            if(mode == ZONE_OFF)
+              {
+               ArrayRemove(g_sellZones, i, 1);
+               return(false);
+              }
             else if(g_sellZones[i].mode != ZONE_TRADE) g_sellZones[i].mode = ZONE_WATCH;
             g_sellZones[i].sl = stopLoss;
             return(false);
@@ -452,12 +460,12 @@ void OnTradeTransaction(const MqlTradeTransaction &trans, const MqlTradeRequest 
    if(dealType == DEAL_TYPE_SELL)
      {
       CloseBasket(POSITION_TYPE_BUY, magic);
-      DeactivateZoneByMagic(POSITION_TYPE_BUY, magic);
+      RemoveZoneByMagic(POSITION_TYPE_BUY, magic);
      }
    else if(dealType == DEAL_TYPE_BUY)
      {
       CloseBasket(POSITION_TYPE_SELL, magic);
-      DeactivateZoneByMagic(POSITION_TYPE_SELL, magic);
+      RemoveZoneByMagic(POSITION_TYPE_SELL, magic);
      }
   }
 
@@ -502,7 +510,7 @@ bool HasOpenPositions(long magic)
    return false;
   }
 
-void DeactivateZoneByMagic(const ENUM_POSITION_TYPE side, const long magic)
+void RemoveZoneByMagic(const ENUM_POSITION_TYPE side, const long magic)
   {
    if(side == POSITION_TYPE_BUY)
      {
@@ -510,7 +518,7 @@ void DeactivateZoneByMagic(const ENUM_POSITION_TYPE side, const long magic)
         {
          if(g_buyZones[i].magic == magic)
            {
-            g_buyZones[i].mode = ZONE_OFF;
+            ArrayRemove(g_buyZones, i, 1);
             return;
            }
         }
@@ -521,7 +529,7 @@ void DeactivateZoneByMagic(const ENUM_POSITION_TYPE side, const long magic)
      {
       if(g_sellZones[i].magic == magic)
         {
-         g_sellZones[i].mode = ZONE_OFF;
+         ArrayRemove(g_sellZones, i, 1);
          return;
         }
      }
@@ -575,7 +583,12 @@ double ZoneActivationDistance(const ENUM_POSITION_TYPE side, const ZoneData &zon
 bool ShouldActivateWatchZone(const ENUM_POSITION_TYPE side, const ZoneData &zone, const double price)
   {
    if(zone.mode != ZONE_WATCH) return(false);
-   return(ZoneActivationDistance(side, zone, price) <= InpZoneActivateBand);
+   return(IsPriceInActivationBand(side, zone, price));
+  }
+
+bool IsPriceInActivationBand(const ENUM_POSITION_TYPE side, const ZoneData &zone, const double price)
+  {
+   return(IsPriceInZone(zone, price) || ZoneActivationDistance(side, zone, price) <= InpZoneActivateBand);
   }
 
 void ActivateSingleWatchZone(const ENUM_POSITION_TYPE side, const int index)
@@ -645,12 +658,12 @@ int GetTradableZoneIndex(ENUM_POSITION_TYPE side, double price)
    if(side == POSITION_TYPE_BUY)
      {
       for(int i = ArraySize(g_buyZones) - 1; i >= 0; i--)
-         if(g_buyZones[i].mode == ZONE_TRADE && IsPriceInZone(g_buyZones[i], price)) return i;
+         if(g_buyZones[i].mode == ZONE_TRADE && IsPriceInActivationBand(side, g_buyZones[i], price)) return i;
      }
    else
      {
       for(int i = ArraySize(g_sellZones) - 1; i >= 0; i--)
-         if(g_sellZones[i].mode == ZONE_TRADE && IsPriceInZone(g_sellZones[i], price)) return i;
+         if(g_sellZones[i].mode == ZONE_TRADE && IsPriceInActivationBand(side, g_sellZones[i], price)) return i;
      }
    return -1;
   }
@@ -666,7 +679,7 @@ void ManageZoneStopsAndWatchers()
       if(g_buyZones[i].sl > 0 && tick.bid <= g_buyZones[i].sl && HasOpenPositions(g_buyZones[i].magic))
         {
          CloseBasket(POSITION_TYPE_BUY, g_buyZones[i].magic);
-         DeactivateZoneByMagic(POSITION_TYPE_BUY, g_buyZones[i].magic);
+         RemoveZoneByMagic(POSITION_TYPE_BUY, g_buyZones[i].magic);
         }
      }
 
@@ -675,7 +688,7 @@ void ManageZoneStopsAndWatchers()
       if(g_sellZones[i].sl > 0 && tick.ask >= g_sellZones[i].sl && HasOpenPositions(g_sellZones[i].magic))
         {
          CloseBasket(POSITION_TYPE_SELL, g_sellZones[i].magic);
-         DeactivateZoneByMagic(POSITION_TYPE_SELL, g_sellZones[i].magic);
+         RemoveZoneByMagic(POSITION_TYPE_SELL, g_sellZones[i].magic);
         }
      }
   }
@@ -688,7 +701,7 @@ void ManageAllZones(const ENUM_POSITION_TYPE side, const bool onFirstTickDca)
    int newestTradableIdx = GetTradableZoneIndex(side, price);
    int totalZones = (side == POSITION_TYPE_BUY) ? ArraySize(g_buyZones) : ArraySize(g_sellZones);
 
-   for(int i = 0; i < totalZones; i++)
+   for(int i = totalZones - 1; i >= 0; i--)
      {
       ZoneData zone = (side == POSITION_TYPE_BUY) ? g_buyZones[i] : g_sellZones[i];
       BasketInfo basket;
@@ -700,7 +713,7 @@ void ManageAllZones(const ENUM_POSITION_TYPE side, const bool onFirstTickDca)
            {
             bool basketClosed = CloseBasket(side, zone.magic);
             if(basketClosed && ShouldDeactivateAfterBasketTakeProfit(side, zone, GetSideClosePrice(side, tick)))
-               DeactivateZoneByMagic(side, zone.magic);
+               RemoveZoneByMagic(side, zone.magic);
            }
          else if(ShouldOpenDca(side, zone, basket, onFirstTickDca))
            {
@@ -763,7 +776,7 @@ bool ShouldOpenInitial(const ENUM_POSITION_TYPE side, const ZoneData &zone, doub
    if(side == POSITION_TYPE_BUY && zone.sl > 0 && price <= zone.sl) return(false);
    if(side == POSITION_TYPE_SELL && zone.sl > 0 && price >= zone.sl) return(false);
 
-   return(IsPriceInZone(zone, price));
+   return(IsPriceInActivationBand(side, zone, price));
   }
 
 bool ShouldOpenDca(const ENUM_POSITION_TYPE side, const ZoneData &zone, const BasketInfo &basket, const bool onFirstTick)

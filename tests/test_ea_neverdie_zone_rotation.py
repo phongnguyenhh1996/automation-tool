@@ -51,19 +51,31 @@ def test_watch_zone_activation_allows_only_one_trade_zone_globally() -> None:
     assert "ActivateSideWatchZones(" not in source
 
 
-def test_zone_turns_off_after_stop_loss_but_not_unconditionally_after_take_profit() -> None:
+def test_zone_is_removed_after_stop_loss_but_not_unconditionally_after_take_profit() -> None:
     source = _source()
     stops_body = _function_body(source, "ManageZoneStopsAndWatchers")
     trade_tx_body = _function_body(source, "OnTradeTransaction")
     manage_body = _function_body(source, "ManageAllZones")
+    remove_body = _function_body(source, "RemoveZoneByMagic")
 
-    assert "DeactivateZoneByMagic" in source
-    assert "DeactivateZoneByMagic(POSITION_TYPE_BUY, g_buyZones[i].magic)" in stops_body
-    assert "DeactivateZoneByMagic(POSITION_TYPE_SELL, g_sellZones[i].magic)" in stops_body
-    assert "DeactivateZoneByMagic(POSITION_TYPE_BUY, magic)" in trade_tx_body
-    assert "DeactivateZoneByMagic(POSITION_TYPE_SELL, magic)" in trade_tx_body
+    assert "RemoveZoneByMagic" in source
+    assert "ArrayRemove(g_buyZones, i, 1)" in remove_body
+    assert "ArrayRemove(g_sellZones, i, 1)" in remove_body
+    assert "RemoveZoneByMagic(POSITION_TYPE_BUY, g_buyZones[i].magic)" in stops_body
+    assert "RemoveZoneByMagic(POSITION_TYPE_SELL, g_sellZones[i].magic)" in stops_body
+    assert "RemoveZoneByMagic(POSITION_TYPE_BUY, magic)" in trade_tx_body
+    assert "RemoveZoneByMagic(POSITION_TYPE_SELL, magic)" in trade_tx_body
     assert "ShouldDeactivateAfterBasketTakeProfit(side, zone, GetSideClosePrice(side, tick))" in manage_body
-    assert "CloseBasket(side, zone.magic);\n            DeactivateZoneByMagic(side, zone.magic);" not in manage_body
+    assert "CloseBasket(side, zone.magic);\n            RemoveZoneByMagic(side, zone.magic);" not in manage_body
+
+
+def test_off_json_removes_matching_zone_instead_of_marking_it_off() -> None:
+    source = _source()
+    add_body = _function_body(source, "AddZoneIfNotExists")
+
+    assert "ArrayRemove(g_buyZones, i, 1)" in add_body
+    assert "ArrayRemove(g_sellZones, i, 1)" in add_body
+    assert "mode = ZONE_OFF" not in add_body
 
 
 def test_take_profit_deactivates_only_outside_zone_or_after_stop_loss() -> None:
@@ -94,6 +106,16 @@ def test_open_basket_dca_continues_even_after_zone_rotation() -> None:
 
     assert "ShouldOpenDca(side, zone, basket, onFirstTickDca)" in manage_body
     assert "zone.mode != ZONE_TRADE" not in should_dca_body
+
+
+def test_initial_order_opens_as_soon_as_trade_zone_is_within_activation_band() -> None:
+    source = _source()
+    tradable_body = _function_body(source, "GetTradableZoneIndex")
+    initial_body = _function_body(source, "ShouldOpenInitial")
+
+    assert "IsPriceInActivationBand(side, g_buyZones[i], price)" in tradable_body
+    assert "IsPriceInActivationBand(side, g_sellZones[i], price)" in tradable_body
+    assert "return(IsPriceInActivationBand(side, zone, price));" in initial_body
 
 
 def test_ea_draws_two_zone_lines_with_zone_color() -> None:
