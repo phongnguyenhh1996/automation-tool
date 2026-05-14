@@ -450,10 +450,12 @@ void OnTradeTransaction(const MqlTradeTransaction &trans, const MqlTradeRequest 
    if(dealType == DEAL_TYPE_SELL)
      {
       CloseBasket(POSITION_TYPE_BUY, magic);
+      DeactivateZoneByMagic(POSITION_TYPE_BUY, magic);
      }
    else if(dealType == DEAL_TYPE_BUY)
      {
       CloseBasket(POSITION_TYPE_SELL, magic);
+      DeactivateZoneByMagic(POSITION_TYPE_SELL, magic);
      }
   }
 
@@ -496,6 +498,31 @@ bool HasOpenPositions(long magic)
          return true;
      }
    return false;
+  }
+
+void DeactivateZoneByMagic(const ENUM_POSITION_TYPE side, const long magic)
+  {
+   if(side == POSITION_TYPE_BUY)
+     {
+      for(int i = 0; i < ArraySize(g_buyZones); i++)
+        {
+         if(g_buyZones[i].magic == magic)
+           {
+            g_buyZones[i].mode = ZONE_OFF;
+            return;
+           }
+        }
+      return;
+     }
+
+   for(int i = 0; i < ArraySize(g_sellZones); i++)
+     {
+      if(g_sellZones[i].magic == magic)
+        {
+         g_sellZones[i].mode = ZONE_OFF;
+         return;
+        }
+     }
   }
 
 void CleanupExpiredZones()
@@ -637,6 +664,7 @@ void ManageZoneStopsAndWatchers()
       if(g_buyZones[i].sl > 0 && tick.bid <= g_buyZones[i].sl && HasOpenPositions(g_buyZones[i].magic))
         {
          CloseBasket(POSITION_TYPE_BUY, g_buyZones[i].magic);
+         DeactivateZoneByMagic(POSITION_TYPE_BUY, g_buyZones[i].magic);
         }
      }
 
@@ -645,6 +673,7 @@ void ManageZoneStopsAndWatchers()
       if(g_sellZones[i].sl > 0 && tick.ask >= g_sellZones[i].sl && HasOpenPositions(g_sellZones[i].magic))
         {
          CloseBasket(POSITION_TYPE_SELL, g_sellZones[i].magic);
+         DeactivateZoneByMagic(POSITION_TYPE_SELL, g_sellZones[i].magic);
         }
      }
   }
@@ -665,7 +694,11 @@ void ManageAllZones(const ENUM_POSITION_TYPE side, const bool onFirstTickDca)
 
       if(basket.count > 0)
         {
-         if(ShouldCloseBasketByTakeProfit(side, basket)) CloseBasket(side, zone.magic);
+         if(ShouldCloseBasketByTakeProfit(side, basket))
+           {
+            CloseBasket(side, zone.magic);
+            DeactivateZoneByMagic(side, zone.magic);
+           }
          else if(ShouldOpenDca(side, zone, basket, onFirstTickDca))
            {
             double nextVolume = NormalizeVolume(InpLotSize * MathPow(InpMultiplier, basket.count));

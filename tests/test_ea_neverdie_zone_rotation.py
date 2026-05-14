@@ -46,3 +46,17 @@ def test_watch_zone_activation_allows_only_one_trade_zone_globally() -> None:
     assert "g_sellZones[i].mode = ZONE_WATCH" in activate_body
     assert "mode = ZONE_TRADE" in single_activate_body
     assert "ActivateSideWatchZones(" not in source
+
+
+def test_zone_turns_off_after_stop_loss_or_take_profit() -> None:
+    source = _source()
+    stops_body = _function_body(source, "ManageZoneStopsAndWatchers")
+    trade_tx_body = _function_body(source, "OnTradeTransaction")
+    manage_body = _function_body(source, "ManageAllZones")
+
+    assert "DeactivateZoneByMagic" in source
+    assert "DeactivateZoneByMagic(POSITION_TYPE_BUY, g_buyZones[i].magic)" in stops_body
+    assert "DeactivateZoneByMagic(POSITION_TYPE_SELL, g_sellZones[i].magic)" in stops_body
+    assert "DeactivateZoneByMagic(POSITION_TYPE_BUY, magic)" in trade_tx_body
+    assert "DeactivateZoneByMagic(POSITION_TYPE_SELL, magic)" in trade_tx_body
+    assert "DeactivateZoneByMagic(side, zone.magic)" in manage_body

@@ -171,6 +171,12 @@ def _is_scalp_zone(zone: Zone) -> bool:
     return is_scalp_label(zone.label or "")
 
 
+def _source_blocks_scalp_entry(zone: Zone) -> bool:
+    """``all`` / ``update`` scalp zones are informational only; only ``update-scalp`` may trade."""
+    source = (getattr(zone, "source", "") or "").strip().lower()
+    return _is_scalp_zone(zone) and source in {"all", "update"}
+
+
 def _zone_touch_coinmap_main_json_path(charts_dir: Path, zone: Zone) -> tuple[Optional[Path], str]:
     """Scalp: JSON M1; plan_chinh / plan_phu: M5. Trả về (path, suffix log như ``1m`` / ``5m``)."""
     if _is_scalp_zone(zone):
@@ -2352,6 +2358,16 @@ def _auto_entry_job(
             return
         if z0.mt5_ticket is not None and int(z0.mt5_ticket or 0) > 0:
             return
+        if _source_blocks_scalp_entry(z0):
+            z0.status = "cham"
+            z0.auto_entry_retry_after = ""
+            z0.auto_entry_mt5_failed = False
+            _state_write(params, st0)
+            _send_log(
+                settings,
+                f"[auto-entry] blocked_by_source | zone_id={zone_id} label={z0.label} source={z0.source}",
+            )
+            return
         if not z0.trade_line:
             z0.status = "cham"
             z0.auto_entry_retry_after = ""
@@ -2637,6 +2653,18 @@ def _zone_touch_job(
             _send_log(settings, f"[zone-touch] stop: zone already terminal ({zc.status}) | zone_id={zone_id}")
             return
         zone = zc
+
+        if _source_blocks_scalp_entry(zone):
+            zone.status = "cham"
+            zone.retry_at = ""
+            zone.auto_entry_retry_after = ""
+            zone.auto_entry_mt5_failed = False
+            _state_write(params, st_check)
+            _send_log(
+                settings,
+                f"[zone-touch] blocked_by_source | zone_id={zone_id} label={zone.label} source={zone.source}",
+            )
+            return
 
         if _settings_skip_intraday_alert_openai(settings):
             _send_log(
@@ -3478,6 +3506,8 @@ def _daemon_plan_main_loop(
                     for z in st_auto.zones:
                         if z.status not in ("vung_cho", "cham"):
                             continue
+                        if _source_blocks_scalp_entry(z):
+                            continue
                         if z.mt5_ticket is not None and int(z.mt5_ticket or 0) > 0:
                             continue
                         if not z.trade_line:
@@ -3505,6 +3535,8 @@ def _daemon_plan_main_loop(
                 if st_retry is not None:
                     for z in st_retry.zones:
                         if z.status != "cham":
+                            continue
+                        if _source_blocks_scalp_entry(z):
                             continue
                         if not _is_retry_due(getattr(z, "retry_at", "")):
                             continue
@@ -3544,6 +3576,17 @@ def _daemon_plan_main_loop(
                         break
                     z = next((zz for zz in st_current.zones if zz.id == mz.id), None)
                     if z is None or z.status != "vung_cho":
+                        continue
+                    if _source_blocks_scalp_entry(z):
+                        z.status = "cham"
+                        z.retry_at = ""
+                        z.auto_entry_retry_after = ""
+                        z.auto_entry_mt5_failed = False
+                        _state_write(params, st_current)
+                        _send_log(
+                            settings,
+                            f"[zone-touch] blocked_by_source | zone_id={z.id} label={z.label} source={z.source}",
+                        )
                         continue
                     _mark_initial_zone_touch_dispatch(
                         st_current,
