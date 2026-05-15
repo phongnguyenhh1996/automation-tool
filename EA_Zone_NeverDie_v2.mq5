@@ -1,5 +1,5 @@
 #property strict
-#property description "EA Zone NeverDie MT5 v2"
+#property description "EA Zone NeverDie MT5 v2.1"
 
 #include <Trade/Trade.mqh>
 
@@ -65,7 +65,7 @@ input int            InpZonesPollSeconds       = 300;
 input string         InpZonesBearer            = "";
 input double         InpZonesSlBuffer          = 10.0;
 
-const string EA_VERSION = "2.0";
+const string EA_VERSION = "2.1";
 const int JSON_FETCH_WINDOW_MINUTES = 30;
 const int JSON_FETCH_SLOT_COUNT = 3;
 const int PANEL_LINE_COUNT = 24;
@@ -456,8 +456,8 @@ void RemoveTouchedTradeZone()
       ZoneData zone = g_zones[i];
       bool touchesLow = tick.ask <= zone.low;
       bool touchesHigh = tick.bid >= zone.high;
-      bool touchesBuySl = (zone.sl > 0.0 && tick.bid <= zone.sl);
-      bool touchesSellSl = (zone.sl > 0.0 && tick.ask >= zone.sl);
+      bool touchesBuySl = (zone.sl > 0.0 && tick.bid <= zone.sl - InpZonesSlBuffer);
+      bool touchesSellSl = (zone.sl > 0.0 && tick.ask >= zone.sl + InpZonesSlBuffer);
 
       if(zone.side == POSITION_TYPE_SELL && (touchesLow || touchesSellSl))
          RemoveZoneAt(i);

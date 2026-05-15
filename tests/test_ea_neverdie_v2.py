@@ -11,7 +11,7 @@ def _source() -> str:
 def test_v2_ea_file_declares_required_inputs_and_versioned_title() -> None:
     source = _source()
 
-    assert '#property description "EA Zone NeverDie MT5 v2"' in source
+    assert '#property description "EA Zone NeverDie MT5 v2.1"' in source
     assert 'input string         InpZonesJsonUrl' in source
     assert 'input int            InpZonesPollSeconds' in source
     assert 'input double         InpCentTakeProfit' in source
@@ -46,6 +46,8 @@ def test_v2_trade_zone_removal_and_campaign_retention() -> None:
     assert 'RemoveTouchedTradeZone();' in source
     assert 'touchesLow = tick.ask <= zone.low' in source
     assert 'touchesHigh = tick.bid >= zone.high' in source
+    assert 'touchesBuySl = (zone.sl > 0.0 && tick.bid <= zone.sl - InpZonesSlBuffer)' in source
+    assert 'touchesSellSl = (zone.sl > 0.0 && tick.ask >= zone.sl + InpZonesSlBuffer)' in source
     assert 'KeepCampaignForZone(zone);' in source
     assert 'ManageCampaigns(onFirstTickOfNewDcaBar);' in source
 
