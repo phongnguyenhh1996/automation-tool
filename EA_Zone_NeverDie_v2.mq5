@@ -434,6 +434,38 @@ bool HasOpenPositions(const long magic)
    return(false);
   }
 
+double CampaignZoneSlFromPosition(const ENUM_POSITION_TYPE side, const double positionSl)
+  {
+   if(positionSl <= 0.0) return(0.0);
+   if(side == POSITION_TYPE_BUY)
+      return(NormalizeDouble(positionSl + InpZonesSlBuffer, _Digits));
+   return(NormalizeDouble(MathMax(positionSl - InpZonesSlBuffer, 0.0), _Digits));
+  }
+
+void RestoreCampaignsFromOpenPositions()
+  {
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0 || !PositionSelectByTicket(ticket)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+
+      long magic = PositionGetInteger(POSITION_MAGIC);
+      if(!IsOurMagic(magic)) continue;
+      if(FindCampaignIndex(magic) >= 0) continue;
+
+      int size = ArraySize(g_campaigns);
+      ArrayResize(g_campaigns, size + 1);
+      ENUM_POSITION_TYPE side = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      g_campaigns[size].side = side;
+      g_campaigns[size].low = 0.0;
+      g_campaigns[size].high = 0.0;
+      g_campaigns[size].sl = CampaignZoneSlFromPosition(side, PositionGetDouble(POSITION_SL));
+      g_campaigns[size].magic = magic;
+      g_campaigns[size].active = true;
+     }
+  }
+
 void RemoveCurrentTradeZoneBeforeActivation()
   {
    for(int i = ArraySize(g_zones) - 1; i >= 0; i--)
@@ -999,6 +1031,7 @@ int OnInit()
    g_trade.SetTypeFillingBySymbol(_Symbol);
    if(RemoteJsonEnabled()) EventSetTimer(InpZonesPollSeconds);
    FetchZonesOnInit();
+   RestoreCampaignsFromOpenPositions();
    if(InpShowPanel) CreatePanel();
    g_dcaBarOpenSeen = iTime(_Symbol, DcaTimeframe(), 0);
    UpdatePanel();
@@ -1025,6 +1058,7 @@ void OnTick()
       return;
      }
 
+   RestoreCampaignsFromOpenPositions();
    CleanupCampaignsWithoutPositions();
    ActivateNearestWatchZone();
    RemoveTouchedTradeZone();

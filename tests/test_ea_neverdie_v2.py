@@ -52,6 +52,8 @@ def test_v2_trade_zone_removal_and_campaign_retention() -> None:
     assert 'touchesBuySl = (zone.sl > 0.0 && tick.bid <= zone.sl - InpZonesSlBuffer)' in source
     assert 'touchesSellSl = (zone.sl > 0.0 && tick.ask >= zone.sl + InpZonesSlBuffer)' in source
     assert 'KeepCampaignForZone(zone);' in source
+    assert 'RestoreCampaignsFromOpenPositions();' in source
+    assert 'CampaignZoneSlFromPosition(side, PositionGetDouble(POSITION_SL))' in source
     assert 'ManageCampaigns(onFirstTickOfNewDcaBar);' in source
 
 
