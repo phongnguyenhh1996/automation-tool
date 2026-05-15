@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from automation_tool.state_files import MORNING_FULL_ANALYSIS_FILENAME
 
@@ -125,6 +128,67 @@ def test_run_analysis_merged_json_inline_no_cloudinary_purge(tmp_path: Path) -> 
     content = client.responses.create.call_args.kwargs["input"][0]["content"]
     assert content[2]["type"] == "input_text"
     assert '"frames"' in content[2]["text"] or "{}" in content[2]["text"]
+
+
+def test_run_analysis_logs_openai_send_and_receive(caplog, tmp_path: Path) -> None:
+    j = tmp_path / "stamp_coinmap_XAUUSD_merged.json"
+    j.write_text('{"frames":{}}', encoding="utf-8")
+    client = MagicMock()
+    client.responses.create.return_value = MagicMock(output_text="ok", id="resp-1")
+
+    caplog.set_level(logging.INFO, logger="automation_tool.openai_prompt_flow")
+    with patch(
+        "automation_tool.openai_prompt_flow.OpenAI",
+        return_value=client,
+    ):
+        run_analysis_responses_flow(
+            api_key="sk-test",
+            prompt_id="prompt",
+            prompt_version=None,
+            charts_dir=tmp_path,
+            analysis_prompt="p",
+            max_images_per_call=10,
+            vector_store_ids=[],
+            store=True,
+            include=[],
+            chart_payloads=[("json", j)],
+        )
+
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert "OpenAI: đã gửi data lên OpenAI" in messages
+    assert "OpenAI: đã nhận data từ OpenAI" in messages
+    assert "response_id=resp-1" in messages
+    assert "json=1" in messages
+
+
+def test_run_analysis_logs_openai_errors(caplog, tmp_path: Path) -> None:
+    j = tmp_path / "stamp_coinmap_XAUUSD_merged.json"
+    j.write_text('{"frames":{}}', encoding="utf-8")
+    client = MagicMock()
+    client.responses.create.side_effect = RuntimeError("boom")
+
+    caplog.set_level(logging.INFO, logger="automation_tool.openai_prompt_flow")
+    with patch(
+        "automation_tool.openai_prompt_flow.OpenAI",
+        return_value=client,
+    ), pytest.raises(RuntimeError, match="boom"):
+        run_analysis_responses_flow(
+            api_key="sk-test",
+            prompt_id="prompt",
+            prompt_version=None,
+            charts_dir=tmp_path,
+            analysis_prompt="p",
+            max_images_per_call=10,
+            vector_store_ids=[],
+            store=True,
+            include=[],
+            chart_payloads=[("json", j)],
+        )
+
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert "OpenAI: đã gửi data lên OpenAI" in messages
+    assert "OpenAI: lỗi khi gửi/nhận data từ OpenAI" in messages
+    assert "json=1" in messages
 
 
 def test_purge_json_folder_calls_cloudinary_api() -> None:

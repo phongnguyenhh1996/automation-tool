@@ -275,6 +275,86 @@ def _merge_model(common: dict[str, Any], model: str | None) -> None:
         common["model"] = str(model).strip()
 
 
+def _payload_counts(payloads: Sequence[ChartOpenAIPayload]) -> tuple[int, int, int]:
+    json_count = sum(1 for kind, _ in payloads if kind == "json")
+    image_count = sum(1 for kind, _ in payloads if kind == "image")
+    image_url_count = sum(1 for kind, _ in payloads if kind == "image_url")
+    return json_count, image_count, image_url_count
+
+
+def _log_openai_send(
+    *,
+    flow: str,
+    batch_index: int,
+    total_batches: int,
+    payloads: Sequence[ChartOpenAIPayload],
+    prompt_id: str,
+    model: str | None,
+    chained: bool,
+) -> None:
+    json_count, image_count, image_url_count = _payload_counts(payloads)
+    _log.info(
+        (
+            "OpenAI: đã gửi data lên OpenAI | flow=%s batch=%d/%d "
+            "payloads=%d json=%d image=%d image_url=%d prompt_id=%s model=%s chained=%s"
+        ),
+        flow,
+        batch_index,
+        total_batches,
+        len(payloads),
+        json_count,
+        image_count,
+        image_url_count,
+        prompt_id,
+        (model or "").strip() or "prompt-default",
+        chained,
+    )
+
+
+def _log_openai_receive(
+    *,
+    flow: str,
+    batch_index: int,
+    total_batches: int,
+    response_id: str,
+    output_text: str,
+) -> None:
+    _log.info(
+        (
+            "OpenAI: đã nhận data từ OpenAI | flow=%s batch=%d/%d "
+            "response_id=%s output_chars=%d"
+        ),
+        flow,
+        batch_index,
+        total_batches,
+        response_id,
+        len(output_text or ""),
+    )
+
+
+def _log_openai_error(
+    *,
+    flow: str,
+    batch_index: int,
+    total_batches: int,
+    payloads: Sequence[ChartOpenAIPayload],
+) -> None:
+    json_count, image_count, image_url_count = _payload_counts(payloads)
+    _log.exception(
+        (
+            "OpenAI: lỗi khi gửi/nhận data từ OpenAI | flow=%s batch=%d/%d "
+            "payloads=%d json=%d image=%d image_url=%d"
+        ),
+        flow,
+        batch_index,
+        total_batches,
+        len(payloads),
+        json_count,
+        image_count,
+        image_url_count,
+    )
+
+
 def run_analysis_responses_flow(
     *,
     api_key: str,
@@ -347,8 +427,34 @@ def run_analysis_responses_flow(
         payloads = ordered_chart_openai_payloads(charts_dir)
 
     if not payloads:
-        r = client.responses.create(**common, input=analysis_prompt.strip())
+        empty_payloads: list[ChartOpenAIPayload] = []
+        _log_openai_send(
+            flow="analysis",
+            batch_index=1,
+            total_batches=1,
+            payloads=empty_payloads,
+            prompt_id=prompt_id,
+            model=model,
+            chained=False,
+        )
+        try:
+            r = client.responses.create(**common, input=analysis_prompt.strip())
+        except Exception:
+            _log_openai_error(
+                flow="analysis",
+                batch_index=1,
+                total_batches=1,
+                payloads=empty_payloads,
+            )
+            raise
         out = (r.output_text or "").strip()
+        _log_openai_receive(
+            flow="analysis",
+            batch_index=1,
+            total_batches=1,
+            response_id=r.id,
+            output_text=out,
+        )
         if on_first_model_text is not None and out:
             on_first_model_text(out)
         return PromptTwoStepResult(first_text="", after_charts=out, final_response_id=r.id)
@@ -368,24 +474,49 @@ def run_analysis_responses_flow(
                 f"{analysis_prompt}\n\n"
                 f"(Batch {bi + 1} of {total}: {n_img} image(s), {n_json} Coinmap JSON block(s).)"
             )
-        content = _build_mixed_chart_user_content(
-            p_text, batch, max_json_chars=mx_json
-        )
-        kwargs: dict[str, Any] = {
-            **common,
-            "input": [
-                {
-                    "type": "message",
-                    "role": "user",
-                    "content": content,
-                }
-            ],
-        }
-        if prev_id is not None:
-            kwargs["previous_response_id"] = prev_id
-        r = client.responses.create(**kwargs)
+        try:
+            content = _build_mixed_chart_user_content(
+                p_text, batch, max_json_chars=mx_json
+            )
+            kwargs: dict[str, Any] = {
+                **common,
+                "input": [
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": content,
+                    }
+                ],
+            }
+            if prev_id is not None:
+                kwargs["previous_response_id"] = prev_id
+            _log_openai_send(
+                flow="analysis",
+                batch_index=bi + 1,
+                total_batches=total,
+                payloads=batch,
+                prompt_id=prompt_id,
+                model=model,
+                chained=prev_id is not None,
+            )
+            r = client.responses.create(**kwargs)
+        except Exception:
+            _log_openai_error(
+                flow="analysis",
+                batch_index=bi + 1,
+                total_batches=total,
+                payloads=batch,
+            )
+            raise
         prev_id = r.id
         chunk_text = (r.output_text or "").strip()
+        _log_openai_receive(
+            flow="analysis",
+            batch_index=bi + 1,
+            total_batches=total,
+            response_id=prev_id,
+            output_text=chunk_text,
+        )
         assistant_parts.append(chunk_text)
         if bi == 0 and on_first_model_text is not None and chunk_text:
             on_first_model_text(chunk_text)
