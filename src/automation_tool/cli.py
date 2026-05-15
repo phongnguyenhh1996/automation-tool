@@ -357,6 +357,25 @@ def _parser() -> argparse.ArgumentParser:
     )
     tcj.set_defaults(func=cmd_test_cloudinary_json)
 
+    nej = sub.add_parser(
+        "upload-ea-neverdie-json",
+        help="Upload riêng data/<SYM>/ea_zone_neverdie.json lên Cloudinary cho EA Zone NeverDie.",
+    )
+    nej.add_argument(
+        "--main-symbol",
+        default=None,
+        metavar="SYM",
+        help="Symbol cần upload (mặc định: active symbol; ví dụ XAUUSD).",
+    )
+    nej.add_argument(
+        "--file",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="File JSON cần upload (mặc định: data/<SYM>/ea_zone_neverdie.json).",
+    )
+    nej.set_defaults(func=cmd_upload_ea_neverdie_json)
+
     cm = sub.add_parser(
         "capture-many",
         help="Capture Coinmap + TradingView per symbol (single browser session; same flow as capture)",
@@ -2052,6 +2071,55 @@ def cmd_test_cloudinary_json(args: argparse.Namespace) -> None:
     }
     print("--- openai input preview (JSON) ---", flush=True)
     print(json.dumps(openai_preview, ensure_ascii=False, indent=2), flush=True)
+
+
+def cmd_upload_ea_neverdie_json(args: argparse.Namespace) -> None:
+    """Upload the existing local EA NeverDie JSON without rebuilding zones."""
+    from automation_tool.ea_neverdie_zone_publish import (
+        default_local_path,
+        neverdie_cloud_folder,
+        neverdie_public_stem,
+        upload_neverdie_json,
+    )
+    from automation_tool.images import (
+        get_active_main_symbol,
+        normalize_main_chart_symbol,
+        set_active_main_symbol_file,
+    )
+
+    if getattr(args, "main_symbol", None):
+        set_active_main_symbol_file(args.main_symbol)
+        sym = get_active_main_symbol().strip().upper()
+    elif getattr(args, "file", None) is not None:
+        try:
+            sym = normalize_main_chart_symbol(Path(args.file).expanduser().parent.name)
+        except ValueError:
+            sym = get_active_main_symbol().strip().upper()
+    else:
+        sym = get_active_main_symbol().strip().upper()
+    local_path = (args.file or default_local_path(sym)).expanduser()
+    if not local_path.is_file():
+        raise SystemExit(f"EA NeverDie JSON not found: {local_path}")
+
+    body = local_path.read_bytes()
+    try:
+        json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as e:
+        raise SystemExit(f"EA NeverDie JSON invalid: {local_path} ({e})") from e
+
+    url = upload_neverdie_json(body, sym)
+    cloud = (os.getenv("CLOUDINARY_CLOUD_NAME") or "").strip()
+    print(f"EA NeverDie JSON source: {local_path}", flush=True)
+    if cloud:
+        versionless = (
+            f"https://res.cloudinary.com/{cloud}/raw/upload/"
+            f"{neverdie_cloud_folder()}/{neverdie_public_stem(sym)}"
+        )
+        print(f"EA NeverDie JSON (Cloudinary hint): {versionless}", flush=True)
+    if url:
+        print(f"EA NeverDie JSON (secure_url): {url}", flush=True)
+    else:
+        print("EA NeverDie JSON upload skipped (Cloudinary not configured or disabled).", flush=True)
 
 
 def cmd_analyze(args: argparse.Namespace) -> None:

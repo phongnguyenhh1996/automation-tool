@@ -1,5 +1,5 @@
 #property strict
-#property description "EA Zone NeverDie MT5 v2.2"
+#property description "EA Zone NeverDie MT5 v2.3"
 
 #include <Trade/Trade.mqh>
 
@@ -55,6 +55,7 @@ input long           InpMagicNumber            = 20250215;
 input double         InpCentTakeProfit         = 10.0;
 input ENUM_ND_DCA_TF InpDcaGridTimeframe       = ND_DCA_M15;
 input int            InpDcaClosedBarsRequired  = 1;
+input int            InpDcaPrevOrderDistance   = 0;
 input double         InpZoneActivateBand       = 3.0;
 
 input group "=== DISPLAY ==="
@@ -66,7 +67,7 @@ input int            InpZonesPollSeconds       = 300;
 input string         InpZonesBearer            = "";
 input double         InpZonesSlBuffer          = 10.0;
 
-const string EA_VERSION = "2.2";
+const string EA_VERSION = "2.3";
 const int JSON_FETCH_WINDOW_MINUTES = 30;
 const int JSON_FETCH_SLOT_COUNT = 3;
 const int PANEL_LINE_COUNT = 24;
@@ -101,6 +102,7 @@ bool ValidateInputs()
    if(InpMaxGridLevels < 1) return(false);
    if(InpCentTakeProfit <= 0.0) return(false);
    if(InpDcaClosedBarsRequired < 1) return(false);
+   if(InpDcaPrevOrderDistance < 0) return(false);
    if(InpZoneActivateBand < 0.0) return(false);
    if(InpZonesPollSeconds < 0) return(false);
    return(true);
@@ -643,23 +645,35 @@ bool CloseCampaign(const CampaignData &campaign)
    return(allClosed);
   }
 
+bool DcaPrevOrderDistanceReached(const double distance)
+  {
+   if(InpDcaPrevOrderDistance <= 0) return(false);
+   return(distance >= InpDcaPrevOrderDistance);
+  }
+
 bool ShouldOpenDca(const CampaignData &campaign, const BasketInfo &basket, const bool onFirstTick)
   {
-   if(!onFirstTick) return(false);
    if(basket.count <= 0 || basket.count >= InpMaxGridLevels) return(false);
    if(basket.floatingProfit >= 0.0) return(false);
-
-   int shiftSinceOpen = iBarShift(_Symbol, DcaTimeframe(), basket.lastOpenTime, false);
-   if(shiftSinceOpen < InpDcaClosedBarsRequired) return(false);
 
    MqlTick tick;
    if(!SymbolInfoTick(_Symbol, tick)) return(false);
    double price = OpenPriceForSide(campaign.side, tick);
    double distance = MathAbs(price - basket.lastOpenPrice) / _Point;
 
-   if(distance < InpGridStep) return(false);
    if(campaign.side == POSITION_TYPE_BUY && price >= basket.lastOpenPrice) return(false);
    if(campaign.side == POSITION_TYPE_SELL && price <= basket.lastOpenPrice) return(false);
+
+   bool prevOrderDistanceReached = DcaPrevOrderDistanceReached(distance);
+   if(!prevOrderDistanceReached)
+     {
+      if(distance < InpGridStep) return(false);
+      if(!onFirstTick) return(false);
+
+      int shiftSinceOpen = iBarShift(_Symbol, DcaTimeframe(), basket.lastOpenTime, false);
+      if(shiftSinceOpen < InpDcaClosedBarsRequired) return(false);
+     }
+
    return(true);
   }
 

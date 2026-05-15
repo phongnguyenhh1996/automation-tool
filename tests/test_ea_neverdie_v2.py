@@ -11,11 +11,12 @@ def _source() -> str:
 def test_v2_ea_file_declares_required_inputs_and_versioned_title() -> None:
     source = _source()
 
-    assert '#property description "EA Zone NeverDie MT5 v2.2"' in source
+    assert '#property description "EA Zone NeverDie MT5 v2.3"' in source
     assert 'input string         InpZonesJsonUrl' in source
     assert 'input int            InpZonesPollSeconds' in source
     assert 'input double         InpCentTakeProfit' in source
     assert 'input double         InpZoneActivateBand' in source
+    assert 'input int            InpDcaPrevOrderDistance' in source
     assert 'EA Zone NeverDie MT5 v.' in source
 
 
@@ -61,6 +62,8 @@ def test_v2_orders_use_money_tp_dca_and_side_wide_sl() -> None:
     assert 'if(TotalOpenEaOrders() > 0) return;' in source
     assert 'basket.floatingProfit >= 0.0' in source
     assert 'distance < InpGridStep' in source
+    assert 'DcaPrevOrderDistanceReached(distance)' in source
+    assert 'if(!prevOrderDistanceReached)' in source
     assert 'MathPow(InpMultiplier, basket.count)' in source
     assert 'HighestSellStopLoss() + InpZonesSlBuffer' in source
     assert 'LowestBuyStopLoss() - InpZonesSlBuffer' in source
