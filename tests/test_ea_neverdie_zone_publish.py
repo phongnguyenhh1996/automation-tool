@@ -63,6 +63,7 @@ def test_plan_chinh_overwrites_plan_phu_same_side_buy() -> None:
     assert payload["buy"]["low"] == 2700.0
     assert payload["buy"]["high"] == 2730.0
     assert payload["buy"]["sl"] == 2690.0
+    assert payload["buy"]["label"] == "plan_chinh__sang"
     assert payload["sell"]["mode"] == "off"
 
 
@@ -87,6 +88,7 @@ def test_plan_phu_sell_plan_chinh_buy() -> None:
     assert payload["sell"]["mode"] == "trade"
     assert payload["sell"]["low"] == 2680.0
     assert payload["sell"]["high"] == 2660.0
+    assert payload["sell"]["label"] == "plan_phu__sang"
 
 
 def test_slot_filter_ignores_other_session_shard() -> None:
@@ -110,6 +112,7 @@ def test_slot_filter_ignores_other_session_shard() -> None:
     )
     assert payload["buy"]["low"] == 2650.0
     assert payload["buy"]["high"] == 2660.0
+    assert payload["buy"]["label"] == "plan_phu__sang"
 
 
 def test_market_entry_uses_midpoint_sl_tp1() -> None:

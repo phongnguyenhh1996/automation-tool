@@ -11,7 +11,7 @@ def _source() -> str:
 def test_v2_ea_file_declares_required_inputs_and_versioned_title() -> None:
     source = _source()
 
-    assert '#property description "EA Zone NeverDie MT5 v2.1"' in source
+    assert '#property description "EA Zone NeverDie MT5 v2.2"' in source
     assert 'input string         InpZonesJsonUrl' in source
     assert 'input int            InpZonesPollSeconds' in source
     assert 'input double         InpCentTakeProfit' in source
@@ -22,8 +22,10 @@ def test_v2_ea_file_declares_required_inputs_and_versioned_title() -> None:
 def test_v2_json_loads_new_zones_as_watch_and_keeps_poll_slots() -> None:
     source = _source()
 
-    assert 'LoadWatchZone(POSITION_TYPE_BUY' in source
-    assert 'LoadWatchZone(POSITION_TYPE_SELL' in source
+    assert 'string label;' in source
+    assert 'JsonString(objectText, "label")' in source
+    assert 'LoadWatchZone(POSITION_TYPE_BUY, low, high, sl, label)' in source
+    assert 'LoadWatchZone(POSITION_TYPE_SELL, low, high, sl, label)' in source
     assert 'zone.status = ZONE_STATUS_WATCH;' in source
     assert 'return(2 * 60 + 50);' in source
     assert 'return(7 * 60 + 45);' in source
@@ -72,3 +74,5 @@ def test_v2_magic_is_side_aware_and_panel_shows_today_summary() -> None:
     assert 'TodayClosedProfit()' in source
     assert 'TodayClosedOrderCount()' in source
     assert 'FindNearestWatchZoneForDisplay' in source
+    assert '"Label: " + ZoneLabelText(zone)' in source
+    assert '"SL: " + ZoneSlText(zone)' in source

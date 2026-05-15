@@ -20,7 +20,7 @@ from cloudinary.exceptions import Error as CloudinaryError
 from automation_tool.config import symbol_data_dir
 from automation_tool.mt5_openai_parse import ParsedTrade, parse_trade_line
 from automation_tool.state_files import _atomic_write_json
-from automation_tool.zones_paths import SessionSlot, session_slot_now_hcm
+from automation_tool.zones_paths import SessionSlot, session_slot_now_hcm, zone_id_for_shard
 from automation_tool.zones_state import Zone, ZonesState, read_manifest_last_write_slot, read_zones_state
 
 _log = logging.getLogger(__name__)
@@ -93,11 +93,11 @@ def _side_bucket(side: str) -> Optional[Literal["buy", "sell"]]:
 
 
 def _off_side() -> dict[str, Any]:
-    return {"mode": "off", "low": 0.0, "high": 0.0, "sl": 0.0}
+    return {"mode": "off", "low": 0.0, "high": 0.0, "sl": 0.0, "label": ""}
 
 
-def _trade_side(low: float, high: float, sl: float) -> dict[str, Any]:
-    return {"mode": "trade", "low": float(low), "high": float(high), "sl": float(sl)}
+def _trade_side(low: float, high: float, sl: float, label: str) -> dict[str, Any]:
+    return {"mode": "trade", "low": float(low), "high": float(high), "sl": float(sl), "label": label}
 
 
 def _resolve_slot(zones_dir: Path) -> SessionSlot:
@@ -161,7 +161,8 @@ def build_neverdie_payload(
         low = entry_low_from_parsed(parsed)
         high = target_high_from_parsed(parsed)
         sl = float(parsed.sl)
-        block = _trade_side(low, high, sl)
+        zone_label = (z.id or "").strip() or zone_id_for_shard(lab, slot)
+        block = _trade_side(low, high, sl, zone_label)
         if bucket == "buy":
             buy = block
         else:

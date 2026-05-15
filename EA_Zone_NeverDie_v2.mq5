@@ -1,5 +1,5 @@
 #property strict
-#property description "EA Zone NeverDie MT5 v2.1"
+#property description "EA Zone NeverDie MT5 v2.2"
 
 #include <Trade/Trade.mqh>
 
@@ -22,6 +22,7 @@ struct ZoneData
    double             low;
    double             high;
    double             sl;
+   string             label;
    long               magic;
    datetime           createdAt;
   };
@@ -65,7 +66,7 @@ input int            InpZonesPollSeconds       = 300;
 input string         InpZonesBearer            = "";
 input double         InpZonesSlBuffer          = 10.0;
 
-const string EA_VERSION = "2.1";
+const string EA_VERSION = "2.2";
 const int JSON_FETCH_WINDOW_MINUTES = 30;
 const int JSON_FETCH_SLOT_COUNT = 3;
 const int PANEL_LINE_COUNT = 24;
@@ -201,13 +202,47 @@ double JsonNumber(const string objectText, const string key)
    return(StringToDouble(StringSubstr(objectText, pos)));
   }
 
-bool ParseSideZone(const string json, const string key, double &low, double &high, double &sl)
+string JsonString(const string objectText, const string key)
+  {
+   string needle = "\"" + key + "\"";
+   int pos = StringFind(objectText, needle);
+   if(pos < 0) return("");
+   pos += StringLen(needle);
+   while(pos < StringLen(objectText))
+     {
+      ushort ch = StringGetCharacter(objectText, pos);
+      if(ch != ' ' && ch != ':') break;
+      pos++;
+     }
+   if(pos >= StringLen(objectText) || StringGetCharacter(objectText, pos) != '"') return("");
+   int start = pos + 1;
+   bool escaped = false;
+   for(int i = start; i < StringLen(objectText); i++)
+     {
+      ushort ch = StringGetCharacter(objectText, i);
+      if(escaped)
+        {
+         escaped = false;
+         continue;
+        }
+      if(ch == '\\')
+        {
+         escaped = true;
+         continue;
+        }
+      if(ch == '"') return(StringSubstr(objectText, start, i - start));
+     }
+   return("");
+  }
+
+bool ParseSideZone(const string json, const string key, double &low, double &high, double &sl, string &label)
   {
    string objectText;
    if(!ExtractJsonObject(json, key, objectText)) return(false);
    low = JsonNumber(objectText, "low");
    high = JsonNumber(objectText, "high");
    sl = JsonNumber(objectText, "sl");
+   label = JsonString(objectText, "label");
    return(low > 0.0 && high > 0.0);
   }
 
@@ -254,7 +289,7 @@ int FindCampaignIndex(const long magic)
    return(-1);
   }
 
-void LoadWatchZone(const ENUM_POSITION_TYPE side, double low, double high, const double sl)
+void LoadWatchZone(const ENUM_POSITION_TYPE side, double low, double high, const double sl, const string label)
   {
    NormalizeZonePrices(low, high);
    long magic = StableZoneMagic(side, low, high);
@@ -263,6 +298,7 @@ void LoadWatchZone(const ENUM_POSITION_TYPE side, double low, double high, const
    if(index >= 0)
      {
       g_zones[index].sl = NormalizeDouble(sl, _Digits);
+      g_zones[index].label = label;
       g_zones[index].magic = magic;
       if(g_zones[index].status != ZONE_STATUS_TRADE)
          g_zones[index].status = ZONE_STATUS_WATCH;
@@ -277,6 +313,7 @@ void LoadWatchZone(const ENUM_POSITION_TYPE side, double low, double high, const
    zone.low = low;
    zone.high = high;
    zone.sl = NormalizeDouble(sl, _Digits);
+   zone.label = label;
    zone.magic = magic;
    zone.createdAt = TimeCurrent();
    g_zones[size] = zone;
@@ -288,16 +325,17 @@ bool ApplyZonesJson(const string json)
    double low;
    double high;
    double sl;
+   string label;
 
-   if(ParseSideZone(json, "buy", low, high, sl))
+   if(ParseSideZone(json, "buy", low, high, sl, label))
      {
-      LoadWatchZone(POSITION_TYPE_BUY, low, high, sl);
+      LoadWatchZone(POSITION_TYPE_BUY, low, high, sl, label);
       parsed = true;
      }
 
-   if(ParseSideZone(json, "sell", low, high, sl))
+   if(ParseSideZone(json, "sell", low, high, sl, label))
      {
-      LoadWatchZone(POSITION_TYPE_SELL, low, high, sl);
+      LoadWatchZone(POSITION_TYPE_SELL, low, high, sl, label);
       parsed = true;
      }
 
@@ -765,6 +803,16 @@ string SideText(const ENUM_POSITION_TYPE side)
    return(side == POSITION_TYPE_BUY ? "BUY" : "SELL");
   }
 
+string ZoneLabelText(const ZoneData &zone)
+  {
+   return(StringLen(zone.label) > 0 ? zone.label : "-");
+  }
+
+string ZoneSlText(const ZoneData &zone)
+  {
+   return(zone.sl > 0.0 ? DoubleToString(zone.sl, _Digits) : "-");
+  }
+
 color ProfitColor(const double value)
   {
    if(value > 0.0) return(clrDarkGreen);
@@ -896,7 +944,9 @@ void UpdatePanel()
      {
       ZoneData zone = g_zones[tradeIndex];
       AddPanelRow(lines, colors, row, "Zone TRADE: " + SideText(zone.side), clrDarkGreen);
+      AddPanelRow(lines, colors, row, "Label: " + ZoneLabelText(zone), clrBlack);
       AddPanelRow(lines, colors, row, "Low/High: " + DoubleToString(zone.low, _Digits) + " - " + DoubleToString(zone.high, _Digits), clrBlack);
+      AddPanelRow(lines, colors, row, "SL: " + ZoneSlText(zone), clrBlack);
      }
    else
      {
@@ -905,7 +955,9 @@ void UpdatePanel()
       if(FindNearestWatchZoneForDisplay(watchZone, distance))
         {
          AddPanelRow(lines, colors, row, "Zone WATCH Next: " + SideText(watchZone.side), clrDarkOrange);
+         AddPanelRow(lines, colors, row, "Label: " + ZoneLabelText(watchZone), clrBlack);
          AddPanelRow(lines, colors, row, "Low/High: " + DoubleToString(watchZone.low, _Digits) + " - " + DoubleToString(watchZone.high, _Digits), clrBlack);
+         AddPanelRow(lines, colors, row, "SL: " + ZoneSlText(watchZone), clrBlack);
          AddPanelRow(lines, colors, row, "Distance: " + DoubleToString(distance, _Digits), clrBlack);
         }
       else
