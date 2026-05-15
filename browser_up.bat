@@ -17,6 +17,13 @@ set "LOG_FILE=%LOG_DIR%\browser_up_errors.log"
 set "SERVICE_LOG_FILE=%LOG_DIR%\browser_service.log"
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 set "BROWSER_SERVICE_LOG_FILE=%SERVICE_LOG_FILE%"
+echo [%date% %time%] INFO: Logging to "%LOG_FILE%"
+>> "%LOG_FILE%" echo.
+>> "%LOG_FILE%" echo ============================================================
+>> "%LOG_FILE%" echo [%date% %time%] Running: %~nx0
+>> "%LOG_FILE%" echo CWD    : %cd%
+>> "%LOG_FILE%" echo Args   : %*
+>> "%LOG_FILE%" echo ============================================================
 
 call ".venv\Scripts\activate.bat" 2>> "%LOG_FILE%"
 if errorlevel 1 (
@@ -35,8 +42,9 @@ if %EXIT_CODE% neq 0 (
   echo Check logs:
   echo   "%LOG_FILE%"
   echo   "%SERVICE_LOG_FILE%"
-  if /i not "%BROWSER_UP_PAUSE_ON_ERROR%"=="0" pause
+  if /i "%BROWSER_UP_PAUSE_ON_ERROR%"=="1" pause
 ) else (
   echo [%date% %time%] INFO: browser up OK
+  >> "%LOG_FILE%" echo [%date% %time%] INFO: browser up OK
 )
 exit /b %EXIT_CODE%
