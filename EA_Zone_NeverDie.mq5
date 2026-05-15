@@ -43,7 +43,7 @@ input group "=== REMOTE ZONES JSON (Cloudinary / HTTPS) ==="
 input string         InpZonesJsonUrl       = "https://res.cloudinary.com/easy-toeic/raw/upload/automation_tool/ea_neverdie/neverdie_XAUUSD.json"; // URL đã được cập nhật mặc định
 input int            InpZonesPollSeconds   = 300;
 input string         InpZonesBearer        = "";
-input double         InpZonesSlBuffer      = 3.0;
+input double         InpZonesSlBuffer      = 10.0;
 
 const int JSON_FETCH_WINDOW_MINUTES = 30;
 const int JSON_FETCH_SLOT_COUNT     = 3;
@@ -93,6 +93,10 @@ int      g_completedJsonFetchWindowKey = -1;
 // --- ZONE ARRAYS ---
 ZoneData g_buyZones[];
 ZoneData g_sellZones[];
+ZoneData g_retiredBuyZones[];
+ZoneData g_retiredSellZones[];
+long g_stoppedBuyZoneMagics[];
+long g_stoppedSellZoneMagics[];
 
 // =======================================================================
 // HELPER: TIME & MAGIC NUMBERS
@@ -233,6 +237,12 @@ double BufferedJsonStopLoss(const ENUM_POSITION_TYPE side, const double sl)
    return(NormalizeDouble(sl + buffer, _Digits));
   }
 
+double NormalizeJsonStopLoss(const double sl)
+  {
+   if(sl <= 0.0) return(0.0);
+   return(NormalizeDouble(sl, _Digits));
+  }
+
 bool ParseNeverdieSide(const string json, const string key, ENUM_ZONE_MODE &mode, double &lo, double &hi, double &sl)
   {
    string o;
@@ -248,7 +258,10 @@ bool AddZoneIfNotExists(ENUM_POSITION_TYPE side, ENUM_ZONE_MODE mode, double low
   {
    double minPrice = MathMin(low, high);
    double maxPrice = MathMax(low, high);
-   double stopLoss = BufferedJsonStopLoss(side, sl);
+   double stopLoss = NormalizeJsonStopLoss(sl);
+   long magic = GetZoneMagic(minPrice, maxPrice);
+   if(IsZoneStoppedOut(side, magic)) return(false);
+   if(UpdateRetiredZoneIfOpen(side, magic, stopLoss)) return(false);
    
    if(side == POSITION_TYPE_BUY)
      {
@@ -276,7 +289,7 @@ bool AddZoneIfNotExists(ENUM_POSITION_TYPE side, ENUM_ZONE_MODE mode, double low
       g_buyZones[size].high = maxPrice;
       g_buyZones[size].sl = stopLoss;
       g_buyZones[size].expireTime = GetNext2AM();
-      g_buyZones[size].magic = GetZoneMagic(minPrice, maxPrice);
+      g_buyZones[size].magic = magic;
       g_buyZones[size].wasInActivationBand = false;
       return(true);
      }
@@ -305,7 +318,7 @@ bool AddZoneIfNotExists(ENUM_POSITION_TYPE side, ENUM_ZONE_MODE mode, double low
       g_sellZones[size].high = maxPrice;
       g_sellZones[size].sl = stopLoss;
       g_sellZones[size].expireTime = GetNext2AM();
-      g_sellZones[size].magic = GetZoneMagic(minPrice, maxPrice);
+      g_sellZones[size].magic = magic;
       g_sellZones[size].wasInActivationBand = false;
       return(true);
      }
@@ -463,11 +476,13 @@ void OnTradeTransaction(const MqlTradeTransaction &trans, const MqlTradeRequest 
    if(dealType == DEAL_TYPE_SELL)
      {
       CloseBasket(POSITION_TYPE_BUY, magic);
+      MarkZoneStoppedOut(POSITION_TYPE_BUY, magic);
       RemoveZoneByMagic(POSITION_TYPE_BUY, magic);
      }
    else if(dealType == DEAL_TYPE_BUY)
      {
       CloseBasket(POSITION_TYPE_SELL, magic);
+      MarkZoneStoppedOut(POSITION_TYPE_SELL, magic);
       RemoveZoneByMagic(POSITION_TYPE_SELL, magic);
      }
   }
@@ -513,6 +528,120 @@ bool HasOpenPositions(long magic)
    return false;
   }
 
+string StoppedOutGlobalName(const ENUM_POSITION_TYPE side, const long magic)
+  {
+   string sideKey = (side == POSITION_TYPE_BUY) ? "BUY" : "SELL";
+   return("ZND_SL_" + IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN)) + "_" + _Symbol + "_" + sideKey + "_" + IntegerToString(magic));
+  }
+
+bool IsZoneStoppedOut(const ENUM_POSITION_TYPE side, const long magic)
+  {
+   if(side == POSITION_TYPE_BUY)
+     {
+      for(int i = 0; i < ArraySize(g_stoppedBuyZoneMagics); i++)
+         if(g_stoppedBuyZoneMagics[i] == magic) return(true);
+     }
+   else
+     {
+      for(int i = 0; i < ArraySize(g_stoppedSellZoneMagics); i++)
+         if(g_stoppedSellZoneMagics[i] == magic) return(true);
+     }
+
+   if(GlobalVariableCheck(StoppedOutGlobalName(side, magic))) return(true);
+   return(false);
+  }
+
+void MarkZoneStoppedOut(const ENUM_POSITION_TYPE side, const long magic)
+  {
+   if(IsZoneStoppedOut(side, magic)) return;
+   GlobalVariableSet(StoppedOutGlobalName(side, magic), (double)TimeCurrent());
+
+   if(side == POSITION_TYPE_BUY)
+     {
+      int size = ArraySize(g_stoppedBuyZoneMagics);
+      ArrayResize(g_stoppedBuyZoneMagics, size + 1);
+      g_stoppedBuyZoneMagics[size] = magic;
+      return;
+     }
+
+   int size = ArraySize(g_stoppedSellZoneMagics);
+   ArrayResize(g_stoppedSellZoneMagics, size + 1);
+   g_stoppedSellZoneMagics[size] = magic;
+  }
+
+void AddRetiredZone(const ENUM_POSITION_TYPE side, ZoneData &zone)
+  {
+   zone.mode = ZONE_OFF;
+   if(side == POSITION_TYPE_BUY)
+     {
+      for(int i = 0; i < ArraySize(g_retiredBuyZones); i++)
+        {
+         if(g_retiredBuyZones[i].magic == zone.magic)
+           {
+            g_retiredBuyZones[i] = zone;
+            return;
+           }
+        }
+
+      int size = ArraySize(g_retiredBuyZones);
+      ArrayResize(g_retiredBuyZones, size + 1);
+      g_retiredBuyZones[size] = zone;
+      return;
+     }
+
+   for(int i = 0; i < ArraySize(g_retiredSellZones); i++)
+     {
+      if(g_retiredSellZones[i].magic == zone.magic)
+        {
+         g_retiredSellZones[i] = zone;
+         return;
+        }
+     }
+
+   int size = ArraySize(g_retiredSellZones);
+   ArrayResize(g_retiredSellZones, size + 1);
+   g_retiredSellZones[size] = zone;
+  }
+
+void RemoveRetiredZoneByMagic(const ENUM_POSITION_TYPE side, const long magic)
+  {
+   if(side == POSITION_TYPE_BUY)
+     {
+      for(int i = ArraySize(g_retiredBuyZones) - 1; i >= 0; i--)
+         if(g_retiredBuyZones[i].magic == magic) ArrayRemove(g_retiredBuyZones, i, 1);
+      return;
+     }
+
+   for(int i = ArraySize(g_retiredSellZones) - 1; i >= 0; i--)
+      if(g_retiredSellZones[i].magic == magic) ArrayRemove(g_retiredSellZones, i, 1);
+  }
+
+bool UpdateRetiredZoneIfOpen(const ENUM_POSITION_TYPE side, const long magic, const double stopLoss)
+  {
+   if(side == POSITION_TYPE_BUY)
+     {
+      for(int i = 0; i < ArraySize(g_retiredBuyZones); i++)
+        {
+         if(g_retiredBuyZones[i].magic == magic && HasOpenPositions(magic))
+           {
+            g_retiredBuyZones[i].sl = stopLoss;
+            return(true);
+           }
+        }
+      return(false);
+     }
+
+   for(int i = 0; i < ArraySize(g_retiredSellZones); i++)
+     {
+      if(g_retiredSellZones[i].magic == magic && HasOpenPositions(magic))
+        {
+         g_retiredSellZones[i].sl = stopLoss;
+         return(true);
+        }
+     }
+   return(false);
+  }
+
 void RemoveZoneByMagic(const ENUM_POSITION_TYPE side, const long magic)
   {
    if(side == POSITION_TYPE_BUY)
@@ -522,9 +651,11 @@ void RemoveZoneByMagic(const ENUM_POSITION_TYPE side, const long magic)
          if(g_buyZones[i].magic == magic)
            {
             ArrayRemove(g_buyZones, i, 1);
+            RemoveRetiredZoneByMagic(side, magic);
             return;
            }
         }
+      RemoveRetiredZoneByMagic(side, magic);
       return;
      }
 
@@ -533,9 +664,11 @@ void RemoveZoneByMagic(const ENUM_POSITION_TYPE side, const long magic)
       if(g_sellZones[i].magic == magic)
         {
          ArrayRemove(g_sellZones, i, 1);
+         RemoveRetiredZoneByMagic(side, magic);
          return;
         }
      }
+   RemoveRetiredZoneByMagic(side, magic);
   }
 
 void CleanupExpiredZones()
@@ -550,6 +683,16 @@ void CleanupExpiredZones()
      {
       if(now >= g_sellZones[i].expireTime && !HasOpenPositions(g_sellZones[i].magic))
          ArrayRemove(g_sellZones, i, 1);
+     }
+   for(int i = ArraySize(g_retiredBuyZones) - 1; i >= 0; i--)
+     {
+      if(!HasOpenPositions(g_retiredBuyZones[i].magic))
+         ArrayRemove(g_retiredBuyZones, i, 1);
+     }
+   for(int i = ArraySize(g_retiredSellZones) - 1; i >= 0; i--)
+     {
+      if(!HasOpenPositions(g_retiredSellZones[i].magic))
+         ArrayRemove(g_retiredSellZones, i, 1);
      }
   }
 
@@ -617,6 +760,41 @@ void ActivateSingleWatchZone(const ENUM_POSITION_TYPE side, const int index)
    PrintFormat("SELL zone activated: %.2f - %.2f", g_sellZones[index].low, g_sellZones[index].high);
   }
 
+int FindZoneIndexByMagic(const ENUM_POSITION_TYPE side, const long magic)
+  {
+   if(side == POSITION_TYPE_BUY)
+     {
+      for(int i = 0; i < ArraySize(g_buyZones); i++)
+         if(g_buyZones[i].magic == magic) return(i);
+      return(-1);
+     }
+
+   for(int i = 0; i < ArraySize(g_sellZones); i++)
+      if(g_sellZones[i].magic == magic) return(i);
+   return(-1);
+  }
+
+void RemoveOrRetireActiveTradeZonesExcept(const ENUM_POSITION_TYPE activatedSide, const long activatedMagic)
+  {
+   for(int i = ArraySize(g_buyZones) - 1; i >= 0; i--)
+     {
+      if(g_buyZones[i].mode != ZONE_TRADE) continue;
+      if(activatedSide == POSITION_TYPE_BUY && g_buyZones[i].magic == activatedMagic) continue;
+
+      if(HasOpenPositions(g_buyZones[i].magic)) AddRetiredZone(POSITION_TYPE_BUY, g_buyZones[i]);
+      ArrayRemove(g_buyZones, i, 1);
+     }
+
+   for(int i = ArraySize(g_sellZones) - 1; i >= 0; i--)
+     {
+      if(g_sellZones[i].mode != ZONE_TRADE) continue;
+      if(activatedSide == POSITION_TYPE_SELL && g_sellZones[i].magic == activatedMagic) continue;
+
+      if(HasOpenPositions(g_sellZones[i].magic)) AddRetiredZone(POSITION_TYPE_SELL, g_sellZones[i]);
+      ArrayRemove(g_sellZones, i, 1);
+     }
+  }
+
 void ActivateWatchZones()
   {
    MqlTick tick;
@@ -661,27 +839,25 @@ void ActivateWatchZones()
       return;
      }
 
-   for(int i = 0; i < ArraySize(g_buyZones); i++)
-      if(g_buyZones[i].mode == ZONE_TRADE) g_buyZones[i].mode = ZONE_WATCH;
+   long activatedMagic = (activatedSide == POSITION_TYPE_BUY) ? g_buyZones[activatedIndex].magic : g_sellZones[activatedIndex].magic;
+   RemoveOrRetireActiveTradeZonesExcept(activatedSide, activatedMagic);
 
-   for(int i = 0; i < ArraySize(g_sellZones); i++)
-      if(g_sellZones[i].mode == ZONE_TRADE) g_sellZones[i].mode = ZONE_WATCH;
-
-   ActivateSingleWatchZone(activatedSide, activatedIndex);
+   activatedIndex = FindZoneIndexByMagic(activatedSide, activatedMagic);
+   if(activatedIndex >= 0) ActivateSingleWatchZone(activatedSide, activatedIndex);
    RefreshActivationBandState(price);
   }
 
-int GetTradableZoneIndex(ENUM_POSITION_TYPE side, double price)
+int GetTradableZoneIndex(ENUM_POSITION_TYPE side)
   {
    if(side == POSITION_TYPE_BUY)
      {
       for(int i = ArraySize(g_buyZones) - 1; i >= 0; i--)
-         if(g_buyZones[i].mode == ZONE_TRADE && IsPriceInActivationBand(side, g_buyZones[i], price)) return i;
+         if(g_buyZones[i].mode == ZONE_TRADE) return i;
      }
    else
      {
       for(int i = ArraySize(g_sellZones) - 1; i >= 0; i--)
-         if(g_sellZones[i].mode == ZONE_TRADE && IsPriceInActivationBand(side, g_sellZones[i], price)) return i;
+         if(g_sellZones[i].mode == ZONE_TRADE) return i;
      }
    return -1;
   }
@@ -697,6 +873,7 @@ void ManageZoneStopsAndWatchers()
       if(g_buyZones[i].sl > 0 && tick.bid <= g_buyZones[i].sl && HasOpenPositions(g_buyZones[i].magic))
         {
          CloseBasket(POSITION_TYPE_BUY, g_buyZones[i].magic);
+         MarkZoneStoppedOut(POSITION_TYPE_BUY, g_buyZones[i].magic);
          RemoveZoneByMagic(POSITION_TYPE_BUY, g_buyZones[i].magic);
         }
      }
@@ -706,7 +883,28 @@ void ManageZoneStopsAndWatchers()
       if(g_sellZones[i].sl > 0 && tick.ask >= g_sellZones[i].sl && HasOpenPositions(g_sellZones[i].magic))
         {
          CloseBasket(POSITION_TYPE_SELL, g_sellZones[i].magic);
+         MarkZoneStoppedOut(POSITION_TYPE_SELL, g_sellZones[i].magic);
          RemoveZoneByMagic(POSITION_TYPE_SELL, g_sellZones[i].magic);
+        }
+     }
+
+   for(int i = ArraySize(g_retiredBuyZones) - 1; i >= 0; i--)
+     {
+      if(g_retiredBuyZones[i].sl > 0 && tick.bid <= g_retiredBuyZones[i].sl && HasOpenPositions(g_retiredBuyZones[i].magic))
+        {
+         CloseBasket(POSITION_TYPE_BUY, g_retiredBuyZones[i].magic);
+         MarkZoneStoppedOut(POSITION_TYPE_BUY, g_retiredBuyZones[i].magic);
+         RemoveZoneByMagic(POSITION_TYPE_BUY, g_retiredBuyZones[i].magic);
+        }
+     }
+
+   for(int i = ArraySize(g_retiredSellZones) - 1; i >= 0; i--)
+     {
+      if(g_retiredSellZones[i].sl > 0 && tick.ask >= g_retiredSellZones[i].sl && HasOpenPositions(g_retiredSellZones[i].magic))
+        {
+         CloseBasket(POSITION_TYPE_SELL, g_retiredSellZones[i].magic);
+         MarkZoneStoppedOut(POSITION_TYPE_SELL, g_retiredSellZones[i].magic);
+         RemoveZoneByMagic(POSITION_TYPE_SELL, g_retiredSellZones[i].magic);
         }
      }
   }
@@ -716,7 +914,7 @@ void ManageAllZones(const ENUM_POSITION_TYPE side, const bool onFirstTickDca)
    MqlTick tick;
    if(!SymbolInfoTick(_Symbol, tick)) return;
    double price = GetSideOpenPrice(side, tick);
-   int newestTradableIdx = GetTradableZoneIndex(side, price);
+   int newestTradableIdx = GetTradableZoneIndex(side);
    int totalZones = (side == POSITION_TYPE_BUY) ? ArraySize(g_buyZones) : ArraySize(g_sellZones);
 
    for(int i = totalZones - 1; i >= 0; i--)
@@ -741,11 +939,41 @@ void ManageAllZones(const ENUM_POSITION_TYPE side, const bool onFirstTickDca)
         }
       else
         {
-         // Mở Initial khi giá nằm trong zone TRADE mới nhất.
+         // Mở Initial cho zone TRADE mới nhất miễn là giá chưa chạm SL.
          if(i == newestTradableIdx && ShouldOpenInitial(side, zone, price))
            {
             OpenPosition(side, zone, NormalizeVolume(InpLotSize), "START");
            }
+        }
+     }
+
+   ManageRetiredBaskets(side, onFirstTickDca);
+  }
+
+void ManageRetiredBaskets(const ENUM_POSITION_TYPE side, const bool onFirstTickDca)
+  {
+   int totalZones = (side == POSITION_TYPE_BUY) ? ArraySize(g_retiredBuyZones) : ArraySize(g_retiredSellZones);
+   for(int i = totalZones - 1; i >= 0; i--)
+     {
+      ZoneData zone = (side == POSITION_TYPE_BUY) ? g_retiredBuyZones[i] : g_retiredSellZones[i];
+      BasketInfo basket;
+      BuildBasket(side, zone.magic, basket);
+
+      if(basket.count <= 0)
+        {
+         RemoveRetiredZoneByMagic(side, zone.magic);
+         continue;
+        }
+
+      if(ShouldCloseBasketByTakeProfit(side, zone, basket))
+        {
+         bool basketClosed = CloseBasket(side, zone.magic);
+         if(basketClosed) RemoveRetiredZoneByMagic(side, zone.magic);
+        }
+      else if(ShouldOpenDca(side, zone, basket, onFirstTickDca))
+        {
+         double nextVolume = NormalizeVolume(InpLotSize * MathPow(InpMultiplier, basket.count));
+         OpenPosition(side, zone, nextVolume, "DCA");
         }
      }
   }
@@ -794,7 +1022,7 @@ bool ShouldOpenInitial(const ENUM_POSITION_TYPE side, const ZoneData &zone, doub
    if(side == POSITION_TYPE_BUY && zone.sl > 0 && price <= zone.sl) return(false);
    if(side == POSITION_TYPE_SELL && zone.sl > 0 && price >= zone.sl) return(false);
 
-   return(IsPriceInActivationBand(side, zone, price));
+   return(true);
   }
 
 bool ShouldOpenDca(const ENUM_POSITION_TYPE side, const ZoneData &zone, const BasketInfo &basket, const bool onFirstTick)
@@ -842,9 +1070,49 @@ bool ShouldCloseBasketByTakeProfit(const ENUM_POSITION_TYPE side, const ZoneData
    return(false);
   }
 
+double OrderStopLossForSide(const ENUM_POSITION_TYPE side)
+  {
+   double extremeSl = 0.0;
+
+   if(side == POSITION_TYPE_BUY)
+     {
+      for(int i = 0; i < ArraySize(g_buyZones); i++)
+        {
+         if(g_buyZones[i].sl <= 0.0) continue;
+         if(extremeSl <= 0.0) extremeSl = g_buyZones[i].sl;
+         else extremeSl = MathMin(extremeSl, g_buyZones[i].sl);
+        }
+
+      for(int i = 0; i < ArraySize(g_retiredBuyZones); i++)
+        {
+         if(g_retiredBuyZones[i].sl <= 0.0) continue;
+         if(extremeSl <= 0.0) extremeSl = g_retiredBuyZones[i].sl;
+         else extremeSl = MathMin(extremeSl, g_retiredBuyZones[i].sl);
+        }
+
+      return(BufferedJsonStopLoss(side, extremeSl));
+     }
+
+   for(int i = 0; i < ArraySize(g_sellZones); i++)
+     {
+      if(g_sellZones[i].sl <= 0.0) continue;
+      if(extremeSl <= 0.0) extremeSl = g_sellZones[i].sl;
+      else extremeSl = MathMax(extremeSl, g_sellZones[i].sl);
+     }
+
+   for(int i = 0; i < ArraySize(g_retiredSellZones); i++)
+     {
+      if(g_retiredSellZones[i].sl <= 0.0) continue;
+      if(extremeSl <= 0.0) extremeSl = g_retiredSellZones[i].sl;
+      else extremeSl = MathMax(extremeSl, g_retiredSellZones[i].sl);
+     }
+
+   return(BufferedJsonStopLoss(side, extremeSl));
+  }
+
 bool OpenPosition(const ENUM_POSITION_TYPE side, const ZoneData &zone, const double volume, const string tag)
   {
-   double sl = NormalizeDouble(zone.sl, _Digits);
+   double sl = OrderStopLossForSide(side);
    string note = StringFormat("ZONE_ND_%s_%s", side == POSITION_TYPE_BUY ? "BUY" : "SELL", tag);
    
    g_trade.SetExpertMagicNumber(zone.magic);
@@ -960,11 +1228,36 @@ ZoneData GetLatestZone(ENUM_POSITION_TYPE side)
    return (side == POSITION_TYPE_BUY) ? g_buyZones[count-1] : g_sellZones[count-1];
   }
 
+int ActiveTradeZoneIndex(const ENUM_POSITION_TYPE side)
+  {
+   if(side == POSITION_TYPE_BUY)
+     {
+      for(int i = ArraySize(g_buyZones) - 1; i >= 0; i--)
+         if(g_buyZones[i].mode == ZONE_TRADE) return(i);
+     }
+   else
+     {
+      for(int i = ArraySize(g_sellZones) - 1; i >= 0; i--)
+         if(g_sellZones[i].mode == ZONE_TRADE) return(i);
+     }
+
+   return(-1);
+  }
+
+ZoneData GetDisplayZone(ENUM_POSITION_TYPE side)
+  {
+   int tradeIndex = ActiveTradeZoneIndex(side);
+   if(tradeIndex >= 0)
+      return(side == POSITION_TYPE_BUY ? g_buyZones[tradeIndex] : g_sellZones[tradeIndex]);
+
+   return(GetLatestZone(side));
+  }
+
 string ZoneModeText(const ENUM_ZONE_MODE mode) { return(mode == ZONE_TRADE ? "TRADE" : (mode == ZONE_WATCH ? "WATCH" : "OFF")); }
 
 string SideStatusText(const ENUM_POSITION_TYPE side)
   {
-   ZoneData z = GetLatestZone(side);
+   ZoneData z = GetDisplayZone(side);
    if(z.mode == ZONE_TRADE) return("READY");
    if(z.mode == ZONE_WATCH) return("WATCHING");
    return("OFF");
@@ -1019,50 +1312,45 @@ void AddZoneDetailRows(string &lines[], color &colors[], int &row, const ENUM_PO
       return;
      }
 
-   bool displayed[];
-   ArrayResize(displayed, count);
-   for(int i = 0; i < count; i++) displayed[i] = false;
-
-   for(int rank = 0; rank < count; rank++)
+   int tradeIndex = ActiveTradeZoneIndex(side);
+   int otherZones = 0;
+   for(int i = 0; i < count; i++)
      {
-      int bestIndex = -1;
-      double bestDistance = 1.0e100;
-
-      for(int i = 0; i < count; i++)
-        {
-         if(displayed[i]) continue;
-         ZoneData candidate = (side == POSITION_TYPE_BUY) ? g_buyZones[i] : g_sellZones[i];
-         double distance = hasPrice ? ZoneActivationDistance(side, candidate, price) : (double)i;
-         if(bestIndex < 0 || distance < bestDistance)
-           {
-            bestIndex = i;
-            bestDistance = distance;
-           }
-        }
-
-      if(bestIndex < 0) return;
-      displayed[bestIndex] = true;
-
-      ZoneData zone = (side == POSITION_TYPE_BUY) ? g_buyZones[bestIndex] : g_sellZones[bestIndex];
-      BasketInfo basket;
-      BuildBasket(side, zone.magic, basket);
-
-      string label = prefix + " Zone " + IntegerToString(bestIndex + 1) + ": ";
-      string detail = ZoneDetailText(side, zone, price, hasPrice);
-      color rowColor = ZoneDisplayColor(ZoneGlobalIndex(side, bestIndex));
-
-      AddPanelRow(lines, colors, row, label + detail, rowColor);
-
-      string distanceText = "   Distance: " + ZoneProximityText(side, zone, price, hasPrice);
-      if(basket.count > 0)
-         distanceText += StringFormat(" | Orders %d | P/L %.2f", basket.count, basket.floatingProfit);
-      AddPanelRow(lines, colors, row, distanceText, rowColor);
+      if(i == tradeIndex) continue;
+      ZoneData otherZone = (side == POSITION_TYPE_BUY) ? g_buyZones[i] : g_sellZones[i];
+      if(otherZone.mode != ZONE_OFF) otherZones++;
      }
+
+   if(tradeIndex < 0)
+     {
+      AddPanelRow(lines, colors, row, prefix + " Zone:  NO TRADE", clrGray);
+      if(otherZones > 0)
+         AddPanelRow(lines, colors, row, prefix + " Other Zones: " + IntegerToString(otherZones) + " hidden", clrDimGray);
+      return;
+     }
+
+   ZoneData zone = (side == POSITION_TYPE_BUY) ? g_buyZones[tradeIndex] : g_sellZones[tradeIndex];
+   BasketInfo basket;
+   BuildBasket(side, zone.magic, basket);
+
+   string label = prefix + " Trade Zone " + IntegerToString(tradeIndex + 1) + ": ";
+   string detail = ZoneDetailText(side, zone, price, hasPrice);
+   color rowColor = ZoneDisplayColor(ZoneGlobalIndex(side, tradeIndex));
+
+   AddPanelRow(lines, colors, row, label + detail, rowColor);
+
+   string distanceText = "   Distance: " + ZoneProximityText(side, zone, price, hasPrice);
+   if(basket.count > 0)
+      distanceText += StringFormat(" | Orders %d | P/L %.2f", basket.count, basket.floatingProfit);
+   AddPanelRow(lines, colors, row, distanceText, rowColor);
+
+   if(otherZones > 0)
+      AddPanelRow(lines, colors, row, prefix + " Other Zones: " + IntegerToString(otherZones) + " hidden", clrDimGray);
   }
 
 string ZoneStopText(const ENUM_POSITION_TYPE side)
   {
-   ZoneData z = GetLatestZone(side);
+   ZoneData z = GetDisplayZone(side);
    if(z.mode != ZONE_TRADE || z.sl <= 0.0) return("-");
    return(DoubleToString(z.sl, _Digits));
   }
@@ -1137,8 +1425,8 @@ void UpdatePanel()
    bool hasDisplayPrice = SymbolInfoTick(_Symbol, displayTick);
    double displayPrice = hasDisplayPrice ? MidPrice(displayTick) : 0.0;
 
-   ZoneData lBuy = GetLatestZone(POSITION_TYPE_BUY);
-   ZoneData lSell = GetLatestZone(POSITION_TYPE_SELL);
+   ZoneData lBuy = GetDisplayZone(POSITION_TYPE_BUY);
+   ZoneData lSell = GetDisplayZone(POSITION_TYPE_SELL);
 
    int row = 0;
    AddPanelRow(lines, colors, row, "---- Account Data ----", clrDimGray);
@@ -1315,13 +1603,13 @@ void UpdateZoneChartObjects()
 
    for(int i = 0; i < ArraySize(g_buyZones); i++)
      {
-      if(g_buyZones[i].mode == ZONE_OFF) continue;
+      if(g_buyZones[i].mode != ZONE_TRADE) continue;
       DrawZoneLines(POSITION_TYPE_BUY, g_buyZones[i], i, ZoneGlobalIndex(POSITION_TYPE_BUY, i));
      }
 
    for(int i = 0; i < ArraySize(g_sellZones); i++)
      {
-      if(g_sellZones[i].mode == ZONE_OFF) continue;
+      if(g_sellZones[i].mode != ZONE_TRADE) continue;
       DrawZoneLines(POSITION_TYPE_SELL, g_sellZones[i], i, ZoneGlobalIndex(POSITION_TYPE_SELL, i));
      }
 
