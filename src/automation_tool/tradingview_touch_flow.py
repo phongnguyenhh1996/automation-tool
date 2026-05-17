@@ -606,6 +606,7 @@ def run_intraday_touch_flow(
                         accounts,
                         dry_run=params.mt5_dry_run,
                         symbol_override=params.mt5_symbol,
+                        zone_label=touched_label,
                     )
                     # MARKET: chỉ dùng fill price từ primary account để cập nhật trade_line.
                     tl0 = (parsed.raw_line or "").strip()

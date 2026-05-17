@@ -331,7 +331,7 @@ Khi trả kết quả phải có đủ:
 #### XAUUSD
 - Mặc định phải có:
   - **1 plan chính**: ưu tiên hướng được H4, H1, DXY và Footprint đồng thuận mạnh.
-  - **1 plan phụ**: bias ngược tại vùng sweep đối diện, TP ngắn hơn.
+  - **1 plan phụ**: bias ngược tại vùng sweep đối diện, TP ngắn hơn, phải luôn đặt ngoài vùng zone session trước đó.
   - **1 scalp plan**: BUY khi có HL + absorption + stacked BID M5; SELL khi ở premium M15 + stacked ASK + CD giảm.
 - Scalp XAUUSD ưu tiên TP **7–10 giá**.
 - Entry ưu tiên ở vùng có hợp lưu:

@@ -39,12 +39,13 @@ from automation_tool.mt5_openai_parse import ParsedTrade
 LotMode = Literal["fixed", "max_notional_usd", "max_loss_usd", "from_trade"]
 EntryTakeProfitTarget = Literal["tp1", "tp2"]
 EntrySlot = Literal["sang", "chieu", "toi"]
+FixedLotVolume = Union[float, dict[str, float]]
 
 
 @dataclass(frozen=True)
 class LotRuleFixed:
     mode: Literal["fixed"] = "fixed"
-    volume: float = 0.01
+    volume: FixedLotVolume = 0.01
 
 
 @dataclass(frozen=True)
@@ -113,6 +114,33 @@ def _parse_symbol_map(obj: Any, index: int) -> dict[str, str]:
     return out
 
 
+def _parse_fixed_volume(raw: Any) -> FixedLotVolume:
+    if isinstance(raw, dict):
+        out: dict[str, float] = {}
+        for k, v in raw.items():
+            key = str(k or "").strip().lower()
+            if not key:
+                raise ValueError("lot.mode=fixed volume object không được có key rỗng")
+            out[key] = float(v)
+        if not out:
+            raise ValueError("lot.mode=fixed volume object không được rỗng")
+        if "default" not in out:
+            raise ValueError("lot.mode=fixed volume object cần key 'default'")
+        return out
+    return float(raw)
+
+
+def fixed_lot_volume_for_label(rule: LotRuleFixed, zone_label: Optional[str]) -> float:
+    """Resolve fixed lot volume; object form may override by zone label and falls back to default."""
+    volume = rule.volume
+    if not isinstance(volume, dict):
+        return float(volume)
+    label = str(zone_label or "").strip().lower()
+    if label and label in volume:
+        return float(volume[label])
+    return float(volume["default"])
+
+
 def _parse_lot(d: Any) -> LotRule:
     if not isinstance(d, dict):
         raise ValueError("lot phải là object")
@@ -121,7 +149,7 @@ def _parse_lot(d: Any) -> LotRule:
         v = d.get("volume")
         if v is None:
             raise ValueError("lot.mode=fixed cần volume")
-        return LotRuleFixed(volume=float(v))
+        return LotRuleFixed(volume=_parse_fixed_volume(v))
     if mode == "max_notional_usd":
         m = d.get("max_usd")
         if m is None:
@@ -476,7 +504,7 @@ def compute_lot_override(
     ``mt5.order_calc_profit`` với volume=1.0 (entry → SL). Thường yêu cầu ``trade.sl``.
     """
     if isinstance(rule, LotRuleFixed):
-        return float(rule.volume), None
+        return fixed_lot_volume_for_label(rule, None), None
 
     if isinstance(rule, LotRuleFromTrade):
         return float(trade.lot), None

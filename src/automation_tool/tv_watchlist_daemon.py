@@ -2482,6 +2482,7 @@ def _auto_entry_job(
                 exec_accs_ae,
                 dry_run=params.mt5_dry_run,
                 symbol_override=params.mt5_symbol,
+                zone_label=z0.label,
             )
             multi_ae = format_mt5_multi_for_telegram(summary_ae)
             if not params.no_telegram:
@@ -2994,6 +2995,7 @@ def _zone_touch_job(
                 exec_accs_zt,
                 dry_run=params.mt5_dry_run,
                 symbol_override=params.mt5_symbol,
+                zone_label=z1.label,
             )
             # MARKET: MT5 trả fill price; chỉ dùng giá từ account primary để update trade_line.
             try:

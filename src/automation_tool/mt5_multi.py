@@ -17,6 +17,7 @@ from automation_tool.mt5_accounts import (
     compute_lot_override,
     compute_volume_for_max_loss_live,
     compute_volume_for_max_notional_live,
+    fixed_lot_volume_for_label,
     primary_account,
 )
 from automation_tool.mt5_execute import MT5ExecutionResult, execute_trade, format_mt5_execution_for_telegram
@@ -53,11 +54,12 @@ def _lot_override_for_entry(
     *,
     dry_run: bool,
     symbol_override: Optional[str],
+    zone_label: Optional[str] = None,
 ) -> tuple[Optional[float], Optional[str]]:
     """Trả về (lot_override hoặc None để dùng trade.lot, ghi chú debug)."""
     rule = acc.lot
     if isinstance(rule, LotRuleFixed):
-        return float(rule.volume), None
+        return fixed_lot_volume_for_label(rule, zone_label), None
     if isinstance(rule, LotRuleFromTrade):
         return None, None
     if isinstance(rule, LotRuleMaxNotionalUsd):
@@ -111,6 +113,7 @@ def execute_trade_all_accounts(
     *,
     dry_run: bool = True,
     symbol_override: Optional[str] = None,
+    zone_label: Optional[str] = None,
     deviation: int = 20,
     magic: Optional[int] = None,
     log_tp2: bool = True,
@@ -122,7 +125,11 @@ def execute_trade_all_accounts(
 
     def _run_one(acc: MT5AccountEntry) -> MT5ExecutionResult:
         lot_ov, _hint = _lot_override_for_entry(
-            trade, acc, dry_run=dry_run, symbol_override=symbol_override
+            trade,
+            acc,
+            dry_run=dry_run,
+            symbol_override=symbol_override,
+            zone_label=zone_label,
         )
         return execute_trade(
             trade,

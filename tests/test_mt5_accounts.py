@@ -114,6 +114,39 @@ def test_load_valid_two_accounts_one_primary() -> None:
         assert accs[1].lot.max_usd == 50.0
 
 
+def test_load_fixed_lot_accepts_volume_by_zone_label() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "accounts.json"
+        _write_accounts(
+            p,
+            [
+                {
+                    "id": "a",
+                    "terminal_path": "C:/MT5/A/metatrader64.exe",
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                    "lot": {
+                        "mode": "fixed",
+                        "volume": {
+                            "plan_chinh": 0.02,
+                            "plan_phu": 0.01,
+                            "default": 0.01,
+                        },
+                    },
+                },
+            ],
+        )
+        accs = load_mt5_accounts_from_path(p)
+        assert isinstance(accs[0].lot, LotRuleFixed)
+        assert accs[0].lot.volume == {
+            "plan_chinh": 0.02,
+            "plan_phu": 0.01,
+            "default": 0.01,
+        }
+
+
 def test_load_max_loss_usd_rule() -> None:
     with tempfile.TemporaryDirectory() as td:
         p = Path(td) / "accounts.json"

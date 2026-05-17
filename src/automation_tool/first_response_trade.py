@@ -440,6 +440,7 @@ def apply_first_response_vao_lenh(
                 accounts,
                 dry_run=mt5_dry_run,
                 symbol_override=mt5_symbol,
+                zone_label=label,
             )
             multi_text = format_mt5_multi_for_telegram(summary)
             print(multi_text, flush=True)

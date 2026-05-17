@@ -697,6 +697,7 @@ def _run_intraday_touch_loop(
                         accounts,
                         dry_run=params.mt5_dry_run,
                         symbol_override=params.mt5_symbol,
+                        zone_label=touched_label,
                     )
                     multi_txt = format_mt5_multi_for_telegram(summary)
                     _journal_log(tz, multi_txt)
