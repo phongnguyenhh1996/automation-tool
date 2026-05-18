@@ -455,6 +455,7 @@ def write_zones_for_slot(
     zones_dir: Optional[Path] = None,
     last_observed: Optional[LastObserved] = None,
     update_manifest_slot: bool = True,
+    shard_suffix: str = "",
 ) -> None:
     """Write shard files + manifest for one session slot.
 
@@ -470,7 +471,7 @@ def write_zones_for_slot(
             if not lab:
                 continue
             z2 = Zone(
-                id=zone_id_for_shard(lab, slot),
+                id=zone_id_for_shard(lab, slot, suffix=shard_suffix),
                 label=z.label,
                 vung_cho=z.vung_cho,
                 side=z.side,
@@ -497,7 +498,7 @@ def write_zones_for_slot(
                 source=z.source,
                 session_slot=slot,
             )
-            _write_shard_file(shard_path(root, lab, slot), symbol, slot, z2)
+            _write_shard_file(shard_path(root, lab, slot, suffix=shard_suffix), symbol, slot, z2)
 
         mp = manifest_path(root)
         if update_manifest_slot:

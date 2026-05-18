@@ -197,6 +197,31 @@ def test_write_zones_for_slot_offsets_trade_line_tp1_before_persisting(tmp_path:
     assert rewritten_data["zone"]["trade_line"] == buy_data["zone"]["trade_line"]
 
 
+def test_write_zones_for_slot_supports_suffix_for_second_flow(tmp_path: Path) -> None:
+    write_zones_for_slot(
+        symbol="XAUUSD",
+        slot="sang",
+        zones=[
+            Zone(
+                id="buy",
+                label="plan_chinh",
+                vung_cho="4708–4710",
+                side="BUY",
+                trade_line="BUY LIMIT 4709.0 | SL 4699.0 | TP1 4720.0 | Lot 0.02",
+            ),
+        ],
+        zones_dir=tmp_path,
+        shard_suffix="-2",
+    )
+
+    shard = shard_path(tmp_path, "plan_chinh", "sang", suffix="-2")
+    data = json.loads(shard.read_text())
+
+    assert shard.name == "vung_plan_chinh_sang-2.json"
+    assert data["zone"]["id"] == "plan_chinh__sang-2"
+    assert data["zone"]["label"] == "plan_chinh"
+
+
 def test_parse_zone_reads_has_position_flag() -> None:
     z = _parse_zone(
         {

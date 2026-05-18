@@ -78,14 +78,21 @@ def manifest_path(zones_dir: Path) -> Path:
     return zones_dir / _MANIFEST_NAME
 
 
-def shard_filename(label: str, slot: SessionSlot) -> str:
+def _normalize_shard_suffix(suffix: str) -> str:
+    s = (suffix or "").strip()
+    if not s:
+        return ""
+    return s if s.startswith("-") else f"-{s}"
+
+
+def shard_filename(label: str, slot: SessionSlot, *, suffix: str = "") -> str:
     """``vung_{label}_{slot}.json`` — label must match ``ZONE_LABELS_ORDER`` keys."""
     lab = label.strip().lower()
-    return f"vung_{lab}_{slot}.json"
+    return f"vung_{lab}_{slot}{_normalize_shard_suffix(suffix)}.json"
 
 
-def shard_path(zones_dir: Path, label: str, slot: SessionSlot) -> Path:
-    return zones_dir / shard_filename(label, slot)
+def shard_path(zones_dir: Path, label: str, slot: SessionSlot, *, suffix: str = "") -> Path:
+    return zones_dir / shard_filename(label, slot, suffix=suffix)
 
 
 def session_slot_now_hcm(
@@ -126,15 +133,20 @@ def iter_shard_paths(zones_dir: Path) -> list[Path]:
     return out
 
 
-def zone_id_for_shard(label: str, slot: SessionSlot) -> str:
-    return f"{label.strip().lower()}__{slot}"
+def zone_id_for_shard(label: str, slot: SessionSlot, *, suffix: str = "") -> str:
+    return f"{label.strip().lower()}__{slot}{_normalize_shard_suffix(suffix)}"
 
 
 def session_slot_from_shard_path(path: Path) -> Optional[SessionSlot]:
     """Infer ``sang``/``chieu``/``toi`` from ``vung_*_{slot}.json`` filename."""
     stem = path.stem
     for s in SLOTS_ORDER:
-        if stem.endswith("_" + s):
+        marker = "_" + s
+        idx = stem.rfind(marker)
+        if idx < 0:
+            continue
+        tail = stem[idx + len(marker) :]
+        if tail == "" or tail.startswith("-"):
             return s
     return None
 
@@ -147,8 +159,13 @@ def label_from_shard_stem(stem: str) -> Optional[str]:
     if not s:
         return None
     for slot in SLOTS_ORDER:
-        if s.endswith("_" + slot):
-            base = s[: -(len(slot) + 1)]
+        marker = "_" + slot
+        idx = s.rfind(marker)
+        if idx < 0:
+            continue
+        tail = s[idx + len(marker) :]
+        if tail == "" or tail.startswith("-"):
+            base = s[:idx]
             if base.startswith("vung_"):
                 return base[5:]
     return None

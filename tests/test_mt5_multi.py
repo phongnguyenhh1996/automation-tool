@@ -270,6 +270,44 @@ def test_execute_trade_all_accounts_uses_account_entry_take_profit(
     assert seen == [("acc_tp1", "tp1"), ("acc_tp2", "tp2")]
 
 
+def test_execute_trade_all_accounts_passes_zone_id_comment(
+    sample_trade, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    accounts = [
+        MT5AccountEntry(
+            id="acc_a",
+            terminal_path="/tmp/mt5-acc-a/terminal64.exe",
+            login=1,
+            password="p",
+            server="srv",
+            primary=True,
+            lot=LotRuleFromTrade(),
+        ),
+    ]
+    seen: list[str | None] = []
+
+    def fake_execute_trade(trade, **kwargs):
+        seen.append(kwargs.get("order_comment"))
+        return MT5ExecutionResult(
+            ok=True,
+            message="mock acc_a",
+            order=6001,
+            account_id=kwargs.get("account_id"),
+        )
+
+    monkeypatch.setattr("automation_tool.mt5_multi.execute_trade", fake_execute_trade)
+
+    summ = execute_trade_all_accounts(
+        sample_trade,
+        accounts,
+        dry_run=True,
+        order_comment="plan_chinh__sang-2",
+    )
+
+    assert summ.ok_all
+    assert seen == ["plan_chinh__sang-2"]
+
+
 def test_cancel_close_all_accounts_retries_failed_position_close(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

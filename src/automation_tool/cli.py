@@ -92,7 +92,7 @@ from automation_tool.daemon_launcher import (
     zones_dir_from_cli_path,
 )
 from automation_tool.tv_watchlist_daemon import WatchlistDaemonParams, run_daemon_plan, run_tv_watchlist_daemon
-from automation_tool.zones_paths import SessionSlot, session_slot_now_hcm
+from automation_tool.zones_paths import SessionSlot, session_slot_now_hcm, shard_path
 from automation_tool.zones_state import (
     clear_zones_directory,
     migrate_legacy_zones_state_if_needed,
@@ -128,6 +128,9 @@ from automation_tool.playwright_browser import close_browser_and_context, launch
 _log = logging.getLogger("automation_tool.cli")
 
 _HCM = ZoneInfo("Asia/Ho_Chi_Minh")
+_ALL_SECOND_FLOW_VECTOR_STORE_ID = "vs_69fa9d55f3b48191b4aea51214b880d6"
+_ALL_SECOND_FLOW_TELEGRAM_CHAT_ID = "-1003996623506"
+_ALL_SECOND_FLOW_SHARD_SUFFIX = "-2"
 
 
 def _now_clock_hcm() -> str:
@@ -1548,6 +1551,7 @@ def _run_openai_flow(
     purge_json_attachment_storage: bool = False,
     purge_openai_user_data_files: bool | None = None,
     model: str | None = None,
+    vector_store_ids: list[str] | None = None,
 ) -> PromptTwoStepResult:
     return run_analysis_responses_flow(
         api_key=s.openai_api_key,
@@ -1556,7 +1560,7 @@ def _run_openai_flow(
         charts_dir=charts_dir,
         analysis_prompt=analysis_prompt,
         max_images_per_call=max_images,
-        vector_store_ids=s.openai_vector_store_ids,
+        vector_store_ids=vector_store_ids if vector_store_ids is not None else s.openai_vector_store_ids,
         store=s.openai_responses_store,
         include=s.openai_responses_include,
         chart_paths=chart_paths,
@@ -2484,6 +2488,25 @@ def _reconcile_daemon_plans_after_cli(zones_dir: Path, log_step: str) -> None:
     print(f"reconcile-daemon-plans: spawned {n} process(es) | dir={zones_dir}", flush=True)
 
 
+def _write_daemon_plan_sidecar_response_ids(
+    *,
+    zones_dir: Path,
+    zones,
+    slot: SessionSlot,
+    response_id: str,
+    shard_suffix: str,
+) -> None:
+    rid = (response_id or "").strip()
+    if not rid:
+        return
+    for z in zones:
+        lab = (getattr(z, "label", "") or "").strip().lower()
+        if not lab:
+            continue
+        sp = shard_path(zones_dir, lab, slot, suffix=shard_suffix)
+        write_last_response_id(rid, path=sp.parent / f"{sp.stem}.last_response_id.txt")
+
+
 def cmd_all(args: argparse.Namespace) -> None:
     s = load_settings()
     from automation_tool.images import set_active_main_symbol_file
@@ -2672,6 +2695,75 @@ def cmd_all(args: argparse.Namespace) -> None:
             )
         except Exception as e:
             _log.warning("all: ea-neverdie publish failed: %s", e)
+
+    try:
+        out2 = _run_openai_flow(
+            s,
+            charts_dir,
+            prompt_all,
+            args.max_images_per_call,
+            chart_payloads=payloads,
+            on_first_model_text=None,
+            model=resolved_openai_model(s, getattr(args, "model", None)),
+            vector_store_ids=[_ALL_SECOND_FLOW_VECTOR_STORE_ID],
+        )
+    except Exception as e:
+        re_raise_unless_openai(e)
+    print(out2.full_text())
+    _log.info("all-2: OpenAI xong | response_id=%s", out2.final_response_id)
+
+    if not args.no_telegram and out2.after_charts:
+        require_telegram(s)
+        send_openai_output_to_telegram(
+            bot_token=s.telegram_bot_token,
+            chat_id=_ALL_SECOND_FLOW_TELEGRAM_CHAT_ID,
+            raw=out2.after_charts,
+            default_parse_mode=s.telegram_parse_mode,
+            summary_chat_id=None,
+        )
+
+    if out2.after_charts:
+        payload2 = parse_analysis_from_openai_text(out2.after_charts)
+        if payload2 is not None and payload2.prices:
+            from automation_tool.images import get_active_main_symbol
+
+            sym2 = get_active_main_symbol().strip().upper()
+            slot2: SessionSlot = run_slot
+            zones2 = zones_from_analysis_payload(
+                symbol=sym2,
+                payload=payload2,
+                source="all",
+                session_slot=slot2,
+            )
+            if zones2:
+                write_zones_for_slot(
+                    symbol=sym2,
+                    zones=zones2,
+                    slot=slot2,
+                    zones_dir=zones_dir,
+                    shard_suffix=_ALL_SECOND_FLOW_SHARD_SUFFIX,
+                )
+                _write_daemon_plan_sidecar_response_ids(
+                    zones_dir=zones_dir,
+                    zones=zones2,
+                    slot=slot2,
+                    response_id=out2.final_response_id,
+                    shard_suffix=_ALL_SECOND_FLOW_SHARD_SUFFIX,
+                )
+                _log.info(
+                    "all-2: đã ghi shard zones | slot=%s zones=%d | symbol=%s suffix=%s",
+                    slot2,
+                    len(zones2),
+                    sym2,
+                    _ALL_SECOND_FLOW_SHARD_SUFFIX,
+                )
+            else:
+                _log.warning("all-2: parse JSON có prices nhưng không tạo được zones — không ghi shard")
+        elif out2.after_charts.strip():
+            print(
+                "Warning: could not parse second analysis JSON for zones (no `prices` or empty).",
+                file=sys.stderr,
+            )
 
 
 def cmd_tv_alerts(args: argparse.Namespace) -> None:

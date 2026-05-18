@@ -31,16 +31,20 @@ def test_session_slot_boundaries_hcm() -> None:
 def test_shard_filename_and_zone_id() -> None:
     assert shard_filename("plan_chinh", "sang") == "vung_plan_chinh_sang.json"
     assert zone_id_for_shard("plan_chinh", "chieu") == "plan_chinh__chieu"
+    assert shard_filename("plan_chinh", "sang", suffix="-2") == "vung_plan_chinh_sang-2.json"
+    assert zone_id_for_shard("plan_chinh", "sang", suffix="-2") == "plan_chinh__sang-2"
 
 
 def test_session_slot_from_shard_path() -> None:
     assert session_slot_from_shard_path(Path("zones/vung_scalp_toi.json")) == "toi"
     assert session_slot_from_shard_path(Path("vung_plan_phu_chieu.json")) == "chieu"
+    assert session_slot_from_shard_path(Path("zones/vung_plan_chinh_sang-2.json")) == "sang"
 
 
 def test_label_from_shard_stem() -> None:
     assert label_from_shard_stem("vung_plan_chinh_sang") == "plan_chinh"
     assert label_from_shard_stem("vung_scalp_toi") == "scalp"
+    assert label_from_shard_stem("vung_plan_chinh_sang-2") == "plan_chinh"
 
 
 def test_session_slot_display_vn() -> None:

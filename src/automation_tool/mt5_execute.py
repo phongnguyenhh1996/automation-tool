@@ -28,6 +28,8 @@ _MT5_INIT_RETRY_DELAY_SEC = 3.0
 _MT5_SESSION_SWITCH_DELAYS_SEC = (2, 4, 6, 8)
 _MT5_ORDER_SEND_MAX_ATTEMPTS = 3
 _MT5_ORDER_SEND_RETRY_DELAY_MS = 200
+_MT5_ORDER_COMMENT_DEFAULT = "openai-auto"
+_MT5_ORDER_COMMENT_MAX_LEN = 31
 
 
 @dataclass
@@ -881,6 +883,14 @@ def build_request(
     }
 
 
+def _mt5_order_comment(value: Optional[str]) -> str:
+    s = str(value or "").strip()
+    if not s:
+        return _MT5_ORDER_COMMENT_DEFAULT
+    # MT5 comments are broker-limited; keep the meaningful zone id visible in history.
+    return s[:_MT5_ORDER_COMMENT_MAX_LEN]
+
+
 def _env_int(name: str, default: int = 0) -> int:
     raw = (os.getenv(name) or "").strip()
     if not raw:
@@ -946,6 +956,7 @@ def execute_trade(
     account_id: Optional[str] = None,
     account_symbol_map: Optional[dict[str, str]] = None,
     take_profit_target: EntryTakeProfitTarget = "tp2",
+    order_comment: Optional[str] = None,
     order_send_max_attempts: Optional[int] = None,
     order_send_retry_delay_ms: Optional[int] = None,
 ) -> MT5ExecutionResult:
@@ -988,6 +999,7 @@ def execute_trade(
         else _env_int("MT5_ORDER_SEND_RETRY_DELAY_MS", _MT5_ORDER_SEND_RETRY_DELAY_MS)
     )
     send_retry_delay_sec = max(0.0, float(send_retry_delay_raw) / 1000.0)
+    comment = _mt5_order_comment(order_comment)
 
     extra = ""
     tp_effective = trade.tp1 if take_profit_target == "tp1" else (trade.tp2 or trade.tp1)
@@ -1009,6 +1021,7 @@ def execute_trade(
             "tp": tp_effective,
             "entry_take_profit": take_profit_target,
             "lot": trade.lot,
+            "comment": comment,
         }
         return MT5ExecutionResult(
             ok=True,
@@ -1041,6 +1054,7 @@ def execute_trade(
                 trade,
                 deviation=deviation,
                 magic=mag,
+                comment=comment,
                 take_profit_target=take_profit_target,
             )
         except RuntimeError as e:

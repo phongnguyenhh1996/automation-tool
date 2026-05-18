@@ -117,6 +117,7 @@ def execute_trade_all_accounts(
     deviation: int = 20,
     magic: Optional[int] = None,
     log_tp2: bool = True,
+    order_comment: Optional[str] = None,
 ) -> MT5MultiExecutionSummary:
     """
     Gửi lệnh lần lượt qua từng tài khoản (``execute_trade`` shutdown sau mỗi lần).
@@ -146,6 +147,7 @@ def execute_trade_all_accounts(
             account_id=acc.id,
             account_symbol_map=acc.symbol_map or None,
             take_profit_target=acc.entry_take_profit,
+            order_comment=order_comment,
         )
 
     for acc in accounts:

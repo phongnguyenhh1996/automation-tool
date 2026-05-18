@@ -974,6 +974,12 @@ def _filter_entry_accounts_for_zone(
 ) -> tuple[list[MT5AccountEntry], Optional[str], list[str]]:
     slot = _entry_slot_for_zone(zone, params)
     allowed = filter_mt5_accounts_for_entry_slot(accounts, slot)
+    if str(zone.id or "").strip().endswith("-2"):
+        try:
+            primary_id = primary_account(accounts).id
+        except RuntimeError:
+            primary_id = ""
+        allowed = [a for a in allowed if a.id == primary_id]
     allowed_ids = {a.id for a in allowed}
     blocked_ids = [a.id for a in accounts if a.id not in allowed_ids]
     return allowed, slot, blocked_ids
@@ -2483,6 +2489,7 @@ def _auto_entry_job(
                 dry_run=params.mt5_dry_run,
                 symbol_override=params.mt5_symbol,
                 zone_label=z0.label,
+                order_comment=zone_id,
             )
             multi_ae = format_mt5_multi_for_telegram(summary_ae)
             if not params.no_telegram:
@@ -2546,6 +2553,7 @@ def _auto_entry_job(
             parsed,
             dry_run=params.mt5_dry_run,
             symbol_override=params.mt5_symbol,
+            order_comment=zone_id,
         )
         if not params.no_telegram:
             send_mt5_execution_log_to_ngan_gon_chat(
@@ -2996,6 +3004,7 @@ def _zone_touch_job(
                 dry_run=params.mt5_dry_run,
                 symbol_override=params.mt5_symbol,
                 zone_label=z1.label,
+                order_comment=zone_id,
             )
             # MARKET: MT5 trả fill price; chỉ dùng giá từ account primary để update trade_line.
             try:
@@ -3061,6 +3070,7 @@ def _zone_touch_job(
             parsed,
             dry_run=params.mt5_dry_run,
             symbol_override=params.mt5_symbol,
+            order_comment=zone_id,
         )
         # MARKET: MT5 trả fill price; update trade_line để theo dõi 1R/TP1.
         try:
