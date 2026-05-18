@@ -42,8 +42,8 @@ def test_build_empty_state_off_off() -> None:
     assert payload["sell"]["mode"] == "off"
 
 
-def test_plan_chinh_overwrites_plan_phu_same_side_buy() -> None:
-    """plan_phu first, plan_chinh second → BUY prices from plan_chinh."""
+def test_plan_chinh_is_published_and_plan_phu_same_side_is_ignored() -> None:
+    """plan_phu is no longer published; BUY prices come from plan_chinh."""
     phu = _zone(
         label="plan_phu",
         trade_line="BUY LIMIT 2650.0 | SL 2645.0 | TP1 2660.0 | TP2 2670.0 | Lot 0.01",
@@ -67,7 +67,7 @@ def test_plan_chinh_overwrites_plan_phu_same_side_buy() -> None:
     assert payload["sell"]["mode"] == "off"
 
 
-def test_plan_phu_sell_plan_chinh_buy() -> None:
+def test_plan_phu_sell_is_ignored_plan_chinh_buy_only() -> None:
     phu = _zone(
         label="plan_phu",
         trade_line="SELL LIMIT 2680.0 | SL 2690.0 | TP1 2660.0 | Lot 0.01",
@@ -85,14 +85,11 @@ def test_plan_phu_sell_plan_chinh_buy() -> None:
         manifest_slot="sang",
     )
     assert payload["buy"]["mode"] == "trade"
-    assert payload["sell"]["mode"] == "trade"
-    assert payload["sell"]["low"] == 2680.0
-    assert payload["sell"]["high"] == 2660.0
-    assert payload["sell"]["label"] == "plan_phu__sang"
+    assert payload["sell"]["mode"] == "off"
 
 
-def test_slot_filter_ignores_other_session_shard() -> None:
-    """Only zones matching manifest_slot are used."""
+def test_slot_filter_does_not_fall_back_to_plan_phu() -> None:
+    """Only plan_chinh zones matching manifest_slot are used."""
     phu_sang = _zone(
         label="plan_phu",
         trade_line="BUY LIMIT 2650.0 | SL 2645.0 | TP1 2660.0 | Lot 0.01",
@@ -110,9 +107,8 @@ def test_slot_filter_ignores_other_session_shard() -> None:
         state=st,
         manifest_slot="sang",
     )
-    assert payload["buy"]["low"] == 2650.0
-    assert payload["buy"]["high"] == 2660.0
-    assert payload["buy"]["label"] == "plan_phu__sang"
+    assert payload["buy"]["mode"] == "off"
+    assert payload["sell"]["mode"] == "off"
 
 
 def test_market_entry_uses_midpoint_sl_tp1() -> None:

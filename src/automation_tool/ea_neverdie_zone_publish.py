@@ -1,5 +1,5 @@
 """
-Build EA Zone NeverDie JSON from shard zones (plan_chinh / plan_phu), persist locally,
+Build EA Zone NeverDie JSON from shard zones (plan_chinh), persist locally,
 and optionally upload to Cloudinary with a stable public_id.
 
 Used after ``coinmap-automation all`` / ``update``.
@@ -26,7 +26,7 @@ from automation_tool.zones_state import Zone, ZonesState, read_manifest_last_wri
 _log = logging.getLogger(__name__)
 
 _DEFAULT_EA_FOLDER = "automation_tool/ea_neverdie"
-_PLAN_LABELS = ("plan_phu", "plan_chinh")  # plan_phu first, plan_chinh overwrites same side
+_PLAN_LABELS = ("plan_chinh",)
 
 NeverdieMode = Literal["trade", "off", "watch"]
 
@@ -123,8 +123,7 @@ def build_neverdie_payload(
     manifest_slot: Optional[SessionSlot] = None,
 ) -> dict[str, Any]:
     """
-    Merge ``plan_phu`` then ``plan_chinh`` into ``buy`` / ``sell`` blocks.
-    Successful parse updates that side; ``plan_chinh`` overwrites ``plan_phu`` for the same side.
+    Publish only ``plan_chinh`` into ``buy`` / ``sell`` blocks.
 
     ``manifest_slot``: when set, skip reading ``zones_manifest.json`` (tests / callers).
     """
@@ -141,7 +140,7 @@ def build_neverdie_payload(
         if getattr(z, "session_slot", None) != slot:
             continue
         lab = (z.label or "").strip().lower()
-        if lab in ("plan_chinh", "plan_phu"):
+        if lab == "plan_chinh":
             by_lab[lab] = z
 
     sym = symbol.strip().upper()

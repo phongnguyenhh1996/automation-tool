@@ -1,5 +1,5 @@
 #property strict
-#property description "EA Zone NeverDie MT5 v2.3"
+#property description "EA Zone NeverDie MT5 v2.4"
 
 #include <Trade/Trade.mqh>
 
@@ -33,6 +33,7 @@ struct CampaignData
    double             low;
    double             high;
    double             sl;
+   double             baseLot;
    long               magic;
    bool               active;
   };
@@ -48,6 +49,7 @@ struct BasketInfo
 
 input group "=== TRADE SETTINGS ==="
 input double         InpLotSize                = 0.05;
+input double         InpPlanFollowLotSize      = 0.01;
 input double         InpMultiplier             = 1.25;
 input int            InpGridStep               = 3000;
 input int            InpMaxGridLevels          = 50;
@@ -67,7 +69,7 @@ input int            InpZonesPollSeconds       = 300;
 input string         InpZonesBearer            = "";
 input double         InpZonesSlBuffer          = 10.0;
 
-const string EA_VERSION = "2.3";
+const string EA_VERSION = "2.4";
 const int JSON_FETCH_WINDOW_MINUTES = 30;
 const int JSON_FETCH_SLOT_COUNT = 3;
 const int PANEL_LINE_COUNT = 24;
@@ -97,6 +99,7 @@ ENUM_TIMEFRAMES DcaTimeframe()
 bool ValidateInputs()
   {
    if(InpLotSize <= 0.0) return(false);
+   if(InpPlanFollowLotSize <= 0.0) return(false);
    if(InpMultiplier < 1.0) return(false);
    if(InpGridStep <= 0) return(false);
    if(InpMaxGridLevels < 1) return(false);
@@ -248,9 +251,9 @@ bool ParseSideZone(const string json, const string key, double &low, double &hig
    return(low > 0.0 && high > 0.0);
   }
 
-long StableZoneMagic(const ENUM_POSITION_TYPE side, const double low, const double high)
+long StableZoneMagicWithSalt(const ENUM_POSITION_TYPE side, const double low, const double high, const int buySalt, const int sellSalt)
   {
-   int sideSalt = (side == POSITION_TYPE_BUY ? 17 : 53);
+   int sideSalt = (side == POSITION_TYPE_BUY ? buySalt : sellSalt);
    string key = _Symbol + "_" + IntegerToString(sideSalt) + "_" + DoubleToString(low, _Digits) + "_" + DoubleToString(high, _Digits);
    long hash = 2166136261;
    for(int i = 0; i < StringLen(key); i++)
@@ -262,9 +265,26 @@ long StableZoneMagic(const ENUM_POSITION_TYPE side, const double low, const doub
    return(InpMagicNumber + 1 + hash);
   }
 
+long StableZoneMagic(const ENUM_POSITION_TYPE side, const double low, const double high)
+  {
+   return(StableZoneMagicWithSalt(side, low, high, 17, 53));
+  }
+
+long StablePlanFollowMagic(const ENUM_POSITION_TYPE side, const double low, const double high)
+  {
+   return(StableZoneMagicWithSalt(side, low, high, 71, 89));
+  }
+
 bool IsOurMagic(const long magic)
   {
    return(magic > InpMagicNumber && magic <= InpMagicNumber + 900000);
+  }
+
+bool IsPlanChinhLabel(const string label)
+  {
+   string value = label;
+   StringToLower(value);
+   return(StringFind(value, "plan_chinh__") == 0);
   }
 
 void NormalizeZonePrices(double &low, double &high)
@@ -293,6 +313,8 @@ int FindCampaignIndex(const long magic)
 
 void LoadWatchZone(const ENUM_POSITION_TYPE side, double low, double high, const double sl, const string label)
   {
+   if(!IsPlanChinhLabel(label)) return;
+
    NormalizeZonePrices(low, high);
    long magic = StableZoneMagic(side, low, high);
    int index = FindZoneIndex(side, low, high);
@@ -344,6 +366,20 @@ bool ApplyZonesJson(const string json)
    return(parsed);
   }
 
+void CleanupPreviousDayZonesBeforeJsonFetch()
+  {
+   int todayKey = DateKey(TimeCurrent());
+   for(int i = ArraySize(g_zones) - 1; i >= 0; i--)
+     {
+      if(DateKey(g_zones[i].createdAt) < todayKey)
+        {
+         if(g_zones[i].status == ZONE_STATUS_TRADE)
+            KeepCampaignForZone(g_zones[i]);
+         ArrayRemove(g_zones, i, 1);
+        }
+     }
+  }
+
 bool FetchZonesJson()
   {
    uchar request[];
@@ -352,6 +388,8 @@ bool FetchZonesJson()
    string headers = "";
    if(StringLen(InpZonesBearer) > 0)
       headers = "Authorization: Bearer " + InpZonesBearer + "\r\n";
+
+   CleanupPreviousDayZonesBeforeJsonFetch();
 
    ResetLastError();
    int code = WebRequest("GET", InpZonesJsonUrl, headers, 15000, request, result, responseHeaders);
@@ -399,15 +437,16 @@ double ActivationDistance(const ZoneData &zone, const double price)
    return(MathAbs(price - trigger));
   }
 
-void KeepCampaignForZone(const ZoneData &zone)
+void KeepCampaignForZoneWithMagic(const ZoneData &zone, const long magic, const double baseLot)
   {
-   int index = FindCampaignIndex(zone.magic);
+   int index = FindCampaignIndex(magic);
    if(index >= 0)
      {
       g_campaigns[index].side = zone.side;
       g_campaigns[index].low = zone.low;
       g_campaigns[index].high = zone.high;
       g_campaigns[index].sl = zone.sl;
+      g_campaigns[index].baseLot = baseLot;
       g_campaigns[index].active = true;
       return;
      }
@@ -418,8 +457,14 @@ void KeepCampaignForZone(const ZoneData &zone)
    g_campaigns[size].low = zone.low;
    g_campaigns[size].high = zone.high;
    g_campaigns[size].sl = zone.sl;
-   g_campaigns[size].magic = zone.magic;
+   g_campaigns[size].baseLot = baseLot;
+   g_campaigns[size].magic = magic;
    g_campaigns[size].active = true;
+  }
+
+void KeepCampaignForZone(const ZoneData &zone)
+  {
+   KeepCampaignForZoneWithMagic(zone, zone.magic, InpLotSize);
   }
 
 bool HasOpenPositions(const long magic)
@@ -442,6 +487,13 @@ double CampaignZoneSlFromPosition(const ENUM_POSITION_TYPE side, const double po
    return(NormalizeDouble(MathMax(positionSl - InpZonesSlBuffer, 0.0), _Digits));
   }
 
+double CampaignBaseLotFromPositionComment(const string comment)
+  {
+   if(StringFind(comment, "FOLLOW") >= 0)
+      return(InpPlanFollowLotSize);
+   return(InpLotSize);
+  }
+
 void RestoreCampaignsFromOpenPositions()
   {
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -461,6 +513,7 @@ void RestoreCampaignsFromOpenPositions()
       g_campaigns[size].low = 0.0;
       g_campaigns[size].high = 0.0;
       g_campaigns[size].sl = CampaignZoneSlFromPosition(side, PositionGetDouble(POSITION_SL));
+      g_campaigns[size].baseLot = CampaignBaseLotFromPositionComment(PositionGetString(POSITION_COMMENT));
       g_campaigns[size].magic = magic;
       g_campaigns[size].active = true;
      }
@@ -528,8 +581,8 @@ void RemoveTouchedTradeZone()
       ZoneData zone = g_zones[i];
       bool touchesLow = tick.ask <= zone.low;
       bool touchesHigh = tick.bid >= zone.high;
-      bool touchesBuySl = (zone.sl > 0.0 && tick.bid <= zone.sl - InpZonesSlBuffer);
-      bool touchesSellSl = (zone.sl > 0.0 && tick.ask >= zone.sl + InpZonesSlBuffer);
+      bool touchesBuySl = (zone.sl > 0.0 && tick.bid <= zone.sl);
+      bool touchesSellSl = (zone.sl > 0.0 && tick.ask >= zone.sl);
 
       if(zone.side == POSITION_TYPE_SELL && (touchesLow || touchesSellSl))
          RemoveZoneAt(i);
@@ -544,6 +597,46 @@ int ActiveTradeZoneIndex()
       if(g_zones[i].status == ZONE_STATUS_TRADE)
          return(i);
    return(-1);
+  }
+
+int NearestPlanChinhZoneIndex()
+  {
+   MqlTick tick;
+   if(!SymbolInfoTick(_Symbol, tick)) return(-1);
+   double price = MidPrice(tick);
+   int bestIndex = -1;
+   double bestDistance = 1.0e100;
+
+   for(int i = 0; i < ArraySize(g_zones); i++)
+     {
+      if(!IsPlanChinhLabel(g_zones[i].label)) continue;
+      double distance = ActivationDistance(g_zones[i], price);
+      if(distance <= bestDistance)
+        {
+         bestDistance = distance;
+         bestIndex = i;
+        }
+     }
+
+   return(bestIndex);
+  }
+
+void ManagePlanChinhFollowEntry()
+  {
+   int zoneIndex = NearestPlanChinhZoneIndex();
+   if(zoneIndex < 0) return;
+
+   ZoneData zone = g_zones[zoneIndex];
+   long followMagic = StablePlanFollowMagic(zone.side, zone.low, zone.high);
+   KeepCampaignForZoneWithMagic(zone, followMagic, InpPlanFollowLotSize);
+
+   BasketInfo basket;
+   BuildBasket(zone.side, followMagic, basket);
+   if(basket.count > 0) return;
+
+   int campaignIndex = FindCampaignIndex(followMagic);
+   if(campaignIndex < 0) return;
+   OpenCampaignOrder(g_campaigns[campaignIndex], NormalizeVolume(InpPlanFollowLotSize), "FOLLOW");
   }
 
 void BuildBasket(const ENUM_POSITION_TYPE side, const long magic, BasketInfo &basket)
@@ -713,7 +806,6 @@ void ManageActiveTradeEntry()
   {
    int zoneIndex = ActiveTradeZoneIndex();
    if(zoneIndex < 0) return;
-   if(TotalOpenEaOrders() > 0) return;
 
    ZoneData zone = g_zones[zoneIndex];
    KeepCampaignForZone(zone);
@@ -749,7 +841,7 @@ void ManageCampaigns(const bool onFirstTickOfNewDcaBar)
 
       if(ShouldOpenDca(g_campaigns[i], basket, onFirstTickOfNewDcaBar))
         {
-         double nextVolume = NormalizeVolume(InpLotSize * MathPow(InpMultiplier, basket.count));
+         double nextVolume = NormalizeVolume(g_campaigns[i].baseLot * MathPow(InpMultiplier, basket.count));
          OpenCampaignOrder(g_campaigns[i], nextVolume, "DCA");
         }
      }
@@ -1060,6 +1152,7 @@ void OnTick()
 
    RestoreCampaignsFromOpenPositions();
    CleanupCampaignsWithoutPositions();
+   ManagePlanChinhFollowEntry();
    ActivateNearestWatchZone();
    RemoveTouchedTradeZone();
 
