@@ -11,7 +11,7 @@ def _source() -> str:
 def test_v2_ea_file_declares_required_inputs_and_versioned_title() -> None:
     source = _source()
 
-    assert '#property description "EA Zone NeverDie MT5 v2.5"' in source
+    assert '#property description "EA Zone NeverDie MT5 v2.6"' in source
     assert 'input string         InpZonesJsonUrl' in source
     assert 'input int            InpZonesPollSeconds' in source
     assert 'input int            InpTakeProfit' in source
@@ -86,6 +86,14 @@ def test_v2_orders_use_price_tp_dca_and_side_wide_sl() -> None:
     assert 'g_campaigns[i].baseLot * MathPow(InpMultiplier, basket.count)' in source
     assert 'HighestSellStopLoss() + InpZonesSlBuffer' in source
     assert 'LowestBuyStopLoss() - InpZonesSlBuffer' in source
+
+
+def test_v2_follow_entry_is_disabled_while_a_trade_zone_is_active() -> None:
+    source = _source()
+    on_tick = source[source.index("void OnTick()") :]
+
+    assert 'if(ActiveTradeZoneIndex() >= 0) return;' in source
+    assert on_tick.index('ActivateNearestWatchZone();') < on_tick.index('ManagePlanChinhFollowEntry();')
 
 
 def test_v2_magic_is_side_aware_and_panel_shows_today_summary() -> None:

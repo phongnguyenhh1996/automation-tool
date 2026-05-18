@@ -1,5 +1,5 @@
 #property strict
-#property description "EA Zone NeverDie MT5 v2.5"
+#property description "EA Zone NeverDie MT5 v2.6"
 
 #include <Trade/Trade.mqh>
 
@@ -72,7 +72,7 @@ input int            InpZonesPollSeconds       = 300;
 input string         InpZonesBearer            = "";
 input double         InpZonesSlBuffer          = 10.0;
 
-const string EA_VERSION = "2.5";
+const string EA_VERSION = "2.6";
 const int JSON_FETCH_WINDOW_MINUTES = 30;
 const int JSON_FETCH_SLOT_COUNT = 3;
 const int PANEL_LINE_COUNT = 24;
@@ -636,6 +636,8 @@ int LatestPlanChinhZoneIndex()
 
 void ManagePlanChinhFollowEntry()
   {
+   if(ActiveTradeZoneIndex() >= 0) return;
+
    int zoneIndex = LatestPlanChinhZoneIndex();
    if(zoneIndex < 0) return;
 
@@ -1181,9 +1183,9 @@ void OnTick()
 
    RestoreCampaignsFromOpenPositions();
    CleanupCampaignsWithoutPositions();
-   ManagePlanChinhFollowEntry();
    ActivateNearestWatchZone();
    RemoveTouchedTradeZone();
+   ManagePlanChinhFollowEntry();
 
    bool onFirstTickOfNewDcaBar = false;
    datetime dcaBarOpen = iTime(_Symbol, DcaTimeframe(), 0);
