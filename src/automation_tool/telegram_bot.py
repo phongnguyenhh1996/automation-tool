@@ -493,6 +493,50 @@ def _should_fallback_summary_to_main(err: RuntimeError) -> bool:
     )
 
 
+def _is_telegram_parse_entities_error(err: RuntimeError) -> bool:
+    s = str(err).lower()
+    return "can't parse entities" in s or "can't find end tag" in s
+
+
+def _send_message_with_plain_fallback(
+    *,
+    bot_token: str,
+    chat_id: str,
+    text: str,
+    parse_mode: Optional[str] = None,
+    html_ready: bool = False,
+    reply_to_message_id: Optional[int] = None,
+    message_thread_id: Optional[int] = None,
+) -> Optional[int]:
+    try:
+        return send_message(
+            bot_token=bot_token,
+            chat_id=chat_id,
+            text=text,
+            parse_mode=parse_mode,
+            html_ready=html_ready,
+            reply_to_message_id=reply_to_message_id,
+            message_thread_id=message_thread_id,
+        )
+    except RuntimeError as e:
+        if not parse_mode or not _is_telegram_parse_entities_error(e):
+            raise
+        _log.warning(
+            "Telegram parse_mode=%s failed; retrying as plain text: %s",
+            parse_mode,
+            e,
+        )
+        return send_message(
+            bot_token=bot_token,
+            chat_id=chat_id,
+            text=text,
+            parse_mode=None,
+            html_ready=False,
+            reply_to_message_id=reply_to_message_id,
+            message_thread_id=message_thread_id,
+        )
+
+
 def enrich_ngan_gon_with_detail_link(
     ngan_gon: str,
     *,
@@ -935,7 +979,7 @@ def send_openai_output_to_telegram(
             summary_target = s_opt or chat_id
             detail_msg_id: Optional[int] = None
             if chi_tiet:
-                detail_msg_id = send_message(
+                detail_msg_id = _send_message_with_plain_fallback(
                     bot_token=bot_token,
                     chat_id=detail_target,
                     text=chi_tiet,
@@ -958,7 +1002,7 @@ def send_openai_output_to_telegram(
                         pm_out = pm2
                 target = summary_target.strip()
                 try:
-                    send_message(
+                    _send_message_with_plain_fallback(
                         bot_token=bot_token,
                         chat_id=target,
                         text=text_out,
@@ -977,7 +1021,7 @@ def send_openai_output_to_telegram(
                         "channels). Sending the short summary to TELEGRAM_CHAT_ID instead.",
                         file=sys.stderr,
                     )
-                    send_message(
+                    _send_message_with_plain_fallback(
                         bot_token=bot_token,
                         chat_id=chat_id,
                         text=text_out,
@@ -987,7 +1031,7 @@ def send_openai_output_to_telegram(
                         message_thread_id=message_thread_id,
                     )
             return
-        send_message(
+        _send_message_with_plain_fallback(
             bot_token=bot_token,
             chat_id=chat_id,
             text=raw,
@@ -999,7 +1043,7 @@ def send_openai_output_to_telegram(
         return
     for chunk in parsed:
         pm = chunk.parse_mode if chunk.parse_mode is not None else default_parse_mode
-        send_message(
+        _send_message_with_plain_fallback(
             bot_token=bot_token,
             chat_id=chat_id,
             text=chunk.text,

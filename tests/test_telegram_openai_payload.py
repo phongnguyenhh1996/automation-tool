@@ -88,6 +88,37 @@ def test_send_openai_legacy_no_network(monkeypatch):
     assert calls[0]["html_ready"] is False
 
 
+def test_send_openai_legacy_falls_back_to_plain_text_on_entity_parse_error(monkeypatch):
+    calls: list[dict] = []
+
+    def fake_send(**kwargs):
+        calls.append(kwargs)
+        if kwargs.get("parse_mode") == "HTML":
+            raise RuntimeError(
+                'Telegram sendMessage failed: 400 {"ok":false,"description":"Bad Request: '
+                "can't parse entities: Can't find end tag corresponding to start tag "
+                '\\"code\\""}'
+            )
+        return None
+
+    monkeypatch.setattr(
+        "automation_tool.telegram_bot.send_message",
+        fake_send,
+    )
+
+    send_openai_output_to_telegram(
+        bot_token="t",
+        chat_id="1",
+        raw='bad <code>output',
+        default_parse_mode="HTML",
+    )
+
+    assert len(calls) == 2
+    assert calls[0]["parse_mode"] == "HTML"
+    assert calls[1]["parse_mode"] is None
+    assert calls[1]["text"] == 'bad <code>output'
+
+
 def test_split_dual_markers():
     raw = """[OUTPUT_CHI_TIET]
 
