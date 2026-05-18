@@ -1,5 +1,5 @@
 #property strict
-#property description "EA Zone NeverDie MT5 v2.6"
+#property description "EA Zone NeverDie MT5 v2.7"
 
 #include <Trade/Trade.mqh>
 
@@ -72,7 +72,7 @@ input int            InpZonesPollSeconds       = 300;
 input string         InpZonesBearer            = "";
 input double         InpZonesSlBuffer          = 10.0;
 
-const string EA_VERSION = "2.6";
+const string EA_VERSION = "2.7";
 const int JSON_FETCH_WINDOW_MINUTES = 30;
 const int JSON_FETCH_SLOT_COUNT = 3;
 const int PANEL_LINE_COUNT = 24;
@@ -90,6 +90,8 @@ const int PANEL_HORIZONTAL_PAD = 28;
 CTrade g_trade;
 ZoneData g_zones[];
 CampaignData g_campaigns[];
+long g_stoppedBuyZoneMagics[];
+long g_stoppedSellZoneMagics[];
 datetime g_dcaBarOpenSeen = 0;
 int g_completedJsonFetchWindowKey = -1;
 int g_zoneFetchSequence = 0;
@@ -294,6 +296,47 @@ bool IsOurMagic(const long magic)
    return(magic > InpMagicNumber && magic <= InpMagicNumber + 900000);
   }
 
+string StoppedOutGlobalName(const ENUM_POSITION_TYPE side, const long magic)
+  {
+   string sideKey = (side == POSITION_TYPE_BUY ? "BUY" : "SELL");
+   return("ZND_V2_SL_" + IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN)) + "_" + _Symbol + "_" + sideKey + "_" + IntegerToString(magic));
+  }
+
+bool IsZoneStoppedOut(const ENUM_POSITION_TYPE side, const long magic)
+  {
+   if(side == POSITION_TYPE_BUY)
+     {
+      for(int i = 0; i < ArraySize(g_stoppedBuyZoneMagics); i++)
+         if(g_stoppedBuyZoneMagics[i] == magic) return(true);
+     }
+   else
+     {
+      for(int i = 0; i < ArraySize(g_stoppedSellZoneMagics); i++)
+         if(g_stoppedSellZoneMagics[i] == magic) return(true);
+     }
+
+   if(GlobalVariableCheck(StoppedOutGlobalName(side, magic))) return(true);
+   return(false);
+  }
+
+void MarkZoneStoppedOut(const ENUM_POSITION_TYPE side, const long magic)
+  {
+   if(IsZoneStoppedOut(side, magic)) return;
+   GlobalVariableSet(StoppedOutGlobalName(side, magic), (double)TimeCurrent());
+
+   if(side == POSITION_TYPE_BUY)
+     {
+      int size = ArraySize(g_stoppedBuyZoneMagics);
+      ArrayResize(g_stoppedBuyZoneMagics, size + 1);
+      g_stoppedBuyZoneMagics[size] = magic;
+      return;
+     }
+
+   int size = ArraySize(g_stoppedSellZoneMagics);
+   ArrayResize(g_stoppedSellZoneMagics, size + 1);
+   g_stoppedSellZoneMagics[size] = magic;
+  }
+
 bool IsPlanChinhLabel(const string label)
   {
    string value = label;
@@ -331,6 +374,7 @@ void LoadWatchZone(const ENUM_POSITION_TYPE side, double low, double high, const
 
    NormalizeZonePrices(low, high);
    long magic = StableZoneMagic(side, low, high);
+   if(IsZoneStoppedOut(side, magic)) return;
    int index = FindZoneIndex(side, low, high);
    g_zoneFetchSequence++;
 
@@ -584,6 +628,7 @@ void RemoveZoneAt(const int index)
   {
    if(index < 0 || index >= ArraySize(g_zones)) return;
    KeepCampaignForZone(g_zones[index]);
+   MarkZoneStoppedOut(g_zones[index].side, g_zones[index].magic);
    ArrayRemove(g_zones, index, 1);
   }
 

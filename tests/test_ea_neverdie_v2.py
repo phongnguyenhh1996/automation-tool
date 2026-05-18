@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -8,10 +9,30 @@ def _source() -> str:
     return EA_V2_SOURCE.read_text()
 
 
+def _function_body(source: str, name: str) -> str:
+    match = re.search(rf"(?m)^[A-Za-z_][A-Za-z0-9_<>&:\s*]*\b{name}\(", source)
+    if match is None:
+        raise AssertionError(f"Could not find function definition for {name}")
+    start = match.start()
+    brace_start = source.index("{", start)
+    depth = 0
+
+    for pos in range(brace_start, len(source)):
+        char = source[pos]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return source[brace_start : pos + 1]
+
+    raise AssertionError(f"Could not parse function body for {name}")
+
+
 def test_v2_ea_file_declares_required_inputs_and_versioned_title() -> None:
     source = _source()
 
-    assert '#property description "EA Zone NeverDie MT5 v2.6"' in source
+    assert '#property description "EA Zone NeverDie MT5 v2.7"' in source
     assert 'input string         InpZonesJsonUrl' in source
     assert 'input int            InpZonesPollSeconds' in source
     assert 'input int            InpTakeProfit' in source
@@ -65,6 +86,22 @@ def test_v2_trade_zone_removal_and_campaign_retention() -> None:
     assert 'RestoreCampaignsFromOpenPositions();' in source
     assert 'CampaignZoneSlFromPosition(side, PositionGetDouble(POSITION_SL))' in source
     assert 'ManageCampaigns(onFirstTickOfNewDcaBar);' in source
+
+
+def test_v2_stopped_zone_is_not_reloaded_from_json() -> None:
+    source = _source()
+    load_body = _function_body(source, "LoadWatchZone")
+    remove_body = _function_body(source, "RemoveZoneAt")
+    is_stopped_body = _function_body(source, "IsZoneStoppedOut")
+    mark_stopped_body = _function_body(source, "MarkZoneStoppedOut")
+
+    assert "long g_stoppedBuyZoneMagics[]" in source
+    assert "long g_stoppedSellZoneMagics[]" in source
+    assert "StoppedOutGlobalName" in source
+    assert "IsZoneStoppedOut(side, magic)" in load_body
+    assert "MarkZoneStoppedOut(g_zones[index].side, g_zones[index].magic)" in remove_body
+    assert "GlobalVariableCheck(StoppedOutGlobalName(side, magic))" in is_stopped_body
+    assert "GlobalVariableSet(StoppedOutGlobalName(side, magic)" in mark_stopped_body
 
 
 def test_v2_orders_use_price_tp_dca_and_side_wide_sl() -> None:
