@@ -11,10 +11,10 @@ def _source() -> str:
 def test_v2_ea_file_declares_required_inputs_and_versioned_title() -> None:
     source = _source()
 
-    assert '#property description "EA Zone NeverDie MT5 v2.4"' in source
+    assert '#property description "EA Zone NeverDie MT5 v2.5"' in source
     assert 'input string         InpZonesJsonUrl' in source
     assert 'input int            InpZonesPollSeconds' in source
-    assert 'input double         InpCentTakeProfit' in source
+    assert 'input int            InpTakeProfit' in source
     assert 'input double         InpPlanFollowLotSize' in source
     assert 'input double         InpZoneActivateBand' in source
     assert 'input int            InpDcaPrevOrderDistance' in source
@@ -67,12 +67,18 @@ def test_v2_trade_zone_removal_and_campaign_retention() -> None:
     assert 'ManageCampaigns(onFirstTickOfNewDcaBar);' in source
 
 
-def test_v2_orders_use_money_tp_dca_and_side_wide_sl() -> None:
+def test_v2_orders_use_price_tp_dca_and_side_wide_sl() -> None:
     source = _source()
 
-    assert 'basket.floatingProfit >= InpCentTakeProfit' in source
+    assert 'double   averagePrice;' in source
+    assert 'basket.averagePrice = basket.weightedPriceSum / basket.totalVolume;' in source
+    assert 'basket.averagePrice + DirectionMultiplier(side) * InpTakeProfit * _Point' in source
     assert 'OpenCampaignOrder(g_campaigns[campaignIndex], NormalizeVolume(InpPlanFollowLotSize), "FOLLOW")' in source
     assert 'KeepCampaignForZoneWithMagic(zone, followMagic, InpPlanFollowLotSize)' in source
+    assert "int                fetchSequence;" in source
+    assert "g_zoneFetchSequence++;" in source
+    assert "LatestPlanChinhZoneIndex();" in source
+    assert "if(g_zones[i].fetchSequence >= bestFetchSequence)" in source
     assert 'basket.floatingProfit >= 0.0' in source
     assert 'distance < InpGridStep' in source
     assert 'DcaPrevOrderDistanceReached(distance)' in source

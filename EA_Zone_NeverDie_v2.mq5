@@ -1,5 +1,5 @@
 #property strict
-#property description "EA Zone NeverDie MT5 v2.4"
+#property description "EA Zone NeverDie MT5 v2.5"
 
 #include <Trade/Trade.mqh>
 
@@ -25,6 +25,7 @@ struct ZoneData
    string             label;
    long               magic;
    datetime           createdAt;
+   int                fetchSequence;
   };
 
 struct CampaignData
@@ -42,6 +43,8 @@ struct BasketInfo
   {
    int      count;
    double   totalVolume;
+   double   weightedPriceSum;
+   double   averagePrice;
    double   floatingProfit;
    double   lastOpenPrice;
    datetime lastOpenTime;
@@ -54,7 +57,7 @@ input double         InpMultiplier             = 1.25;
 input int            InpGridStep               = 3000;
 input int            InpMaxGridLevels          = 50;
 input long           InpMagicNumber            = 20250215;
-input double         InpCentTakeProfit         = 10.0;
+input int            InpTakeProfit             = 3000;
 input ENUM_ND_DCA_TF InpDcaGridTimeframe       = ND_DCA_M15;
 input int            InpDcaClosedBarsRequired  = 1;
 input int            InpDcaPrevOrderDistance   = 0;
@@ -69,7 +72,7 @@ input int            InpZonesPollSeconds       = 300;
 input string         InpZonesBearer            = "";
 input double         InpZonesSlBuffer          = 10.0;
 
-const string EA_VERSION = "2.4";
+const string EA_VERSION = "2.5";
 const int JSON_FETCH_WINDOW_MINUTES = 30;
 const int JSON_FETCH_SLOT_COUNT = 3;
 const int PANEL_LINE_COUNT = 24;
@@ -89,6 +92,7 @@ ZoneData g_zones[];
 CampaignData g_campaigns[];
 datetime g_dcaBarOpenSeen = 0;
 int g_completedJsonFetchWindowKey = -1;
+int g_zoneFetchSequence = 0;
 string g_panelPrefix = "ZoneNeverDieV2Panel";
 
 ENUM_TIMEFRAMES DcaTimeframe()
@@ -103,7 +107,7 @@ bool ValidateInputs()
    if(InpMultiplier < 1.0) return(false);
    if(InpGridStep <= 0) return(false);
    if(InpMaxGridLevels < 1) return(false);
-   if(InpCentTakeProfit <= 0.0) return(false);
+   if(InpTakeProfit <= 0) return(false);
    if(InpDcaClosedBarsRequired < 1) return(false);
    if(InpDcaPrevOrderDistance < 0) return(false);
    if(InpZoneActivateBand < 0.0) return(false);
@@ -126,6 +130,16 @@ double MidPrice(const MqlTick &tick)
 double OpenPriceForSide(const ENUM_POSITION_TYPE side, const MqlTick &tick)
   {
    return(side == POSITION_TYPE_BUY ? tick.ask : tick.bid);
+  }
+
+double ClosePriceForSide(const ENUM_POSITION_TYPE side, const MqlTick &tick)
+  {
+   return(side == POSITION_TYPE_BUY ? tick.bid : tick.ask);
+  }
+
+double DirectionMultiplier(const ENUM_POSITION_TYPE side)
+  {
+   return(side == POSITION_TYPE_BUY ? 1.0 : -1.0);
   }
 
 bool RemoteJsonEnabled()
@@ -318,12 +332,14 @@ void LoadWatchZone(const ENUM_POSITION_TYPE side, double low, double high, const
    NormalizeZonePrices(low, high);
    long magic = StableZoneMagic(side, low, high);
    int index = FindZoneIndex(side, low, high);
+   g_zoneFetchSequence++;
 
    if(index >= 0)
      {
       g_zones[index].sl = NormalizeDouble(sl, _Digits);
       g_zones[index].label = label;
       g_zones[index].magic = magic;
+      g_zones[index].fetchSequence = g_zoneFetchSequence;
       if(g_zones[index].status != ZONE_STATUS_TRADE)
          g_zones[index].status = ZONE_STATUS_WATCH;
       return;
@@ -340,6 +356,7 @@ void LoadWatchZone(const ENUM_POSITION_TYPE side, double low, double high, const
    zone.label = label;
    zone.magic = magic;
    zone.createdAt = TimeCurrent();
+   zone.fetchSequence = g_zoneFetchSequence;
    g_zones[size] = zone;
   }
 
@@ -599,21 +616,17 @@ int ActiveTradeZoneIndex()
    return(-1);
   }
 
-int NearestPlanChinhZoneIndex()
+int LatestPlanChinhZoneIndex()
   {
-   MqlTick tick;
-   if(!SymbolInfoTick(_Symbol, tick)) return(-1);
-   double price = MidPrice(tick);
    int bestIndex = -1;
-   double bestDistance = 1.0e100;
+   int bestFetchSequence = -1;
 
    for(int i = 0; i < ArraySize(g_zones); i++)
      {
       if(!IsPlanChinhLabel(g_zones[i].label)) continue;
-      double distance = ActivationDistance(g_zones[i], price);
-      if(distance <= bestDistance)
+      if(g_zones[i].fetchSequence >= bestFetchSequence)
         {
-         bestDistance = distance;
+         bestFetchSequence = g_zones[i].fetchSequence;
          bestIndex = i;
         }
      }
@@ -623,7 +636,7 @@ int NearestPlanChinhZoneIndex()
 
 void ManagePlanChinhFollowEntry()
   {
-   int zoneIndex = NearestPlanChinhZoneIndex();
+   int zoneIndex = LatestPlanChinhZoneIndex();
    if(zoneIndex < 0) return;
 
    ZoneData zone = g_zones[zoneIndex];
@@ -643,6 +656,8 @@ void BuildBasket(const ENUM_POSITION_TYPE side, const long magic, BasketInfo &ba
   {
    basket.count = 0;
    basket.totalVolume = 0.0;
+   basket.weightedPriceSum = 0.0;
+   basket.averagePrice = 0.0;
    basket.floatingProfit = 0.0;
    basket.lastOpenPrice = 0.0;
    basket.lastOpenTime = 0;
@@ -656,17 +671,22 @@ void BuildBasket(const ENUM_POSITION_TYPE side, const long magic, BasketInfo &ba
       if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
 
       double volume = PositionGetDouble(POSITION_VOLUME);
+      double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
       datetime opened = (datetime)PositionGetInteger(POSITION_TIME);
       basket.count++;
       basket.totalVolume += volume;
+      basket.weightedPriceSum += openPrice * volume;
       basket.floatingProfit += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
 
       if(opened >= basket.lastOpenTime)
         {
          basket.lastOpenTime = opened;
-         basket.lastOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+         basket.lastOpenPrice = openPrice;
         }
      }
+
+   if(basket.totalVolume > 0.0)
+      basket.averagePrice = basket.weightedPriceSum / basket.totalVolume;
   }
 
 int VolumeDigits(const double step)
@@ -749,10 +769,19 @@ bool OpenCampaignOrder(const CampaignData &campaign, const double volume, const 
    return(g_trade.Sell(volume, _Symbol, 0.0, sl, 0.0, comment));
   }
 
-bool CampaignTakeProfitReached(const BasketInfo &basket)
+bool CampaignTakeProfitReached(const ENUM_POSITION_TYPE side, const BasketInfo &basket)
   {
-   if(basket.count <= 0) return(false);
-   return(basket.floatingProfit >= InpCentTakeProfit);
+   if(basket.count <= 0 || basket.totalVolume <= 0.0) return(false);
+
+   MqlTick tick;
+   if(!SymbolInfoTick(_Symbol, tick)) return(false);
+
+   double currentPrice = ClosePriceForSide(side, tick);
+   double targetPrice = basket.averagePrice + DirectionMultiplier(side) * InpTakeProfit * _Point;
+
+   if(side == POSITION_TYPE_BUY && currentPrice >= targetPrice && basket.floatingProfit > 0.0) return(true);
+   if(side == POSITION_TYPE_SELL && currentPrice <= targetPrice && basket.floatingProfit > 0.0) return(true);
+   return(false);
   }
 
 bool CloseCampaign(const CampaignData &campaign)
@@ -832,7 +861,7 @@ void ManageCampaigns(const bool onFirstTickOfNewDcaBar)
          continue;
         }
 
-      if(CampaignTakeProfitReached(basket))
+      if(CampaignTakeProfitReached(g_campaigns[i].side, basket))
         {
          if(CloseCampaign(g_campaigns[i]))
             ArrayRemove(g_campaigns, i, 1);
