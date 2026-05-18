@@ -89,18 +89,23 @@ def test_zones_from_analysis_prefers_pe_vung_cho() -> None:
     assert by_id["plan_chinh"].vung_cho == "4707.0–4709.0"
 
 
-def test_zones_from_analysis_skips_scalp_for_all_and_update_sources() -> None:
+def test_zones_from_analysis_keeps_all_scalps_but_skips_update_scalps() -> None:
     payload = AnalysisPayload(
         prices=[
             PriceZoneEntry("plan_chinh", 100.0, hop_luu=70, trade_line="BUY LIMIT 100"),
             PriceZoneEntry("plan_phu", 101.0, hop_luu=65, trade_line="BUY LIMIT 101"),
             PriceZoneEntry("scalp", 102.0, hop_luu=60, trade_line="BUY LIMIT 102"),
+            PriceZoneEntry("scalp_2", 103.0, hop_luu=61, trade_line="BUY LIMIT 103"),
+            PriceZoneEntry("scalp_2", 104.0, hop_luu=62, trade_line="BUY LIMIT 104"),
         ]
     )
 
-    for source in ("all", "update"):
-        zones = zones_from_analysis_payload(symbol="XAUUSD", payload=payload, source=source)
-        assert [z.label for z in zones] == ["plan_chinh", "plan_phu"]
+    all_zones = zones_from_analysis_payload(symbol="XAUUSD", payload=payload, source="all")
+    assert [z.label for z in all_zones] == ["plan_chinh", "plan_phu", "scalp", "scalp_2"]
+    assert [z.vung_cho for z in all_zones] == ["100.0–100.0", "101.0–101.0", "102.0–102.0", "103.0–103.0"]
+
+    update_zones = zones_from_analysis_payload(symbol="XAUUSD", payload=payload, source="update")
+    assert [z.label for z in update_zones] == ["plan_chinh", "plan_phu"]
 
 
 def test_zones_from_analysis_merged_keeps_zone_when_no_change_true() -> None:

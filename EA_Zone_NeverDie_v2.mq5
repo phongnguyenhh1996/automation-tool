@@ -54,7 +54,7 @@ input group "=== TRADE SETTINGS ==="
 input double         InpLotSize                = 0.05;
 input double         InpPlanFollowLotSize      = 0.03;
 input double         InpMultiplier             = 1.25;
-input int            InpGridStep               = 3000;
+input int            InpGridStep               = 5000;
 input int            InpMaxGridLevels          = 50;
 input long           InpMagicNumber            = 20250215;
 input int            InpTakeProfit             = 3000;

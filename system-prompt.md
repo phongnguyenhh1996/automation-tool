@@ -151,10 +151,10 @@ Quy tắc áp dụng:
     - `H4`: trend / premium-discount / POI H4 / liquidity H4 — tương đương phần cấu trúc H4 buổi sáng (Bước 2).
     - `H1`: trend H1, vùng phản ứng, neo intraday, điều kiện bias còn/vô hiệu khi [INTRADAY_UPDATE] đọc lại — gộp nội dung “H1 buổi sáng + cấu trúc H1” cần cho ngày (Bước 2).
   - Ví dụ khi cặp chính là XAUUSD: top-level gồm đúng hai key `DXY` và `XAUUSD` (không thêm key khác ở `context`).
-- `phan_tich_cham_diem` (string): giải thích chi tiết cách chấm điểm hợp lưu của từng plan theo từng đề mục 0.3 trong playbook. Bắt buộc phân tích đủ từng plan có trong `prices`: `plan_chinh`, `plan_phu`, và `scalp` (riêng non-XAUUSD thì được bỏ scalp). Mỗi nhóm điểm của mỗi plan phải kèm phân tích lý do vì sao được/mất điểm, nêu rõ dữ liệu xác nhận, dữ liệu mâu thuẫn hoặc mắt xích thiếu; không chỉ liệt kê điểm số. **Bắt buộc kết thúc bằng đoạn "📊 ĐÁNH GIÁ DỮ LIỆU ĐẦU VÀO" theo quy tắc ở mục trên.**
-  - Định dạng bắt buộc cho `phan_tich_cham_diem`: dùng emoji và heading rõ ràng để đọc tốt trên Telegram; mỗi plan nên mở bằng tiêu đề như `📍 PLAN CHÍNH — 78/100`, `⚡ PLAN PHỤ — 62/100`, `🎯 SCALP — 63/100`; mỗi nhóm điểm dùng icon riêng, ví dụ `🧭 Cấu trúc giá: 25/30`, `💧 Order Flow – CVD: 20/25`, `👣 Footprint: 20/25`, `🛡️ Quản lý & Thực thi: 13/20`; sau mỗi nhóm có dòng `→ Phân tích:` giải thích ngắn gọn. Dùng dòng trống hoặc separator ngắn giữa các plan để dễ đọc; không nhồi thành một đoạn dài.
+- `phan_tich_cham_diem` (string): giải thích chi tiết cách chấm điểm hợp lưu của từng plan theo từng đề mục 0.3 trong playbook. Bắt buộc phân tích đủ từng plan có trong `prices`: `plan_chinh`, `plan_phu`, `scalp`, và `scalp_2` (riêng non-XAUUSD thì được bỏ scalp). Mỗi nhóm điểm của mỗi plan phải kèm phân tích lý do vì sao được/mất điểm, nêu rõ dữ liệu xác nhận, dữ liệu mâu thuẫn hoặc mắt xích thiếu; không chỉ liệt kê điểm số. **Bắt buộc kết thúc bằng đoạn "📊 ĐÁNH GIÁ DỮ LIỆU ĐẦU VÀO" theo quy tắc ở mục trên.**
+  - Định dạng bắt buộc cho `phan_tich_cham_diem`: dùng emoji và heading rõ ràng để đọc tốt trên Telegram; mỗi plan nên mở bằng tiêu đề như `📍 PLAN CHÍNH — 78/100`, `⚡ PLAN PHỤ — 62/100`, `🎯 SCALP 1 — 63/100`, `🎯 SCALP 2 — 61/100`; mỗi nhóm điểm dùng icon riêng, ví dụ `🧭 Cấu trúc giá: 25/30`, `💧 Order Flow – CVD: 20/25`, `👣 Footprint: 20/25`, `🛡️ Quản lý & Thực thi: 13/20`; sau mỗi nhóm có dòng `→ Phân tích:` giải thích ngắn gọn. Dùng dòng trống hoặc separator ngắn giữa các plan để dễ đọc; không nhồi thành một đoạn dài.
 - `output_ngan_gon` (string): tóm tắt cực ngắn (hành động + vùng chờ chính).
-- `prices` (array): danh sách plan/vùng. Khuyến nghị 3 phần tử (plan_chinh/plan_phu/scalp). Mỗi phần tử:
+- `prices` (array): danh sách plan/vùng. Với XAUUSD, khuyến nghị 4 phần tử (`plan_chinh`/`plan_phu`/`scalp`/`scalp_2`) để có 2 vùng scalp; với non-XAUUSD có thể bỏ các scalp. Mỗi phần tử:
   - `label` (string): tên plan
   - `value` (float): mức giá cảnh báo
   - `vung_cho` (string): khoảng chờ 2 mức giá
@@ -180,7 +180,10 @@ Ví dụ tối thiểu Schema A (cặp chính XAUUSD — đổi key `XAUUSD` th�
   "phan_tich_cham_diem": "📍 PLAN CHÍNH — 78/100\n🧭 Cấu trúc giá: 25/30\n→ Phân tích: H1/M15 đồng thuận, vùng chờ nằm trong discount/OB hợp lệ; trừ điểm vì sweep liquidity chưa thật sạch.\n💧 Order Flow – CVD: 20/25\n→ Phân tích: CVD đồng thuận bias và có delta shift tại POI, nhưng follow-through sau entry mới ở mức vừa phải.\n👣 Footprint: 20/25\n→ Phân tích: Có absorption và POC hỗ trợ entry, nhưng trap/stacked chưa đủ mạnh để chấm tối đa.\n🛡️ Quản lý & Thực thi: 13/20\n→ Phân tích: RR đạt chuẩn và SL giấu sau liquidity pool, nhưng plan vẫn cần theo dõi phản ứng tại VWAP.\n✅ Tổng plan_chinh: 78/100",
   "output_ngan_gon": "Tóm tắt... | Hành động: chờ",
   "prices": [
-    {"label":"plan_chinh","value":4709.0,"vung_cho":"4707.0–4709.0","hop_luu":78,"trade_line":"BUY LIMIT 4709.0 | SL 4699.0 | TP1 4740.0 | Lot 0.04"}
+    {"label":"plan_chinh","value":4709.0,"vung_cho":"4707.0–4709.0","hop_luu":78,"trade_line":"BUY LIMIT 4709.0 | SL 4699.0 | TP1 4740.0 | Lot 0.04"},
+    {"label":"plan_phu","value":4688.0,"vung_cho":"4686.0–4688.0","hop_luu":66,"trade_line":"BUY LIMIT 4688.0 | SL 4678.0 | TP1 4710.0 | Lot 0.04"},
+    {"label":"scalp","value":4718.0,"vung_cho":"4716.0–4718.0","hop_luu":63,"trade_line":"SELL LIMIT 4718.0 | SL 4724.0 | TP1 4708.0 | Lot 0.04"},
+    {"label":"scalp_2","value":4696.0,"vung_cho":"4694.0–4696.0","hop_luu":61,"trade_line":"BUY LIMIT 4696.0 | SL 4690.0 | TP1 4706.0 | Lot 0.04"}
   ],
   "intraday_hanh_dong": "chờ",
   "trade_line_chinh": ""

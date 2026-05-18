@@ -1076,6 +1076,22 @@ def zones_from_analysis_payload(
     session_slot: Optional[SessionSlot] = None,
 ) -> list[Zone]:
     """Convert analysis payload (prices[] entries) into zones (full replace per label present)."""
+    source_key = (source or "").strip().lower()
+    if source_key == "all":
+        zones: list[Zone] = []
+        seen: set[str] = set()
+        for pe in payload.prices:
+            lab = (pe.label or "").strip().lower()
+            if not lab or lab in seen:
+                continue
+            if lab not in ZONE_LABELS_ORDER and not is_scalp_label(lab):
+                continue
+            seen.add(lab)
+            zones.append(
+                zone_from_price_entry(lab=lab, pe=pe, source=source, session_slot=session_slot)
+            )
+        return zones
+
     by_label: dict[str, PriceZoneEntry] = {}
     for pe in payload.prices:
         key = pe.label.strip().lower()
@@ -1084,7 +1100,7 @@ def zones_from_analysis_payload(
 
     zones: list[Zone] = []
     for lab in ZONE_LABELS_ORDER:
-        if source in {"all", "update"} and is_scalp_label(lab):
+        if source_key == "update" and is_scalp_label(lab):
             continue
         pe = by_label.get(lab)
         if pe is None:
