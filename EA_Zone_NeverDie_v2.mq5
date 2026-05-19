@@ -1,5 +1,5 @@
 #property strict
-#property description "EA Zone NeverDie MT5 v2.8"
+#property description "EA Zone NeverDie MT5 v2.9"
 
 #include <Trade/Trade.mqh>
 
@@ -76,7 +76,7 @@ input group "=== DEBUG ==="
 input bool           InpDebugLog               = true;
 input bool           InpDebugTraceDecisions    = false;
 
-const string EA_VERSION = "2.8";
+const string EA_VERSION = "2.9";
 const int JSON_FETCH_WINDOW_MINUTES = 30;
 const int JSON_FETCH_SLOT_COUNT = 3;
 const int PANEL_LINE_COUNT = 24;
@@ -446,6 +446,32 @@ bool IsPlanChinhLabel(const string label)
    return(StringFind(value, "plan_chinh__") == 0);
   }
 
+string JsonFetchSlotExpectedLabel(const int slot)
+  {
+   if(slot == 0) return("plan_chinh__sang");
+   if(slot == 1) return("plan_chinh__chieu");
+   if(slot == 2) return("plan_chinh__toi");
+   return("");
+  }
+
+int JsonFetchSlotFromWindowKey(const int windowKey)
+  {
+   if(windowKey < 0) return(-1);
+   return(windowKey % 10);
+  }
+
+bool IsExpectedJsonFetchLabel(const string label, const string expectedLabel)
+  {
+   if(StringLen(expectedLabel) <= 0)
+      return(IsPlanChinhLabel(label));
+
+   string value = label;
+   string expected = expectedLabel;
+   StringToLower(value);
+   StringToLower(expected);
+   return(value == expected);
+  }
+
 void NormalizeZonePrices(double &low, double &high)
   {
    double minPrice = MathMin(low, high);
@@ -514,9 +540,9 @@ void LoadWatchZone(const ENUM_POSITION_TYPE side, double low, double high, const
    DebugLog("Loaded new watch zone from JSON. " + ZoneDebugText(zone));
   }
 
-bool ApplyZonesJson(const string json)
+bool ApplyZonesJson(const string json, const string expectedLabel)
   {
-   bool parsed = false;
+   bool loadedExpectedSlot = false;
    double low;
    double high;
    double sl;
@@ -525,8 +551,13 @@ bool ApplyZonesJson(const string json)
    if(ParseSideZone(json, "buy", low, high, sl, label))
      {
       DebugLog("Parsed BUY JSON zone. low=" + PriceText(low) + " high=" + PriceText(high) + " sl=" + PriceText(sl) + " label=" + label);
-      LoadWatchZone(POSITION_TYPE_BUY, low, high, sl, label);
-      parsed = true;
+      if(IsExpectedJsonFetchLabel(label, expectedLabel))
+        {
+         LoadWatchZone(POSITION_TYPE_BUY, low, high, sl, label);
+         loadedExpectedSlot = true;
+        }
+      else
+         DebugLog("Skip BUY JSON zone for different fetch slot. expected=" + expectedLabel + " label=" + label);
      }
    else
       DebugTrace("No valid BUY zone found in JSON");
@@ -534,13 +565,18 @@ bool ApplyZonesJson(const string json)
    if(ParseSideZone(json, "sell", low, high, sl, label))
      {
       DebugLog("Parsed SELL JSON zone. low=" + PriceText(low) + " high=" + PriceText(high) + " sl=" + PriceText(sl) + " label=" + label);
-      LoadWatchZone(POSITION_TYPE_SELL, low, high, sl, label);
-      parsed = true;
+      if(IsExpectedJsonFetchLabel(label, expectedLabel))
+        {
+         LoadWatchZone(POSITION_TYPE_SELL, low, high, sl, label);
+         loadedExpectedSlot = true;
+        }
+      else
+         DebugLog("Skip SELL JSON zone for different fetch slot. expected=" + expectedLabel + " label=" + label);
      }
    else
       DebugTrace("No valid SELL zone found in JSON");
 
-   return(parsed);
+   return(loadedExpectedSlot);
   }
 
 void CleanupPreviousDayZonesBeforeJsonFetch()
@@ -558,7 +594,7 @@ void CleanupPreviousDayZonesBeforeJsonFetch()
      }
   }
 
-bool FetchZonesJson()
+bool FetchZonesJson(const string expectedLabel)
   {
    uchar request[];
    uchar result[];
@@ -570,7 +606,7 @@ bool FetchZonesJson()
    headers += "Pragma: no-cache\r\n";
 
    string requestUrl = JsonFetchRequestUrl();
-   DebugLog("Fetching zones JSON. url=" + requestUrl + " bearerSet=" + BoolText(StringLen(InpZonesBearer) > 0));
+   DebugLog("Fetching zones JSON. url=" + requestUrl + " expectedLabel=" + expectedLabel + " bearerSet=" + BoolText(StringLen(InpZonesBearer) > 0));
    CleanupPreviousDayZonesBeforeJsonFetch();
 
    ResetLastError();
@@ -583,9 +619,12 @@ bool FetchZonesJson()
 
    string body = CharArrayToString(result);
    DebugLog("Fetched zones JSON. bytes=" + IntegerToString(ArraySize(result)) + " bodyLength=" + IntegerToString(StringLen(body)));
-   if(!ApplyZonesJson(body))
+   if(!ApplyZonesJson(body, expectedLabel))
      {
-      PrintFormat("NeverDie v2 JSON parse failed: %s", body);
+      if(StringLen(expectedLabel) > 0)
+         PrintFormat("NeverDie v2 JSON missing expected slot %s: %s", expectedLabel, body);
+      else
+         PrintFormat("NeverDie v2 JSON parse failed: %s", body);
       return(false);
      }
    return(true);
@@ -598,8 +637,11 @@ void FetchZonesOnInit()
       DebugLog("Remote JSON disabled on init. tester=" + BoolText((bool)MQLInfoInteger(MQL_TESTER)) + " pollSeconds=" + IntegerToString(InpZonesPollSeconds) + " urlLength=" + IntegerToString(StringLen(InpZonesJsonUrl)));
       return;
      }
-   if(!FetchZonesJson()) return;
    int windowKey = CurrentJsonFetchWindowKey();
+   string expectedLabel = "";
+   if(windowKey >= 0)
+      expectedLabel = JsonFetchSlotExpectedLabel(JsonFetchSlotFromWindowKey(windowKey));
+   if(!FetchZonesJson(expectedLabel)) return;
    if(windowKey >= 0) g_completedJsonFetchWindowKey = windowKey;
    DebugLog("Initial zones JSON fetch complete. windowKey=" + IntegerToString(windowKey) + " zones=" + IntegerToString(ArraySize(g_zones)));
   }
@@ -618,11 +660,12 @@ void FetchZonesOnSchedule()
       DebugTrace("Scheduled JSON fetch skipped: window already completed. windowKey=" + IntegerToString(windowKey));
       return;
      }
-   DebugLog("Scheduled zones JSON fetch started. windowKey=" + IntegerToString(windowKey));
-   if(FetchZonesJson())
+   string expectedLabel = JsonFetchSlotExpectedLabel(JsonFetchSlotFromWindowKey(windowKey));
+   DebugLog("Scheduled zones JSON fetch started. windowKey=" + IntegerToString(windowKey) + " expectedLabel=" + expectedLabel);
+   if(FetchZonesJson(expectedLabel))
      {
       g_completedJsonFetchWindowKey = windowKey;
-      DebugLog("Scheduled zones JSON fetch complete. windowKey=" + IntegerToString(windowKey) + " zones=" + IntegerToString(ArraySize(g_zones)));
+      DebugLog("Scheduled zones JSON fetch complete. windowKey=" + IntegerToString(windowKey) + " expectedLabel=" + expectedLabel + " zones=" + IntegerToString(ArraySize(g_zones)));
      }
   }
 

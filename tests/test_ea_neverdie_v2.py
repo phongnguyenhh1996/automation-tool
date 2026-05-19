@@ -32,7 +32,7 @@ def _function_body(source: str, name: str) -> str:
 def test_v2_ea_file_declares_required_inputs_and_versioned_title() -> None:
     source = _source()
 
-    assert '#property description "EA Zone NeverDie MT5 v2.8"' in source
+    assert '#property description "EA Zone NeverDie MT5 v2.9"' in source
     assert 'input string         InpZonesJsonUrl' in source
     assert 'input int            InpZonesPollSeconds' in source
     assert 'input int            InpTakeProfit' in source
@@ -55,10 +55,30 @@ def test_v2_json_loads_new_zones_as_watch_and_keeps_poll_slots() -> None:
     assert 'return(2 * 60 + 50);' in source
     assert 'return(7 * 60 + 45);' in source
     assert 'return(14 * 60 + 15);' in source
+    assert 'return("plan_chinh__sang");' in source
+    assert 'return("plan_chinh__chieu");' in source
+    assert 'return("plan_chinh__toi");' in source
+    assert 'IsExpectedJsonFetchLabel(label, expectedLabel)' in source
+    assert 'FetchZonesJson(expectedLabel)' in source
     assert '"Cache-Control: no-cache\\r\\n"' in fetch_body
     assert '"Pragma: no-cache\\r\\n"' in fetch_body
     assert 'JsonFetchRequestUrl()' in fetch_body
     assert 'WebRequest("GET", requestUrl,' in fetch_body
+
+
+def test_v2_scheduled_json_fetch_only_completes_matching_slot() -> None:
+    source = _source()
+    apply_body = _function_body(source, "ApplyZonesJson")
+    schedule_body = _function_body(source, "FetchZonesOnSchedule")
+
+    assert 'string expectedLabel = JsonFetchSlotExpectedLabel(JsonFetchSlotFromWindowKey(windowKey));' in schedule_body
+    assert 'FetchZonesJson(expectedLabel)' in schedule_body
+    assert 'g_completedJsonFetchWindowKey = windowKey;' in schedule_body
+    assert schedule_body.index('FetchZonesJson(expectedLabel)') < schedule_body.index('g_completedJsonFetchWindowKey = windowKey;')
+    assert 'bool loadedExpectedSlot = false;' in apply_body
+    assert 'loadedExpectedSlot = true;' in apply_body
+    assert 'return(loadedExpectedSlot);' in apply_body
+    assert 'NeverDie v2 JSON missing expected slot %s' in source
 
 
 def test_v2_cleans_yesterday_zones_before_fetching_json() -> None:
