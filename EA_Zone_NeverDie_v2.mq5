@@ -1268,11 +1268,6 @@ bool FindNearestWatchZoneForDisplay(ZoneData &zone, double &distance)
    return(true);
   }
 
-string SideText(const ENUM_POSITION_TYPE side)
-  {
-   return(side == POSITION_TYPE_BUY ? "BUY" : "SELL");
-  }
-
 string ZoneLabelText(const ZoneData &zone)
   {
    return(StringLen(zone.label) > 0 ? zone.label : "-");
