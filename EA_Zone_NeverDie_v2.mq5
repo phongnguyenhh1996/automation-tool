@@ -51,7 +51,7 @@ struct BasketInfo
   };
 
 input group "=== TRADE SETTINGS ==="
-input double         InpLotSize                = 0.05;
+input double         InpLotSize                = 0.06;
 input double         InpPlanFollowLotSize      = 0.03;
 input double         InpMultiplier             = 1.25;
 input int            InpGridStep               = 5000;
@@ -60,7 +60,7 @@ input long           InpMagicNumber            = 20250215;
 input int            InpTakeProfit             = 3000;
 input ENUM_ND_DCA_TF InpDcaGridTimeframe       = ND_DCA_M15;
 input int            InpDcaClosedBarsRequired  = 1;
-input int            InpDcaPrevOrderDistance   = 0;
+input int            InpDcaPrevOrderDistance   = 12000;
 input double         InpZoneActivateBand       = 3.0;
 
 input group "=== DISPLAY ==="
@@ -70,7 +70,7 @@ input group "=== REMOTE ZONES JSON ==="
 input string         InpZonesJsonUrl           = "https://res.cloudinary.com/easy-toeic/raw/upload/automation_tool/ea_neverdie/neverdie_XAUUSD.json";
 input int            InpZonesPollSeconds       = 300;
 input string         InpZonesBearer            = "";
-input double         InpZonesSlBuffer          = 10.0;
+input double         InpZonesSlBuffer          = 30.0;
 
 const string EA_VERSION = "2.7";
 const int JSON_FETCH_WINDOW_MINUTES = 30;

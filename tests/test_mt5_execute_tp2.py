@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from automation_tool.mt5_execute import build_request, symbol_uses_market_execution
 from automation_tool.mt5_openai_parse import ParsedTrade
+from automation_tool.tv_watchlist_daemon import _mt5_entry_order_comment
 
 
 @dataclass
@@ -85,6 +86,12 @@ def test_build_request_uses_zone_id_comment_for_history() -> None:
     )
     req = build_request(mt5, t, comment="plan_chinh__sang-2")
     assert req["comment"] == "plan_chinh__sang-2"
+
+
+def test_mt5_entry_order_comment_drops_plan_prefix() -> None:
+    assert _mt5_entry_order_comment("plan_chinh__chieu") == "chinh__chieu"
+    assert _mt5_entry_order_comment("plan_chinh__sang-2") == "chinh__sang-2"
+    assert _mt5_entry_order_comment("scalp__chieu") == "scalp__chieu"
 
 
 def test_build_request_can_use_tp1_even_when_tp2_is_present() -> None:

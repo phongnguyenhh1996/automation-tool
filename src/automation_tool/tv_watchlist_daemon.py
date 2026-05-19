@@ -985,6 +985,13 @@ def _filter_entry_accounts_for_zone(
     return allowed, slot, blocked_ids
 
 
+def _mt5_entry_order_comment(zone_id: str) -> str:
+    comment = str(zone_id or "").strip()
+    if comment.startswith("plan_"):
+        return comment[len("plan_") :]
+    return comment
+
+
 def _multi_summary_tracking_ticket(summary, accounts: list[MT5AccountEntry]) -> int:
     """Prefer the configured primary ticket; if that account is filtered out, track the first ticket."""
     try:
@@ -2489,7 +2496,7 @@ def _auto_entry_job(
                 dry_run=params.mt5_dry_run,
                 symbol_override=params.mt5_symbol,
                 zone_label=z0.label,
-                order_comment=zone_id,
+                order_comment=_mt5_entry_order_comment(zone_id),
             )
             multi_ae = format_mt5_multi_for_telegram(summary_ae)
             if not params.no_telegram:
@@ -2553,7 +2560,7 @@ def _auto_entry_job(
             parsed,
             dry_run=params.mt5_dry_run,
             symbol_override=params.mt5_symbol,
-            order_comment=zone_id,
+            order_comment=_mt5_entry_order_comment(zone_id),
         )
         if not params.no_telegram:
             send_mt5_execution_log_to_ngan_gon_chat(
@@ -3004,7 +3011,7 @@ def _zone_touch_job(
                 dry_run=params.mt5_dry_run,
                 symbol_override=params.mt5_symbol,
                 zone_label=z1.label,
-                order_comment=zone_id,
+                order_comment=_mt5_entry_order_comment(zone_id),
             )
             # MARKET: MT5 trả fill price; chỉ dùng giá từ account primary để update trade_line.
             try:
@@ -3070,7 +3077,7 @@ def _zone_touch_job(
             parsed,
             dry_run=params.mt5_dry_run,
             symbol_override=params.mt5_symbol,
-            order_comment=zone_id,
+            order_comment=_mt5_entry_order_comment(zone_id),
         )
         # MARKET: MT5 trả fill price; update trade_line để theo dõi 1R/TP1.
         try:
