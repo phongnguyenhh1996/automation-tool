@@ -671,6 +671,26 @@ void KeepCampaignForZone(const ZoneData &zone)
    KeepCampaignForZoneWithMagic(zone, zone.magic, InpLotSize);
   }
 
+void KeepPlanFollowCampaignForZone(const ZoneData &zone)
+  {
+   long followMagic = StablePlanFollowMagic(zone.side, zone.low, zone.high);
+   KeepCampaignForZoneWithMagic(zone, followMagic, InpPlanFollowLotSize);
+  }
+
+bool IsPlanFollowCampaign(const CampaignData &campaign)
+  {
+   if(campaign.low <= 0.0 || campaign.high <= 0.0) return(false);
+   return(campaign.magic == StablePlanFollowMagic(campaign.side, campaign.low, campaign.high));
+  }
+
+int LatestPlanFollowCampaignIndex()
+  {
+   for(int i = ArraySize(g_campaigns) - 1; i >= 0; i--)
+      if(g_campaigns[i].active && IsPlanFollowCampaign(g_campaigns[i]))
+         return(i);
+   return(-1);
+  }
+
 bool HasOpenPositions(const long magic)
   {
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -779,7 +799,9 @@ void RemoveZoneAt(const int index)
   {
    if(index < 0 || index >= ArraySize(g_zones)) return;
    DebugLog("Removing touched trade zone. " + ZoneDebugText(g_zones[index]));
+   ZoneData zone = g_zones[index];
    KeepCampaignForZone(g_zones[index]);
+   KeepPlanFollowCampaignForZone(zone);
    MarkZoneStoppedOut(g_zones[index].side, g_zones[index].magic);
    ArrayRemove(g_zones, index, 1);
   }
@@ -846,29 +868,41 @@ void ManagePlanChinhFollowEntry()
    int zoneIndex = LatestPlanChinhZoneIndex();
    if(zoneIndex < 0)
      {
-      DebugTrace("FOLLOW entry skipped: no latest plan_chinh zone");
+      int campaignIndex = LatestPlanFollowCampaignIndex();
+      if(campaignIndex < 0)
+        {
+         DebugTrace("FOLLOW entry skipped: no latest plan_chinh zone or retained follow campaign");
+         return;
+        }
+      OpenPlanFollowCampaign(campaignIndex, "removed-zone fallback");
       return;
      }
 
    ZoneData zone = g_zones[zoneIndex];
    long followMagic = StablePlanFollowMagic(zone.side, zone.low, zone.high);
-   KeepCampaignForZoneWithMagic(zone, followMagic, InpPlanFollowLotSize);
+   KeepPlanFollowCampaignForZone(zone);
+   int campaignIndex = FindCampaignIndex(followMagic);
+   OpenPlanFollowCampaign(campaignIndex, "latest-zone");
+  }
 
+void OpenPlanFollowCampaign(const int campaignIndex, const string sourceReason)
+  {
+   if(campaignIndex < 0 || campaignIndex >= ArraySize(g_campaigns))
+     {
+      DebugLog("FOLLOW entry skipped: campaign not found. index=" + IntegerToString(campaignIndex) + " reason=" + sourceReason);
+      return;
+     }
+
+   CampaignData campaign = g_campaigns[campaignIndex];
    BasketInfo basket;
-   BuildBasket(zone.side, followMagic, basket);
+   BuildBasket(campaign.side, campaign.magic, basket);
    if(basket.count > 0)
      {
-      DebugTrace("FOLLOW entry skipped: basket already has positions. magic=" + IntegerToString(followMagic) + " " + BasketDebugText(basket));
+      DebugTrace("FOLLOW entry skipped: basket already has positions. reason=" + sourceReason + " magic=" + IntegerToString(campaign.magic) + " " + BasketDebugText(basket));
       return;
      }
 
-   int campaignIndex = FindCampaignIndex(followMagic);
-   if(campaignIndex < 0)
-     {
-      DebugLog("FOLLOW entry skipped: campaign not found. magic=" + IntegerToString(followMagic) + " zone={" + ZoneDebugText(zone) + "}");
-      return;
-     }
-   DebugLog("Opening FOLLOW order. campaign={" + CampaignDebugText(g_campaigns[campaignIndex]) + "} zone={" + ZoneDebugText(zone) + "}");
+   DebugLog("Opening FOLLOW order. reason=" + sourceReason + " campaign={" + CampaignDebugText(g_campaigns[campaignIndex]) + "}");
    OpenCampaignOrder(g_campaigns[campaignIndex], NormalizeVolume(InpPlanFollowLotSize), "FOLLOW");
   }
 

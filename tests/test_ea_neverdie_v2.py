@@ -81,6 +81,8 @@ def test_v2_activation_uses_symmetric_band_and_single_trade_zone() -> None:
 
 def test_v2_trade_zone_removal_and_campaign_retention() -> None:
     source = _source()
+    remove_body = _function_body(source, "RemoveZoneAt")
+    follow_body = _function_body(source, "ManagePlanChinhFollowEntry")
 
     assert 'RemoveTouchedTradeZone();' in source
     assert 'touchesLow = tick.ask <= zone.low' in source
@@ -88,6 +90,9 @@ def test_v2_trade_zone_removal_and_campaign_retention() -> None:
     assert 'touchesBuySl = (zone.sl > 0.0 && tick.bid <= zone.sl - InpZonesSlBuffer)' in source
     assert 'touchesSellSl = (zone.sl > 0.0 && tick.ask >= zone.sl + InpZonesSlBuffer)' in source
     assert 'KeepCampaignForZone(zone);' in source
+    assert 'KeepPlanFollowCampaignForZone(zone);' in remove_body
+    assert 'LatestPlanFollowCampaignIndex();' in follow_body
+    assert 'OpenPlanFollowCampaign(campaignIndex, "removed-zone fallback");' in follow_body
     assert 'RestoreCampaignsFromOpenPositions();' in source
     assert 'CampaignZoneSlFromPosition(side, PositionGetDouble(POSITION_SL))' in source
     assert 'ManageCampaigns(onFirstTickOfNewDcaBar);' in source
