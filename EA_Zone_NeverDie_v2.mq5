@@ -1,5 +1,5 @@
 #property strict
-#property description "EA Zone NeverDie MT5 v2.7"
+#property description "EA Zone NeverDie MT5 v2.8"
 
 #include <Trade/Trade.mqh>
 
@@ -72,7 +72,11 @@ input int            InpZonesPollSeconds       = 300;
 input string         InpZonesBearer            = "";
 input double         InpZonesSlBuffer          = 30.0;
 
-const string EA_VERSION = "2.7";
+input group "=== DEBUG ==="
+input bool           InpDebugLog               = true;
+input bool           InpDebugTraceDecisions    = false;
+
+const string EA_VERSION = "2.8";
 const int JSON_FETCH_WINDOW_MINUTES = 30;
 const int JSON_FETCH_SLOT_COUNT = 3;
 const int PANEL_LINE_COUNT = 24;
@@ -97,6 +101,79 @@ int g_completedJsonFetchWindowKey = -1;
 int g_zoneFetchSequence = 0;
 string g_panelPrefix = "ZoneNeverDieV2Panel";
 
+string BoolText(const bool value)
+  {
+   return(value ? "true" : "false");
+  }
+
+string SideText(const ENUM_POSITION_TYPE side)
+  {
+   if(side == POSITION_TYPE_BUY) return("BUY");
+   if(side == POSITION_TYPE_SELL) return("SELL");
+   return("UNKNOWN");
+  }
+
+string StatusText(const ENUM_ZONE_STATUS status)
+  {
+   if(status == ZONE_STATUS_WATCH) return("WATCH");
+   if(status == ZONE_STATUS_TRADE) return("TRADE");
+   return("UNKNOWN");
+  }
+
+string PriceText(const double value)
+  {
+   return(DoubleToString(value, _Digits));
+  }
+
+void DebugLog(const string message)
+  {
+   if(!InpDebugLog) return;
+   Print("[ZND_V2][DEBUG] ", message);
+  }
+
+void DebugTrace(const string message)
+  {
+   if(!InpDebugTraceDecisions) return;
+   DebugLog("[TRACE] " + message);
+  }
+
+string ZoneDebugText(const ZoneData &zone)
+  {
+   return(StringFormat("side=%s status=%s label=%s magic=%s low=%s high=%s sl=%s created=%s seq=%d",
+                       SideText(zone.side),
+                       StatusText(zone.status),
+                       zone.label,
+                       IntegerToString(zone.magic),
+                       PriceText(zone.low),
+                       PriceText(zone.high),
+                       PriceText(zone.sl),
+                       TimeToString(zone.createdAt, TIME_DATE | TIME_SECONDS),
+                       zone.fetchSequence));
+  }
+
+string CampaignDebugText(const CampaignData &campaign)
+  {
+   return(StringFormat("side=%s magic=%s low=%s high=%s sl=%s baseLot=%.2f active=%s",
+                       SideText(campaign.side),
+                       IntegerToString(campaign.magic),
+                       PriceText(campaign.low),
+                       PriceText(campaign.high),
+                       PriceText(campaign.sl),
+                       campaign.baseLot,
+                       BoolText(campaign.active)));
+  }
+
+string BasketDebugText(const BasketInfo &basket)
+  {
+   return(StringFormat("count=%d volume=%.2f avg=%s profit=%.2f lastPrice=%s lastTime=%s",
+                       basket.count,
+                       basket.totalVolume,
+                       PriceText(basket.averagePrice),
+                       basket.floatingProfit,
+                       PriceText(basket.lastOpenPrice),
+                       TimeToString(basket.lastOpenTime, TIME_DATE | TIME_SECONDS)));
+  }
+
 ENUM_TIMEFRAMES DcaTimeframe()
   {
    return(InpDcaGridTimeframe == ND_DCA_M15 ? PERIOD_M15 : PERIOD_M5);
@@ -104,24 +181,38 @@ ENUM_TIMEFRAMES DcaTimeframe()
 
 bool ValidateInputs()
   {
-   if(InpLotSize <= 0.0) return(false);
-   if(InpPlanFollowLotSize <= 0.0) return(false);
-   if(InpMultiplier < 1.0) return(false);
-   if(InpGridStep <= 0) return(false);
-   if(InpMaxGridLevels < 1) return(false);
-   if(InpTakeProfit <= 0) return(false);
-   if(InpDcaClosedBarsRequired < 1) return(false);
-   if(InpDcaPrevOrderDistance < 0) return(false);
-   if(InpZoneActivateBand < 0.0) return(false);
-   if(InpZonesPollSeconds < 0) return(false);
+   if(InpLotSize <= 0.0) { DebugLog("Invalid input: InpLotSize must be > 0"); return(false); }
+   if(InpPlanFollowLotSize <= 0.0) { DebugLog("Invalid input: InpPlanFollowLotSize must be > 0"); return(false); }
+   if(InpMultiplier < 1.0) { DebugLog("Invalid input: InpMultiplier must be >= 1"); return(false); }
+   if(InpGridStep <= 0) { DebugLog("Invalid input: InpGridStep must be > 0"); return(false); }
+   if(InpMaxGridLevels < 1) { DebugLog("Invalid input: InpMaxGridLevels must be >= 1"); return(false); }
+   if(InpTakeProfit <= 0) { DebugLog("Invalid input: InpTakeProfit must be > 0"); return(false); }
+   if(InpDcaClosedBarsRequired < 1) { DebugLog("Invalid input: InpDcaClosedBarsRequired must be >= 1"); return(false); }
+   if(InpDcaPrevOrderDistance < 0) { DebugLog("Invalid input: InpDcaPrevOrderDistance must be >= 0"); return(false); }
+   if(InpZoneActivateBand < 0.0) { DebugLog("Invalid input: InpZoneActivateBand must be >= 0"); return(false); }
+   if(InpZonesPollSeconds < 0) { DebugLog("Invalid input: InpZonesPollSeconds must be >= 0"); return(false); }
    return(true);
   }
 
 bool EnvironmentReady()
   {
-   if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)) return(false);
-   if(!MQLInfoInteger(MQL_TRADE_ALLOWED)) return(false);
-   return(Bars(_Symbol, _Period) >= 100);
+   if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED))
+     {
+      DebugTrace("Environment not ready: terminal trade is disabled");
+      return(false);
+     }
+   if(!MQLInfoInteger(MQL_TRADE_ALLOWED))
+     {
+      DebugTrace("Environment not ready: EA trade is disabled");
+      return(false);
+     }
+   int bars = Bars(_Symbol, _Period);
+   if(bars < 100)
+     {
+      DebugTrace("Environment not ready: insufficient bars=" + IntegerToString(bars));
+      return(false);
+     }
+   return(true);
   }
 
 double MidPrice(const MqlTick &tick)
@@ -149,6 +240,12 @@ bool RemoteJsonEnabled()
    if(MQLInfoInteger(MQL_TESTER)) return(false);
    if(InpZonesPollSeconds <= 0) return(false);
    return(StringLen(InpZonesJsonUrl) > 0);
+  }
+
+string JsonFetchRequestUrl()
+  {
+   string separator = (StringFind(InpZonesJsonUrl, "?") >= 0 ? "&" : "?");
+   return(InpZonesJsonUrl + separator + "t=" + IntegerToString((long)TimeGMT()));
   }
 
 int DateKey(const datetime value)
@@ -321,8 +418,13 @@ bool IsZoneStoppedOut(const ENUM_POSITION_TYPE side, const long magic)
 
 void MarkZoneStoppedOut(const ENUM_POSITION_TYPE side, const long magic)
   {
-   if(IsZoneStoppedOut(side, magic)) return;
+   if(IsZoneStoppedOut(side, magic))
+     {
+      DebugTrace("Zone already marked stopped out. side=" + SideText(side) + " magic=" + IntegerToString(magic));
+      return;
+     }
    GlobalVariableSet(StoppedOutGlobalName(side, magic), (double)TimeCurrent());
+   DebugLog("Marked zone stopped out. side=" + SideText(side) + " magic=" + IntegerToString(magic));
 
    if(side == POSITION_TYPE_BUY)
      {
@@ -370,11 +472,17 @@ int FindCampaignIndex(const long magic)
 
 void LoadWatchZone(const ENUM_POSITION_TYPE side, double low, double high, const double sl, const string label)
   {
+   if(!IsPlanChinhLabel(label))
+      DebugTrace("Skip JSON zone with non-plan_chinh label. side=" + SideText(side) + " label=" + label);
    if(!IsPlanChinhLabel(label)) return;
 
    NormalizeZonePrices(low, high);
    long magic = StableZoneMagic(side, low, high);
-   if(IsZoneStoppedOut(side, magic)) return;
+   if(IsZoneStoppedOut(side, magic))
+     {
+      DebugLog("Skip stopped-out JSON zone. side=" + SideText(side) + " magic=" + IntegerToString(magic) + " low=" + PriceText(low) + " high=" + PriceText(high) + " label=" + label);
+      return;
+     }
    int index = FindZoneIndex(side, low, high);
    g_zoneFetchSequence++;
 
@@ -386,6 +494,7 @@ void LoadWatchZone(const ENUM_POSITION_TYPE side, double low, double high, const
       g_zones[index].fetchSequence = g_zoneFetchSequence;
       if(g_zones[index].status != ZONE_STATUS_TRADE)
          g_zones[index].status = ZONE_STATUS_WATCH;
+      DebugLog("Updated watch zone from JSON. " + ZoneDebugText(g_zones[index]));
       return;
      }
 
@@ -402,6 +511,7 @@ void LoadWatchZone(const ENUM_POSITION_TYPE side, double low, double high, const
    zone.createdAt = TimeCurrent();
    zone.fetchSequence = g_zoneFetchSequence;
    g_zones[size] = zone;
+   DebugLog("Loaded new watch zone from JSON. " + ZoneDebugText(zone));
   }
 
 bool ApplyZonesJson(const string json)
@@ -414,15 +524,21 @@ bool ApplyZonesJson(const string json)
 
    if(ParseSideZone(json, "buy", low, high, sl, label))
      {
+      DebugLog("Parsed BUY JSON zone. low=" + PriceText(low) + " high=" + PriceText(high) + " sl=" + PriceText(sl) + " label=" + label);
       LoadWatchZone(POSITION_TYPE_BUY, low, high, sl, label);
       parsed = true;
      }
+   else
+      DebugTrace("No valid BUY zone found in JSON");
 
    if(ParseSideZone(json, "sell", low, high, sl, label))
      {
+      DebugLog("Parsed SELL JSON zone. low=" + PriceText(low) + " high=" + PriceText(high) + " sl=" + PriceText(sl) + " label=" + label);
       LoadWatchZone(POSITION_TYPE_SELL, low, high, sl, label);
       parsed = true;
      }
+   else
+      DebugTrace("No valid SELL zone found in JSON");
 
    return(parsed);
   }
@@ -436,6 +552,7 @@ void CleanupPreviousDayZonesBeforeJsonFetch()
         {
          if(g_zones[i].status == ZONE_STATUS_TRADE)
             KeepCampaignForZone(g_zones[i]);
+         DebugLog("Removed previous-day zone before JSON fetch. " + ZoneDebugText(g_zones[i]));
          ArrayRemove(g_zones, i, 1);
         }
      }
@@ -449,11 +566,15 @@ bool FetchZonesJson()
    string headers = "";
    if(StringLen(InpZonesBearer) > 0)
       headers = "Authorization: Bearer " + InpZonesBearer + "\r\n";
+   headers += "Cache-Control: no-cache\r\n";
+   headers += "Pragma: no-cache\r\n";
 
+   string requestUrl = JsonFetchRequestUrl();
+   DebugLog("Fetching zones JSON. url=" + requestUrl + " bearerSet=" + BoolText(StringLen(InpZonesBearer) > 0));
    CleanupPreviousDayZonesBeforeJsonFetch();
 
    ResetLastError();
-   int code = WebRequest("GET", InpZonesJsonUrl, headers, 15000, request, result, responseHeaders);
+   int code = WebRequest("GET", requestUrl, headers, 15000, request, result, responseHeaders);
    if(code != 200)
      {
       PrintFormat("NeverDie v2 JSON fetch failed. code=%d error=%d", code, GetLastError());
@@ -461,6 +582,7 @@ bool FetchZonesJson()
      }
 
    string body = CharArrayToString(result);
+   DebugLog("Fetched zones JSON. bytes=" + IntegerToString(ArraySize(result)) + " bodyLength=" + IntegerToString(StringLen(body)));
    if(!ApplyZonesJson(body))
      {
       PrintFormat("NeverDie v2 JSON parse failed: %s", body);
@@ -471,18 +593,37 @@ bool FetchZonesJson()
 
 void FetchZonesOnInit()
   {
-   if(!RemoteJsonEnabled()) return;
+   if(!RemoteJsonEnabled())
+     {
+      DebugLog("Remote JSON disabled on init. tester=" + BoolText((bool)MQLInfoInteger(MQL_TESTER)) + " pollSeconds=" + IntegerToString(InpZonesPollSeconds) + " urlLength=" + IntegerToString(StringLen(InpZonesJsonUrl)));
+      return;
+     }
    if(!FetchZonesJson()) return;
    int windowKey = CurrentJsonFetchWindowKey();
    if(windowKey >= 0) g_completedJsonFetchWindowKey = windowKey;
+   DebugLog("Initial zones JSON fetch complete. windowKey=" + IntegerToString(windowKey) + " zones=" + IntegerToString(ArraySize(g_zones)));
   }
 
 void FetchZonesOnSchedule()
   {
    if(!RemoteJsonEnabled()) return;
    int windowKey = CurrentJsonFetchWindowKey();
-   if(windowKey < 0 || windowKey == g_completedJsonFetchWindowKey) return;
-   if(FetchZonesJson()) g_completedJsonFetchWindowKey = windowKey;
+   if(windowKey < 0)
+     {
+      DebugTrace("Scheduled JSON fetch skipped: outside allowed window");
+      return;
+     }
+   if(windowKey == g_completedJsonFetchWindowKey)
+     {
+      DebugTrace("Scheduled JSON fetch skipped: window already completed. windowKey=" + IntegerToString(windowKey));
+      return;
+     }
+   DebugLog("Scheduled zones JSON fetch started. windowKey=" + IntegerToString(windowKey));
+   if(FetchZonesJson())
+     {
+      g_completedJsonFetchWindowKey = windowKey;
+      DebugLog("Scheduled zones JSON fetch complete. windowKey=" + IntegerToString(windowKey) + " zones=" + IntegerToString(ArraySize(g_zones)));
+     }
   }
 
 bool IsInActivationBand(const ZoneData &zone, const double price)
@@ -509,6 +650,7 @@ void KeepCampaignForZoneWithMagic(const ZoneData &zone, const long magic, const 
       g_campaigns[index].sl = zone.sl;
       g_campaigns[index].baseLot = baseLot;
       g_campaigns[index].active = true;
+      DebugTrace("Updated campaign for zone. " + CampaignDebugText(g_campaigns[index]) + " zone={" + ZoneDebugText(zone) + "}");
       return;
      }
 
@@ -521,6 +663,7 @@ void KeepCampaignForZoneWithMagic(const ZoneData &zone, const long magic, const 
    g_campaigns[size].baseLot = baseLot;
    g_campaigns[size].magic = magic;
    g_campaigns[size].active = true;
+   DebugLog("Created campaign for zone. " + CampaignDebugText(g_campaigns[size]) + " zone={" + ZoneDebugText(zone) + "}");
   }
 
 void KeepCampaignForZone(const ZoneData &zone)
@@ -577,6 +720,7 @@ void RestoreCampaignsFromOpenPositions()
       g_campaigns[size].baseLot = CampaignBaseLotFromPositionComment(PositionGetString(POSITION_COMMENT));
       g_campaigns[size].magic = magic;
       g_campaigns[size].active = true;
+      DebugLog("Restored campaign from open position. ticket=" + IntegerToString((long)ticket) + " comment=" + PositionGetString(POSITION_COMMENT) + " " + CampaignDebugText(g_campaigns[size]));
      }
   }
 
@@ -586,6 +730,7 @@ void RemoveCurrentTradeZoneBeforeActivation()
      {
       if(g_zones[i].status != ZONE_STATUS_TRADE) continue;
       KeepCampaignForZone(g_zones[i]);
+      DebugLog("Removed existing TRADE zone before activating nearest zone. " + ZoneDebugText(g_zones[i]));
       ArrayRemove(g_zones, i, 1);
      }
   }
@@ -613,13 +758,19 @@ void ActivateNearestWatchZone()
         }
      }
 
-   if(bestIndex < 0) return;
+   if(bestIndex < 0)
+     {
+      DebugTrace("No watch zone in activation band. price=" + PriceText(price) + " zones=" + IntegerToString(ArraySize(g_zones)));
+      return;
+     }
+   DebugLog("Activating nearest watch zone. price=" + PriceText(price) + " distancePoints=" + DoubleToString(bestDistance / _Point, 1) + " zone={" + ZoneDebugText(g_zones[bestIndex]) + "}");
    RemoveCurrentTradeZoneBeforeActivation();
    for(int i = 0; i < ArraySize(g_zones); i++)
      {
       if(g_zones[i].magic != bestMagic) continue;
       g_zones[i].status = ZONE_STATUS_TRADE;
       KeepCampaignForZone(g_zones[i]);
+      DebugLog("Activated TRADE zone. " + ZoneDebugText(g_zones[i]));
       return;
      }
   }
@@ -627,6 +778,7 @@ void ActivateNearestWatchZone()
 void RemoveZoneAt(const int index)
   {
    if(index < 0 || index >= ArraySize(g_zones)) return;
+   DebugLog("Removing touched trade zone. " + ZoneDebugText(g_zones[index]));
    KeepCampaignForZone(g_zones[index]);
    MarkZoneStoppedOut(g_zones[index].side, g_zones[index].magic);
    ArrayRemove(g_zones, index, 1);
@@ -643,13 +795,19 @@ void RemoveTouchedTradeZone()
       ZoneData zone = g_zones[i];
       bool touchesLow = tick.ask <= zone.low;
       bool touchesHigh = tick.bid >= zone.high;
-      bool touchesBuySl = (zone.sl > 0.0 && tick.bid <= zone.sl);
-      bool touchesSellSl = (zone.sl > 0.0 && tick.ask >= zone.sl);
+      bool touchesBuySl = (zone.sl > 0.0 && tick.bid <= zone.sl - InpZonesSlBuffer);
+      bool touchesSellSl = (zone.sl > 0.0 && tick.ask >= zone.sl + InpZonesSlBuffer);
 
       if(zone.side == POSITION_TYPE_SELL && (touchesLow || touchesSellSl))
+        {
+         DebugLog("SELL trade zone touched boundary. bid=" + PriceText(tick.bid) + " ask=" + PriceText(tick.ask) + " touchesLow=" + BoolText(touchesLow) + " touchesSellSl=" + BoolText(touchesSellSl) + " zone={" + ZoneDebugText(zone) + "}");
          RemoveZoneAt(i);
+        }
       else if(zone.side == POSITION_TYPE_BUY && (touchesHigh || touchesBuySl))
+        {
+         DebugLog("BUY trade zone touched boundary. bid=" + PriceText(tick.bid) + " ask=" + PriceText(tick.ask) + " touchesHigh=" + BoolText(touchesHigh) + " touchesBuySl=" + BoolText(touchesBuySl) + " zone={" + ZoneDebugText(zone) + "}");
          RemoveZoneAt(i);
+        }
      }
   }
 
@@ -681,10 +839,16 @@ int LatestPlanChinhZoneIndex()
 
 void ManagePlanChinhFollowEntry()
   {
+   if(ActiveTradeZoneIndex() >= 0)
+      DebugTrace("FOLLOW entry skipped: active TRADE zone exists");
    if(ActiveTradeZoneIndex() >= 0) return;
 
    int zoneIndex = LatestPlanChinhZoneIndex();
-   if(zoneIndex < 0) return;
+   if(zoneIndex < 0)
+     {
+      DebugTrace("FOLLOW entry skipped: no latest plan_chinh zone");
+      return;
+     }
 
    ZoneData zone = g_zones[zoneIndex];
    long followMagic = StablePlanFollowMagic(zone.side, zone.low, zone.high);
@@ -692,10 +856,19 @@ void ManagePlanChinhFollowEntry()
 
    BasketInfo basket;
    BuildBasket(zone.side, followMagic, basket);
-   if(basket.count > 0) return;
+   if(basket.count > 0)
+     {
+      DebugTrace("FOLLOW entry skipped: basket already has positions. magic=" + IntegerToString(followMagic) + " " + BasketDebugText(basket));
+      return;
+     }
 
    int campaignIndex = FindCampaignIndex(followMagic);
-   if(campaignIndex < 0) return;
+   if(campaignIndex < 0)
+     {
+      DebugLog("FOLLOW entry skipped: campaign not found. magic=" + IntegerToString(followMagic) + " zone={" + ZoneDebugText(zone) + "}");
+      return;
+     }
+   DebugLog("Opening FOLLOW order. campaign={" + CampaignDebugText(g_campaigns[campaignIndex]) + "} zone={" + ZoneDebugText(zone) + "}");
    OpenCampaignOrder(g_campaigns[campaignIndex], NormalizeVolume(InpPlanFollowLotSize), "FOLLOW");
   }
 
@@ -810,10 +983,16 @@ bool OpenCampaignOrder(const CampaignData &campaign, const double volume, const 
    g_trade.SetTypeFillingBySymbol(_Symbol);
    string comment = "ZND_V2_" + (campaign.side == POSITION_TYPE_BUY ? "BUY_" : "SELL_") + tag;
    double sl = OrderStopLoss(campaign.side);
+   DebugLog("Sending order. tag=" + tag + " side=" + SideText(campaign.side) + " volume=" + DoubleToString(volume, 2) + " sl=" + PriceText(sl) + " comment=" + comment + " campaign={" + CampaignDebugText(campaign) + "}");
 
+   bool ok = false;
    if(campaign.side == POSITION_TYPE_BUY)
-      return(g_trade.Buy(volume, _Symbol, 0.0, sl, 0.0, comment));
-   return(g_trade.Sell(volume, _Symbol, 0.0, sl, 0.0, comment));
+      ok = g_trade.Buy(volume, _Symbol, 0.0, sl, 0.0, comment);
+   else
+      ok = g_trade.Sell(volume, _Symbol, 0.0, sl, 0.0, comment);
+
+   DebugLog("Order result. ok=" + BoolText(ok) + " tag=" + tag + " retcode=" + IntegerToString((long)g_trade.ResultRetcode()) + " desc=" + g_trade.ResultRetcodeDescription() + " deal=" + IntegerToString((long)g_trade.ResultDeal()) + " order=" + IntegerToString((long)g_trade.ResultOrder()) + " price=" + PriceText(g_trade.ResultPrice()));
+   return(ok);
   }
 
 bool CampaignTakeProfitReached(const ENUM_POSITION_TYPE side, const BasketInfo &basket)
@@ -826,14 +1005,24 @@ bool CampaignTakeProfitReached(const ENUM_POSITION_TYPE side, const BasketInfo &
    double currentPrice = ClosePriceForSide(side, tick);
    double targetPrice = basket.averagePrice + DirectionMultiplier(side) * InpTakeProfit * _Point;
 
-   if(side == POSITION_TYPE_BUY && currentPrice >= targetPrice && basket.floatingProfit > 0.0) return(true);
-   if(side == POSITION_TYPE_SELL && currentPrice <= targetPrice && basket.floatingProfit > 0.0) return(true);
+   if(side == POSITION_TYPE_BUY && currentPrice >= targetPrice && basket.floatingProfit > 0.0)
+     {
+      DebugLog("Campaign TP reached. side=BUY current=" + PriceText(currentPrice) + " target=" + PriceText(targetPrice) + " " + BasketDebugText(basket));
+      return(true);
+     }
+   if(side == POSITION_TYPE_SELL && currentPrice <= targetPrice && basket.floatingProfit > 0.0)
+     {
+      DebugLog("Campaign TP reached. side=SELL current=" + PriceText(currentPrice) + " target=" + PriceText(targetPrice) + " " + BasketDebugText(basket));
+      return(true);
+     }
+   DebugTrace("Campaign TP not reached. side=" + SideText(side) + " current=" + PriceText(currentPrice) + " target=" + PriceText(targetPrice) + " " + BasketDebugText(basket));
    return(false);
   }
 
 bool CloseCampaign(const CampaignData &campaign)
   {
    bool allClosed = true;
+   DebugLog("Closing campaign. " + CampaignDebugText(campaign));
    for(int i = PositionsTotal() - 1; i >= 0; i--)
      {
       ulong ticket = PositionGetTicket(i);
@@ -841,8 +1030,11 @@ bool CloseCampaign(const CampaignData &campaign)
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if(PositionGetInteger(POSITION_MAGIC) != campaign.magic) continue;
       if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != campaign.side) continue;
-      if(!g_trade.PositionClose(ticket)) allClosed = false;
+      bool ok = g_trade.PositionClose(ticket);
+      DebugLog("Close position result. ok=" + BoolText(ok) + " ticket=" + IntegerToString((long)ticket) + " retcode=" + IntegerToString((long)g_trade.ResultRetcode()) + " desc=" + g_trade.ResultRetcodeDescription());
+      if(!ok) allClosed = false;
      }
+   DebugLog("Close campaign complete. allClosed=" + BoolText(allClosed) + " " + CampaignDebugText(campaign));
    return(allClosed);
   }
 
@@ -854,43 +1046,94 @@ bool DcaPrevOrderDistanceReached(const double distance)
 
 bool ShouldOpenDca(const CampaignData &campaign, const BasketInfo &basket, const bool onFirstTick)
   {
-   if(basket.count <= 0 || basket.count >= InpMaxGridLevels) return(false);
-   if(basket.floatingProfit >= 0.0) return(false);
+   if(basket.count <= 0)
+     {
+      DebugTrace("DCA skipped: basket has no positions. " + CampaignDebugText(campaign));
+      return(false);
+     }
+   if(basket.count >= InpMaxGridLevels)
+     {
+      DebugTrace("DCA skipped: max grid levels reached. max=" + IntegerToString(InpMaxGridLevels) + " " + BasketDebugText(basket));
+      return(false);
+     }
+   if(basket.floatingProfit >= 0.0)
+     {
+      DebugTrace("DCA skipped: basket profit is non-negative. " + BasketDebugText(basket));
+      return(false);
+     }
 
    MqlTick tick;
-   if(!SymbolInfoTick(_Symbol, tick)) return(false);
+   if(!SymbolInfoTick(_Symbol, tick))
+     {
+      DebugTrace("DCA skipped: SymbolInfoTick failed");
+      return(false);
+     }
    double price = OpenPriceForSide(campaign.side, tick);
    double distance = MathAbs(price - basket.lastOpenPrice) / _Point;
 
-   if(campaign.side == POSITION_TYPE_BUY && price >= basket.lastOpenPrice) return(false);
-   if(campaign.side == POSITION_TYPE_SELL && price <= basket.lastOpenPrice) return(false);
+   if(campaign.side == POSITION_TYPE_BUY && price >= basket.lastOpenPrice)
+     {
+      DebugTrace("DCA skipped: BUY price has not moved against last order. price=" + PriceText(price) + " last=" + PriceText(basket.lastOpenPrice));
+      return(false);
+     }
+   if(campaign.side == POSITION_TYPE_SELL && price <= basket.lastOpenPrice)
+     {
+      DebugTrace("DCA skipped: SELL price has not moved against last order. price=" + PriceText(price) + " last=" + PriceText(basket.lastOpenPrice));
+      return(false);
+     }
 
    bool prevOrderDistanceReached = DcaPrevOrderDistanceReached(distance);
    if(!prevOrderDistanceReached)
      {
-      if(distance < InpGridStep) return(false);
-      if(!onFirstTick) return(false);
+      if(distance < InpGridStep)
+        {
+         DebugTrace("DCA skipped: grid distance too small. distance=" + DoubleToString(distance, 1) + " required=" + IntegerToString(InpGridStep));
+         return(false);
+        }
+      if(!onFirstTick)
+        {
+         DebugTrace("DCA skipped: waiting for first tick of new DCA bar. distance=" + DoubleToString(distance, 1));
+         return(false);
+        }
 
       int shiftSinceOpen = iBarShift(_Symbol, DcaTimeframe(), basket.lastOpenTime, false);
-      if(shiftSinceOpen < InpDcaClosedBarsRequired) return(false);
+      if(shiftSinceOpen < InpDcaClosedBarsRequired)
+        {
+         DebugTrace("DCA skipped: not enough closed DCA bars. shiftSinceOpen=" + IntegerToString(shiftSinceOpen) + " required=" + IntegerToString(InpDcaClosedBarsRequired));
+         return(false);
+        }
      }
 
+   DebugLog("DCA conditions met. distance=" + DoubleToString(distance, 1) + " prevOrderDistanceReached=" + BoolText(prevOrderDistanceReached) + " onFirstTick=" + BoolText(onFirstTick) + " campaign={" + CampaignDebugText(campaign) + "} basket={" + BasketDebugText(basket) + "}");
    return(true);
   }
 
 void ManageActiveTradeEntry()
   {
    int zoneIndex = ActiveTradeZoneIndex();
-   if(zoneIndex < 0) return;
+   if(zoneIndex < 0)
+     {
+      DebugTrace("START entry skipped: no active TRADE zone");
+      return;
+     }
 
    ZoneData zone = g_zones[zoneIndex];
    KeepCampaignForZone(zone);
    BasketInfo basket;
    BuildBasket(zone.side, zone.magic, basket);
-   if(basket.count > 0) return;
+   if(basket.count > 0)
+     {
+      DebugTrace("START entry skipped: basket already has positions. " + BasketDebugText(basket) + " zone={" + ZoneDebugText(zone) + "}");
+      return;
+     }
 
    int campaignIndex = FindCampaignIndex(zone.magic);
-   if(campaignIndex < 0) return;
+   if(campaignIndex < 0)
+     {
+      DebugLog("START entry skipped: campaign not found. zone={" + ZoneDebugText(zone) + "}");
+      return;
+     }
+   DebugLog("Opening START order. campaign={" + CampaignDebugText(g_campaigns[campaignIndex]) + "} zone={" + ZoneDebugText(zone) + "}");
    OpenCampaignOrder(g_campaigns[campaignIndex], NormalizeVolume(InpLotSize), "START");
   }
 
@@ -898,26 +1141,36 @@ void ManageCampaigns(const bool onFirstTickOfNewDcaBar)
   {
    for(int i = ArraySize(g_campaigns) - 1; i >= 0; i--)
      {
-      if(!g_campaigns[i].active) continue;
+      if(!g_campaigns[i].active)
+        {
+         DebugTrace("Campaign skipped: inactive. " + CampaignDebugText(g_campaigns[i]));
+         continue;
+        }
       BasketInfo basket;
       BuildBasket(g_campaigns[i].side, g_campaigns[i].magic, basket);
 
       if(basket.count <= 0)
         {
+         DebugLog("Removing campaign without basket positions during manage. " + CampaignDebugText(g_campaigns[i]));
          ArrayRemove(g_campaigns, i, 1);
          continue;
         }
 
       if(CampaignTakeProfitReached(g_campaigns[i].side, basket))
         {
+         DebugLog("Closing campaign after TP. campaign={" + CampaignDebugText(g_campaigns[i]) + "} basket={" + BasketDebugText(basket) + "}");
          if(CloseCampaign(g_campaigns[i]))
+           {
+            DebugLog("Removed campaign after successful TP close. " + CampaignDebugText(g_campaigns[i]));
             ArrayRemove(g_campaigns, i, 1);
+           }
          continue;
         }
 
       if(ShouldOpenDca(g_campaigns[i], basket, onFirstTickOfNewDcaBar))
         {
          double nextVolume = NormalizeVolume(g_campaigns[i].baseLot * MathPow(InpMultiplier, basket.count));
+         DebugLog("Opening DCA order. nextVolume=" + DoubleToString(nextVolume, 2) + " campaign={" + CampaignDebugText(g_campaigns[i]) + "} basket={" + BasketDebugText(basket) + "}");
          OpenCampaignOrder(g_campaigns[i], nextVolume, "DCA");
         }
      }
@@ -927,7 +1180,10 @@ void CleanupCampaignsWithoutPositions()
   {
    for(int i = ArraySize(g_campaigns) - 1; i >= 0; i--)
       if(!HasOpenPositions(g_campaigns[i].magic))
+        {
+         DebugLog("Cleanup removed campaign without open positions. " + CampaignDebugText(g_campaigns[i]));
          ArrayRemove(g_campaigns, i, 1);
+        }
   }
 
 datetime TodayStart()
@@ -1194,26 +1450,34 @@ void UpdatePanel()
 int OnInit()
   {
    if(!ValidateInputs()) return(INIT_PARAMETERS_INCORRECT);
+   DebugLog("OnInit started. version=" + EA_VERSION + " symbol=" + _Symbol + " period=" + IntegerToString(_Period) + " lot=" + DoubleToString(InpLotSize, 2) + " followLot=" + DoubleToString(InpPlanFollowLotSize, 2) + " multiplier=" + DoubleToString(InpMultiplier, 2) + " gridStep=" + IntegerToString(InpGridStep) + " maxLevels=" + IntegerToString(InpMaxGridLevels) + " tp=" + IntegerToString(InpTakeProfit) + " dcaTf=" + EnumToString(DcaTimeframe()) + " debugTrace=" + BoolText(InpDebugTraceDecisions));
    g_trade.SetExpertMagicNumber(InpMagicNumber);
    g_trade.SetDeviationInPoints(20);
    g_trade.SetTypeFillingBySymbol(_Symbol);
-   if(RemoteJsonEnabled()) EventSetTimer(InpZonesPollSeconds);
+   if(RemoteJsonEnabled())
+     {
+      EventSetTimer(InpZonesPollSeconds);
+      DebugLog("Timer enabled for remote JSON polling. seconds=" + IntegerToString(InpZonesPollSeconds));
+     }
    FetchZonesOnInit();
    RestoreCampaignsFromOpenPositions();
    if(InpShowPanel) CreatePanel();
    g_dcaBarOpenSeen = iTime(_Symbol, DcaTimeframe(), 0);
    UpdatePanel();
+   DebugLog("OnInit complete. zones=" + IntegerToString(ArraySize(g_zones)) + " campaigns=" + IntegerToString(ArraySize(g_campaigns)) + " dcaBarOpenSeen=" + TimeToString(g_dcaBarOpenSeen, TIME_DATE | TIME_SECONDS));
    return(INIT_SUCCEEDED);
   }
 
 void OnDeinit(const int reason)
   {
+   DebugLog("OnDeinit. reason=" + IntegerToString(reason) + " zones=" + IntegerToString(ArraySize(g_zones)) + " campaigns=" + IntegerToString(ArraySize(g_campaigns)));
    EventKillTimer();
    RemovePanel();
   }
 
 void OnTimer()
   {
+   DebugTrace("OnTimer fired");
    FetchZonesOnSchedule();
    UpdatePanel();
   }
@@ -1238,6 +1502,7 @@ void OnTick()
      {
       g_dcaBarOpenSeen = dcaBarOpen;
       onFirstTickOfNewDcaBar = true;
+      DebugLog("New DCA bar detected. timeframe=" + EnumToString(DcaTimeframe()) + " open=" + TimeToString(dcaBarOpen, TIME_DATE | TIME_SECONDS));
      }
 
    ManageActiveTradeEntry();
