@@ -1,5 +1,5 @@
 #property strict
-#property description "EA Zone NeverDie MT5 v2.9"
+#property description "EA Zone NeverDie MT5 v2.10"
 
 #include <Trade/Trade.mqh>
 
@@ -76,7 +76,7 @@ input group "=== DEBUG ==="
 input bool           InpDebugLog               = true;
 input bool           InpDebugTraceDecisions    = false;
 
-const string EA_VERSION = "2.9";
+const string EA_VERSION = "2.10";
 const int JSON_FETCH_WINDOW_MINUTES = 30;
 const int JSON_FETCH_SLOT_COUNT = 3;
 const int PANEL_LINE_COUNT = 24;
@@ -1072,6 +1072,13 @@ bool OpenCampaignOrder(const CampaignData &campaign, const double volume, const 
    return(ok);
   }
 
+double CampaignTakeProfitPoints(const BasketInfo &basket)
+  {
+   if(basket.count > 10) return(InpTakeProfit * 0.60);
+   if(basket.count > 6) return(InpTakeProfit * 0.70);
+   return((double)InpTakeProfit);
+  }
+
 bool CampaignTakeProfitReached(const ENUM_POSITION_TYPE side, const BasketInfo &basket)
   {
    if(basket.count <= 0 || basket.totalVolume <= 0.0) return(false);
@@ -1080,7 +1087,8 @@ bool CampaignTakeProfitReached(const ENUM_POSITION_TYPE side, const BasketInfo &
    if(!SymbolInfoTick(_Symbol, tick)) return(false);
 
    double currentPrice = ClosePriceForSide(side, tick);
-   double targetPrice = basket.averagePrice + DirectionMultiplier(side) * InpTakeProfit * _Point;
+   double takeProfitPoints = CampaignTakeProfitPoints(basket);
+   double targetPrice = basket.averagePrice + DirectionMultiplier(side) * takeProfitPoints * _Point;
 
    if(side == POSITION_TYPE_BUY && currentPrice >= targetPrice && basket.floatingProfit > 0.0)
      {

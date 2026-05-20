@@ -32,7 +32,7 @@ def _function_body(source: str, name: str) -> str:
 def test_v2_ea_file_declares_required_inputs_and_versioned_title() -> None:
     source = _source()
 
-    assert '#property description "EA Zone NeverDie MT5 v2.9"' in source
+    assert '#property description "EA Zone NeverDie MT5 v2.10"' in source
     assert 'input string         InpZonesJsonUrl' in source
     assert 'input int            InpZonesPollSeconds' in source
     assert 'input int            InpTakeProfit' in source
@@ -139,7 +139,7 @@ def test_v2_orders_use_price_tp_dca_and_side_wide_sl() -> None:
 
     assert 'double   averagePrice;' in source
     assert 'basket.averagePrice = basket.weightedPriceSum / basket.totalVolume;' in source
-    assert 'basket.averagePrice + DirectionMultiplier(side) * InpTakeProfit * _Point' in source
+    assert 'basket.averagePrice + DirectionMultiplier(side) * takeProfitPoints * _Point' in source
     assert 'OpenCampaignOrder(g_campaigns[campaignIndex], NormalizeVolume(InpPlanFollowLotSize), "FOLLOW")' in source
     assert 'KeepCampaignForZoneWithMagic(zone, followMagic, InpPlanFollowLotSize)' in source
     assert "int                fetchSequence;" in source
@@ -153,6 +153,19 @@ def test_v2_orders_use_price_tp_dca_and_side_wide_sl() -> None:
     assert 'g_campaigns[i].baseLot * MathPow(InpMultiplier, basket.count)' in source
     assert 'HighestSellStopLoss() + InpZonesSlBuffer' in source
     assert 'LowestBuyStopLoss() - InpZonesSlBuffer' in source
+
+
+def test_v2_basket_take_profit_scales_down_for_large_baskets() -> None:
+    source = _source()
+    tp_body = _function_body(source, "CampaignTakeProfitPoints")
+    take_profit_body = _function_body(source, "CampaignTakeProfitReached")
+
+    assert "double CampaignTakeProfitPoints(const BasketInfo &basket)" in source
+    assert "if(basket.count > 10) return(InpTakeProfit * 0.60);" in tp_body
+    assert "if(basket.count > 6) return(InpTakeProfit * 0.70);" in tp_body
+    assert "return((double)InpTakeProfit);" in tp_body
+    assert "double takeProfitPoints = CampaignTakeProfitPoints(basket);" in take_profit_body
+    assert "DirectionMultiplier(side) * takeProfitPoints * _Point" in take_profit_body
 
 
 def test_v2_follow_entry_is_disabled_while_a_trade_zone_is_active() -> None:
