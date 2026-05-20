@@ -1,5 +1,5 @@
 #property strict
-#property description "EA Zone NeverDie MT5 v2.10"
+#property description "EA Zone NeverDie MT5 v2.11"
 
 #include <Trade/Trade.mqh>
 
@@ -76,7 +76,7 @@ input group "=== DEBUG ==="
 input bool           InpDebugLog               = true;
 input bool           InpDebugTraceDecisions    = false;
 
-const string EA_VERSION = "2.10";
+const string EA_VERSION = "2.11";
 const int JSON_FETCH_WINDOW_MINUTES = 30;
 const int JSON_FETCH_SLOT_COUNT = 3;
 const int PANEL_LINE_COUNT = 24;
@@ -1074,8 +1074,11 @@ bool OpenCampaignOrder(const CampaignData &campaign, const double volume, const 
 
 double CampaignTakeProfitPoints(const BasketInfo &basket)
   {
-   if(basket.count > 10) return(InpTakeProfit * 0.60);
-   if(basket.count > 6) return(InpTakeProfit * 0.70);
+   if(basket.count >= 6)
+     {
+      double reduction = 0.15 + (basket.count - 6) * 0.02;
+      return(InpTakeProfit * (1.0 - reduction));
+     }
    return((double)InpTakeProfit);
   }
 
