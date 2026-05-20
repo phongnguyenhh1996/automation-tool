@@ -1361,6 +1361,11 @@ def _should_check_managed_tp_done(zone: Zone, parsed, p_last: float) -> bool:
     return bool(getattr(zone, "has_position", False)) and _managed_tp_touched(zone, parsed, p_last)
 
 
+def _daemon_plan_positive_prices(prices: list[float]) -> list[float]:
+    """Bỏ Last <= 0 (tick MT5 lỗi, vd. 0.0) trước khi daemon-plan quét buffer."""
+    return [float(p) for p in prices if float(p) > 0.0]
+
+
 def _daemon_plan_watch_telegram_text(
     z: Zone,
     *,
@@ -3468,6 +3473,7 @@ def _daemon_plan_main_loop(
             #     return
 
             _seq, prices = read_last_prices_for_daemon_plan(sym, last_price_file)
+            prices = _daemon_plan_positive_prices(prices)
             p_last = float(prices[-1]) if prices else None
             now_plan_tg = time.monotonic()
             if (now_plan_tg - last_plan_tg_at) >= telegram_plan_interval_s:

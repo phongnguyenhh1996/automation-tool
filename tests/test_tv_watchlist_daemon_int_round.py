@@ -20,6 +20,7 @@ from automation_tool.tv_watchlist_daemon import (
     _apply_zone_touch_loai_decision,
     _arm_threshold_met_for_zone,
     _daemon_plan_main_loop,
+    _daemon_plan_positive_prices,
     _invalidate_same_side_zones_after_touch,
     _mark_initial_zone_touch_dispatch,
     _maybe_loai_zone_if_last_hit_sl,
@@ -371,6 +372,12 @@ def test_zone_touch_loai_decision_requires_three_confirmations() -> None:
     assert zone.status == "loai"
     assert zone.loai_streak == 3
     assert zone.retry_at == ""
+
+
+def test_daemon_plan_positive_prices_drops_non_positive() -> None:
+    assert _daemon_plan_positive_prices([2650.0, 0.0, 2649.5]) == [2650.0, 2649.5]
+    assert _daemon_plan_positive_prices([-1.0, 0.0]) == []
+    assert _daemon_plan_positive_prices([]) == []
 
 
 def test_arm_uses_trade_line_ref() -> None:

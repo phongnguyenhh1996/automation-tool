@@ -117,7 +117,7 @@ def test_all_morning_clear_keeps_ea_neverdie_json(monkeypatch, tmp_path: Path) -
     assert calls["clear_neverdie"] == 0
 
 
-def test_all_runs_second_flow_with_dedicated_vector_channel_and_zone_suffix(
+def test_all_runs_second_flow_with_dedicated_vector_channel_without_zone_shards(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -232,10 +232,6 @@ def test_all_runs_second_flow_with_dedicated_vector_channel_and_zone_suffix(
     assert len(openai_calls) == 2
     assert openai_calls[1]["vector_store_ids"] == ["vs_69fa9d55f3b48191b4aea51214b880d6"]
     assert telegram_calls[1]["chat_id"] == "-1003996623506"
-    assert (zones_dir / "vung_plan_chinh_sang-2.json").is_file()
-    second_zone = json.loads((zones_dir / "vung_plan_chinh_sang-2.json").read_text(encoding="utf-8"))
-    assert second_zone["zone"]["id"] == "plan_chinh__sang-2"
-    assert (zones_dir / "vung_plan_chinh_sang-2.last_response_id.txt").read_text(
-        encoding="utf-8"
-    ).strip() == "resp-2"
+    assert not (zones_dir / "vung_plan_chinh_sang-2.json").exists()
+    assert not (zones_dir / "vung_plan_chinh_sang-2.last_response_id.txt").exists()
     assert response_ids == ["resp-1"]

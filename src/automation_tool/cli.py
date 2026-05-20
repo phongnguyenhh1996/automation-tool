@@ -130,7 +130,6 @@ _log = logging.getLogger("automation_tool.cli")
 _HCM = ZoneInfo("Asia/Ho_Chi_Minh")
 _ALL_SECOND_FLOW_VECTOR_STORE_ID = "vs_69fa9d55f3b48191b4aea51214b880d6"
 _ALL_SECOND_FLOW_TELEGRAM_CHAT_ID = "-1003996623506"
-_ALL_SECOND_FLOW_SHARD_SUFFIX = "-2"
 
 
 def _now_clock_hcm() -> str:
@@ -2488,25 +2487,6 @@ def _reconcile_daemon_plans_after_cli(zones_dir: Path, log_step: str) -> None:
     print(f"reconcile-daemon-plans: spawned {n} process(es) | dir={zones_dir}", flush=True)
 
 
-def _write_daemon_plan_sidecar_response_ids(
-    *,
-    zones_dir: Path,
-    zones,
-    slot: SessionSlot,
-    response_id: str,
-    shard_suffix: str,
-) -> None:
-    rid = (response_id or "").strip()
-    if not rid:
-        return
-    for z in zones:
-        lab = (getattr(z, "label", "") or "").strip().lower()
-        if not lab:
-            continue
-        sp = shard_path(zones_dir, lab, slot, suffix=shard_suffix)
-        write_last_response_id(rid, path=sp.parent / f"{sp.stem}.last_response_id.txt")
-
-
 def cmd_all(args: argparse.Namespace) -> None:
     s = load_settings()
     from automation_tool.images import set_active_main_symbol_file
@@ -2721,49 +2701,6 @@ def cmd_all(args: argparse.Namespace) -> None:
             default_parse_mode=s.telegram_parse_mode,
             summary_chat_id=None,
         )
-
-    if out2.after_charts:
-        payload2 = parse_analysis_from_openai_text(out2.after_charts)
-        if payload2 is not None and payload2.prices:
-            from automation_tool.images import get_active_main_symbol
-
-            sym2 = get_active_main_symbol().strip().upper()
-            slot2: SessionSlot = run_slot
-            zones2 = zones_from_analysis_payload(
-                symbol=sym2,
-                payload=payload2,
-                source="all",
-                session_slot=slot2,
-            )
-            if zones2:
-                write_zones_for_slot(
-                    symbol=sym2,
-                    zones=zones2,
-                    slot=slot2,
-                    zones_dir=zones_dir,
-                    shard_suffix=_ALL_SECOND_FLOW_SHARD_SUFFIX,
-                )
-                _write_daemon_plan_sidecar_response_ids(
-                    zones_dir=zones_dir,
-                    zones=zones2,
-                    slot=slot2,
-                    response_id=out2.final_response_id,
-                    shard_suffix=_ALL_SECOND_FLOW_SHARD_SUFFIX,
-                )
-                _log.info(
-                    "all-2: đã ghi shard zones | slot=%s zones=%d | symbol=%s suffix=%s",
-                    slot2,
-                    len(zones2),
-                    sym2,
-                    _ALL_SECOND_FLOW_SHARD_SUFFIX,
-                )
-            else:
-                _log.warning("all-2: parse JSON có prices nhưng không tạo được zones — không ghi shard")
-        elif out2.after_charts.strip():
-            print(
-                "Warning: could not parse second analysis JSON for zones (no `prices` or empty).",
-                file=sys.stderr,
-            )
 
 
 def cmd_tv_alerts(args: argparse.Namespace) -> None:
