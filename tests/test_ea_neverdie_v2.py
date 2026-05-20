@@ -32,7 +32,7 @@ def _function_body(source: str, name: str) -> str:
 def test_v2_ea_file_declares_required_inputs_and_versioned_title() -> None:
     source = _source()
 
-    assert '#property description "EA Zone NeverDie MT5 v2.11"' in source
+    assert '#property description "EA Zone NeverDie MT5 v2.12"' in source
     assert 'input string         InpZonesJsonUrl' in source
     assert 'input int            InpZonesPollSeconds' in source
     assert 'input int            InpTakeProfit' in source
@@ -87,6 +87,19 @@ def test_v2_cleans_yesterday_zones_before_fetching_json() -> None:
     assert 'void CleanupPreviousDayZonesBeforeJsonFetch()' in source
     assert 'if(DateKey(g_zones[i].createdAt) < todayKey)' in source
     assert 'CleanupPreviousDayZonesBeforeJsonFetch();\n\n   ResetLastError();\n   int code = WebRequest(' in source
+
+
+def test_v2_clears_all_zones_and_bumps_sequence_before_morning_json_apply() -> None:
+    source = _source()
+    fetch_body = _function_body(source, "FetchZonesJson")
+
+    assert 'void ClearAllZonesBeforeMorningJsonFetch()' in source
+    assert 'expectedLower == "plan_chinh__sang"' in fetch_body
+    assert 'ClearAllZonesBeforeMorningJsonFetch();' in fetch_body
+    assert 'g_zoneFetchSequence++;' in fetch_body
+    assert fetch_body.index('ClearAllZonesBeforeMorningJsonFetch()') < fetch_body.index(
+        'ApplyZonesJson(body, expectedLabel)'
+    )
 
 
 def test_v2_activation_uses_symmetric_band_and_single_trade_zone() -> None:

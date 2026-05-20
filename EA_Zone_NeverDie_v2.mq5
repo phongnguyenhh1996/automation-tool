@@ -1,5 +1,5 @@
 #property strict
-#property description "EA Zone NeverDie MT5 v2.11"
+#property description "EA Zone NeverDie MT5 v2.12"
 
 #include <Trade/Trade.mqh>
 
@@ -76,7 +76,7 @@ input group "=== DEBUG ==="
 input bool           InpDebugLog               = true;
 input bool           InpDebugTraceDecisions    = false;
 
-const string EA_VERSION = "2.11";
+const string EA_VERSION = "2.12";
 const int JSON_FETCH_WINDOW_MINUTES = 30;
 const int JSON_FETCH_SLOT_COUNT = 3;
 const int PANEL_LINE_COUNT = 24;
@@ -594,6 +594,17 @@ void CleanupPreviousDayZonesBeforeJsonFetch()
      }
   }
 
+void ClearAllZonesBeforeMorningJsonFetch()
+  {
+   for(int i = ArraySize(g_zones) - 1; i >= 0; i--)
+     {
+      if(g_zones[i].status == ZONE_STATUS_TRADE)
+         KeepCampaignForZone(g_zones[i]);
+      DebugLog("Removed zone before morning JSON apply. " + ZoneDebugText(g_zones[i]));
+      ArrayRemove(g_zones, i, 1);
+     }
+  }
+
 bool FetchZonesJson(const string expectedLabel)
   {
    uchar request[];
@@ -619,6 +630,16 @@ bool FetchZonesJson(const string expectedLabel)
 
    string body = CharArrayToString(result);
    DebugLog("Fetched zones JSON. bytes=" + IntegerToString(ArraySize(result)) + " bodyLength=" + IntegerToString(StringLen(body)));
+
+   string expectedLower = expectedLabel;
+   StringToLower(expectedLower);
+   if(expectedLower == "plan_chinh__sang")
+     {
+      ClearAllZonesBeforeMorningJsonFetch();
+      g_zoneFetchSequence++;
+      DebugLog("Morning JSON fetch: cleared existing zones and bumped fetchSequence=" + IntegerToString(g_zoneFetchSequence));
+     }
+
    if(!ApplyZonesJson(body, expectedLabel))
      {
       if(StringLen(expectedLabel) > 0)
