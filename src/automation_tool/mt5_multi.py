@@ -19,6 +19,7 @@ from automation_tool.mt5_accounts import (
     compute_volume_for_max_notional_live,
     fixed_lot_volume_for_label,
     primary_account,
+    resolve_account_entry_tp_price,
 )
 from automation_tool.mt5_execute import MT5ExecutionResult, execute_trade, format_mt5_execution_for_telegram
 from automation_tool.mt5_manage import (
@@ -132,6 +133,7 @@ def execute_trade_all_accounts(
             symbol_override=symbol_override,
             zone_label=zone_label,
         )
+        tp_ov = resolve_account_entry_tp_price(trade, acc, zone_label)
         return execute_trade(
             trade,
             terminal_path=acc.terminal_path,
@@ -147,6 +149,7 @@ def execute_trade_all_accounts(
             account_id=acc.id,
             account_symbol_map=acc.symbol_map or None,
             take_profit_target=acc.entry_take_profit,
+            take_profit_override=tp_ov,
             order_comment=order_comment,
         )
 

@@ -10,6 +10,11 @@ hành vi ``mode: from_trade``). Riêng zone ``source=update-scalp`` khi vào l�
 **Entry TP:** bỏ key ``entry_take_profit`` → giữ hành vi cũ là đặt TP2 nếu trade có TP2;
 đặt ``"entry_take_profit": "tp1"`` để account đó chốt TP ở TP1 ngay khi mở lệnh.
 
+**TP theo R (``tp``):** optional, theo plan giống ``lot.volume`` object — ``0`` hoặc thiếu key
+cho plan đó → TP trên lệnh = TP1 từ ``trade_line``; giá trị ``> 0`` (vd. ``1.1``) → TP =
+``1.1R`` (khoảng |entry−SL| × hệ số, hướng có lợi). Account không có key ``tp`` → không
+áp dụng; vẫn dùng ``entry_take_profit`` như trước.
+
 **update-scalp:** optional ``\"update-scalp\": true`` trên từng object — :func:`sync_accounts_scalp_json`
 lọc ra ``accounts-scalp.json`` cho luồng ``coinmap-automation update-scalp``.
 ``daemon-plan`` khi vào lệnh zone ``source=update-scalp`` dùng :func:`load_mt5_accounts_for_zone_entry`
@@ -35,11 +40,13 @@ SOURCE_UPDATE_SCALP = "update-scalp"
 UPDATE_SCALP_DEFAULT_LOT = 0.01
 
 from automation_tool.mt5_openai_parse import ParsedTrade
+from automation_tool.zone_one_r import tp_at_r_multiple
 
 LotMode = Literal["fixed", "max_notional_usd", "max_loss_usd", "from_trade"]
 EntryTakeProfitTarget = Literal["tp1", "tp2"]
 EntrySlot = Literal["sang", "chieu", "toi"]
 FixedLotVolume = Union[float, dict[str, float]]
+AccountTpR = Union[float, dict[str, float]]
 
 
 @dataclass(frozen=True)
@@ -90,6 +97,8 @@ class MT5AccountEntry:
     lot: LotRule
     #: TP đặt trên lệnh khi mở qua MT5. MT5 chỉ có 1 TP; mặc định giữ hành vi cũ là TP2.
     entry_take_profit: EntryTakeProfitTarget = "tp2"
+    #: Optional TP theo bội R theo plan; ``None`` = không ghi đè ``entry_take_profit``.
+    tp_r: Optional[AccountTpR] = None
     #: Map symbol logic (XAUUSD, EURUSD, …) → tên đúng trên broker của acc đó (vd. XAUUSD vs XAUUSDm).
     symbol_map: dict[str, str] = field(default_factory=dict)
     #: Chỉ cho account này vào lệnh ở các shard ``*_sang/_chieu/_toi`` được liệt kê.
@@ -139,6 +148,60 @@ def fixed_lot_volume_for_label(rule: LotRuleFixed, zone_label: Optional[str]) ->
     if label and label in volume:
         return float(volume[label])
     return float(volume["default"])
+
+
+def _parse_account_tp_r(raw: Any, index: int) -> Optional[AccountTpR]:
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    if isinstance(raw, dict):
+        out: dict[str, float] = {}
+        for k, v in raw.items():
+            key = str(k or "").strip().lower()
+            if not key:
+                raise ValueError(f"accounts[{index}].tp object không được có key rỗng")
+            out[key] = float(v)
+        if not out:
+            raise ValueError(f"accounts[{index}].tp object không được rỗng")
+        return out
+    raise ValueError(f"accounts[{index}].tp phải là số hoặc object theo plan")
+
+
+def account_tp_r_multiplier(tp_r: Optional[AccountTpR], zone_label: Optional[str]) -> Optional[float]:
+    """
+    Hệ số R cho plan hiện tại.
+
+    ``None`` — account không khai báo ``tp`` hoặc không có key khớp plan (không ghi đè).
+    """
+    if tp_r is None:
+        return None
+    if not isinstance(tp_r, dict):
+        return float(tp_r)
+    label = str(zone_label or "").strip().lower()
+    if label and label in tp_r:
+        return float(tp_r[label])
+    if "default" in tp_r:
+        return float(tp_r["default"])
+    return None
+
+
+def resolve_account_entry_tp_price(
+    trade: ParsedTrade,
+    acc: MT5AccountEntry,
+    zone_label: Optional[str],
+) -> Optional[float]:
+    """
+    Giá TP đặt trên lệnh MT5 khi account có ``tp``.
+
+    ``None`` — dùng ``entry_take_profit`` (tp1/tp2) như trước.
+    """
+    mult = account_tp_r_multiplier(acc.tp_r, zone_label)
+    if mult is None:
+        return None
+    if mult <= 0:
+        return float(trade.tp1)
+    return tp_at_r_multiple(trade, mult)
 
 
 def _parse_lot(d: Any) -> LotRule:
@@ -229,6 +292,7 @@ def _parse_one(
     else:
         lot = _parse_lot(lot_raw)
     entry_tp = _parse_entry_take_profit(obj.get("entry_take_profit"), index)
+    tp_r = _parse_account_tp_r(obj.get("tp"), index)
     entry_slots = _parse_entry_slots(obj.get("entry_slots"), index)
     sym_map = _parse_symbol_map(obj.get("symbol_map"), index)
     return MT5AccountEntry(
@@ -240,6 +304,7 @@ def _parse_one(
         primary=primary,
         lot=lot,
         entry_take_profit=entry_tp,
+        tp_r=tp_r,
         entry_slots=entry_slots,
         symbol_map=sym_map,
     )

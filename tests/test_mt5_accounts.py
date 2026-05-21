@@ -14,9 +14,11 @@ from automation_tool.mt5_accounts import (
     LotRuleMaxLossUsd,
     LotRuleMaxNotionalUsd,
     SOURCE_UPDATE_SCALP,
+    account_tp_r_multiplier,
     filter_mt5_accounts_for_entry_slot,
     load_mt5_accounts_from_path,
     load_mt5_accounts_for_zone_entry,
+    resolve_account_entry_tp_price,
     trade_with_update_scalp_entry_lot_default,
     sync_accounts_scalp_json,
 )
@@ -251,6 +253,66 @@ def test_load_symbol_map_optional() -> None:
         accs = load_mt5_accounts_from_path(p)
         assert accs[0].symbol_map["XAUUSD"] == "XAUUSDm"
         assert accs[1].symbol_map["XAUUSD"] == "XAUUSD"
+
+
+def test_load_account_tp_r_by_plan() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "accounts.json"
+        _write_accounts(
+            p,
+            [
+                {
+                    "id": "a",
+                    "terminal_path": "C:/MT5/A/metatrader64.exe",
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                    "tp": {
+                        "plan_chinh": 0,
+                        "plan_phu": 1.1,
+                        "scalp": 1.1,
+                    },
+                },
+            ],
+        )
+        accs = load_mt5_accounts_from_path(p)
+        assert accs[0].tp_r == {
+            "plan_chinh": 0.0,
+            "plan_phu": 1.1,
+            "scalp": 1.1,
+        }
+        assert account_tp_r_multiplier(accs[0].tp_r, "plan_phu") == 1.1
+        assert account_tp_r_multiplier(accs[0].tp_r, "plan_chinh") == 0.0
+
+
+def test_resolve_account_entry_tp_price_zero_uses_trade_tp1() -> None:
+    from automation_tool.mt5_accounts import MT5AccountEntry
+
+    trade = ParsedTrade(
+        symbol="XAUUSD",
+        side="BUY",
+        kind="LIMIT",
+        price=4709.0,
+        sl=4699.0,
+        tp1=4720.0,
+        tp2=4730.0,
+        lot=0.02,
+        raw_line="",
+    )
+    entry = MT5AccountEntry(
+        id="x",
+        terminal_path="C:/MT5/A/metatrader64.exe",
+        login=1,
+        password="p",
+        server="S",
+        primary=True,
+        lot=LotRuleFromTrade(),
+        tp_r={"plan_chinh": 0, "plan_phu": 1.1},
+    )
+    assert resolve_account_entry_tp_price(trade, entry, "plan_chinh") == 4720.0
+    assert resolve_account_entry_tp_price(trade, entry, "plan_phu") == pytest.approx(4720.0)
+    assert resolve_account_entry_tp_price(trade, entry, None) is None
 
 
 def test_load_entry_take_profit_per_account_defaults_to_tp2() -> None:

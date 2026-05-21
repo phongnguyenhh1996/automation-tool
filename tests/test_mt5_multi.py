@@ -225,6 +225,52 @@ def test_execute_trade_all_accounts_fixed_lot_uses_zone_label_volume(
     assert seen == [0.02]
 
 
+def test_execute_trade_all_accounts_uses_account_tp_r_override(
+    sample_trade, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    accounts = [
+        MT5AccountEntry(
+            id="acc_tp1_line",
+            terminal_path="/tmp/mt5-acc-a/terminal64.exe",
+            login=1,
+            password="p",
+            server="srv",
+            primary=True,
+            lot=LotRuleFromTrade(),
+            tp_r={"plan_chinh": 0, "plan_phu": 1.1},
+        ),
+    ]
+    seen: list[float | None] = []
+
+    def fake_execute_trade(trade, **kwargs):
+        seen.append(kwargs.get("take_profit_override"))
+        return MT5ExecutionResult(
+            ok=True,
+            message="mock",
+            order=7001,
+            account_id=kwargs.get("account_id"),
+        )
+
+    monkeypatch.setattr("automation_tool.mt5_multi.execute_trade", fake_execute_trade)
+
+    execute_trade_all_accounts(
+        sample_trade,
+        accounts,
+        dry_run=True,
+        zone_label="plan_chinh",
+    )
+    assert seen == [2610.0]
+
+    seen.clear()
+    execute_trade_all_accounts(
+        sample_trade,
+        accounts,
+        dry_run=True,
+        zone_label="plan_phu",
+    )
+    assert seen == [pytest.approx(2611.0)]
+
+
 def test_execute_trade_all_accounts_uses_account_entry_take_profit(
     sample_trade, monkeypatch: pytest.MonkeyPatch
 ) -> None:

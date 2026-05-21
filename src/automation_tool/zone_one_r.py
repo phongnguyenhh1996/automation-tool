@@ -20,8 +20,13 @@ def risk_price_distance(parsed: ParsedTrade) -> float:
 
 def one_r_favorable_price(parsed: ParsedTrade) -> float:
     """Mức giá tương đương +1R theo hướng TP (BUY: lên; SELL: xuống)."""
+    return tp_at_r_multiple(parsed, 1.0)
+
+
+def tp_at_r_multiple(parsed: ParsedTrade, r_multiple: float) -> float:
+    """Mức TP theo bội R từ entry_ref tới SL (vd. 1.1 → 1.1R theo hướng có lợi)."""
     ref = entry_reference_price(parsed)
-    r = risk_price_distance(parsed)
+    r = risk_price_distance(parsed) * float(r_multiple)
     if parsed.side == "BUY":
         return ref + r
     return ref - r

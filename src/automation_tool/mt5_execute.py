@@ -828,14 +828,18 @@ def build_request(
     magic: int = 2222222,
     comment: str = "openai-auto",
     take_profit_target: EntryTakeProfitTarget = "tp2",
+    take_profit_override: Optional[float] = None,
 ) -> dict[str, Any]:
     sym, err = _ensure_symbol(mt5, trade.symbol)
     if err or not sym:
         raise RuntimeError(err or "Không resolve được symbol để trade.")
 
     filling = _filling_for_symbol(mt5, sym)
-    # MT5 chỉ có 1 TP trên 1 lệnh; account có thể chọn TP1 hoặc TP2 khi mở lệnh.
-    tp_effective = trade.tp1 if take_profit_target == "tp1" else (trade.tp2 or trade.tp1)
+    # MT5 chỉ có 1 TP trên 1 lệnh; account có thể chọn TP1/TP2 hoặc giá TP tùy chỉnh (vd. 1.1R).
+    if take_profit_override is not None:
+        tp_effective = float(take_profit_override)
+    else:
+        tp_effective = trade.tp1 if take_profit_target == "tp1" else (trade.tp2 or trade.tp1)
     if trade.kind == "MARKET":
         omit_price = symbol_uses_market_execution(mt5, sym)
         price: Optional[float] = None
@@ -956,6 +960,7 @@ def execute_trade(
     account_id: Optional[str] = None,
     account_symbol_map: Optional[dict[str, str]] = None,
     take_profit_target: EntryTakeProfitTarget = "tp2",
+    take_profit_override: Optional[float] = None,
     order_comment: Optional[str] = None,
     order_send_max_attempts: Optional[int] = None,
     order_send_retry_delay_ms: Optional[int] = None,
@@ -1002,9 +1007,14 @@ def execute_trade(
     comment = _mt5_order_comment(order_comment)
 
     extra = ""
-    tp_effective = trade.tp1 if take_profit_target == "tp1" else (trade.tp2 or trade.tp1)
+    if take_profit_override is not None:
+        tp_effective = float(take_profit_override)
+    else:
+        tp_effective = trade.tp1 if take_profit_target == "tp1" else (trade.tp2 or trade.tp1)
     if log_tp2:
-        if take_profit_target == "tp1":
+        if take_profit_override is not None:
+            extra = f" (tp R/custom — sẽ đặt TP={tp_effective:g} trên lệnh MT5)"
+        elif take_profit_target == "tp1":
             extra = f" (entry_take_profit=tp1 — sẽ đặt TP1={trade.tp1} trên lệnh MT5)"
         elif trade.tp2 is not None:
             extra = f" (TP2={trade.tp2} — sẽ đặt TP2 trên lệnh MT5)"
@@ -1056,6 +1066,7 @@ def execute_trade(
                 magic=mag,
                 comment=comment,
                 take_profit_target=take_profit_target,
+                take_profit_override=take_profit_override,
             )
         except RuntimeError as e:
             le = _last_error_tuple(mt5)

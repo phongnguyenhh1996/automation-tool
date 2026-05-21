@@ -11,6 +11,7 @@ from automation_tool.zone_one_r import (
     one_r_favorable_price,
     one_r_reached,
     risk_price_distance,
+    tp_at_r_multiple,
 )
 
 
@@ -66,3 +67,10 @@ def test_one_r_zero_risk_not_reached() -> None:
     p = replace(_buy_limit(), sl=2650.0)
     assert risk_price_distance(p) == 0.0
     assert not one_r_reached(p, 3000.0, eps=0.01)
+
+
+def test_tp_at_r_multiple_buy_and_sell() -> None:
+    buy = _buy_limit()
+    assert tp_at_r_multiple(buy, 1.1) == pytest.approx(2661.0)
+    sell = _sell_limit()
+    assert tp_at_r_multiple(sell, 1.1) == pytest.approx(2639.0)
