@@ -125,13 +125,16 @@ def test_v2_keeps_single_main_zone_per_side_and_merges_json_updates() -> None:
     assert 'MathMax(existingSl, newSl)' in source
 
 
-def test_v2_activation_uses_low_to_entry_band_and_single_trade_zone() -> None:
+def test_v2_activation_uses_side_specific_entry_ranges() -> None:
     source = _source()
+    activation_body = _function_body(source, "IsInActivationBand")
 
     assert "ZoneActivationRangeMin(const ZoneData &zone)" in source
     assert "ZoneActivationRangeMax(const ZoneData &zone)" in source
-    assert "price >= rangeMin - InpZoneActivateBand && price <= rangeMax + InpZoneActivateBand" in source
-    assert "if(zone.entry <= 0.0) return(false);" in source
+    assert "if(zone.side == POSITION_TYPE_BUY)" in activation_body
+    assert "price >= zone.low - InpZoneActivateBand && price <= zone.entry + InpZoneActivateBand" in activation_body
+    assert "price >= zone.entry - InpZoneActivateBand && price <= zone.high + InpZoneActivateBand" in activation_body
+    assert "if(zone.entry <= 0.0) return(false);" in activation_body
     assert 'long bestMagic = 0;' in source
     assert 'RemoveCurrentTradeZoneBeforeActivation();' in source
     assert 'ActivateNearestWatchZone();' in source

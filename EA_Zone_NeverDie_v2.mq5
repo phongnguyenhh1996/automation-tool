@@ -762,22 +762,28 @@ void FetchZonesOnSchedule()
 
 double ZoneActivationRangeMin(const ZoneData &zone)
   {
-   if(zone.entry <= 0.0) return(zone.low);
-   return(MathMin(zone.low, zone.entry));
+   if(zone.side == POSITION_TYPE_SELL)
+      return(zone.entry);
+   return(zone.low);
   }
 
 double ZoneActivationRangeMax(const ZoneData &zone)
   {
-   if(zone.entry <= 0.0) return(zone.low);
-   return(MathMax(zone.low, zone.entry));
+   if(zone.side == POSITION_TYPE_SELL)
+      return(zone.high);
+   return(zone.entry);
   }
 
 bool IsInActivationBand(const ZoneData &zone, const double price)
   {
    if(zone.entry <= 0.0) return(false);
-   double rangeMin = ZoneActivationRangeMin(zone);
-   double rangeMax = ZoneActivationRangeMax(zone);
-   return(price >= rangeMin - InpZoneActivateBand && price <= rangeMax + InpZoneActivateBand);
+   if(zone.side == POSITION_TYPE_BUY)
+     {
+      if(zone.low <= 0.0) return(false);
+      return(price >= zone.low - InpZoneActivateBand && price <= zone.entry + InpZoneActivateBand);
+     }
+   if(zone.high <= 0.0) return(false);
+   return(price >= zone.entry - InpZoneActivateBand && price <= zone.high + InpZoneActivateBand);
   }
 
 double ActivationDistance(const ZoneData &zone, const double price)
