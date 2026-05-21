@@ -460,6 +460,29 @@ void MarkZoneStoppedOut(const ENUM_POSITION_TYPE side, const long magic)
    g_stoppedSellZoneMagics[size] = magic;
   }
 
+void ClearZoneStoppedOut(const ENUM_POSITION_TYPE side, const long magic)
+  {
+   string gvName = StoppedOutGlobalName(side, magic);
+   if(GlobalVariableCheck(gvName))
+      GlobalVariableDel(gvName);
+
+   if(side == POSITION_TYPE_BUY)
+     {
+      for(int i = ArraySize(g_stoppedBuyZoneMagics) - 1; i >= 0; i--)
+        {
+         if(g_stoppedBuyZoneMagics[i] != magic) continue;
+         ArrayRemove(g_stoppedBuyZoneMagics, i, 1);
+        }
+      return;
+     }
+
+   for(int i = ArraySize(g_stoppedSellZoneMagics) - 1; i >= 0; i--)
+     {
+      if(g_stoppedSellZoneMagics[i] != magic) continue;
+      ArrayRemove(g_stoppedSellZoneMagics, i, 1);
+     }
+  }
+
 bool IsPlanChinhLabel(const string label)
   {
    string value = label;
@@ -539,6 +562,26 @@ void MergeZoneBounds(ZoneData &zone, const double newLow, const double newHigh, 
    zone.sl = MergedZoneSl(zone.side, zone.sl, newSl);
   }
 
+void ApplyFreshWatchZoneFromJson(ZoneData &zone,
+                                 const ENUM_POSITION_TYPE side,
+                                 const double low,
+                                 const double high,
+                                 const double jsonLow,
+                                 const double sl,
+                                 const string label,
+                                 const long magic)
+  {
+   zone.side = side;
+   zone.status = ZONE_STATUS_WATCH;
+   zone.low = low;
+   zone.high = high;
+   zone.entry = NormalizeDouble(jsonLow, _Digits);
+   zone.sl = MergedZoneSl(side, 0.0, sl);
+   zone.label = label;
+   zone.magic = magic;
+   zone.fetchSequence = g_zoneFetchSequence;
+  }
+
 void RemoveOppositeMainZone(const ENUM_POSITION_TYPE side)
   {
    ENUM_POSITION_TYPE opposite = (side == POSITION_TYPE_BUY ? POSITION_TYPE_SELL : POSITION_TYPE_BUY);
@@ -570,13 +613,34 @@ void LoadWatchZone(const ENUM_POSITION_TYPE side, double low, double high, const
    double jsonLow = low;
    NormalizeZonePrices(low, high);
    long magic = StableDailyZoneMagic(side);
-   if(IsZoneStoppedOut(side, magic))
+   bool resetStoppedOutZone = IsZoneStoppedOut(side, magic);
+   if(resetStoppedOutZone)
      {
-      DebugLog("Skip stopped-out JSON zone. side=" + SideText(side) + " magic=" + IntegerToString(magic) + " low=" + PriceText(low) + " high=" + PriceText(high) + " label=" + label);
-      return;
+      ClearZoneStoppedOut(side, magic);
+      DebugLog("Cleared stopped-out flag for new JSON fetch window. side=" + SideText(side) + " magic=" + IntegerToString(magic) + " label=" + label);
      }
    int index = FindMainZoneIndexBySide(side);
    g_zoneFetchSequence++;
+
+   if(resetStoppedOutZone)
+     {
+      if(index >= 0)
+        {
+         ApplyFreshWatchZoneFromJson(g_zones[index], side, low, high, jsonLow, sl, label, magic);
+         g_zones[index].createdAt = TimeCurrent();
+         DebugLog("Replaced main zone from JSON after stopped-out reset. " + ZoneDebugText(g_zones[index]));
+         return;
+        }
+
+      int size = ArraySize(g_zones);
+      ArrayResize(g_zones, size + 1);
+      ZoneData zone;
+      ApplyFreshWatchZoneFromJson(zone, side, low, high, jsonLow, sl, label, magic);
+      zone.createdAt = TimeCurrent();
+      g_zones[size] = zone;
+      DebugLog("Loaded new main zone from JSON after stopped-out reset. " + ZoneDebugText(zone));
+      return;
+     }
 
    if(index >= 0)
      {
@@ -594,16 +658,8 @@ void LoadWatchZone(const ENUM_POSITION_TYPE side, double low, double high, const
    int size = ArraySize(g_zones);
    ArrayResize(g_zones, size + 1);
    ZoneData zone;
-   zone.side = side;
-   zone.status = ZONE_STATUS_WATCH;
-   zone.low = low;
-   zone.high = high;
-   zone.entry = NormalizeDouble(jsonLow, _Digits);
-   zone.sl = MergedZoneSl(side, 0.0, sl);
-   zone.label = label;
-   zone.magic = magic;
+   ApplyFreshWatchZoneFromJson(zone, side, low, high, jsonLow, sl, label, magic);
    zone.createdAt = TimeCurrent();
-   zone.fetchSequence = g_zoneFetchSequence;
    g_zones[size] = zone;
    DebugLog("Loaded new main zone from JSON. " + ZoneDebugText(zone));
   }

@@ -159,20 +159,26 @@ def test_v2_trade_zone_removal_and_campaign_retention() -> None:
     assert 'ManageCampaigns(onFirstTickOfNewDcaBar);' in source
 
 
-def test_v2_stopped_zone_is_not_reloaded_from_json() -> None:
+def test_v2_stopped_zone_is_refreshed_on_new_json_fetch_window() -> None:
     source = _source()
     load_body = _function_body(source, "LoadWatchZone")
     remove_body = _function_body(source, "RemoveZoneAt")
     is_stopped_body = _function_body(source, "IsZoneStoppedOut")
     mark_stopped_body = _function_body(source, "MarkZoneStoppedOut")
+    clear_stopped_body = _function_body(source, "ClearZoneStoppedOut")
 
     assert "long g_stoppedBuyZoneMagics[]" in source
     assert "long g_stoppedSellZoneMagics[]" in source
     assert "StoppedOutGlobalName" in source
-    assert "IsZoneStoppedOut(side, magic)" in load_body
+    assert "bool resetStoppedOutZone = IsZoneStoppedOut(side, magic);" in load_body
+    assert "ClearZoneStoppedOut(side, magic);" in load_body
+    assert "ApplyFreshWatchZoneFromJson(g_zones[index], side, low, high, jsonLow, sl, label, magic);" in load_body
+    assert "Replaced main zone from JSON after stopped-out reset." in load_body
+    assert "Skip stopped-out JSON zone." not in load_body
     assert "MarkZoneStoppedOut(g_zones[index].side, g_zones[index].magic)" in remove_body
     assert "GlobalVariableCheck(StoppedOutGlobalName(side, magic))" in is_stopped_body
     assert "GlobalVariableSet(StoppedOutGlobalName(side, magic)" in mark_stopped_body
+    assert "GlobalVariableDel(gvName)" in clear_stopped_body
 
 
 def test_v2_orders_use_price_tp_dca_and_side_wide_sl() -> None:
