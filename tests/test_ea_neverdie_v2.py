@@ -32,7 +32,7 @@ def _function_body(source: str, name: str) -> str:
 def test_v2_ea_file_declares_required_inputs_and_versioned_title() -> None:
     source = _source()
 
-    assert '#property description "EA Zone NeverDie MT5 v2.12"' in source
+    assert '#property description "EA Zone NeverDie MT5 v2.14"' in source
     assert 'input string         InpZonesJsonUrl' in source
     assert 'input int            InpZonesPollSeconds' in source
     assert 'input int            InpTakeProfit' in source
@@ -89,24 +89,49 @@ def test_v2_cleans_yesterday_zones_before_fetching_json() -> None:
     assert 'CleanupPreviousDayZonesBeforeJsonFetch();\n\n   ResetLastError();\n   int code = WebRequest(' in source
 
 
-def test_v2_clears_all_zones_and_bumps_sequence_before_morning_json_apply() -> None:
+def test_v2_keeps_single_main_zone_per_side_and_merges_json_updates() -> None:
     source = _source()
+    load_body = _function_body(source, "LoadWatchZone")
+    apply_body = _function_body(source, "ApplyZonesJson")
     fetch_body = _function_body(source, "FetchZonesJson")
 
+    assert "int FindMainZoneIndexBySide(const ENUM_POSITION_TYPE side)" in source
+    assert "double MergedZoneSl(const ENUM_POSITION_TYPE side" in source
+    assert "void MergeZoneBounds(ZoneData &zone" in source
+    assert "long StableDailyZoneMagic(const ENUM_POSITION_TYPE side)" in source
+    assert "long StableDailyPlanFollowMagic(const ENUM_POSITION_TYPE side)" in source
+    assert "void RemoveOppositeMainZone(const ENUM_POSITION_TYPE side)" in source
+    assert "RemoveOppositeMainZone(side)" in load_body
+    assert "Removed opposite-direction main zone" in source
+    assert "FindMainZoneIndexBySide(side)" in load_body
+    assert "double             entry;" in source
+    assert "void MergeZoneEntry(ZoneData &zone" in source
+    assert "double jsonLow = low;" in load_body
+    assert "MergeZoneEntry(g_zones[index], jsonLow)" in load_body
+    assert "MergeZoneBounds(g_zones[index], low, high, sl)" in load_body
+    assert "MathMax(zone.entry, jsonLow)" in source
+    assert "MathMin(zone.entry, jsonLow)" in source
+    assert "StableDailyZoneMagic(side)" in load_body
+    assert "Merged main zone from JSON" in source
+    assert "PruneDuplicateMainZones();" in apply_body
+    assert "SyncMainZoneCampaignsAfterMerge();" in apply_body
     assert 'void ClearAllZonesBeforeMorningJsonFetch()' in source
     assert 'expectedLower == "plan_chinh__sang"' in fetch_body
     assert 'ClearAllZonesBeforeMorningJsonFetch();' in fetch_body
-    assert 'g_zoneFetchSequence++;' in fetch_body
     assert fetch_body.index('ClearAllZonesBeforeMorningJsonFetch()') < fetch_body.index(
         'ApplyZonesJson(body, expectedLabel)'
     )
+    assert 'MathMin(existingSl, newSl)' in source
+    assert 'MathMax(existingSl, newSl)' in source
 
 
-def test_v2_activation_uses_symmetric_band_and_single_trade_zone() -> None:
+def test_v2_activation_uses_low_to_entry_band_and_single_trade_zone() -> None:
     source = _source()
 
-    assert 'price >= zone.high - InpZoneActivateBand && price <= zone.high + InpZoneActivateBand' in source
-    assert 'price >= zone.low - InpZoneActivateBand && price <= zone.low + InpZoneActivateBand' in source
+    assert "ZoneActivationRangeMin(const ZoneData &zone)" in source
+    assert "ZoneActivationRangeMax(const ZoneData &zone)" in source
+    assert "price >= rangeMin - InpZoneActivateBand && price <= rangeMax + InpZoneActivateBand" in source
+    assert "if(zone.entry <= 0.0) return(false);" in source
     assert 'long bestMagic = 0;' in source
     assert 'RemoveCurrentTradeZoneBeforeActivation();' in source
     assert 'ActivateNearestWatchZone();' in source
@@ -194,7 +219,8 @@ def test_v2_magic_is_side_aware_and_panel_shows_today_summary() -> None:
     source = _source()
 
     assert 'StableZoneMagic(const ENUM_POSITION_TYPE side' in source
-    assert 'StableZoneMagicWithSalt(side, low, high, 17, 53)' in source
+    assert 'StableDailyPlanFollowMagic(zone.side)' in source
+    assert 'StableDailyPlanFollowMagic(campaign.side)' in source
     assert 'TodayClosedProfit()' in source
     assert 'TodayClosedOrderCount()' in source
     assert 'FindNearestWatchZoneForDisplay' in source

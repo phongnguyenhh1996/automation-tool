@@ -1,5 +1,5 @@
 #property strict
-#property description "EA Zone NeverDie MT5 v2.12"
+#property description "EA Zone NeverDie MT5 v2.14"
 
 #include <Trade/Trade.mqh>
 
@@ -21,6 +21,7 @@ struct ZoneData
    ENUM_ZONE_STATUS   status;
    double             low;
    double             high;
+   double             entry;
    double             sl;
    string             label;
    long               magic;
@@ -76,7 +77,7 @@ input group "=== DEBUG ==="
 input bool           InpDebugLog               = true;
 input bool           InpDebugTraceDecisions    = false;
 
-const string EA_VERSION = "2.12";
+const string EA_VERSION = "2.14";
 const int JSON_FETCH_WINDOW_MINUTES = 30;
 const int JSON_FETCH_SLOT_COUNT = 3;
 const int PANEL_LINE_COUNT = 24;
@@ -139,13 +140,14 @@ void DebugTrace(const string message)
 
 string ZoneDebugText(const ZoneData &zone)
   {
-   return(StringFormat("side=%s status=%s label=%s magic=%s low=%s high=%s sl=%s created=%s seq=%d",
+   return(StringFormat("side=%s status=%s label=%s magic=%s low=%s high=%s entry=%s sl=%s created=%s seq=%d",
                        SideText(zone.side),
                        StatusText(zone.status),
                        zone.label,
                        IntegerToString(zone.magic),
                        PriceText(zone.low),
                        PriceText(zone.high),
+                       PriceText(zone.entry),
                        PriceText(zone.sl),
                        TimeToString(zone.createdAt, TIME_DATE | TIME_SECONDS),
                        zone.fetchSequence));
@@ -364,10 +366,8 @@ bool ParseSideZone(const string json, const string key, double &low, double &hig
    return(low > 0.0 && high > 0.0);
   }
 
-long StableZoneMagicWithSalt(const ENUM_POSITION_TYPE side, const double low, const double high, const int buySalt, const int sellSalt)
+long StableMagicFromKey(const string key)
   {
-   int sideSalt = (side == POSITION_TYPE_BUY ? buySalt : sellSalt);
-   string key = _Symbol + "_" + IntegerToString(sideSalt) + "_" + DoubleToString(low, _Digits) + "_" + DoubleToString(high, _Digits);
    long hash = 2166136261;
    for(int i = 0; i < StringLen(key); i++)
      {
@@ -376,6 +376,27 @@ long StableZoneMagicWithSalt(const ENUM_POSITION_TYPE side, const double low, co
       hash %= 900000;
      }
    return(InpMagicNumber + 1 + hash);
+  }
+
+long StableZoneMagicWithSalt(const ENUM_POSITION_TYPE side, const double low, const double high, const int buySalt, const int sellSalt)
+  {
+   int sideSalt = (side == POSITION_TYPE_BUY ? buySalt : sellSalt);
+   string key = _Symbol + "_" + IntegerToString(sideSalt) + "_" + DoubleToString(low, _Digits) + "_" + DoubleToString(high, _Digits);
+   return(StableMagicFromKey(key));
+  }
+
+long StableDailyZoneMagic(const ENUM_POSITION_TYPE side)
+  {
+   int sideSalt = (side == POSITION_TYPE_BUY ? 17 : 53);
+   string key = _Symbol + "_daily_zone_" + IntegerToString(sideSalt) + "_" + IntegerToString(DateKey(TimeCurrent()));
+   return(StableMagicFromKey(key));
+  }
+
+long StableDailyPlanFollowMagic(const ENUM_POSITION_TYPE side)
+  {
+   int sideSalt = (side == POSITION_TYPE_BUY ? 71 : 89);
+   string key = _Symbol + "_daily_follow_" + IntegerToString(sideSalt) + "_" + IntegerToString(DateKey(TimeCurrent()));
+   return(StableMagicFromKey(key));
   }
 
 long StableZoneMagic(const ENUM_POSITION_TYPE side, const double low, const double high)
@@ -480,12 +501,55 @@ void NormalizeZonePrices(double &low, double &high)
    high = NormalizeDouble(maxPrice, _Digits);
   }
 
-int FindZoneIndex(const ENUM_POSITION_TYPE side, const double low, const double high)
+int FindMainZoneIndexBySide(const ENUM_POSITION_TYPE side)
   {
    for(int i = 0; i < ArraySize(g_zones); i++)
-      if(g_zones[i].side == side && g_zones[i].low == low && g_zones[i].high == high)
+      if(g_zones[i].side == side)
          return(i);
    return(-1);
+  }
+
+double MergedZoneSl(const ENUM_POSITION_TYPE side, const double existingSl, const double newSl)
+  {
+   if(newSl <= 0.0) return(existingSl);
+   if(existingSl <= 0.0) return(NormalizeDouble(newSl, _Digits));
+   if(side == POSITION_TYPE_BUY)
+      return(NormalizeDouble(MathMin(existingSl, newSl), _Digits));
+   return(NormalizeDouble(MathMax(existingSl, newSl), _Digits));
+  }
+
+void MergeZoneEntry(ZoneData &zone, const double jsonLow)
+  {
+   if(jsonLow <= 0.0) return;
+   if(zone.entry <= 0.0)
+      zone.entry = NormalizeDouble(jsonLow, _Digits);
+   else if(zone.side == POSITION_TYPE_BUY)
+      zone.entry = NormalizeDouble(MathMax(zone.entry, jsonLow), _Digits);
+   else
+      zone.entry = NormalizeDouble(MathMin(zone.entry, jsonLow), _Digits);
+  }
+
+void MergeZoneBounds(ZoneData &zone, const double newLow, const double newHigh, const double newSl)
+  {
+   double low = newLow;
+   double high = newHigh;
+   NormalizeZonePrices(low, high);
+   zone.low = (zone.low <= 0.0 ? low : NormalizeDouble(MathMin(zone.low, low), _Digits));
+   zone.high = (zone.high <= 0.0 ? high : NormalizeDouble(MathMax(zone.high, high), _Digits));
+   zone.sl = MergedZoneSl(zone.side, zone.sl, newSl);
+  }
+
+void RemoveOppositeMainZone(const ENUM_POSITION_TYPE side)
+  {
+   ENUM_POSITION_TYPE opposite = (side == POSITION_TYPE_BUY ? POSITION_TYPE_SELL : POSITION_TYPE_BUY);
+   for(int i = ArraySize(g_zones) - 1; i >= 0; i--)
+     {
+      if(g_zones[i].side != opposite) continue;
+      if(g_zones[i].status == ZONE_STATUS_TRADE)
+         KeepCampaignForZone(g_zones[i]);
+      DebugLog("Removed opposite-direction main zone before applying new plan_chinh. incomingSide=" + SideText(side) + " removed={" + ZoneDebugText(g_zones[i]) + "}");
+      ArrayRemove(g_zones, i, 1);
+     }
   }
 
 int FindCampaignIndex(const long magic)
@@ -502,25 +566,28 @@ void LoadWatchZone(const ENUM_POSITION_TYPE side, double low, double high, const
       DebugTrace("Skip JSON zone with non-plan_chinh label. side=" + SideText(side) + " label=" + label);
    if(!IsPlanChinhLabel(label)) return;
 
+   RemoveOppositeMainZone(side);
+   double jsonLow = low;
    NormalizeZonePrices(low, high);
-   long magic = StableZoneMagic(side, low, high);
+   long magic = StableDailyZoneMagic(side);
    if(IsZoneStoppedOut(side, magic))
      {
       DebugLog("Skip stopped-out JSON zone. side=" + SideText(side) + " magic=" + IntegerToString(magic) + " low=" + PriceText(low) + " high=" + PriceText(high) + " label=" + label);
       return;
      }
-   int index = FindZoneIndex(side, low, high);
+   int index = FindMainZoneIndexBySide(side);
    g_zoneFetchSequence++;
 
    if(index >= 0)
      {
-      g_zones[index].sl = NormalizeDouble(sl, _Digits);
+      MergeZoneBounds(g_zones[index], low, high, sl);
+      MergeZoneEntry(g_zones[index], jsonLow);
       g_zones[index].label = label;
       g_zones[index].magic = magic;
       g_zones[index].fetchSequence = g_zoneFetchSequence;
       if(g_zones[index].status != ZONE_STATUS_TRADE)
          g_zones[index].status = ZONE_STATUS_WATCH;
-      DebugLog("Updated watch zone from JSON. " + ZoneDebugText(g_zones[index]));
+      DebugLog("Merged main zone from JSON. " + ZoneDebugText(g_zones[index]));
       return;
      }
 
@@ -531,13 +598,14 @@ void LoadWatchZone(const ENUM_POSITION_TYPE side, double low, double high, const
    zone.status = ZONE_STATUS_WATCH;
    zone.low = low;
    zone.high = high;
-   zone.sl = NormalizeDouble(sl, _Digits);
+   zone.entry = NormalizeDouble(jsonLow, _Digits);
+   zone.sl = MergedZoneSl(side, 0.0, sl);
    zone.label = label;
    zone.magic = magic;
    zone.createdAt = TimeCurrent();
    zone.fetchSequence = g_zoneFetchSequence;
    g_zones[size] = zone;
-   DebugLog("Loaded new watch zone from JSON. " + ZoneDebugText(zone));
+   DebugLog("Loaded new main zone from JSON. " + ZoneDebugText(zone));
   }
 
 bool ApplyZonesJson(const string json, const string expectedLabel)
@@ -576,6 +644,8 @@ bool ApplyZonesJson(const string json, const string expectedLabel)
    else
       DebugTrace("No valid SELL zone found in JSON");
 
+   PruneDuplicateMainZones();
+   SyncMainZoneCampaignsAfterMerge();
    return(loadedExpectedSlot);
   }
 
@@ -637,7 +707,7 @@ bool FetchZonesJson(const string expectedLabel)
      {
       ClearAllZonesBeforeMorningJsonFetch();
       g_zoneFetchSequence++;
-      DebugLog("Morning JSON fetch: cleared existing zones and bumped fetchSequence=" + IntegerToString(g_zoneFetchSequence));
+      DebugLog("Morning JSON fetch: cleared today's zones and will create fresh main zones. fetchSequence=" + IntegerToString(g_zoneFetchSequence));
      }
 
    if(!ApplyZonesJson(body, expectedLabel))
@@ -690,17 +760,33 @@ void FetchZonesOnSchedule()
      }
   }
 
+double ZoneActivationRangeMin(const ZoneData &zone)
+  {
+   if(zone.entry <= 0.0) return(zone.low);
+   return(MathMin(zone.low, zone.entry));
+  }
+
+double ZoneActivationRangeMax(const ZoneData &zone)
+  {
+   if(zone.entry <= 0.0) return(zone.low);
+   return(MathMax(zone.low, zone.entry));
+  }
+
 bool IsInActivationBand(const ZoneData &zone, const double price)
   {
-   if(zone.side == POSITION_TYPE_SELL)
-      return(price >= zone.high - InpZoneActivateBand && price <= zone.high + InpZoneActivateBand);
-   return(price >= zone.low - InpZoneActivateBand && price <= zone.low + InpZoneActivateBand);
+   if(zone.entry <= 0.0) return(false);
+   double rangeMin = ZoneActivationRangeMin(zone);
+   double rangeMax = ZoneActivationRangeMax(zone);
+   return(price >= rangeMin - InpZoneActivateBand && price <= rangeMax + InpZoneActivateBand);
   }
 
 double ActivationDistance(const ZoneData &zone, const double price)
   {
-   double trigger = (zone.side == POSITION_TYPE_BUY ? zone.low : zone.high);
-   return(MathAbs(price - trigger));
+   double rangeMin = ZoneActivationRangeMin(zone);
+   double rangeMax = ZoneActivationRangeMax(zone);
+   if(price < rangeMin) return(rangeMin - price);
+   if(price > rangeMax) return(price - rangeMax);
+   return(0.0);
   }
 
 void KeepCampaignForZoneWithMagic(const ZoneData &zone, const long magic, const double baseLot)
@@ -737,14 +823,50 @@ void KeepCampaignForZone(const ZoneData &zone)
 
 void KeepPlanFollowCampaignForZone(const ZoneData &zone)
   {
-   long followMagic = StablePlanFollowMagic(zone.side, zone.low, zone.high);
+   long followMagic = StableDailyPlanFollowMagic(zone.side);
    KeepCampaignForZoneWithMagic(zone, followMagic, InpPlanFollowLotSize);
   }
 
 bool IsPlanFollowCampaign(const CampaignData &campaign)
   {
-   if(campaign.low <= 0.0 || campaign.high <= 0.0) return(false);
-   return(campaign.magic == StablePlanFollowMagic(campaign.side, campaign.low, campaign.high));
+   return(campaign.magic == StableDailyPlanFollowMagic(campaign.side));
+  }
+
+void PruneDuplicateMainZones()
+  {
+   for(int sideIdx = 0; sideIdx < 2; sideIdx++)
+     {
+      ENUM_POSITION_TYPE side = (sideIdx == 0 ? POSITION_TYPE_BUY : POSITION_TYPE_SELL);
+      int keepIndex = FindMainZoneIndexBySide(side);
+      if(keepIndex < 0) continue;
+
+      for(int i = ArraySize(g_zones) - 1; i >= 0; i--)
+        {
+         if(i == keepIndex || g_zones[i].side != side) continue;
+         DebugLog("Merging duplicate main zone into kept zone. kept={" + ZoneDebugText(g_zones[keepIndex]) + "} duplicate={" + ZoneDebugText(g_zones[i]) + "}");
+         MergeZoneBounds(g_zones[keepIndex], g_zones[i].low, g_zones[i].high, g_zones[i].sl);
+         MergeZoneEntry(g_zones[keepIndex], g_zones[i].entry);
+         if(g_zones[i].fetchSequence > g_zones[keepIndex].fetchSequence)
+           {
+            g_zones[keepIndex].fetchSequence = g_zones[i].fetchSequence;
+            g_zones[keepIndex].label = g_zones[i].label;
+           }
+         if(g_zones[i].status == ZONE_STATUS_TRADE)
+            g_zones[keepIndex].status = ZONE_STATUS_TRADE;
+         ArrayRemove(g_zones, i, 1);
+         if(i < keepIndex) keepIndex--;
+        }
+     }
+  }
+
+void SyncMainZoneCampaignsAfterMerge()
+  {
+   for(int i = 0; i < ArraySize(g_zones); i++)
+     {
+      if(g_zones[i].status == ZONE_STATUS_TRADE)
+         KeepCampaignForZone(g_zones[i]);
+      KeepPlanFollowCampaignForZone(g_zones[i]);
+     }
   }
 
 int LatestPlanFollowCampaignIndex()
@@ -943,7 +1065,7 @@ void ManagePlanChinhFollowEntry()
      }
 
    ZoneData zone = g_zones[zoneIndex];
-   long followMagic = StablePlanFollowMagic(zone.side, zone.low, zone.high);
+   long followMagic = StableDailyPlanFollowMagic(zone.side);
    KeepPlanFollowCampaignForZone(zone);
    int campaignIndex = FindCampaignIndex(followMagic);
    OpenPlanFollowCampaign(campaignIndex, "latest-zone");
@@ -1387,6 +1509,11 @@ string ZoneSlText(const ZoneData &zone)
    return(zone.sl > 0.0 ? DoubleToString(zone.sl, _Digits) : "-");
   }
 
+string ZoneEntryText(const ZoneData &zone)
+  {
+   return(zone.entry > 0.0 ? DoubleToString(zone.entry, _Digits) : "-");
+  }
+
 color ProfitColor(const double value)
   {
    if(value > 0.0) return(clrDarkGreen);
@@ -1520,6 +1647,7 @@ void UpdatePanel()
       AddPanelRow(lines, colors, row, "Zone TRADE: " + SideText(zone.side), clrDarkGreen);
       AddPanelRow(lines, colors, row, "Label: " + ZoneLabelText(zone), clrBlack);
       AddPanelRow(lines, colors, row, "Low/High: " + DoubleToString(zone.low, _Digits) + " - " + DoubleToString(zone.high, _Digits), clrBlack);
+      AddPanelRow(lines, colors, row, "Entry: " + ZoneEntryText(zone), clrBlack);
       AddPanelRow(lines, colors, row, "SL: " + ZoneSlText(zone), clrBlack);
      }
    else
@@ -1531,6 +1659,7 @@ void UpdatePanel()
          AddPanelRow(lines, colors, row, "Zone WATCH Next: " + SideText(watchZone.side), clrDarkOrange);
          AddPanelRow(lines, colors, row, "Label: " + ZoneLabelText(watchZone), clrBlack);
          AddPanelRow(lines, colors, row, "Low/High: " + DoubleToString(watchZone.low, _Digits) + " - " + DoubleToString(watchZone.high, _Digits), clrBlack);
+         AddPanelRow(lines, colors, row, "Entry: " + ZoneEntryText(watchZone), clrBlack);
          AddPanelRow(lines, colors, row, "SL: " + ZoneSlText(watchZone), clrBlack);
          AddPanelRow(lines, colors, row, "Distance: " + DoubleToString(distance, _Digits), clrBlack);
         }
