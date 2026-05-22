@@ -32,10 +32,12 @@ def _function_body(source: str, name: str) -> str:
 def test_v2_ea_file_declares_required_inputs_and_versioned_title() -> None:
     source = _source()
 
-    assert '#property description "EA Zone NeverDie MT5 v2.16"' in source
+    assert '#property description "EA Zone NeverDie MT5 v2.17"' in source
     assert "input bool           InpSessionStopEnabled" in source
     assert "input int            InpSessionStopHour        = 2" in source
     assert "input int            InpSessionStopUtcOffsetMin = 420" in source
+    assert "input int            InpMorningAutoResumeHour    = 10" in source
+    assert "input int            InpMorningAutoResumeMinute  = 15" in source
     assert 'input string         InpZonesJsonUrl' in source
     assert 'input int            InpZonesPollSeconds' in source
     assert 'input int            InpTakeProfit' in source
@@ -248,6 +250,7 @@ def test_v2_session_stop_clears_zones_but_keeps_dca_baskets() -> None:
     assert "bool IsSessionTradingPaused()" in source
     assert "SessionLocalNow()" in source
     assert "SessionStopMinuteOfDay()" in paused_body
+    assert "IsPastMorningAutoResumeCutoff()" in paused_body
     assert "HasMorningSlotResumeForLocalDay" in paused_body
     assert "RecordMorningSlotResumeAfterFetch" in schedule_body
     assert 'expectedLabel = JsonFetchSlotExpectedLabel' in schedule_body

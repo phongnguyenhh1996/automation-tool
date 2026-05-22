@@ -1,5 +1,5 @@
 #property strict
-#property description "EA Zone NeverDie MT5 v2.16"
+#property description "EA Zone NeverDie MT5 v2.17"
 
 #include <Trade/Trade.mqh>
 
@@ -78,12 +78,14 @@ input bool           InpSessionStopEnabled     = true;
 input int            InpSessionStopHour        = 2;
 input int            InpSessionStopMinute      = 0;
 input int            InpSessionStopUtcOffsetMin = 420;
+input int            InpMorningAutoResumeHour    = 10;
+input int            InpMorningAutoResumeMinute  = 15;
 
 input group "=== DEBUG ==="
 input bool           InpDebugLog               = true;
 input bool           InpDebugTraceDecisions    = false;
 
-const string EA_VERSION = "2.16";
+const string EA_VERSION = "2.17";
 const int JSON_FETCH_WINDOW_MINUTES = 30;
 const int JSON_FETCH_SLOT_COUNT = 3;
 const int PANEL_LINE_COUNT = 24;
@@ -203,6 +205,8 @@ bool ValidateInputs()
    if(InpZonesPollSeconds < 0) { DebugLog("Invalid input: InpZonesPollSeconds must be >= 0"); return(false); }
    if(InpSessionStopHour < 0 || InpSessionStopHour > 23) { DebugLog("Invalid input: InpSessionStopHour must be 0-23"); return(false); }
    if(InpSessionStopMinute < 0 || InpSessionStopMinute > 59) { DebugLog("Invalid input: InpSessionStopMinute must be 0-59"); return(false); }
+   if(InpMorningAutoResumeHour < 0 || InpMorningAutoResumeHour > 23) { DebugLog("Invalid input: InpMorningAutoResumeHour must be 0-23"); return(false); }
+   if(InpMorningAutoResumeMinute < 0 || InpMorningAutoResumeMinute > 59) { DebugLog("Invalid input: InpMorningAutoResumeMinute must be 0-59"); return(false); }
    return(true);
   }
 
@@ -228,6 +232,16 @@ int SessionLocalMinuteOfDay()
 int SessionStopMinuteOfDay()
   {
    return(InpSessionStopHour * 60 + InpSessionStopMinute);
+  }
+
+int MorningAutoResumeMinuteOfDay()
+  {
+   return(InpMorningAutoResumeHour * 60 + InpMorningAutoResumeMinute);
+  }
+
+bool IsPastMorningAutoResumeCutoff()
+  {
+   return(SessionLocalMinuteOfDay() >= MorningAutoResumeMinuteOfDay());
   }
 
 string MorningResumeGlobalNameForDate(const int localDateKey)
@@ -273,6 +287,7 @@ bool IsSessionTradingPaused()
   {
    if(!InpSessionStopEnabled || !RemoteJsonEnabled()) return(false);
    if(SessionLocalMinuteOfDay() < SessionStopMinuteOfDay()) return(false);
+   if(IsPastMorningAutoResumeCutoff()) return(false);
    return(!HasMorningSlotResumeForLocalDay(SessionLocalDateKey()));
   }
 
