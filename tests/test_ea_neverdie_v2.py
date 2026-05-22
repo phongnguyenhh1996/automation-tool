@@ -32,7 +32,7 @@ def _function_body(source: str, name: str) -> str:
 def test_v2_ea_file_declares_required_inputs_and_versioned_title() -> None:
     source = _source()
 
-    assert '#property description "EA Zone NeverDie MT5 v2.15"' in source
+    assert '#property description "EA Zone NeverDie MT5 v2.16"' in source
     assert "input bool           InpSessionStopEnabled" in source
     assert "input int            InpSessionStopHour        = 2" in source
     assert "input int            InpSessionStopUtcOffsetMin = 420" in source
@@ -217,6 +217,17 @@ def test_v2_basket_take_profit_scales_down_for_large_baskets() -> None:
     assert "return((double)InpTakeProfit);" in tp_body
     assert "double takeProfitPoints = CampaignTakeProfitPoints(basket);" in take_profit_body
     assert "DirectionMultiplier(side) * takeProfitPoints * _Point" in take_profit_body
+
+
+def test_v2_start_entry_blocks_when_another_main_campaign_has_positions() -> None:
+    source = _source()
+    start_body = _function_body(source, "ManageActiveTradeEntry")
+
+    assert "bool HasOtherMainSideOpenPositions(const ENUM_POSITION_TYPE side, const long zoneMagic)" in source
+    assert "if(IsPlanFollowCampaign(g_campaigns[i])) continue;" in _function_body(source, "HasOtherMainSideOpenPositions")
+    assert "if(g_campaigns[i].magic == zoneMagic) continue;" in _function_body(source, "HasOtherMainSideOpenPositions")
+    assert "HasOtherMainSideOpenPositions(zone.side, zone.magic)" in start_body
+    assert "START entry skipped: another main campaign still has open positions." in source
 
 
 def test_v2_follow_entry_is_disabled_while_a_trade_zone_is_active() -> None:

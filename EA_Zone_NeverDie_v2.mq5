@@ -1,5 +1,5 @@
 #property strict
-#property description "EA Zone NeverDie MT5 v2.15"
+#property description "EA Zone NeverDie MT5 v2.16"
 
 #include <Trade/Trade.mqh>
 
@@ -83,7 +83,7 @@ input group "=== DEBUG ==="
 input bool           InpDebugLog               = true;
 input bool           InpDebugTraceDecisions    = false;
 
-const string EA_VERSION = "2.15";
+const string EA_VERSION = "2.16";
 const int JSON_FETCH_WINDOW_MINUTES = 30;
 const int JSON_FETCH_SLOT_COUNT = 3;
 const int PANEL_LINE_COUNT = 24;
@@ -1057,6 +1057,20 @@ bool HasOpenPositions(const long magic)
    return(false);
   }
 
+bool HasOtherMainSideOpenPositions(const ENUM_POSITION_TYPE side, const long zoneMagic)
+  {
+   for(int i = 0; i < ArraySize(g_campaigns); i++)
+     {
+      if(!g_campaigns[i].active) continue;
+      if(g_campaigns[i].side != side) continue;
+      if(g_campaigns[i].magic == zoneMagic) continue;
+      if(IsPlanFollowCampaign(g_campaigns[i])) continue;
+      if(HasOpenPositions(g_campaigns[i].magic))
+         return(true);
+     }
+   return(false);
+  }
+
 double CampaignZoneSlFromPosition(const ENUM_POSITION_TYPE side, const double positionSl)
   {
    if(positionSl <= 0.0) return(0.0);
@@ -1523,6 +1537,11 @@ void ManageActiveTradeEntry()
    if(basket.count > 0)
      {
       DebugTrace("START entry skipped: basket already has positions. " + BasketDebugText(basket) + " zone={" + ZoneDebugText(zone) + "}");
+      return;
+     }
+   if(HasOtherMainSideOpenPositions(zone.side, zone.magic))
+     {
+      DebugLog("START entry skipped: another main campaign still has open positions. zone={" + ZoneDebugText(zone) + "}");
       return;
      }
 
