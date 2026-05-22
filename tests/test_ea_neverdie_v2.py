@@ -32,7 +32,7 @@ def _function_body(source: str, name: str) -> str:
 def test_v2_ea_file_declares_required_inputs_and_versioned_title() -> None:
     source = _source()
 
-    assert '#property description "EA Zone NeverDie MT5 v2.17"' in source
+    assert '#property description "EA Zone NeverDie MT5 v2.18"' in source
     assert "input bool           InpSessionStopEnabled" in source
     assert "input int            InpSessionStopHour        = 2" in source
     assert "input int            InpSessionStopUtcOffsetMin = 420" in source
@@ -71,15 +71,38 @@ def test_v2_json_loads_new_zones_as_watch_and_keeps_poll_slots() -> None:
     assert 'WebRequest("GET", requestUrl,' in fetch_body
 
 
+def test_v2_json_fetch_slot_completion_persisted_in_globals() -> None:
+    source = _source()
+
+    assert 'string JsonFetchCompletedGlobalName(const int windowKey)' in source
+    assert 'bool IsJsonFetchWindowCompleted(const int windowKey)' in source
+    assert 'void MarkJsonFetchWindowCompleted(const int windowKey)' in source
+    assert 'void RestoreJsonFetchWindowStateFromGlobals()' in source
+    assert 'GlobalVariableSet(JsonFetchCompletedGlobalName(windowKey), (double)TimeGMT());' in source
+    assert 'RestoreJsonFetchWindowStateFromGlobals();' in source
+    assert source.index('RestoreMorningResumeStateFromGlobals();') < source.index(
+        'RestoreJsonFetchWindowStateFromGlobals();'
+    )
+    assert source.index('RestoreJsonFetchWindowStateFromGlobals();') < source.index('FetchZonesOnInit();')
+
+
 def test_v2_scheduled_json_fetch_only_completes_matching_slot() -> None:
     source = _source()
     apply_body = _function_body(source, "ApplyZonesJson")
     schedule_body = _function_body(source, "FetchZonesOnSchedule")
+    init_body = _function_body(source, "FetchZonesOnInit")
 
     assert 'string expectedLabel = JsonFetchSlotExpectedLabel(JsonFetchSlotFromWindowKey(windowKey));' in schedule_body
+    assert 'IsJsonFetchWindowCompleted(windowKey)' in schedule_body
+    assert 'IsJsonFetchWindowCompleted(windowKey)' in init_body
+    assert 'Initial JSON fetch skipped: fetch slot already completed today.' in init_body
+    assert 'Scheduled JSON fetch skipped: fetch slot already completed today.' in schedule_body
     assert 'FetchZonesJson(expectedLabel)' in schedule_body
-    assert 'g_completedJsonFetchWindowKey = windowKey;' in schedule_body
-    assert schedule_body.index('FetchZonesJson(expectedLabel)') < schedule_body.index('g_completedJsonFetchWindowKey = windowKey;')
+    assert 'MarkJsonFetchWindowCompleted(windowKey);' in schedule_body
+    assert schedule_body.index('FetchZonesJson(expectedLabel)') < schedule_body.index(
+        'MarkJsonFetchWindowCompleted(windowKey);'
+    )
+    assert 'MarkJsonFetchWindowCompleted(windowKey);' in init_body
     assert 'bool loadedExpectedSlot = false;' in apply_body
     assert 'loadedExpectedSlot = true;' in apply_body
     assert 'return(loadedExpectedSlot);' in apply_body

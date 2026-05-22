@@ -1,5 +1,5 @@
 #property strict
-#property description "EA Zone NeverDie MT5 v2.17"
+#property description "EA Zone NeverDie MT5 v2.18"
 
 #include <Trade/Trade.mqh>
 
@@ -85,7 +85,7 @@ input group "=== DEBUG ==="
 input bool           InpDebugLog               = true;
 input bool           InpDebugTraceDecisions    = false;
 
-const string EA_VERSION = "2.17";
+const string EA_VERSION = "2.18";
 const int JSON_FETCH_WINDOW_MINUTES = 30;
 const int JSON_FETCH_SLOT_COUNT = 3;
 const int PANEL_LINE_COUNT = 24;
@@ -268,6 +268,33 @@ void RestoreMorningResumeStateFromGlobals()
    int localDate = SessionLocalDateKey();
    if(HasMorningSlotResumeForLocalDay(localDate))
       g_morningResumeLocalDateKey = localDate;
+  }
+
+string JsonFetchCompletedGlobalName(const int windowKey)
+  {
+   return("ZND_V2_JF_" + IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN)) + "_" + _Symbol + "_" + IntegerToString(windowKey));
+  }
+
+bool IsJsonFetchWindowCompleted(const int windowKey)
+  {
+   if(windowKey < 0) return(false);
+   if(g_completedJsonFetchWindowKey == windowKey) return(true);
+   return(GlobalVariableCheck(JsonFetchCompletedGlobalName(windowKey)));
+  }
+
+void MarkJsonFetchWindowCompleted(const int windowKey)
+  {
+   if(windowKey < 0) return;
+   g_completedJsonFetchWindowKey = windowKey;
+   GlobalVariableSet(JsonFetchCompletedGlobalName(windowKey), (double)TimeGMT());
+   DebugLog("JSON fetch window marked complete. windowKey=" + IntegerToString(windowKey));
+  }
+
+void RestoreJsonFetchWindowStateFromGlobals()
+  {
+   int windowKey = CurrentJsonFetchWindowKey();
+   if(windowKey >= 0 && IsJsonFetchWindowCompleted(windowKey))
+      g_completedJsonFetchWindowKey = windowKey;
   }
 
 bool IsExpectedMorningSlotLabel(const string expectedLabel)
@@ -904,11 +931,17 @@ void FetchZonesOnInit()
       return;
      }
    int windowKey = CurrentJsonFetchWindowKey();
+   if(windowKey >= 0 && IsJsonFetchWindowCompleted(windowKey))
+     {
+      g_completedJsonFetchWindowKey = windowKey;
+      DebugLog("Initial JSON fetch skipped: fetch slot already completed today. windowKey=" + IntegerToString(windowKey) + " expectedLabel=" + JsonFetchSlotExpectedLabel(JsonFetchSlotFromWindowKey(windowKey)));
+      return;
+     }
    string expectedLabel = "";
    if(windowKey >= 0)
       expectedLabel = JsonFetchSlotExpectedLabel(JsonFetchSlotFromWindowKey(windowKey));
    if(!FetchZonesJson(expectedLabel)) return;
-   if(windowKey >= 0) g_completedJsonFetchWindowKey = windowKey;
+   if(windowKey >= 0) MarkJsonFetchWindowCompleted(windowKey);
    RecordMorningSlotResumeAfterFetch(expectedLabel);
    DebugLog("Initial zones JSON fetch complete. windowKey=" + IntegerToString(windowKey) + " zones=" + IntegerToString(ArraySize(g_zones)));
   }
@@ -922,16 +955,17 @@ void FetchZonesOnSchedule()
       DebugTrace("Scheduled JSON fetch skipped: outside allowed window");
       return;
      }
-   if(windowKey == g_completedJsonFetchWindowKey)
+   if(IsJsonFetchWindowCompleted(windowKey))
      {
-      DebugTrace("Scheduled JSON fetch skipped: window already completed. windowKey=" + IntegerToString(windowKey));
+      g_completedJsonFetchWindowKey = windowKey;
+      DebugTrace("Scheduled JSON fetch skipped: fetch slot already completed today. windowKey=" + IntegerToString(windowKey));
       return;
      }
    string expectedLabel = JsonFetchSlotExpectedLabel(JsonFetchSlotFromWindowKey(windowKey));
    DebugLog("Scheduled zones JSON fetch started. windowKey=" + IntegerToString(windowKey) + " expectedLabel=" + expectedLabel);
    if(FetchZonesJson(expectedLabel))
      {
-      g_completedJsonFetchWindowKey = windowKey;
+      MarkJsonFetchWindowCompleted(windowKey);
       RecordMorningSlotResumeAfterFetch(expectedLabel);
       DebugLog("Scheduled zones JSON fetch complete. windowKey=" + IntegerToString(windowKey) + " expectedLabel=" + expectedLabel + " zones=" + IntegerToString(ArraySize(g_zones)));
      }
@@ -1902,6 +1936,7 @@ int OnInit()
       DebugLog("Timer enabled for remote JSON polling. seconds=" + IntegerToString(InpZonesPollSeconds));
      }
    RestoreMorningResumeStateFromGlobals();
+   RestoreJsonFetchWindowStateFromGlobals();
    FetchZonesOnInit();
    RestoreCampaignsFromOpenPositions();
    EnsureSessionStopZonesCleared();
