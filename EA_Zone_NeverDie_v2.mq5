@@ -388,14 +388,14 @@ long StableZoneMagicWithSalt(const ENUM_POSITION_TYPE side, const double low, co
 long StableDailyZoneMagic(const ENUM_POSITION_TYPE side)
   {
    int sideSalt = (side == POSITION_TYPE_BUY ? 17 : 53);
-   string key = _Symbol + "_daily_zone_" + IntegerToString(sideSalt) + "_" + IntegerToString(DateKey(TimeCurrent()));
+   string key = _Symbol + "_daily_zone_" + IntegerToString(sideSalt);
    return(StableMagicFromKey(key));
   }
 
 long StableDailyPlanFollowMagic(const ENUM_POSITION_TYPE side)
   {
    int sideSalt = (side == POSITION_TYPE_BUY ? 71 : 89);
-   string key = _Symbol + "_daily_follow_" + IntegerToString(sideSalt) + "_" + IntegerToString(DateKey(TimeCurrent()));
+   string key = _Symbol + "_daily_follow_" + IntegerToString(sideSalt);
    return(StableMagicFromKey(key));
   }
 

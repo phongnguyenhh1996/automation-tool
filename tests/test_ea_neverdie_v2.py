@@ -226,8 +226,12 @@ def test_v2_follow_entry_is_disabled_while_a_trade_zone_is_active() -> None:
 
 def test_v2_magic_is_side_aware_and_panel_shows_today_summary() -> None:
     source = _source()
+    zone_magic_body = _function_body(source, "StableDailyZoneMagic")
+    follow_magic_body = _function_body(source, "StableDailyPlanFollowMagic")
 
     assert 'StableZoneMagic(const ENUM_POSITION_TYPE side' in source
+    assert "DateKey(TimeCurrent())" not in zone_magic_body
+    assert "DateKey(TimeCurrent())" not in follow_magic_body
     assert 'StableDailyPlanFollowMagic(zone.side)' in source
     assert 'StableDailyPlanFollowMagic(campaign.side)' in source
     assert 'TodayClosedProfit()' in source
