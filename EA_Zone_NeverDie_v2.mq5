@@ -1,5 +1,5 @@
 #property strict
-#property description "EA Zone NeverDie MT5 v2.18"
+#property description "EA Zone NeverDie MT5 v2.19"
 
 #include <Trade/Trade.mqh>
 
@@ -85,7 +85,7 @@ input group "=== DEBUG ==="
 input bool           InpDebugLog               = true;
 input bool           InpDebugTraceDecisions    = false;
 
-const string EA_VERSION = "2.18";
+const string EA_VERSION = "2.19";
 const int JSON_FETCH_WINDOW_MINUTES = 30;
 const int JSON_FETCH_SLOT_COUNT = 3;
 const int PANEL_LINE_COUNT = 24;
@@ -678,36 +678,6 @@ int FindMainZoneIndexBySide(const ENUM_POSITION_TYPE side)
    return(-1);
   }
 
-double MergedZoneSl(const ENUM_POSITION_TYPE side, const double existingSl, const double newSl)
-  {
-   if(newSl <= 0.0) return(existingSl);
-   if(existingSl <= 0.0) return(NormalizeDouble(newSl, _Digits));
-   if(side == POSITION_TYPE_BUY)
-      return(NormalizeDouble(MathMin(existingSl, newSl), _Digits));
-   return(NormalizeDouble(MathMax(existingSl, newSl), _Digits));
-  }
-
-void MergeZoneEntry(ZoneData &zone, const double jsonLow)
-  {
-   if(jsonLow <= 0.0) return;
-   if(zone.entry <= 0.0)
-      zone.entry = NormalizeDouble(jsonLow, _Digits);
-   else if(zone.side == POSITION_TYPE_BUY)
-      zone.entry = NormalizeDouble(MathMax(zone.entry, jsonLow), _Digits);
-   else
-      zone.entry = NormalizeDouble(MathMin(zone.entry, jsonLow), _Digits);
-  }
-
-void MergeZoneBounds(ZoneData &zone, const double newLow, const double newHigh, const double newSl)
-  {
-   double low = newLow;
-   double high = newHigh;
-   NormalizeZonePrices(low, high);
-   zone.low = (zone.low <= 0.0 ? low : NormalizeDouble(MathMin(zone.low, low), _Digits));
-   zone.high = (zone.high <= 0.0 ? high : NormalizeDouble(MathMax(zone.high, high), _Digits));
-   zone.sl = MergedZoneSl(zone.side, zone.sl, newSl);
-  }
-
 void ApplyFreshWatchZoneFromJson(ZoneData &zone,
                                  const ENUM_POSITION_TYPE side,
                                  const double low,
@@ -722,23 +692,10 @@ void ApplyFreshWatchZoneFromJson(ZoneData &zone,
    zone.low = low;
    zone.high = high;
    zone.entry = NormalizeDouble(jsonLow, _Digits);
-   zone.sl = MergedZoneSl(side, 0.0, sl);
+   zone.sl = (sl > 0.0 ? NormalizeDouble(sl, _Digits) : 0.0);
    zone.label = label;
    zone.magic = magic;
    zone.fetchSequence = g_zoneFetchSequence;
-  }
-
-void RemoveOppositeMainZone(const ENUM_POSITION_TYPE side)
-  {
-   ENUM_POSITION_TYPE opposite = (side == POSITION_TYPE_BUY ? POSITION_TYPE_SELL : POSITION_TYPE_BUY);
-   for(int i = ArraySize(g_zones) - 1; i >= 0; i--)
-     {
-      if(g_zones[i].side != opposite) continue;
-      if(g_zones[i].status == ZONE_STATUS_TRADE)
-         KeepCampaignForZone(g_zones[i]);
-      DebugLog("Removed opposite-direction main zone before applying new plan_chinh. incomingSide=" + SideText(side) + " removed={" + ZoneDebugText(g_zones[i]) + "}");
-      ArrayRemove(g_zones, i, 1);
-     }
   }
 
 int FindCampaignIndex(const long magic)
@@ -755,12 +712,10 @@ void LoadWatchZone(const ENUM_POSITION_TYPE side, double low, double high, const
       DebugTrace("Skip JSON zone with non-plan_chinh label. side=" + SideText(side) + " label=" + label);
    if(!IsPlanChinhLabel(label)) return;
 
-   RemoveOppositeMainZone(side);
    double jsonLow = low;
    NormalizeZonePrices(low, high);
    long magic = StableDailyZoneMagic(side);
-   bool resetStoppedOutZone = IsZoneStoppedOut(side, magic);
-   if(resetStoppedOutZone)
+   if(IsZoneStoppedOut(side, magic))
      {
       ClearZoneStoppedOut(side, magic);
       DebugLog("Cleared stopped-out flag for new JSON fetch window. side=" + SideText(side) + " magic=" + IntegerToString(magic) + " label=" + label);
@@ -768,36 +723,13 @@ void LoadWatchZone(const ENUM_POSITION_TYPE side, double low, double high, const
    int index = FindMainZoneIndexBySide(side);
    g_zoneFetchSequence++;
 
-   if(resetStoppedOutZone)
-     {
-      if(index >= 0)
-        {
-         ApplyFreshWatchZoneFromJson(g_zones[index], side, low, high, jsonLow, sl, label, magic);
-         g_zones[index].createdAt = TimeCurrent();
-         DebugLog("Replaced main zone from JSON after stopped-out reset. " + ZoneDebugText(g_zones[index]));
-         return;
-        }
-
-      int size = ArraySize(g_zones);
-      ArrayResize(g_zones, size + 1);
-      ZoneData zone;
-      ApplyFreshWatchZoneFromJson(zone, side, low, high, jsonLow, sl, label, magic);
-      zone.createdAt = TimeCurrent();
-      g_zones[size] = zone;
-      DebugLog("Loaded new main zone from JSON after stopped-out reset. " + ZoneDebugText(zone));
-      return;
-     }
-
    if(index >= 0)
      {
-      MergeZoneBounds(g_zones[index], low, high, sl);
-      MergeZoneEntry(g_zones[index], jsonLow);
-      g_zones[index].label = label;
-      g_zones[index].magic = magic;
-      g_zones[index].fetchSequence = g_zoneFetchSequence;
-      if(g_zones[index].status != ZONE_STATUS_TRADE)
-         g_zones[index].status = ZONE_STATUS_WATCH;
-      DebugLog("Merged main zone from JSON. " + ZoneDebugText(g_zones[index]));
+      if(g_zones[index].status == ZONE_STATUS_TRADE)
+         KeepCampaignForZone(g_zones[index]);
+      ApplyFreshWatchZoneFromJson(g_zones[index], side, low, high, jsonLow, sl, label, magic);
+      g_zones[index].createdAt = TimeCurrent();
+      DebugLog("Replaced main zone from JSON. " + ZoneDebugText(g_zones[index]));
       return;
      }
 
@@ -866,13 +798,14 @@ void CleanupPreviousDayZonesBeforeJsonFetch()
      }
   }
 
-void ClearAllZonesBeforeMorningJsonFetch()
+void ClearAllZonesBeforeJsonFetch()
   {
    for(int i = ArraySize(g_zones) - 1; i >= 0; i--)
      {
       if(g_zones[i].status == ZONE_STATUS_TRADE)
          KeepCampaignForZone(g_zones[i]);
-      DebugLog("Removed zone before morning JSON apply. " + ZoneDebugText(g_zones[i]));
+      MarkZoneStoppedOut(g_zones[i].side, g_zones[i].magic);
+      DebugLog("Locked and removed zone before JSON apply. " + ZoneDebugText(g_zones[i]));
       ArrayRemove(g_zones, i, 1);
      }
   }
@@ -903,14 +836,9 @@ bool FetchZonesJson(const string expectedLabel)
    string body = CharArrayToString(result);
    DebugLog("Fetched zones JSON. bytes=" + IntegerToString(ArraySize(result)) + " bodyLength=" + IntegerToString(StringLen(body)));
 
-   string expectedLower = expectedLabel;
-   StringToLower(expectedLower);
-   if(expectedLower == "plan_chinh__sang")
-     {
-      ClearAllZonesBeforeMorningJsonFetch();
-      g_zoneFetchSequence++;
-      DebugLog("Morning JSON fetch: cleared today's zones and will create fresh main zones. fetchSequence=" + IntegerToString(g_zoneFetchSequence));
-     }
+   ClearAllZonesBeforeJsonFetch();
+   g_zoneFetchSequence++;
+   DebugLog("JSON fetch: cleared today's zones and will create fresh main zones. expectedLabel=" + expectedLabel + " fetchSequence=" + IntegerToString(g_zoneFetchSequence));
 
    if(!ApplyZonesJson(body, expectedLabel))
      {
@@ -1054,22 +982,25 @@ void PruneDuplicateMainZones()
    for(int sideIdx = 0; sideIdx < 2; sideIdx++)
      {
       ENUM_POSITION_TYPE side = (sideIdx == 0 ? POSITION_TYPE_BUY : POSITION_TYPE_SELL);
-      int keepIndex = FindMainZoneIndexBySide(side);
+      int keepIndex = -1;
+      int bestFetchSequence = -1;
+      for(int i = 0; i < ArraySize(g_zones); i++)
+        {
+         if(g_zones[i].side != side) continue;
+         if(keepIndex < 0 || g_zones[i].fetchSequence > bestFetchSequence)
+           {
+            keepIndex = i;
+            bestFetchSequence = g_zones[i].fetchSequence;
+           }
+        }
       if(keepIndex < 0) continue;
 
       for(int i = ArraySize(g_zones) - 1; i >= 0; i--)
         {
          if(i == keepIndex || g_zones[i].side != side) continue;
-         DebugLog("Merging duplicate main zone into kept zone. kept={" + ZoneDebugText(g_zones[keepIndex]) + "} duplicate={" + ZoneDebugText(g_zones[i]) + "}");
-         MergeZoneBounds(g_zones[keepIndex], g_zones[i].low, g_zones[i].high, g_zones[i].sl);
-         MergeZoneEntry(g_zones[keepIndex], g_zones[i].entry);
-         if(g_zones[i].fetchSequence > g_zones[keepIndex].fetchSequence)
-           {
-            g_zones[keepIndex].fetchSequence = g_zones[i].fetchSequence;
-            g_zones[keepIndex].label = g_zones[i].label;
-           }
          if(g_zones[i].status == ZONE_STATUS_TRADE)
-            g_zones[keepIndex].status = ZONE_STATUS_TRADE;
+            KeepCampaignForZone(g_zones[i]);
+         DebugLog("Removed duplicate main zone. kept={" + ZoneDebugText(g_zones[keepIndex]) + "} duplicate={" + ZoneDebugText(g_zones[i]) + "}");
          ArrayRemove(g_zones, i, 1);
          if(i < keepIndex) keepIndex--;
         }

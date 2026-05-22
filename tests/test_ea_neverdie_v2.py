@@ -32,7 +32,7 @@ def _function_body(source: str, name: str) -> str:
 def test_v2_ea_file_declares_required_inputs_and_versioned_title() -> None:
     source = _source()
 
-    assert '#property description "EA Zone NeverDie MT5 v2.18"' in source
+    assert '#property description "EA Zone NeverDie MT5 v2.19"' in source
     assert "input bool           InpSessionStopEnabled" in source
     assert "input int            InpSessionStopHour        = 2" in source
     assert "input int            InpSessionStopUtcOffsetMin = 420" in source
@@ -117,40 +117,51 @@ def test_v2_cleans_yesterday_zones_before_fetching_json() -> None:
     assert 'CleanupPreviousDayZonesBeforeJsonFetch();\n\n   ResetLastError();\n   int code = WebRequest(' in source
 
 
-def test_v2_keeps_single_main_zone_per_side_and_merges_json_updates() -> None:
+def test_v2_keeps_single_main_zone_per_side_and_replaces_json_updates() -> None:
     source = _source()
     load_body = _function_body(source, "LoadWatchZone")
     apply_body = _function_body(source, "ApplyZonesJson")
     fetch_body = _function_body(source, "FetchZonesJson")
+    prune_body = _function_body(source, "PruneDuplicateMainZones")
 
     assert "int FindMainZoneIndexBySide(const ENUM_POSITION_TYPE side)" in source
-    assert "double MergedZoneSl(const ENUM_POSITION_TYPE side" in source
-    assert "void MergeZoneBounds(ZoneData &zone" in source
+    assert "double MergedZoneSl(const ENUM_POSITION_TYPE side" not in source
+    assert "void MergeZoneBounds(ZoneData &zone" not in source
+    assert "void MergeZoneEntry(ZoneData &zone" not in source
     assert "long StableDailyZoneMagic(const ENUM_POSITION_TYPE side)" in source
     assert "long StableDailyPlanFollowMagic(const ENUM_POSITION_TYPE side)" in source
-    assert "void RemoveOppositeMainZone(const ENUM_POSITION_TYPE side)" in source
-    assert "RemoveOppositeMainZone(side)" in load_body
-    assert "Removed opposite-direction main zone" in source
+    assert "void RemoveOppositeMainZone(const ENUM_POSITION_TYPE side)" not in source
+    assert "RemoveOppositeMainZone(side)" not in load_body
+    clear_body = _function_body(source, "ClearAllZonesBeforeJsonFetch")
+    assert "MarkZoneStoppedOut(g_zones[i].side, g_zones[i].magic);" in clear_body
+    assert "Locked and removed zone before JSON apply." in source
     assert "FindMainZoneIndexBySide(side)" in load_body
     assert "double             entry;" in source
-    assert "void MergeZoneEntry(ZoneData &zone" in source
     assert "double jsonLow = low;" in load_body
-    assert "MergeZoneEntry(g_zones[index], jsonLow)" in load_body
-    assert "MergeZoneBounds(g_zones[index], low, high, sl)" in load_body
-    assert "MathMax(zone.entry, jsonLow)" in source
-    assert "MathMin(zone.entry, jsonLow)" in source
+    assert "ApplyFreshWatchZoneFromJson(g_zones[index], side, low, high, jsonLow, sl, label, magic);" in load_body
+    assert "Replaced main zone from JSON." in source
+    assert "Merged main zone from JSON" not in source
     assert "StableDailyZoneMagic(side)" in load_body
-    assert "Merged main zone from JSON" in source
     assert "PruneDuplicateMainZones();" in apply_body
     assert "SyncMainZoneCampaignsAfterMerge();" in apply_body
-    assert 'void ClearAllZonesBeforeMorningJsonFetch()' in source
-    assert 'expectedLower == "plan_chinh__sang"' in fetch_body
-    assert 'ClearAllZonesBeforeMorningJsonFetch();' in fetch_body
-    assert fetch_body.index('ClearAllZonesBeforeMorningJsonFetch()') < fetch_body.index(
+    assert "Removed duplicate main zone." in prune_body
+    assert "Merging duplicate main zone" not in source
+    assert 'void ClearAllZonesBeforeJsonFetch()' in source
+    assert 'ClearAllZonesBeforeJsonFetch();' in fetch_body
+    assert fetch_body.index('ClearAllZonesBeforeJsonFetch()') < fetch_body.index(
         'ApplyZonesJson(body, expectedLabel)'
     )
-    assert 'MathMin(existingSl, newSl)' in source
-    assert 'MathMax(existingSl, newSl)' in source
+    assert 'expectedLower == "plan_chinh__sang"' not in fetch_body
+
+
+def test_v2_json_fetch_keeps_both_sides_when_present() -> None:
+    source = _source()
+    apply_body = _function_body(source, "ApplyZonesJson")
+
+    assert apply_body.index("LoadWatchZone(POSITION_TYPE_BUY") < apply_body.index(
+        "LoadWatchZone(POSITION_TYPE_SELL"
+    )
+    assert "RemoveOppositeMainZone" not in apply_body
 
 
 def test_v2_activation_uses_side_specific_entry_ranges() -> None:
@@ -198,10 +209,10 @@ def test_v2_stopped_zone_is_refreshed_on_new_json_fetch_window() -> None:
     assert "long g_stoppedBuyZoneMagics[]" in source
     assert "long g_stoppedSellZoneMagics[]" in source
     assert "StoppedOutGlobalName" in source
-    assert "bool resetStoppedOutZone = IsZoneStoppedOut(side, magic);" in load_body
+    assert "if(IsZoneStoppedOut(side, magic))" in load_body
     assert "ClearZoneStoppedOut(side, magic);" in load_body
     assert "ApplyFreshWatchZoneFromJson(g_zones[index], side, low, high, jsonLow, sl, label, magic);" in load_body
-    assert "Replaced main zone from JSON after stopped-out reset." in load_body
+    assert "Replaced main zone from JSON." in load_body
     assert "Skip stopped-out JSON zone." not in load_body
     assert "MarkZoneStoppedOut(g_zones[index].side, g_zones[index].magic)" in remove_body
     assert "GlobalVariableCheck(StoppedOutGlobalName(side, magic))" in is_stopped_body
