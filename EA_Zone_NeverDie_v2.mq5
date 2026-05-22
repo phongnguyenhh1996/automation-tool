@@ -1,5 +1,5 @@
 #property strict
-#property description "EA Zone NeverDie MT5 v2.14"
+#property description "EA Zone NeverDie MT5 v2.15"
 
 #include <Trade/Trade.mqh>
 
@@ -73,11 +73,17 @@ input int            InpZonesPollSeconds       = 300;
 input string         InpZonesBearer            = "";
 input double         InpZonesSlBuffer          = 30.0;
 
+input group "=== SESSION STOP (VN) ==="
+input bool           InpSessionStopEnabled     = true;
+input int            InpSessionStopHour        = 2;
+input int            InpSessionStopMinute      = 0;
+input int            InpSessionStopUtcOffsetMin = 420;
+
 input group "=== DEBUG ==="
 input bool           InpDebugLog               = true;
 input bool           InpDebugTraceDecisions    = false;
 
-const string EA_VERSION = "2.14";
+const string EA_VERSION = "2.15";
 const int JSON_FETCH_WINDOW_MINUTES = 30;
 const int JSON_FETCH_SLOT_COUNT = 3;
 const int PANEL_LINE_COUNT = 24;
@@ -100,6 +106,8 @@ long g_stoppedSellZoneMagics[];
 datetime g_dcaBarOpenSeen = 0;
 int g_completedJsonFetchWindowKey = -1;
 int g_zoneFetchSequence = 0;
+int g_sessionStopClearedLocalDateKey = -1;
+int g_morningResumeLocalDateKey = -1;
 string g_panelPrefix = "ZoneNeverDieV2Panel";
 
 string BoolText(const bool value)
@@ -193,7 +201,103 @@ bool ValidateInputs()
    if(InpDcaPrevOrderDistance < 0) { DebugLog("Invalid input: InpDcaPrevOrderDistance must be >= 0"); return(false); }
    if(InpZoneActivateBand < 0.0) { DebugLog("Invalid input: InpZoneActivateBand must be >= 0"); return(false); }
    if(InpZonesPollSeconds < 0) { DebugLog("Invalid input: InpZonesPollSeconds must be >= 0"); return(false); }
+   if(InpSessionStopHour < 0 || InpSessionStopHour > 23) { DebugLog("Invalid input: InpSessionStopHour must be 0-23"); return(false); }
+   if(InpSessionStopMinute < 0 || InpSessionStopMinute > 59) { DebugLog("Invalid input: InpSessionStopMinute must be 0-59"); return(false); }
    return(true);
+  }
+
+datetime SessionLocalNow()
+  {
+   return(TimeGMT() + (datetime)InpSessionStopUtcOffsetMin * 60);
+  }
+
+int SessionLocalDateKey()
+  {
+   MqlDateTime tm;
+   TimeToStruct(SessionLocalNow(), tm);
+   return(tm.year * 10000 + tm.mon * 100 + tm.day);
+  }
+
+int SessionLocalMinuteOfDay()
+  {
+   MqlDateTime tm;
+   TimeToStruct(SessionLocalNow(), tm);
+   return(tm.hour * 60 + tm.min);
+  }
+
+int SessionStopMinuteOfDay()
+  {
+   return(InpSessionStopHour * 60 + InpSessionStopMinute);
+  }
+
+string MorningResumeGlobalNameForDate(const int localDateKey)
+  {
+   return("ZND_V2_MR_" + IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN)) + "_" + _Symbol + "_" + IntegerToString(localDateKey));
+  }
+
+bool HasMorningSlotResumeForLocalDay(const int localDateKey)
+  {
+   if(g_morningResumeLocalDateKey == localDateKey) return(true);
+   return(GlobalVariableCheck(MorningResumeGlobalNameForDate(localDateKey)));
+  }
+
+void MarkMorningSlotResumeForLocalDay()
+  {
+   int localDate = SessionLocalDateKey();
+   g_morningResumeLocalDateKey = localDate;
+   GlobalVariableSet(MorningResumeGlobalNameForDate(localDate), (double)TimeGMT());
+   DebugLog("Morning slot resume marked for local date. dateKey=" + IntegerToString(localDate));
+  }
+
+void RestoreMorningResumeStateFromGlobals()
+  {
+   int localDate = SessionLocalDateKey();
+   if(HasMorningSlotResumeForLocalDay(localDate))
+      g_morningResumeLocalDateKey = localDate;
+  }
+
+bool IsExpectedMorningSlotLabel(const string expectedLabel)
+  {
+   string lower = expectedLabel;
+   StringToLower(lower);
+   return(lower == "plan_chinh__sang");
+  }
+
+void RecordMorningSlotResumeAfterFetch(const string expectedLabel)
+  {
+   if(!IsExpectedMorningSlotLabel(expectedLabel)) return;
+   MarkMorningSlotResumeForLocalDay();
+  }
+
+bool IsSessionTradingPaused()
+  {
+   if(!InpSessionStopEnabled || !RemoteJsonEnabled()) return(false);
+   if(SessionLocalMinuteOfDay() < SessionStopMinuteOfDay()) return(false);
+   return(!HasMorningSlotResumeForLocalDay(SessionLocalDateKey()));
+  }
+
+void ClearAllZonesForSessionStop()
+  {
+   for(int i = ArraySize(g_zones) - 1; i >= 0; i--)
+     {
+      if(g_zones[i].status == ZONE_STATUS_TRADE)
+         KeepCampaignForZone(g_zones[i]);
+      KeepPlanFollowCampaignForZone(g_zones[i]);
+      DebugLog("Session stop removed zone. " + ZoneDebugText(g_zones[i]));
+      ArrayRemove(g_zones, i, 1);
+     }
+  }
+
+void EnsureSessionStopZonesCleared()
+  {
+   if(!IsSessionTradingPaused()) return;
+
+   int localDate = SessionLocalDateKey();
+   if(g_sessionStopClearedLocalDateKey == localDate) return;
+
+   ClearAllZonesForSessionStop();
+   g_sessionStopClearedLocalDateKey = localDate;
+   DebugLog("Session stop applied: zones cleared, open baskets kept for DCA/TP. localDateKey=" + IntegerToString(localDate));
   }
 
 bool EnvironmentReady()
@@ -790,6 +894,7 @@ void FetchZonesOnInit()
       expectedLabel = JsonFetchSlotExpectedLabel(JsonFetchSlotFromWindowKey(windowKey));
    if(!FetchZonesJson(expectedLabel)) return;
    if(windowKey >= 0) g_completedJsonFetchWindowKey = windowKey;
+   RecordMorningSlotResumeAfterFetch(expectedLabel);
    DebugLog("Initial zones JSON fetch complete. windowKey=" + IntegerToString(windowKey) + " zones=" + IntegerToString(ArraySize(g_zones)));
   }
 
@@ -812,6 +917,7 @@ void FetchZonesOnSchedule()
    if(FetchZonesJson(expectedLabel))
      {
       g_completedJsonFetchWindowKey = windowKey;
+      RecordMorningSlotResumeAfterFetch(expectedLabel);
       DebugLog("Scheduled zones JSON fetch complete. windowKey=" + IntegerToString(windowKey) + " expectedLabel=" + expectedLabel + " zones=" + IntegerToString(ArraySize(g_zones)));
      }
   }
@@ -1700,6 +1806,13 @@ void UpdatePanel()
    AddPanelRow(lines, colors, row, "Profit Today: " + DoubleToString(todayProfit, 2), ProfitColor(todayProfit));
    AddPanelRow(lines, colors, row, "Orders Today: " + IntegerToString(TodayClosedOrderCount()), clrBlack);
    AddPanelRow(lines, colors, row, "Open Orders:  " + IntegerToString(TotalOpenEaOrders()), clrBlack);
+   if(InpSessionStopEnabled && RemoteJsonEnabled())
+     {
+      if(IsSessionTradingPaused())
+         AddPanelRow(lines, colors, row, "Session: PAUSED (DCA only)", clrCrimson);
+      else
+         AddPanelRow(lines, colors, row, "Session: ACTIVE", clrDarkGreen);
+     }
    AddPanelRow(lines, colors, row, " ", clrBlack);
 
    int tradeIndex = ActiveTradeZoneIndex();
@@ -1754,8 +1867,10 @@ int OnInit()
       EventSetTimer(InpZonesPollSeconds);
       DebugLog("Timer enabled for remote JSON polling. seconds=" + IntegerToString(InpZonesPollSeconds));
      }
+   RestoreMorningResumeStateFromGlobals();
    FetchZonesOnInit();
    RestoreCampaignsFromOpenPositions();
+   EnsureSessionStopZonesCleared();
    if(InpShowPanel) CreatePanel();
    g_dcaBarOpenSeen = iTime(_Symbol, DcaTimeframe(), 0);
    UpdatePanel();
@@ -1786,10 +1901,6 @@ void OnTick()
      }
 
    RestoreCampaignsFromOpenPositions();
-   CleanupCampaignsWithoutPositions();
-   ActivateNearestWatchZone();
-   RemoveTouchedTradeZone();
-   ManagePlanChinhFollowEntry();
 
    bool onFirstTickOfNewDcaBar = false;
    datetime dcaBarOpen = iTime(_Symbol, DcaTimeframe(), 0);
@@ -1800,6 +1911,18 @@ void OnTick()
       DebugLog("New DCA bar detected. timeframe=" + EnumToString(DcaTimeframe()) + " open=" + TimeToString(dcaBarOpen, TIME_DATE | TIME_SECONDS));
      }
 
+   if(IsSessionTradingPaused())
+     {
+      EnsureSessionStopZonesCleared();
+      ManageCampaigns(onFirstTickOfNewDcaBar);
+      UpdatePanel();
+      return;
+     }
+
+   CleanupCampaignsWithoutPositions();
+   ActivateNearestWatchZone();
+   RemoveTouchedTradeZone();
+   ManagePlanChinhFollowEntry();
    ManageActiveTradeEntry();
    ManageCampaigns(onFirstTickOfNewDcaBar);
    UpdatePanel();

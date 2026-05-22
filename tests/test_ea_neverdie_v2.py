@@ -32,7 +32,10 @@ def _function_body(source: str, name: str) -> str:
 def test_v2_ea_file_declares_required_inputs_and_versioned_title() -> None:
     source = _source()
 
-    assert '#property description "EA Zone NeverDie MT5 v2.14"' in source
+    assert '#property description "EA Zone NeverDie MT5 v2.15"' in source
+    assert "input bool           InpSessionStopEnabled" in source
+    assert "input int            InpSessionStopHour        = 2" in source
+    assert "input int            InpSessionStopUtcOffsetMin = 420" in source
     assert 'input string         InpZonesJsonUrl' in source
     assert 'input int            InpZonesPollSeconds' in source
     assert 'input int            InpTakeProfit' in source
@@ -222,6 +225,33 @@ def test_v2_follow_entry_is_disabled_while_a_trade_zone_is_active() -> None:
 
     assert 'if(ActiveTradeZoneIndex() >= 0) return;' in source
     assert on_tick.index('ActivateNearestWatchZone();') < on_tick.index('ManagePlanChinhFollowEntry();')
+
+
+def test_v2_session_stop_clears_zones_but_keeps_dca_baskets() -> None:
+    source = _source()
+    on_tick = source[source.index("void OnTick()") :]
+    stop_body = _function_body(source, "ClearAllZonesForSessionStop")
+    paused_body = _function_body(source, "IsSessionTradingPaused")
+    schedule_body = _function_body(source, "FetchZonesOnSchedule")
+
+    assert "bool IsSessionTradingPaused()" in source
+    assert "SessionLocalNow()" in source
+    assert "SessionStopMinuteOfDay()" in paused_body
+    assert "HasMorningSlotResumeForLocalDay" in paused_body
+    assert "RecordMorningSlotResumeAfterFetch" in schedule_body
+    assert 'expectedLabel = JsonFetchSlotExpectedLabel' in schedule_body
+    assert "KeepCampaignForZone(g_zones[i])" in stop_body
+    assert "KeepPlanFollowCampaignForZone(g_zones[i])" in stop_body
+    assert "if(IsSessionTradingPaused())" in on_tick
+    paused_block = on_tick[on_tick.index("if(IsSessionTradingPaused())") : on_tick.index("CleanupCampaignsWithoutPositions();")]
+    assert "EnsureSessionStopZonesCleared();" in paused_block
+    assert "ManageCampaigns(onFirstTickOfNewDcaBar);" in paused_block
+    assert "return;" in paused_block
+    assert "ActivateNearestWatchZone();" not in paused_block
+    assert "ManagePlanChinhFollowEntry();" not in paused_block
+    assert "ManageActiveTradeEntry();" not in paused_block
+    assert 'return("plan_chinh__sang");' in source
+    assert 'IsExpectedMorningSlotLabel(expectedLabel)' in source or "IsExpectedMorningSlotLabel" in source
 
 
 def test_v2_magic_is_side_aware_and_panel_shows_today_summary() -> None:
