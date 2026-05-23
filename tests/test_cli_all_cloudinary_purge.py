@@ -117,7 +117,7 @@ def test_all_morning_clear_keeps_ea_neverdie_json(monkeypatch, tmp_path: Path) -
     assert calls["clear_neverdie"] == 0
 
 
-def test_all_runs_second_flow_with_dedicated_vector_channel_without_zone_shards(
+def test_all_runs_second_flow_with_dedicated_vector_channel_and_all2_shards(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -217,6 +217,7 @@ def test_all_runs_second_flow_with_dedicated_vector_channel_without_zone_shards(
         "automation_tool.ea_neverdie_zone_publish.maybe_publish_neverdie_after_cli",
         lambda **_kwargs: None,
     )
+    monkeypatch.setattr(cli, "sync_accounts_all2_json", lambda _path: None)
 
     args = _parser().parse_args(
         [
@@ -232,6 +233,104 @@ def test_all_runs_second_flow_with_dedicated_vector_channel_without_zone_shards(
     assert len(openai_calls) == 2
     assert openai_calls[1]["vector_store_ids"] == ["vs_69fa9d55f3b48191b4aea51214b880d6"]
     assert telegram_calls[1]["chat_id"] == "-1003996623506"
-    assert not (zones_dir / "vung_plan_chinh_sang-2.json").exists()
-    assert not (zones_dir / "vung_plan_chinh_sang-2.last_response_id.txt").exists()
+    assert (zones_dir / "vung_plan_chinh_sang-2.json").is_file()
+    shard = json.loads((zones_dir / "vung_plan_chinh_sang-2.json").read_text(encoding="utf-8"))
+    assert shard["zone"]["source"] == "all-2"
     assert response_ids == ["resp-1"]
+
+
+def test_all_2_standalone_uses_existing_charts_without_capture(monkeypatch, tmp_path: Path) -> None:
+    from automation_tool import cli
+
+    stamp = "20260514_090000"
+    chart_json = tmp_path / f"{stamp}_coinmap_XAUUSD_5m.json"
+    chart_json.write_text("{}", encoding="utf-8")
+    openai_calls: list[dict[str, object]] = []
+    telegram_calls: list[dict[str, object]] = []
+    capture_called = {"n": 0}
+    payload = json.dumps(
+        {
+            "prices": [
+                {
+                    "label": "plan_chinh",
+                    "value": 4709.0,
+                    "vung_cho": "4708–4710",
+                    "side": "BUY",
+                    "hop_luu": 80,
+                    "trade_line": "BUY LIMIT 4709.0 | SL 4699.0 | TP1 4720.0 | Lot 0.02",
+                },
+            ]
+        },
+        ensure_ascii=False,
+    )
+
+    class Settings:
+        openai_vector_store_ids = ["vs_primary"]
+        telegram_bot_token = "bot-token"
+        telegram_chat_id = "-100111"
+        telegram_output_ngan_gon_chat_id = None
+        telegram_parse_mode = None
+
+    class OpenAIResult:
+        final_response_id = "resp-2"
+        after_charts = payload
+
+        def full_text(self) -> str:
+            return self.after_charts
+
+    def fake_capture(**_kwargs):
+        capture_called["n"] += 1
+        return []
+
+    def fake_run_openai_flow(*_args, **kwargs):
+        openai_calls.append(kwargs)
+        return OpenAIResult()
+
+    def fake_send_openai_output_to_telegram(**kwargs):
+        telegram_calls.append(kwargs)
+
+    monkeypatch.setattr(cli, "load_settings", lambda: Settings())
+    monkeypatch.setattr(cli, "require_openai", lambda _settings: None)
+    monkeypatch.setattr(cli, "require_telegram", lambda _settings: None)
+    monkeypatch.setattr(cli, "capture_charts", fake_capture)
+    monkeypatch.setattr(cli, "_run_openai_flow", fake_run_openai_flow)
+    monkeypatch.setattr(cli, "send_openai_output_to_telegram", fake_send_openai_output_to_telegram)
+    monkeypatch.setattr(cli, "resolved_openai_model", lambda _settings, model: model)
+    monkeypatch.setattr(cli, "sync_accounts_all2_json", lambda _path: None)
+    zones_dir = tmp_path / "zones"
+    write_calls: list[dict[str, object]] = []
+
+    def fake_write_zones_for_slot(**kwargs):
+        write_calls.append(kwargs)
+
+    monkeypatch.setattr(cli, "zones_dir_from_cli_path", lambda _path: zones_dir)
+    monkeypatch.setattr(cli, "session_slot_now_hcm", lambda: "sang")
+    monkeypatch.setattr(cli, "write_zones_for_slot", fake_write_zones_for_slot)
+    monkeypatch.setattr(
+        cli,
+        "ordered_chart_openai_payloads",
+        lambda _charts_dir, stamp=None: [("json", chart_json)],
+    )
+    monkeypatch.setattr(cli, "_warn_if_incomplete_chart_payloads", lambda *_a, **_k: None)
+
+    args = _parser().parse_args(
+        [
+            "all-2",
+            "--charts-dir",
+            str(tmp_path),
+            "--stamp",
+            stamp,
+            "--prompt",
+            "retry flow 2",
+        ]
+    )
+
+    cli.cmd_all_2(args)
+
+    assert capture_called["n"] == 0
+    assert len(openai_calls) == 1
+    assert openai_calls[0]["vector_store_ids"] == ["vs_69fa9d55f3b48191b4aea51214b880d6"]
+    assert telegram_calls[0]["chat_id"] == "-1003996623506"
+    assert len(write_calls) == 1
+    assert write_calls[0]["shard_suffix"] == "-2"
+    assert write_calls[0]["zones"][0].source == "all-2"

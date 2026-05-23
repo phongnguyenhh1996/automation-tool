@@ -37,6 +37,7 @@ from automation_tool.mt5_accounts import (
     load_mt5_accounts_for_cli,
     load_mt5_accounts_for_zone_entry,
     primary_account,
+    subset_accounts_json_basename,
     trade_with_update_scalp_entry_lot_default,
 )
 from automation_tool.mt5_execute import (
@@ -121,7 +122,7 @@ from automation_tool.zones_paths import (
 from automation_tool.zones_state import (
     Zone,
     ZonesState,
-    read_manifest_last_write_slot,
+    read_manifest_updated_at,
     read_zones_state,
     read_zones_state_from_shard,
     write_zones_state,
@@ -974,12 +975,6 @@ def _filter_entry_accounts_for_zone(
 ) -> tuple[list[MT5AccountEntry], Optional[str], list[str]]:
     slot = _entry_slot_for_zone(zone, params)
     allowed = filter_mt5_accounts_for_entry_slot(accounts, slot)
-    if str(zone.id or "").strip().endswith("-2"):
-        try:
-            primary_id = primary_account(accounts).id
-        except RuntimeError:
-            primary_id = ""
-        allowed = [a for a in allowed if a.id == primary_id]
     allowed_ids = {a.id for a in allowed}
     blocked_ids = [a.id for a in accounts if a.id not in allowed_ids]
     return allowed, slot, blocked_ids
@@ -2461,15 +2456,17 @@ def _auto_entry_job(
                         z.auto_entry_mt5_failed = False
                         break
                 _state_write(params, st_z)
+            subset_fn = subset_accounts_json_basename(z0.source or "") or "accounts.json"
             _send_log(
                 settings,
-                "[auto-entry] update-scalp zone requires accounts-scalp.json beside accounts file "
+                f"[auto-entry] zone source={z0.source!r} requires {subset_fn} beside accounts file "
                 f"| zone_id={zone_id}",
             )
             _send_user_notice(
                 settings,
-                "Tự động vào lệnh: thiếu accounts-scalp.json.",
-                "Vùng update-scalp cần file accounts-scalp.json cạnh accounts.json (chạy update-scalp hoặc tạo subset).",
+                f"Tự động vào lệnh: thiếu {subset_fn}.",
+                f"Vùng {z0.source!r} cần {subset_fn} cạnh accounts.json "
+                f'(flag trên account hoặc chạy all / all-2 để tạo subset).',
                 zone=z0,
                 params=params,
             )
@@ -2970,15 +2967,17 @@ def _zone_touch_job(
                         z.mt5_tickets_by_account = None
                         break
                 _state_write(params, st_block_scalp)
+            subset_fn = subset_accounts_json_basename(z1.source or "") or "accounts.json"
             _send_log(
                 settings,
-                "[zone-touch] update-scalp requires accounts-scalp.json beside accounts file "
+                f"[zone-touch] zone source={z1.source!r} requires {subset_fn} beside accounts file "
                 f"| zone_id={zone_id}",
             )
             _send_user_notice(
                 settings,
-                "Vào lệnh: thiếu accounts-scalp.json.",
-                "Vùng update-scalp cần file accounts-scalp.json cạnh accounts.json (chạy update-scalp hoặc tạo subset).",
+                f"Vào lệnh: thiếu {subset_fn}.",
+                f"Vùng {z1.source!r} cần {subset_fn} cạnh accounts.json "
+                f'(flag trên account hoặc chạy all / all-2 để tạo subset).',
                 zone=z1,
                 params=params,
             )
@@ -3161,6 +3160,64 @@ def _zone_touch_job(
             return
 
 
+_DAEMON_GIA_MANIFEST_RECONCILE_DEBOUNCE_S = 10.0
+
+
+def _daemon_gia_tick_manifest_updated_at_reconcile(
+    zones_dir: Path,
+    *,
+    state: dict[str, Any],
+    debounce_s: float = _DAEMON_GIA_MANIFEST_RECONCILE_DEBOUNCE_S,
+) -> Optional[int]:
+    """
+    When ``zones_manifest.json`` ``updated_at`` changes, wait ``debounce_s`` after the latest
+    change (trailing debounce), then ``reconcile_daemon_plans_at_boot``.
+    Returns spawn count when reconcile runs, else ``None``.
+    """
+    cur = read_manifest_updated_at(zones_dir)
+    if cur is None:
+        return None
+
+    last_rec = state.get("last_reconciled_updated_at")
+    if last_rec is None:
+        state["last_reconciled_updated_at"] = cur
+        return None
+
+    if cur == last_rec:
+        state.pop("pending_updated_at", None)
+        state.pop("pending_since_mono", None)
+        return None
+
+    pending = state.get("pending_updated_at")
+    if cur != pending:
+        state["pending_updated_at"] = cur
+        state["pending_since_mono"] = time.monotonic()
+        return None
+
+    since = state.get("pending_since_mono")
+    if since is None:
+        state["pending_since_mono"] = time.monotonic()
+        return None
+
+    if (time.monotonic() - float(since)) < debounce_s:
+        return None
+
+    prev_rec = last_rec
+    n = reconcile_daemon_plans_at_boot(zones_dir)
+    state["last_reconciled_updated_at"] = cur
+    state.pop("pending_updated_at", None)
+    state.pop("pending_since_mono", None)
+    _log.info(
+        "tv-watchlist-daemon (gia) | zones_manifest updated_at %s -> %s | "
+        "reconcile-daemon-plans after %.0fs debounce | spawned %s",
+        prev_rec,
+        cur,
+        debounce_s,
+        n,
+    )
+    return n
+
+
 def _tv_watchlist_price_only_loop(
     *,
     settings: Settings,
@@ -3176,7 +3233,7 @@ def _tv_watchlist_price_only_loop(
     last_path = params.last_price_path or default_last_price_path(sym)
     shm = open_writer_shared_memory_v2(sym)
     zones_dir = default_zones_dir(sym)
-    prev_manifest_slot: Optional[SessionSlot] = None
+    manifest_reconcile_state: dict[str, Any] = {}
     reconciled_after_first_last = False
     heartbeat_s = 300.0
     last_heartbeat_at = 0.0
@@ -3212,26 +3269,12 @@ def _tv_watchlist_price_only_loop(
                 _send_log(settings, "[daemon-gia] auto-stop 00:30 | đã dừng daemon giá.")
                 break
             try:
-                cur_manifest_slot = read_manifest_last_write_slot(zones_dir)
-                if cur_manifest_slot is not None:
-                    if prev_manifest_slot is None:
-                        prev_manifest_slot = cur_manifest_slot
-                    elif cur_manifest_slot != prev_manifest_slot:
-                        _log.info(
-                            "tv-watchlist-daemon (gia) | zones_manifest last_write_slot %s -> %s | "
-                            "reconcile-daemon-plans (no stop)",
-                            prev_manifest_slot,
-                            cur_manifest_slot,
-                        )
-                        n_rec = reconcile_daemon_plans_at_boot(zones_dir)
-                        _log.info(
-                            "tv-watchlist-daemon (gia) | reconcile-daemon-plans spawned %s process(es)",
-                            n_rec,
-                        )
-                        prev_manifest_slot = cur_manifest_slot
+                _daemon_gia_tick_manifest_updated_at_reconcile(
+                    zones_dir, state=manifest_reconcile_state
+                )
             except Exception as e:
                 _log.warning(
-                    "tv-watchlist-daemon (gia) | last_write_slot watch / reconcile-daemon-plans: %s",
+                    "tv-watchlist-daemon (gia) | updated_at watch / reconcile-daemon-plans: %s",
                     e,
                 )
 
@@ -3272,8 +3315,9 @@ def _tv_watchlist_price_only_loop(
                             n,
                         )
                         reconciled_after_first_last = True
-                        if prev_manifest_slot is None:
-                            prev_manifest_slot = read_manifest_last_write_slot(zones_dir)
+                        ts0 = read_manifest_updated_at(zones_dir)
+                        if ts0:
+                            manifest_reconcile_state["last_reconciled_updated_at"] = ts0
                     except Exception as e:
                         _log.warning(
                             "tv-watchlist-daemon (gia) | reconcile-daemon-plans after first last failed: %s",

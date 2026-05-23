@@ -116,6 +116,7 @@ from automation_tool.mt5_openai_parse import parse_openai_output_md
 from automation_tool.mt5_accounts import (
     load_mt5_accounts_for_cli,
     resolve_mt5_accounts_path,
+    sync_accounts_all2_json,
     sync_accounts_scalp_json,
 )
 from automation_tool.mt5_execute import check_mt5_login, execute_trade, format_mt5_execution_for_telegram
@@ -588,8 +589,65 @@ def _parser() -> argparse.ArgumentParser:
             "(mặc định: chỉ xóa khi `all` chạy trong slot sáng)"
         ),
     )
+    al.add_argument(
+        "--mt5-accounts-json",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help="accounts.json nguồn để tạo accounts-all2.json sau luồng 2 (mặc định MT5_ACCOUNTS_JSON)",
+    )
     al.add_argument("--model", default=None, metavar="ID", help=_OPENAI_MODEL_HELP)
     al.set_defaults(func=cmd_all)
+
+    al2 = sub.add_parser(
+        "all-2",
+        help=(
+            "Chạy riêng luồng OpenAI thứ hai của `all` (vector store + Telegram nhóm 2), "
+            "dùng chart đã capture — ghi shard *-2.json source=all-2; không capture"
+        ),
+    )
+    al2.add_argument("--charts-dir", type=Path, default=None)
+    al2.add_argument(
+        "--main-symbol",
+        default=None,
+        metavar="SYM",
+        help="Cặp active: ghi data/.main_chart_symbol và đọc charts theo SYM",
+    )
+    al2.add_argument(
+        "--stamp",
+        default=None,
+        metavar="STAMP",
+        help="Prefix capture YYYYMMDD_HHMMSS (mặc định: stamp mới nhất trong charts-dir)",
+    )
+    al2.add_argument(
+        "--prompt",
+        type=str,
+        default=None,
+        help="Override user message; mặc định giống `all` ([FULL_ANALYSIS] + cặp active).",
+    )
+    al2.add_argument(
+        "--max-images-per-call",
+        type=int,
+        default=CHART_SLOT_COUNT,
+        help="Max items per OpenAI call (images + Coinmap JSON)",
+    )
+    al2.add_argument("--no-telegram", action="store_true")
+    al2.add_argument(
+        "--zones-json",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help="Thư mục zones shard cho all-2 (mặc định data/<SYM>/zones/)",
+    )
+    al2.add_argument(
+        "--mt5-accounts-json",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help="accounts.json nguồn để tạo accounts-all2.json (mặc định MT5_ACCOUNTS_JSON)",
+    )
+    al2.add_argument("--model", default=None, metavar="ID", help=_OPENAI_MODEL_HELP)
+    al2.set_defaults(func=cmd_all_2)
 
     tl = sub.add_parser(
         "telegram-listen",
@@ -2487,6 +2545,158 @@ def _reconcile_daemon_plans_after_cli(zones_dir: Path, log_step: str) -> None:
     print(f"reconcile-daemon-plans: spawned {n} process(es) | dir={zones_dir}", flush=True)
 
 
+def _sync_all2_accounts_subset(cli_path: Optional[Path]) -> None:
+    """Tạo ``accounts-all2.json`` từ các dòng ``\"all-2\": true`` trong accounts.json."""
+    base_acc = resolve_mt5_accounts_path(cli_path)
+    if base_acc is None or not base_acc.is_file():
+        return
+    try:
+        out = sync_accounts_all2_json(base_acc)
+    except Exception as e:
+        raise SystemExit(f"Không tạo accounts-all2.json từ {base_acc}: {e}") from e
+    if out is not None:
+        _log.info("all-2: đã ghi %s", out)
+    else:
+        _log.warning(
+            'all-2: không có account nào "all-2": true trong %s — daemon-plan sẽ không vào lệnh '
+            "zone source=all-2 cho đến khi có subset",
+            base_acc,
+        )
+
+
+def _persist_all_second_flow_zones(
+    *,
+    out2: PromptTwoStepResult,
+    zones_dir: Path,
+    session_slot: SessionSlot,
+) -> None:
+    """Ghi shard ``*_<slot>-2.json`` với ``source=all-2`` từ output OpenAI luồng 2."""
+    if not out2.after_charts.strip():
+        return
+    payload = parse_analysis_from_openai_text(out2.after_charts)
+    if payload is None or not payload.prices:
+        if out2.after_charts.strip():
+            print(
+                "Warning: all-2 could not parse analysis JSON for zones (no `prices` or empty).",
+                file=sys.stderr,
+            )
+        return
+    from automation_tool.images import get_active_main_symbol
+
+    sym = get_active_main_symbol().strip().upper()
+    zones = zones_from_analysis_payload(
+        symbol=sym, payload=payload, source="all-2", session_slot=session_slot
+    )
+    if not zones:
+        _log.warning("all-2: parse JSON có prices nhưng không tạo được zones — không ghi shard")
+        return
+    write_zones_for_slot(
+        symbol=sym,
+        zones=zones,
+        slot=session_slot,
+        zones_dir=zones_dir,
+        shard_suffix="-2",
+        update_manifest_slot=False,
+    )
+    _log.info(
+        "all-2: đã ghi shard zones | slot=%s zones=%d | symbol=%s | suffix=-2",
+        session_slot,
+        len(zones),
+        sym,
+    )
+
+
+def _run_all_second_flow(
+    s,
+    *,
+    charts_dir: Path,
+    analysis_prompt: str,
+    max_images_per_call: int,
+    chart_payloads: list[ChartOpenAIPayload],
+    no_telegram: bool,
+    model: str | None,
+    zones_dir: Optional[Path] = None,
+    session_slot: Optional[SessionSlot] = None,
+    mt5_accounts_json: Optional[Path] = None,
+) -> PromptTwoStepResult:
+    """Luồng OpenAI thứ hai của ``all``: vector store riêng, Telegram nhóm 2, ghi shard ``-2``."""
+    try:
+        out2 = _run_openai_flow(
+            s,
+            charts_dir,
+            analysis_prompt,
+            max_images_per_call,
+            chart_payloads=chart_payloads,
+            on_first_model_text=None,
+            model=resolved_openai_model(s, model),
+            vector_store_ids=[_ALL_SECOND_FLOW_VECTOR_STORE_ID],
+        )
+    except Exception as e:
+        re_raise_unless_openai(e)
+    print(out2.full_text())
+    _log.info("all-2: OpenAI xong | response_id=%s", out2.final_response_id)
+    if not no_telegram and out2.after_charts:
+        require_telegram(s)
+        send_openai_output_to_telegram(
+            bot_token=s.telegram_bot_token,
+            chat_id=_ALL_SECOND_FLOW_TELEGRAM_CHAT_ID,
+            raw=out2.after_charts,
+            default_parse_mode=s.telegram_parse_mode,
+            summary_chat_id=None,
+        )
+    if zones_dir is not None and session_slot is not None:
+        _sync_all2_accounts_subset(mt5_accounts_json)
+        _persist_all_second_flow_zones(
+            out2=out2, zones_dir=zones_dir, session_slot=session_slot
+        )
+    return out2
+
+
+def cmd_all_2(args: argparse.Namespace) -> None:
+    """Chạy lại luồng 2 của ``all`` từ chart đã có (khi luồng 1 xong nhưng luồng 2 lỗi)."""
+    from automation_tool.images import set_active_main_symbol_file
+
+    s = load_settings()
+    if getattr(args, "main_symbol", None):
+        set_active_main_symbol_file(args.main_symbol)
+
+    zones_dir = zones_dir_from_cli_path(getattr(args, "zones_json", None))
+    run_slot: SessionSlot = session_slot_now_hcm()
+    charts_dir = args.charts_dir or default_charts_dir()
+    stamp_raw = getattr(args, "stamp", None)
+    stamp = (str(stamp_raw).strip() if stamp_raw else None) or latest_chart_stamp(charts_dir)
+    if not stamp:
+        raise SystemExit(
+            f"No chart stamp under {charts_dir}. Run `all` or `capture` first, "
+            "or pass --stamp YYYYMMDD_HHMMSS matching existing filenames."
+        )
+
+    _log.info("all-2: bắt đầu | charts=%s stamp=%s no_telegram=%s", charts_dir, stamp, args.no_telegram)
+    require_openai(s)
+    payloads = ordered_chart_openai_payloads(charts_dir, stamp=stamp)
+    _warn_if_incomplete_chart_payloads(charts_dir, payloads)
+    if not payloads:
+        raise SystemExit(
+            f"No chart files for stamp {stamp!r} under {charts_dir}. "
+            "Check capture artifacts or pass a different --stamp."
+        )
+
+    prompt = _resolved_analysis_prompt(args, charts_dir)
+    print(f"all-2: using stamp {stamp} | {len(payloads)} payload(s) from {charts_dir}", flush=True)
+    _run_all_second_flow(
+        s,
+        charts_dir=charts_dir,
+        analysis_prompt=prompt,
+        max_images_per_call=args.max_images_per_call,
+        chart_payloads=payloads,
+        no_telegram=args.no_telegram,
+        model=getattr(args, "model", None),
+        zones_dir=zones_dir,
+        session_slot=run_slot,
+        mt5_accounts_json=getattr(args, "mt5_accounts_json", None),
+    )
+
+
 def cmd_all(args: argparse.Namespace) -> None:
     s = load_settings()
     from automation_tool.images import set_active_main_symbol_file
@@ -2676,31 +2886,18 @@ def cmd_all(args: argparse.Namespace) -> None:
         except Exception as e:
             _log.warning("all: ea-neverdie publish failed: %s", e)
 
-    try:
-        out2 = _run_openai_flow(
-            s,
-            charts_dir,
-            prompt_all,
-            args.max_images_per_call,
-            chart_payloads=payloads,
-            on_first_model_text=None,
-            model=resolved_openai_model(s, getattr(args, "model", None)),
-            vector_store_ids=[_ALL_SECOND_FLOW_VECTOR_STORE_ID],
-        )
-    except Exception as e:
-        re_raise_unless_openai(e)
-    print(out2.full_text())
-    _log.info("all-2: OpenAI xong | response_id=%s", out2.final_response_id)
-
-    if not args.no_telegram and out2.after_charts:
-        require_telegram(s)
-        send_openai_output_to_telegram(
-            bot_token=s.telegram_bot_token,
-            chat_id=_ALL_SECOND_FLOW_TELEGRAM_CHAT_ID,
-            raw=out2.after_charts,
-            default_parse_mode=s.telegram_parse_mode,
-            summary_chat_id=None,
-        )
+    _run_all_second_flow(
+        s,
+        charts_dir=charts_dir,
+        analysis_prompt=prompt_all,
+        max_images_per_call=args.max_images_per_call,
+        chart_payloads=payloads,
+        no_telegram=args.no_telegram,
+        model=getattr(args, "model", None),
+        zones_dir=zones_dir,
+        session_slot=run_slot,
+        mt5_accounts_json=getattr(args, "mt5_accounts_json", None),
+    )
 
 
 def cmd_tv_alerts(args: argparse.Namespace) -> None:

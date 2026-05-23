@@ -47,7 +47,7 @@ def test_source_allows_plan_entry_for_all_update_sources() -> None:
     assert _source_blocks_scalp_entry(z) is False
 
 
-def test_second_all_flow_entry_uses_primary_account_only(tmp_path) -> None:
+def test_all_2_zone_entry_allows_all_accounts_in_subset(tmp_path) -> None:
     accounts = [
         MT5AccountEntry(
             id="primary",
@@ -73,7 +73,7 @@ def test_second_all_flow_entry_uses_primary_account_only(tmp_path) -> None:
         label="plan_chinh",
         vung_cho="100-101",
         side="BUY",
-        source="all",
+        source="all-2",
         session_slot="sang",
     )
     params = WatchlistDaemonParams(
@@ -89,11 +89,11 @@ def test_second_all_flow_entry_uses_primary_account_only(tmp_path) -> None:
     allowed, slot, blocked = _filter_entry_accounts_for_zone(accounts, zone, params)
 
     assert slot == "sang"
-    assert [a.id for a in allowed] == ["primary"]
-    assert blocked == ["secondary"]
+    assert {a.id for a in allowed} == {"primary", "secondary"}
+    assert blocked == []
 
 
-def test_primary_only_second_flow_still_respects_entry_slots(tmp_path) -> None:
+def test_all_2_entry_still_respects_entry_slots(tmp_path) -> None:
     accounts = [
         MT5AccountEntry(
             id="primary",
@@ -113,6 +113,7 @@ def test_primary_only_second_flow_still_respects_entry_slots(tmp_path) -> None:
             server="srv",
             primary=False,
             lot=LotRuleFromTrade(),
+            entry_slots=("chieu",),
         ),
     ]
     zone = Zone(
@@ -120,7 +121,7 @@ def test_primary_only_second_flow_still_respects_entry_slots(tmp_path) -> None:
         label="plan_chinh",
         vung_cho="100-101",
         side="BUY",
-        source="all",
+        source="all-2",
         session_slot="sang",
     )
     params = WatchlistDaemonParams(

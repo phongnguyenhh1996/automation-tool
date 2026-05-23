@@ -20,6 +20,10 @@ lọc ra ``accounts-scalp.json`` cho luồng ``coinmap-automation update-scalp``
 ``daemon-plan`` khi vào lệnh zone ``source=update-scalp`` dùng :func:`load_mt5_accounts_for_zone_entry`
 để chỉ đọc ``accounts-scalp.json`` (không fallback full list).
 
+**all-2:** optional ``\"all-2\": true`` — :func:`sync_accounts_all2_json` tạo ``accounts-all2.json``.
+Zone ``source=all-2`` chỉ vào lệnh qua account trong file đó; zone ``source=all`` **không** dùng
+các account có flag này (chỉ luồng 1 / shard không suffix ``-2``).
+
 **Bảo mật:** không commit file chứa mật khẩu; hạn chế quyền đọc (ví dụ ``chmod 600``).
 """
 
@@ -37,6 +41,7 @@ from typing import Any, Literal, Optional, Union
 _log = logging.getLogger(__name__)
 
 SOURCE_UPDATE_SCALP = "update-scalp"
+SOURCE_ALL_2 = "all-2"
 UPDATE_SCALP_DEFAULT_LOT = 0.01
 
 from automation_tool.mt5_openai_parse import ParsedTrade
@@ -404,6 +409,52 @@ def sync_accounts_scalp_json(
     return dest.resolve()
 
 
+def sync_accounts_all2_json(
+    source_accounts_json: Path,
+    *,
+    dest_path: Optional[Path] = None,
+) -> Optional[Path]:
+    """
+    Tạo (hoặc xoá) ``accounts-all2.json``: chỉ object có ``\"all-2\": true`` (JSON literal).
+    Key ``all-2`` không ghi vào file đích. Nếu không có ``primary: true`` trong subset, gán
+    phần tử đầu làm primary.
+    """
+    src = source_accounts_json.expanduser()
+    if not src.is_file():
+        return None
+    raw = src.read_text(encoding="utf-8")
+    data = json.loads(raw)
+    if not isinstance(data, list):
+        raise ValueError("accounts.json phải là mảng")
+    out_rows: list[dict[str, Any]] = []
+    for i, row in enumerate(data):
+        if not isinstance(row, dict):
+            raise ValueError(f"accounts[{i}] phải là object")
+        if row.get("all-2") is not True:
+            continue
+        cleaned = {k: v for k, v in row.items() if k != "all-2"}
+        out_rows.append(cleaned)
+    dest = (dest_path or (src.parent / "accounts-all2.json")).expanduser()
+    if not out_rows:
+        try:
+            if dest.is_file():
+                dest.unlink()
+        except OSError:
+            pass
+        return None
+    n_primary = sum(1 for r in out_rows if r.get("primary") is True)
+    if n_primary == 0:
+        for i, r in enumerate(out_rows):
+            r["primary"] = i == 0
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(
+        json.dumps(out_rows, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    load_mt5_accounts_from_path(dest)
+    return dest.resolve()
+
+
 def default_mt5_accounts_json_path() -> Optional[Path]:
     raw = (os.getenv("MT5_ACCOUNTS_JSON") or "").strip()
     if not raw:
@@ -431,6 +482,68 @@ def load_mt5_accounts_for_cli(cli_path: Optional[Path]) -> Optional[list[MT5Acco
 
 def _is_update_scalp_zone_source(zone_source: str) -> bool:
     return (zone_source or "").strip().lower() == SOURCE_UPDATE_SCALP
+
+
+def _is_all_2_zone_source(zone_source: str) -> bool:
+    return (zone_source or "").strip().lower() == SOURCE_ALL_2
+
+
+def _is_all_zone_source(zone_source: str) -> bool:
+    return (zone_source or "").strip().lower() == "all"
+
+
+def all2_account_ids_from_accounts_json(path: Path) -> frozenset[str]:
+    """Account ids marked ``\"all-2\": true`` in the raw accounts array (JSON literal only)."""
+    src = path.expanduser()
+    if not src.is_file():
+        return frozenset()
+    raw = src.read_text(encoding="utf-8")
+    data = json.loads(raw)
+    if not isinstance(data, list):
+        return frozenset()
+    out: set[str] = set()
+    for i, row in enumerate(data):
+        if not isinstance(row, dict):
+            continue
+        if row.get("all-2") is not True:
+            continue
+        acc_id = str(row.get("id") or "").strip()
+        if not acc_id:
+            raise ValueError(f"accounts[{i}].id bắt buộc khi all-2=true")
+        out.add(acc_id)
+    return frozenset(out)
+
+
+def exclude_all2_dedicated_accounts(
+    accounts: list[MT5AccountEntry],
+    source_accounts_path: Path,
+) -> list[MT5AccountEntry]:
+    """
+    Bỏ account chỉ dành luồng 2 khỏi danh sách vào lệnh ``source=all``.
+
+    Nếu không còn primary sau lọc, gán ``primary=true`` cho phần tử đầu (chỉ trong bản sao trả về).
+    """
+    all2_ids = all2_account_ids_from_accounts_json(source_accounts_path)
+    if not all2_ids:
+        return accounts
+    filtered = [a for a in accounts if a.id not in all2_ids]
+    if not filtered:
+        return []
+    if sum(1 for a in filtered if a.primary) == 1:
+        return filtered
+    out: list[MT5AccountEntry] = []
+    for i, a in enumerate(filtered):
+        out.append(replace(a, primary=(i == 0)))
+    return out
+
+
+def subset_accounts_json_basename(zone_source: str) -> Optional[str]:
+    """Tên file subset cạnh ``accounts.json`` khi zone dùng account lọc theo flag."""
+    if _is_update_scalp_zone_source(zone_source):
+        return "accounts-scalp.json"
+    if _is_all_2_zone_source(zone_source):
+        return "accounts-all2.json"
+    return None
 
 
 def _replace_trade_line_lot(raw_line: str, lot: float) -> str:
@@ -473,32 +586,47 @@ def load_mt5_accounts_for_zone_entry(
     accounts đã resolve (giống :func:`sync_accounts_scalp_json`). Nếu đường dẫn hiện tại đã là
     ``accounts-scalp.json`` thì giữ nguyên.
 
+    Với ``source`` = ``all-2``: chỉ ``accounts-all2.json`` (giống :func:`sync_accounts_all2_json`).
+
+    Với ``source`` = ``all``: đọc ``accounts.json`` đầy đủ nhưng loại account có ``\"all-2\": true``.
+
     Giá trị trả về:
 
     - ``None`` — không có file accounts (chế độ một terminal / ``execute_trade`` đơn).
-    - ``[]`` — zone ``update-scalp`` nhưng không có hoặc không đọc được ``accounts-scalp.json``:
-      **không** được fallback sang full ``accounts.json``.
+    - ``[]`` — zone subset nhưng không có hoặc không đọc được file cạnh accounts:
+      **không** fallback sang full ``accounts.json``.
     - Danh sách khác rỗng — multi-account như cũ.
     """
-    if not _is_update_scalp_zone_source(zone_source):
-        return load_mt5_accounts_for_cli(cli_path)
-
     base = resolve_mt5_accounts_path(cli_path)
-    if base is None or not base.is_file():
-        return load_mt5_accounts_for_cli(cli_path)
+    subset_name = subset_accounts_json_basename(zone_source)
+    if subset_name is None:
+        accounts = load_mt5_accounts_for_cli(cli_path)
+        if accounts is None:
+            return None
+        if _is_all_zone_source(zone_source) and base is not None and base.is_file():
+            return exclude_all2_dedicated_accounts(accounts, base)
+        return accounts
 
-    path_to_load = (
-        base if base.name.lower() == "accounts-scalp.json" else base.parent / "accounts-scalp.json"
-    )
+    if base is None or not base.is_file():
+        accounts = load_mt5_accounts_for_cli(cli_path)
+        if accounts is None:
+            return None
+        if _is_all_zone_source(zone_source):
+            return accounts
+        return accounts
+
+    path_to_load = base if base.name.lower() == subset_name.lower() else base.parent / subset_name
     if not path_to_load.is_file():
         return []
 
     try:
-        accounts = load_mt5_accounts_from_path(
-            path_to_load,
-            default_lot_rule=LotRuleFixed(volume=UPDATE_SCALP_DEFAULT_LOT),
-        )
-        return _force_update_scalp_account_lot(accounts)
+        if _is_update_scalp_zone_source(zone_source):
+            accounts = load_mt5_accounts_from_path(
+                path_to_load,
+                default_lot_rule=LotRuleFixed(volume=UPDATE_SCALP_DEFAULT_LOT),
+            )
+            return _force_update_scalp_account_lot(accounts)
+        return load_mt5_accounts_from_path(path_to_load)
     except ValueError as e:
         _log.warning(
             "load_mt5_accounts_for_zone_entry: invalid %s: %s",

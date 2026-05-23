@@ -13,6 +13,7 @@ from automation_tool.mt5_accounts import (
     LotRuleFromTrade,
     LotRuleMaxLossUsd,
     LotRuleMaxNotionalUsd,
+    SOURCE_ALL_2,
     SOURCE_UPDATE_SCALP,
     account_tp_r_multiplier,
     filter_mt5_accounts_for_entry_slot,
@@ -20,6 +21,8 @@ from automation_tool.mt5_accounts import (
     load_mt5_accounts_for_zone_entry,
     resolve_account_entry_tp_price,
     trade_with_update_scalp_entry_lot_default,
+    exclude_all2_dedicated_accounts,
+    sync_accounts_all2_json,
     sync_accounts_scalp_json,
 )
 from automation_tool.mt5_execute import resolve_mt5_trade_symbol
@@ -734,6 +737,139 @@ def test_sync_accounts_scalp_json_empty_removes_dest() -> None:
         dest.write_text("[]\n", encoding="utf-8")
         assert sync_accounts_scalp_json(p) is None
         assert not dest.is_file()
+
+
+def test_sync_accounts_all2_json_writes_subset_and_strips_flag() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "accounts.json"
+        _write_accounts(
+            p,
+            [
+                {
+                    "id": "full_only",
+                    "terminal_path": "C:/MT5/A/metatrader64.exe",
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                    "lot": {"mode": "fixed", "volume": 0.01},
+                    "all-2": False,
+                },
+                {
+                    "id": "all2_acc",
+                    "terminal_path": "C:/MT5/B/metatrader64.exe",
+                    "login": 2,
+                    "password": "y",
+                    "server": "S",
+                    "primary": False,
+                    "lot": {"mode": "fixed", "volume": 0.02},
+                    "all-2": True,
+                },
+            ],
+        )
+        out = sync_accounts_all2_json(p)
+        assert out is not None
+        dest = Path(td) / "accounts-all2.json"
+        rows = json.loads(dest.read_text(encoding="utf-8"))
+        assert len(rows) == 1
+        assert rows[0]["id"] == "all2_acc"
+        assert "all-2" not in rows[0]
+        accs = load_mt5_accounts_for_zone_entry(zone_source=SOURCE_ALL_2, cli_path=p)
+        assert accs is not None
+        assert len(accs) == 1
+        assert accs[0].id == "all2_acc"
+
+
+def test_load_mt5_accounts_for_zone_entry_all_excludes_all2_flagged(monkeypatch) -> None:
+    with tempfile.TemporaryDirectory() as td:
+        full_p = Path(td) / "accounts.json"
+        _write_accounts(
+            full_p,
+            [
+                {
+                    "id": "main",
+                    "terminal_path": "C:/MT5/A/metatrader64.exe",
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                    "lot": {"mode": "fixed", "volume": 0.01},
+                },
+                {
+                    "id": "flow2",
+                    "terminal_path": "C:/MT5/B/metatrader64.exe",
+                    "login": 2,
+                    "password": "y",
+                    "server": "S",
+                    "primary": False,
+                    "all-2": True,
+                    "lot": {"mode": "fixed", "volume": 0.02},
+                },
+            ],
+        )
+        monkeypatch.delenv("MT5_ACCOUNTS_JSON", raising=False)
+        accs_all = load_mt5_accounts_for_zone_entry(zone_source="all", cli_path=full_p)
+        assert accs_all is not None
+        assert [a.id for a in accs_all] == ["main"]
+        accs_all2 = load_mt5_accounts_for_zone_entry(zone_source=SOURCE_ALL_2, cli_path=full_p)
+        sync_accounts_all2_json(full_p)
+        accs_all2 = load_mt5_accounts_for_zone_entry(zone_source=SOURCE_ALL_2, cli_path=full_p)
+        assert accs_all2 is not None
+        assert [a.id for a in accs_all2] == ["flow2"]
+
+
+def test_exclude_all2_dedicated_accounts_rehomes_primary() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "accounts.json"
+        _write_accounts(
+            p,
+            [
+                {
+                    "id": "only_all2",
+                    "terminal_path": "C:/MT5/A/metatrader64.exe",
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                    "all-2": True,
+                },
+                {
+                    "id": "main",
+                    "terminal_path": "C:/MT5/B/metatrader64.exe",
+                    "login": 2,
+                    "password": "y",
+                    "server": "S",
+                    "primary": False,
+                },
+            ],
+        )
+        full = load_mt5_accounts_from_path(p)
+        out = exclude_all2_dedicated_accounts(full, p)
+        assert len(out) == 1
+        assert out[0].id == "main"
+        assert out[0].primary is True
+
+
+def test_load_mt5_accounts_for_zone_entry_all2_missing_sibling_empty(monkeypatch) -> None:
+    with tempfile.TemporaryDirectory() as td:
+        full_p = Path(td) / "accounts.json"
+        _write_accounts(
+            full_p,
+            [
+                {
+                    "id": "a",
+                    "terminal_path": "C:/MT5/A/metatrader64.exe",
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                    "lot": {"mode": "fixed", "volume": 0.01},
+                },
+            ],
+        )
+        monkeypatch.delenv("MT5_ACCOUNTS_JSON", raising=False)
+        accs = load_mt5_accounts_for_zone_entry(zone_source=SOURCE_ALL_2, cli_path=full_p)
+        assert accs == []
 
 
 def test_resolve_mt5_trade_symbol_uses_per_account_map() -> None:

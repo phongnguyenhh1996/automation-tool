@@ -545,6 +545,24 @@ def read_manifest_last_write_slot(zones_dir: Path) -> Optional[SessionSlot]:
     return None
 
 
+def read_manifest_updated_at(zones_dir: Path) -> Optional[str]:
+    """``updated_at`` ISO timestamp từ ``zones_manifest.json``, hoặc ``None``."""
+    mp = manifest_path(zones_dir)
+    if not mp.is_file():
+        return None
+    try:
+        md = json.loads(mp.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(md, dict):
+        return None
+    ts = md.get("updated_at")
+    if not isinstance(ts, str):
+        return None
+    s = ts.strip()
+    return s if s else None
+
+
 def read_zones_state_from_shard(shard_path: Path) -> Optional[ZonesState]:
     """Load a single-zone :class:`ZonesState` from one shard file (``daemon-plan``)."""
     if not shard_path.is_file():
@@ -1077,7 +1095,7 @@ def zones_from_analysis_payload(
 ) -> list[Zone]:
     """Convert analysis payload (prices[] entries) into zones (full replace per label present)."""
     source_key = (source or "").strip().lower()
-    if source_key == "all":
+    if source_key in ("all", "all-2"):
         zones: list[Zone] = []
         seen: set[str] = set()
         for pe in payload.prices:
