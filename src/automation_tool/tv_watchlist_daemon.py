@@ -114,6 +114,7 @@ from automation_tool.zones_paths import (
     default_zones_dir,
     label_from_shard_stem,
     read_last_price_file,
+    resolve_second_flow,
     resolve_session_slot_raw,
     session_slot_display_vn,
     session_slot_from_shard_path,
@@ -170,12 +171,6 @@ DAEMON_PLAN_AUTO_CUTOFF_FRIDAY_MINUTE = 0
 
 def _is_scalp_zone(zone: Zone) -> bool:
     return is_scalp_label(zone.label or "")
-
-
-def _source_blocks_scalp_entry(zone: Zone) -> bool:
-    """``all`` / ``update`` scalp zones are informational only; only ``update-scalp`` may trade."""
-    source = (getattr(zone, "source", "") or "").strip().lower()
-    return _is_scalp_zone(zone) and source in {"all", "update"}
 
 
 def _zone_touch_coinmap_main_json_path(charts_dir: Path, zone: Zone) -> tuple[Optional[Path], str]:
@@ -914,7 +909,7 @@ def _user_notice_plan_slot_tag(
     zone_label: Optional[str] = None,
 ) -> str:
     """
-    Tiền tố hiển thị plan + khung giờ, ví dụ ``(Plan chính - Sáng)`` / ``(Scalp - Chiều)``.
+    Tiền tố hiển thị plan + khung giờ, ví dụ ``(Plan chính - Sáng)`` / ``(Plan chính - Tối luồng 2)``.
     Slot: ``zone.session_slot`` hoặc parse từ ``params.shard_path`` (``vung_*_{sang|chieu|toi}.json``).
     """
     slot_raw = resolve_session_slot_raw(
@@ -933,7 +928,14 @@ def _user_notice_plan_slot_tag(
         if raw:
             lab_disp = mt5_zone_label_display_vn(raw) or raw
 
-    slot_vn = session_slot_display_vn(slot_raw) if slot_raw else None
+    second_flow = resolve_second_flow(
+        zone_id=getattr(zone, "id", None) if zone is not None else None,
+        source=getattr(zone, "source", None) if zone is not None else None,
+        shard_path=params.shard_path if params is not None else None,
+    )
+    slot_vn = (
+        session_slot_display_vn(slot_raw, second_flow=second_flow) if slot_raw else None
+    )
     if lab_disp and slot_vn:
         return f"({lab_disp} - {slot_vn})"
     if lab_disp:
@@ -966,6 +968,15 @@ def _entry_slot_for_zone(zone: Zone, params: WatchlistDaemonParams) -> Optional[
         zone_session_slot=getattr(zone, "session_slot", None),
         shard_path=params.shard_path,
     )
+
+
+def _mt5_telegram_zone_context(zone: Zone, params: WatchlistDaemonParams) -> dict[str, Any]:
+    """``zone_id`` / ``source`` / ``shard_path`` để nhãn Telegram phân biệt luồng 2."""
+    return {
+        "zone_id": zone.id,
+        "zone_source": zone.source,
+        "shard_path": params.shard_path,
+    }
 
 
 def _filter_entry_accounts_for_zone(
@@ -1014,10 +1025,18 @@ def _skip_scalp_r1_followup_if_needed(
     return False
 
 
-def _zone_label_slot_display_vn(zone: Zone) -> str:
-    """Ví dụ: ``Plan chính - Sáng`` hoặc ``Scalp - Chiều`` (không ngoặc)."""
+def _zone_label_slot_display_vn(zone: Zone, params: Optional[WatchlistDaemonParams] = None) -> str:
+    """Ví dụ: ``Plan chính - Sáng`` hoặc ``Plan chính - Tối luồng 2`` (không ngoặc)."""
     lab = mt5_zone_label_display_vn(zone.label) or (zone.label or "").strip()
-    slot = session_slot_display_vn(getattr(zone, "session_slot", None))
+    second_flow = resolve_second_flow(
+        zone_id=zone.id,
+        source=zone.source,
+        shard_path=params.shard_path if params is not None else None,
+    )
+    slot = session_slot_display_vn(
+        getattr(zone, "session_slot", None),
+        second_flow=second_flow,
+    )
     if lab and slot:
         return f"{lab} - {slot}"
     return lab or "(unknown)"
@@ -1062,7 +1081,9 @@ def _mark_initial_zone_touch_dispatch(
             f"ref={touched_ref} | loai={','.join(zz.id for zz, _prev, _ref in invalidated)}",
         )
 
-        names = ", ".join(_zone_label_slot_display_vn(zz) for zz, _prev, _ref in invalidated)
+        names = ", ".join(
+            _zone_label_slot_display_vn(zz, params) for zz, _prev, _ref in invalidated
+        )
         _send_user_notice(
             settings,
             f"Đã loại những vùng {side} {huong}: {names}",
@@ -1676,6 +1697,7 @@ def _tp1_followup_job(
                             zone_session_slot=getattr(z0, "session_slot", None),
                             shard_path=params.shard_path,
                         ),
+                        **_mt5_telegram_zone_context(z0, params),
                     )
             else:
                 _send_log(settings, "[tp1] bỏ qua partial close 50% vì mt5_execute=false")
@@ -1812,6 +1834,7 @@ def _tp1_followup_job(
                 action=dec.sau_tp1,
                 reason=dec.reason,
                 trade_line=None,
+                **_mt5_telegram_zone_context(z1, params),
             )
 
         if dec.sau_tp1 == "giu_nguyen":
@@ -1908,6 +1931,7 @@ def _tp1_followup_job(
                                 zone_session_slot=getattr(z1, "session_slot", None),
                                 shard_path=params.shard_path,
                             ),
+                            **_mt5_telegram_zone_context(z1, params),
                         )
                 else:
                     _send_log(
@@ -1946,6 +1970,7 @@ def _tp1_followup_job(
                                 zone_session_slot=getattr(z1, "session_slot", None),
                                 shard_path=params.shard_path,
                             ),
+                            **_mt5_telegram_zone_context(z1, params),
                         )
                 else:
                     _send_log(
@@ -2159,6 +2184,7 @@ def _r1_followup_job(
                 action=dec.sau_tp1,
                 reason=dec.reason,
                 trade_line=None,
+                **_mt5_telegram_zone_context(z1, params),
             )
 
         if dec.sau_tp1 == "giu_nguyen":
@@ -2255,6 +2281,7 @@ def _r1_followup_job(
                                 zone_session_slot=getattr(z1, "session_slot", None),
                                 shard_path=params.shard_path,
                             ),
+                            **_mt5_telegram_zone_context(z1, params),
                         )
                 else:
                     _send_log(
@@ -2293,6 +2320,7 @@ def _r1_followup_job(
                                 zone_session_slot=getattr(z1, "session_slot", None),
                                 shard_path=params.shard_path,
                             ),
+                            **_mt5_telegram_zone_context(z1, params),
                         )
                 else:
                     _send_log(
@@ -2370,16 +2398,6 @@ def _auto_entry_job(
         if z0.status != "dang_vao_lenh":
             return
         if z0.mt5_ticket is not None and int(z0.mt5_ticket or 0) > 0:
-            return
-        if _source_blocks_scalp_entry(z0):
-            z0.status = "cham"
-            z0.auto_entry_retry_after = ""
-            z0.auto_entry_mt5_failed = False
-            _state_write(params, st0)
-            _send_log(
-                settings,
-                f"[auto-entry] blocked_by_source | zone_id={zone_id} label={z0.label} source={z0.source}",
-            )
             return
         if not z0.trade_line:
             z0.status = "cham"
@@ -2516,6 +2534,7 @@ def _auto_entry_job(
                         zone_session_slot=getattr(z0, "session_slot", None),
                         shard_path=params.shard_path,
                     ),
+                    **_mt5_telegram_zone_context(z0, params),
                 )
             _send_log(settings, f"[auto-entry] mt5_execute_trade multi: {multi_ae[:400]}".strip())
             tid = _multi_summary_tracking_ticket(summary_ae, exec_accs_ae)
@@ -2579,6 +2598,7 @@ def _auto_entry_job(
                     zone_session_slot=getattr(z0, "session_slot", None),
                     shard_path=params.shard_path,
                 ),
+                **_mt5_telegram_zone_context(z0, params),
             )
         _send_log(settings, f"[auto-entry] mt5_execute_trade: {ex.message}".strip())
 
@@ -2671,18 +2691,6 @@ def _zone_touch_job(
             _send_log(settings, f"[zone-touch] stop: zone already terminal ({zc.status}) | zone_id={zone_id}")
             return
         zone = zc
-
-        if _source_blocks_scalp_entry(zone):
-            zone.status = "cham"
-            zone.retry_at = ""
-            zone.auto_entry_retry_after = ""
-            zone.auto_entry_mt5_failed = False
-            _state_write(params, st_check)
-            _send_log(
-                settings,
-                f"[zone-touch] blocked_by_source | zone_id={zone_id} label={zone.label} source={zone.source}",
-            )
-            return
 
         if _settings_skip_intraday_alert_openai(settings):
             _send_log(
@@ -3053,6 +3061,7 @@ def _zone_touch_job(
                         zone_session_slot=getattr(z1, "session_slot", None),
                         shard_path=params.shard_path,
                     ),
+                    **_mt5_telegram_zone_context(z1, params),
                 )
             _send_log(settings, f"[zone-touch] mt5_execute_trade multi: {zt_txt[:400]}".strip())
             tid = _multi_summary_tracking_ticket(summary_zt, exec_accs_zt)
@@ -3105,6 +3114,7 @@ def _zone_touch_job(
                     zone_session_slot=getattr(z1, "session_slot", None),
                     shard_path=params.shard_path,
                 ),
+                **_mt5_telegram_zone_context(z1, params),
             )
         _send_log(settings, f"[zone-touch] mt5_execute_trade: {ex.message}".strip())
 
@@ -3575,8 +3585,6 @@ def _daemon_plan_main_loop(
                     for z in st_auto.zones:
                         if z.status not in ("vung_cho", "cham"):
                             continue
-                        if _source_blocks_scalp_entry(z):
-                            continue
                         if z.mt5_ticket is not None and int(z.mt5_ticket or 0) > 0:
                             continue
                         if not z.trade_line:
@@ -3604,8 +3612,6 @@ def _daemon_plan_main_loop(
                 if st_retry is not None:
                     for z in st_retry.zones:
                         if z.status != "cham":
-                            continue
-                        if _source_blocks_scalp_entry(z):
                             continue
                         if not _is_retry_due(getattr(z, "retry_at", "")):
                             continue
@@ -3645,17 +3651,6 @@ def _daemon_plan_main_loop(
                         break
                     z = next((zz for zz in st_current.zones if zz.id == mz.id), None)
                     if z is None or z.status != "vung_cho":
-                        continue
-                    if _source_blocks_scalp_entry(z):
-                        z.status = "cham"
-                        z.retry_at = ""
-                        z.auto_entry_retry_after = ""
-                        z.auto_entry_mt5_failed = False
-                        _state_write(params, st_current)
-                        _send_log(
-                            settings,
-                            f"[zone-touch] blocked_by_source | zone_id={z.id} label={z.label} source={z.source}",
-                        )
                         continue
                     _mark_initial_zone_touch_dispatch(
                         st_current,
@@ -3779,7 +3774,7 @@ def _daemon_plan_main_loop(
                                     _send_entry_management_notice(
                                         settings,
                                         z,
-                                        f"Đã khớp lệnh {_zone_label_slot_display_vn(z)}.",
+                                        f"Đã khớp lệnh {_zone_label_slot_display_vn(z, params)}.",
                                     )
                             if _should_check_managed_tp_done(z, parsed, float(p_last)) and prim_pos is not None:
                                 is_pos_now, msg_pos_now = mt5_ticket_is_open_position(

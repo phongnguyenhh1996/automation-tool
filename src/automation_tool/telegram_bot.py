@@ -7,14 +7,15 @@ import random
 import re
 import sys
 from dataclasses import dataclass
-from typing import Any, Optional
+from pathlib import Path
+from typing import Any, Optional, Union
 
 import httpx
 
 _log = logging.getLogger(__name__)
 
 from automation_tool.openai_analysis_json import parse_analysis_from_openai_text
-from automation_tool.zones_paths import session_slot_display_vn
+from automation_tool.zones_paths import resolve_second_flow, session_slot_display_vn
 
 TELEGRAM_MAX_MESSAGE = 4096
 
@@ -53,55 +54,104 @@ def mt5_zone_label_display_vn(zone_label: Optional[str]) -> Optional[str]:
     return _MT5_ZONE_LABEL_DISPLAY_VN.get(key)
 
 
+def _mt5_plan_slot_quoted_vn(
+    zone_label: Optional[str],
+    session_slot: Optional[str] = None,
+    *,
+    second_flow: bool = False,
+) -> Optional[str]:
+    if not zone_label or not str(zone_label).strip():
+        return None
+    key = str(zone_label).strip().lower()
+    display = _MT5_ZONE_LABEL_DISPLAY_VN.get(key)
+    if not display:
+        return None
+    slot_vn = session_slot_display_vn(session_slot, second_flow=second_flow) if session_slot else None
+    return f"{display} - {slot_vn}" if slot_vn else display
+
+
+def _resolve_mt5_second_flow(
+    *,
+    second_flow: Optional[bool] = None,
+    zone_id: Optional[str] = None,
+    zone_source: Optional[str] = None,
+    shard_path: Optional[Union[str, Path]] = None,
+) -> bool:
+    if second_flow is not None:
+        return bool(second_flow)
+    sp: Optional[Path] = None
+    if shard_path is not None:
+        sp = Path(shard_path) if not isinstance(shard_path, Path) else shard_path
+    return resolve_second_flow(zone_id=zone_id, source=zone_source, shard_path=sp)
+
+
 def mt5_zone_entry_line_vn(
     zone_label: Optional[str],
     session_slot: Optional[str] = None,
+    *,
+    second_flow: Optional[bool] = None,
+    zone_id: Optional[str] = None,
+    zone_source: Optional[str] = None,
+    shard_path: Optional[Union[str, Path]] = None,
 ) -> Optional[str]:
     """
     Một dòng: ``Đã vào lệnh cho "Plan chính".`` hoặc ``Đã vào lệnh cho "Scalp - Chiều".``
     khi có ``session_slot`` (``sang`` / ``chieu`` / ``toi``).
     Đặt **sau** câu emoji ngẫu nhiên trong tin MT5. Trả ``None`` nếu không map được nhãn.
     """
-    if not zone_label or not str(zone_label).strip():
+    sf = _resolve_mt5_second_flow(
+        second_flow=second_flow,
+        zone_id=zone_id,
+        zone_source=zone_source,
+        shard_path=shard_path,
+    )
+    quoted = _mt5_plan_slot_quoted_vn(zone_label, session_slot, second_flow=sf)
+    if not quoted:
         return None
-    key = str(zone_label).strip().lower()
-    display = _MT5_ZONE_LABEL_DISPLAY_VN.get(key)
-    if not display:
-        return None
-    slot_vn = session_slot_display_vn(session_slot) if session_slot else None
-    quoted = f"{display} - {slot_vn}" if slot_vn else display
     return f'Đã vào lệnh cho "{quoted}".'
 
 
 def mt5_zone_chinh_line_vn(
     zone_label: Optional[str],
     session_slot: Optional[str] = None,
+    *,
+    second_flow: Optional[bool] = None,
+    zone_id: Optional[str] = None,
+    zone_source: Optional[str] = None,
+    shard_path: Optional[Union[str, Path]] = None,
 ) -> Optional[str]:
     """Một dòng cho thao tác chỉnh lệnh, không gợi ý đây là entry mới."""
-    if not zone_label or not str(zone_label).strip():
+    sf = _resolve_mt5_second_flow(
+        second_flow=second_flow,
+        zone_id=zone_id,
+        zone_source=zone_source,
+        shard_path=shard_path,
+    )
+    quoted = _mt5_plan_slot_quoted_vn(zone_label, session_slot, second_flow=sf)
+    if not quoted:
         return None
-    key = str(zone_label).strip().lower()
-    display = _MT5_ZONE_LABEL_DISPLAY_VN.get(key)
-    if not display:
-        return None
-    slot_vn = session_slot_display_vn(session_slot) if session_slot else None
-    quoted = f"{display} - {slot_vn}" if slot_vn else display
     return f'Đã chỉnh lệnh cho "{quoted}".'
 
 
 def mt5_zone_partial_close_line_vn(
     zone_label: Optional[str],
     session_slot: Optional[str] = None,
+    *,
+    second_flow: Optional[bool] = None,
+    zone_id: Optional[str] = None,
+    zone_source: Optional[str] = None,
+    shard_path: Optional[Union[str, Path]] = None,
 ) -> Optional[str]:
     """Một dòng cho thao tác chốt bớt (partial close), không gợi ý vào lệnh mới."""
-    if not zone_label or not str(zone_label).strip():
+    sf = _resolve_mt5_second_flow(
+        second_flow=second_flow,
+        zone_id=zone_id,
+        zone_source=zone_source,
+        shard_path=shard_path,
+    )
+    quoted = _mt5_plan_slot_quoted_vn(zone_label, session_slot, second_flow=sf)
+    if not quoted:
         return None
-    key = str(zone_label).strip().lower()
-    display = _MT5_ZONE_LABEL_DISPLAY_VN.get(key)
-    if not display:
-        return None
-    slot_vn = session_slot_display_vn(session_slot) if session_slot else None
-    quoted = f"{display} - {slot_vn}" if slot_vn else display
     return f'Đã chốt 50% lệnh cho "{quoted}".'
 
 
@@ -160,11 +210,22 @@ def _trade_management_action_display_vn(action: Optional[str]) -> str:
 def _trade_management_plan_display_vn(
     zone_label: Optional[str],
     session_slot: Optional[str] = None,
+    *,
+    second_flow: Optional[bool] = None,
+    zone_id: Optional[str] = None,
+    zone_source: Optional[str] = None,
+    shard_path: Optional[Union[str, Path]] = None,
 ) -> str:
+    sf = _resolve_mt5_second_flow(
+        second_flow=second_flow,
+        zone_id=zone_id,
+        zone_source=zone_source,
+        shard_path=shard_path,
+    )
+    quoted = _mt5_plan_slot_quoted_vn(zone_label, session_slot, second_flow=sf)
+    if quoted:
+        return quoted
     lab = mt5_zone_label_display_vn(zone_label) or (zone_label or "").strip()
-    slot_vn = session_slot_display_vn(session_slot) if session_slot else None
-    if lab and slot_vn:
-        return f"{lab} - {slot_vn}"
     return lab or "Không rõ plan"
 
 
@@ -174,6 +235,9 @@ def send_trade_management_reason_notice(
     telegram_python_bot_chat_id: Optional[str],
     zone_label: Optional[str],
     session_slot: Optional[str] = None,
+    zone_id: Optional[str] = None,
+    zone_source: Optional[str] = None,
+    shard_path: Optional[Union[str, Path]] = None,
     action: Optional[str],
     reason: str,
     trade_line: Optional[str] = None,
@@ -185,7 +249,13 @@ def send_trade_management_reason_notice(
     body = (reason or "").strip()
     if not body:
         return
-    plan = _trade_management_plan_display_vn(zone_label, session_slot=session_slot)
+    plan = _trade_management_plan_display_vn(
+        zone_label,
+        session_slot=session_slot,
+        zone_id=zone_id,
+        zone_source=zone_source,
+        shard_path=shard_path,
+    )
     action_vn = _trade_management_action_display_vn(action)
     lines = [body]
     tl = (trade_line or "").strip()
@@ -709,6 +779,9 @@ def _send_mt5_execution_detail_to_log_chat(
     zone_label: Optional[str] = None,
     trade_line: Optional[str] = None,
     session_slot: Optional[str] = None,
+    zone_id: Optional[str] = None,
+    zone_source: Optional[str] = None,
+    shard_path: Optional[Union[str, Path]] = None,
 ) -> None:
     """
     Log kỹ thuật đầy đủ (``text``) sau MT5 tới ``TELEGRAM_LOG_CHAT_ID`` khi được cấu hình.
@@ -721,12 +794,21 @@ def _send_mt5_execution_detail_to_log_chat(
         return
     src = (source or "").strip() or "MT5"
     lines: list[str] = [f"📊 Kết quả MT5 — {src}", f"execution_ok={execution_ok}"]
-    zd = mt5_zone_label_display_vn(zone_label)
-    slot_vn = session_slot_display_vn(session_slot) if session_slot else None
-    if zd:
-        lines.append(
-            f'Vùng: "{zd} - {slot_vn}"' if slot_vn else f'Vùng: "{zd}"'
-        )
+    quoted = _mt5_plan_slot_quoted_vn(
+        zone_label,
+        session_slot,
+        second_flow=_resolve_mt5_second_flow(
+            zone_id=zone_id,
+            zone_source=zone_source,
+            shard_path=shard_path,
+        ),
+    )
+    if quoted:
+        lines.append(f'Vùng: "{quoted}"')
+    else:
+        zd = mt5_zone_label_display_vn(zone_label)
+        if zd:
+            lines.append(f'Vùng: "{zd}"')
     tl = (trade_line or "").strip()
     if tl:
         lines.append(f"trade_line: {tl}")
@@ -754,6 +836,9 @@ def send_mt5_execution_log_to_ngan_gon_chat(
     trade_line: Optional[str] = None,
     previous_trade_line: Optional[str] = None,
     session_slot: Optional[str] = None,
+    zone_id: Optional[str] = None,
+    zone_source: Optional[str] = None,
+    shard_path: Optional[Union[str, Path]] = None,
     action: Optional[str] = None,
 ) -> None:
     """
@@ -781,6 +866,11 @@ def send_mt5_execution_log_to_ngan_gon_chat(
     if not tok:
         return
 
+    mt5_ctx = {
+        "zone_id": zone_id,
+        "zone_source": zone_source,
+        "shard_path": shard_path,
+    }
     _send_mt5_execution_detail_to_log_chat(
         bot_token=tok,
         telegram_log_chat_id=telegram_log_chat_id,
@@ -790,6 +880,7 @@ def send_mt5_execution_log_to_ngan_gon_chat(
         zone_label=zone_label,
         trade_line=trade_line,
         session_slot=session_slot,
+        **mt5_ctx,
     )
 
     if not execution_ok:
@@ -800,12 +891,16 @@ def send_mt5_execution_log_to_ngan_gon_chat(
         src = (source or "").strip()
         if src:
             lines.append(f"Nguồn: {src}")
-        zd = mt5_zone_label_display_vn(zone_label)
-        slot_vn = session_slot_display_vn(session_slot) if session_slot else None
-        if zd:
-            if slot_vn:
-                lines.append(f'Vùng / kế hoạch: "{zd} - {slot_vn}".')
-            else:
+        quoted = _mt5_plan_slot_quoted_vn(
+            zone_label,
+            session_slot,
+            second_flow=_resolve_mt5_second_flow(**mt5_ctx),
+        )
+        if quoted:
+            lines.append(f'Vùng / kế hoạch: "{quoted}".')
+        else:
+            zd = mt5_zone_label_display_vn(zone_label)
+            if zd:
                 lines.append(f'Vùng / kế hoạch: "{zd}".')
         tl = (trade_line or "").strip()
         if tl:
@@ -836,13 +931,19 @@ def send_mt5_execution_log_to_ngan_gon_chat(
     )
     if is_chinh_trade_line:
         out = "MT5 đã cập nhật lệnh theo quyết định quản lý lệnh."
-        zone_line = mt5_zone_chinh_line_vn(zone_label, session_slot=session_slot)
+        zone_line = mt5_zone_chinh_line_vn(
+            zone_label, session_slot=session_slot, **mt5_ctx
+        )
     elif is_partial_close:
         out = "MT5 đã chốt bớt vị thế theo quyết định quản lý lệnh."
-        zone_line = mt5_zone_partial_close_line_vn(zone_label, session_slot=session_slot)
+        zone_line = mt5_zone_partial_close_line_vn(
+            zone_label, session_slot=session_slot, **mt5_ctx
+        )
     else:
         out = random.choice(_MT5_NGAN_GON_MESSAGES)
-        zone_line = mt5_zone_entry_line_vn(zone_label, session_slot=session_slot)
+        zone_line = mt5_zone_entry_line_vn(
+            zone_label, session_slot=session_slot, **mt5_ctx
+        )
     if zone_line:
         out = f"{out}\n\n{zone_line}"
     change_lines = (

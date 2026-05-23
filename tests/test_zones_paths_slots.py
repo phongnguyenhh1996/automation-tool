@@ -8,7 +8,10 @@ from zoneinfo import ZoneInfo
 from pathlib import Path
 
 from automation_tool.zones_paths import (
+    is_second_flow_shard_path,
+    is_second_flow_zone_id,
     label_from_shard_stem,
+    resolve_second_flow,
     resolve_session_slot_raw,
     session_slot_display_vn,
     session_slot_from_shard_path,
@@ -53,6 +56,16 @@ def test_session_slot_display_vn() -> None:
     assert session_slot_display_vn("toi") == "Tối"
     assert session_slot_display_vn(None) is None
     assert session_slot_display_vn("other") is None
+    assert session_slot_display_vn("toi", second_flow=True) == "Tối luồng 2"
+
+
+def test_resolve_second_flow() -> None:
+    assert is_second_flow_zone_id("plan_chinh__toi-2")
+    assert not is_second_flow_zone_id("plan_chinh__toi")
+    assert is_second_flow_shard_path(Path("zones/vung_plan_chinh_toi-2.json"))
+    assert not is_second_flow_shard_path(Path("zones/vung_plan_chinh_toi.json"))
+    assert resolve_second_flow(zone_id="plan_chinh__sang-2", source="all-2")
+    assert not resolve_second_flow(zone_id="plan_chinh__sang", source="all")
 
 
 def test_resolve_session_slot_raw() -> None:

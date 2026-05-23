@@ -171,18 +171,55 @@ def label_from_shard_stem(stem: str) -> Optional[str]:
     return None
 
 
-def session_slot_display_vn(slot: Optional[str]) -> Optional[str]:
-    """``sang`` / ``chieu`` / ``toi`` → tiếng Việt cho tin user."""
+def is_second_flow_zone_id(zone_id: Optional[str]) -> bool:
+    """``plan_chinh__toi-2`` và shard suffix ``-2``."""
+    zid = (zone_id or "").strip()
+    return bool(zid) and zid.endswith("-2")
+
+
+def is_second_flow_source(source: Optional[str]) -> bool:
+    return (source or "").strip().lower() == "all-2"
+
+
+def is_second_flow_shard_path(path: Optional[Path]) -> bool:
+    if path is None:
+        return False
+    stem = Path(path).stem
+    return stem.endswith("-2")
+
+
+def resolve_second_flow(
+    *,
+    zone_id: Optional[str] = None,
+    source: Optional[str] = None,
+    shard_path: Optional[Path] = None,
+) -> bool:
+    """Luồng 2: zone ``*-2``, ``source=all-2``, hoặc shard ``vung_*_*-2.json``."""
+    if is_second_flow_source(source):
+        return True
+    if is_second_flow_zone_id(zone_id):
+        return True
+    if is_second_flow_shard_path(shard_path):
+        return True
+    return False
+
+
+def session_slot_display_vn(slot: Optional[str], *, second_flow: bool = False) -> Optional[str]:
+    """``sang`` / ``chieu`` / ``toi`` → tiếng Việt cho tin user; ``second_flow`` → thêm ``luồng 2``."""
     if not slot or not str(slot).strip():
         return None
     key = str(slot).strip().lower()
     if key == "sang":
-        return "Sáng"
-    if key == "chieu":
-        return "Chiều"
-    if key == "toi":
-        return "Tối"
-    return None
+        base = "Sáng"
+    elif key == "chieu":
+        base = "Chiều"
+    elif key == "toi":
+        base = "Tối"
+    else:
+        return None
+    if second_flow:
+        return f"{base} luồng 2"
+    return base
 
 
 def resolve_session_slot_raw(

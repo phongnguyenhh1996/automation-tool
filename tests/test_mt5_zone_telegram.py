@@ -23,6 +23,14 @@ def test_mt5_zone_entry_line_vn_with_session_slot():
         mt5_zone_entry_line_vn("plan_chinh", session_slot="sang")
         == 'Đã vào lệnh cho "Plan chính - Sáng".'
     )
+    assert (
+        mt5_zone_entry_line_vn(
+            "plan_chinh",
+            session_slot="toi",
+            zone_id="plan_chinh__toi-2",
+        )
+        == 'Đã vào lệnh cho "Plan chính - Tối luồng 2".'
+    )
 
 
 def test_mt5_zone_entry_line_vn_absent_or_unknown():
