@@ -160,7 +160,9 @@ def test_remove_zones_state_file(tmp_path: Path) -> None:
     assert remove_zones_state_file(p) is False
 
 
-def test_write_zones_for_slot_offsets_trade_line_tp1_before_persisting(tmp_path: Path) -> None:
+def test_write_zones_for_slot_keeps_trade_line_tp1_unchanged_before_persisting(
+    tmp_path: Path,
+) -> None:
     write_zones_for_slot(
         symbol="XAUUSD",
         slot="sang",
@@ -187,11 +189,11 @@ def test_write_zones_for_slot_offsets_trade_line_tp1_before_persisting(tmp_path:
     sell_data = json.loads(shard_path(tmp_path, "plan_phu", "sang").read_text())
 
     assert buy_data["zone"]["trade_line"] == (
-        "BUY LIMIT 4709.0 | SL 4699.0 | TP1 4718.5 | Lot 0.02"
+        "BUY LIMIT 4709.0 | SL 4699.0 | TP1 4720.0 | Lot 0.02"
     )
-    assert buy_data["zone"]["tp1_write_adjusted"] is True
+    assert buy_data["zone"]["tp1_write_adjusted"] is False
     assert sell_data["zone"]["trade_line"] == (
-        "SELL LIMIT 4729.0 | SL 4739.0 | TP1 4719.5 | Lot 0.02"
+        "SELL LIMIT 4729.0 | SL 4739.0 | TP1 4718.0 | Lot 0.02"
     )
 
     buy_shard = shard_path(tmp_path, "plan_chinh", "sang")

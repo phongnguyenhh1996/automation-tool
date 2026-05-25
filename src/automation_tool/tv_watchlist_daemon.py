@@ -880,6 +880,18 @@ def _should_write_intraday_alert_anchor(params: WatchlistDaemonParams) -> bool:
     return not (read_last_response_id(p) or "").strip()
 
 
+def _report_telegram_send_failure(context: str, text: str, exc: BaseException) -> None:
+    preview = (text or "").strip().replace("\r", " ").replace("\n", " ")
+    if len(preview) > 280:
+        preview = preview[:277] + "..."
+    _poll_terminal.warning(
+        "[telegram-log] send failed | context=%s | err=%s | text=%s",
+        context,
+        exc,
+        preview or "(empty)",
+    )
+
+
 def _send_log(settings: Settings, text: str) -> None:
     """
     Best-effort: send plain text to TELEGRAM_LOG_CHAT_ID.
@@ -897,8 +909,9 @@ def _send_log(settings: Settings, text: str) -> None:
             text=body,
             parse_mode=None,
         )
-    except Exception:
-        # Never let logging break the daemon.
+    except Exception as exc:
+        # Never let logging break the daemon, but keep a local trace for debugging.
+        _report_telegram_send_failure("tv_watchlist_daemon._send_log", body, exc)
         return
 
 
