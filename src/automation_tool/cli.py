@@ -33,6 +33,7 @@ from automation_tool.openai_analysis_json import (
     format_plan_lines_for_telegram,
     parse_analysis_from_openai_text,
     triple_from_zone_prices,
+    try_parse_analysis_payload,
 )
 from automation_tool.openai_errors import re_raise_unless_openai
 from automation_tool.openai_prompt_flow import (
@@ -822,6 +823,38 @@ def _parser() -> argparse.ArgumentParser:
         help="Sau khi ghi zones: không gọi reconcile-daemon-plans (mặc định: có gọi).",
     )
     ups.set_defaults(func=cmd_update_scalp)
+
+    rmz = sub.add_parser(
+        "restore-morning-zones",
+        help="Tạo lại shard zones từ data/<SYM>/morning_full_analysis.json đã lưu trước đó.",
+    )
+    rmz.add_argument(
+        "--main-symbol",
+        default=None,
+        metavar="SYM",
+        help="Cặp cần khôi phục zones (vd. XAUUSD); mặc định dùng active symbol hiện tại.",
+    )
+    rmz.add_argument(
+        "--morning-json",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help="File morning_full_analysis.json nguồn (mặc định data/<SYM>/morning_full_analysis.json).",
+    )
+    rmz.add_argument(
+        "--zones-json",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Thư mục zones (mặc định: data/<SYM>/zones/) hoặc legacy zones_state.json companion dir.",
+    )
+    rmz.add_argument(
+        "--slot",
+        choices=("sang", "chieu", "toi"),
+        default="sang",
+        help="Session slot để ghi shard zones (mặc định: sang).",
+    )
+    rmz.set_defaults(func=cmd_restore_morning_zones)
 
     wd = sub.add_parser(
         "tv-watchlist-daemon",
@@ -3493,6 +3526,55 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
     _send_phan_tich_scalp_if_any()
     if not args.no_reconcile_daemon_plans:
         _reconcile_daemon_plans_after_cli(zones_dir, "update-scalp")
+
+
+def cmd_restore_morning_zones(args: argparse.Namespace) -> None:
+    from automation_tool.images import get_active_main_symbol, set_active_main_symbol_file
+
+    if getattr(args, "main_symbol", None):
+        set_active_main_symbol_file(args.main_symbol)
+
+    morning_path = Path(getattr(args, "morning_json", None) or default_morning_full_analysis_path()).expanduser()
+    if not morning_path.is_file():
+        raise SystemExit(
+            f"Missing {morning_path} — cần file morning_full_analysis.json đã lưu từ lệnh `all`."
+        )
+
+    try:
+        raw = json.loads(morning_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        raise SystemExit(f"Không đọc được JSON từ {morning_path}: {e}") from e
+    if not isinstance(raw, dict):
+        raise SystemExit(f"File {morning_path} phải là JSON object của morning_full_analysis.")
+
+    payload = try_parse_analysis_payload(raw)
+    if payload is None or not payload.prices:
+        raise SystemExit(f"File {morning_path} không có `prices` hợp lệ để tạo shard zones.")
+
+    slot: SessionSlot = getattr(args, "slot", "sang")
+    symbol = str(getattr(args, "main_symbol", None) or get_active_main_symbol()).strip().upper()
+    zones_dir = zones_dir_from_cli_path(getattr(args, "zones_json", None))
+    zones = zones_from_analysis_payload(
+        symbol=symbol,
+        payload=payload,
+        source="all",
+        session_slot=slot,
+    )
+    if not zones:
+        raise SystemExit(f"File {morning_path} có `prices` nhưng không tạo được zone nào.")
+
+    write_zones_for_slot(symbol=symbol, zones=zones, slot=slot, zones_dir=zones_dir)
+    _log.info(
+        "restore-morning-zones: đã ghi shard zones | slot=%s zones=%d | symbol=%s | morning=%s",
+        slot,
+        len(zones),
+        symbol,
+        morning_path,
+    )
+    print(
+        f"Đã tạo lại {len(zones)} shard zone từ {morning_path.name} vào {zones_dir} (slot={slot}).",
+        flush=True,
+    )
 
 
 def cmd_tv_watchlist_daemon(args: argparse.Namespace) -> None:
