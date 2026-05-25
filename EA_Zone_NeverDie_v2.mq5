@@ -1,5 +1,5 @@
 #property strict
-#property description "EA Zone NeverDie MT5 v2.19"
+#property description "EA Zone NeverDie MT5 v2.20"
 
 #include <Trade/Trade.mqh>
 
@@ -85,7 +85,7 @@ input group "=== DEBUG ==="
 input bool           InpDebugLog               = true;
 input bool           InpDebugTraceDecisions    = false;
 
-const string EA_VERSION = "2.19";
+const string EA_VERSION = "2.20";
 const int JSON_FETCH_WINDOW_MINUTES = 30;
 const int JSON_FETCH_SLOT_COUNT = 3;
 const int PANEL_LINE_COUNT = 24;
@@ -1037,6 +1037,22 @@ bool HasOpenPositions(const long magic)
    return(false);
   }
 
+bool HasAnyOpenBasketPositions(const long excludedMagic = 0)
+  {
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0 || !PositionSelectByTicket(ticket)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+
+      long magic = PositionGetInteger(POSITION_MAGIC);
+      if(!IsOurMagic(magic)) continue;
+      if(excludedMagic > 0 && magic == excludedMagic) continue;
+      return(true);
+     }
+   return(false);
+  }
+
 bool HasOtherMainSideOpenPositions(const ENUM_POSITION_TYPE side, const long zoneMagic)
   {
    for(int i = 0; i < ArraySize(g_campaigns); i++)
@@ -1247,6 +1263,11 @@ void OpenPlanFollowCampaign(const int campaignIndex, const string sourceReason)
    if(basket.count > 0)
      {
       DebugTrace("FOLLOW entry skipped: basket already has positions. reason=" + sourceReason + " magic=" + IntegerToString(campaign.magic) + " " + BasketDebugText(basket));
+      return;
+     }
+   if(HasAnyOpenBasketPositions(campaign.magic))
+     {
+      DebugLog("FOLLOW entry skipped: another unfinished basket still has open positions. reason=" + sourceReason + " magic=" + IntegerToString(campaign.magic));
       return;
      }
 
@@ -1519,9 +1540,9 @@ void ManageActiveTradeEntry()
       DebugTrace("START entry skipped: basket already has positions. " + BasketDebugText(basket) + " zone={" + ZoneDebugText(zone) + "}");
       return;
      }
-   if(HasOtherMainSideOpenPositions(zone.side, zone.magic))
+   if(HasAnyOpenBasketPositions(zone.magic))
      {
-      DebugLog("START entry skipped: another main campaign still has open positions. zone={" + ZoneDebugText(zone) + "}");
+      DebugLog("START entry skipped: another unfinished basket still has open positions. zone={" + ZoneDebugText(zone) + "}");
       return;
      }
 

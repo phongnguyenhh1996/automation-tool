@@ -50,8 +50,10 @@ from automation_tool.zone_one_r import tp_at_r_multiple
 LotMode = Literal["fixed", "max_notional_usd", "max_loss_usd", "from_trade"]
 EntryTakeProfitTarget = Literal["tp1", "tp2"]
 EntrySlot = Literal["sang", "chieu", "toi"]
-FixedLotVolume = Union[float, dict[str, float]]
-AccountTpR = Union[float, dict[str, float]]
+PlanFloatValue = Union[float, dict[str, float]]
+FixedLotVolume = PlanFloatValue
+MaxLossUsdBudget = PlanFloatValue
+AccountTpR = PlanFloatValue
 
 
 @dataclass(frozen=True)
@@ -75,7 +77,7 @@ class LotRuleMaxLossUsd:
     """
 
     mode: Literal["max_loss_usd"] = "max_loss_usd"
-    max_usd: float = 100.0
+    max_usd: MaxLossUsdBudget = 100.0
 
 
 @dataclass(frozen=True)
@@ -128,18 +130,18 @@ def _parse_symbol_map(obj: Any, index: int) -> dict[str, str]:
     return out
 
 
-def _parse_fixed_volume(raw: Any) -> FixedLotVolume:
+def _parse_plan_float_with_default(raw: Any, *, field_name: str) -> PlanFloatValue:
     if isinstance(raw, dict):
         out: dict[str, float] = {}
         for k, v in raw.items():
             key = str(k or "").strip().lower()
             if not key:
-                raise ValueError("lot.mode=fixed volume object không được có key rỗng")
+                raise ValueError(f"{field_name} object không được có key rỗng")
             out[key] = float(v)
         if not out:
-            raise ValueError("lot.mode=fixed volume object không được rỗng")
+            raise ValueError(f"{field_name} object không được rỗng")
         if "default" not in out:
-            raise ValueError("lot.mode=fixed volume object cần key 'default'")
+            raise ValueError(f"{field_name} object cần key 'default'")
         return out
     return float(raw)
 
@@ -153,6 +155,17 @@ def fixed_lot_volume_for_label(rule: LotRuleFixed, zone_label: Optional[str]) ->
     if label and label in volume:
         return float(volume[label])
     return float(volume["default"])
+
+
+def max_loss_usd_for_label(rule: LotRuleMaxLossUsd, zone_label: Optional[str]) -> float:
+    """Resolve max loss budget; object form may override by zone label and falls back to default."""
+    max_usd = rule.max_usd
+    if not isinstance(max_usd, dict):
+        return float(max_usd)
+    label = str(zone_label or "").strip().lower()
+    if label and label in max_usd:
+        return float(max_usd[label])
+    return float(max_usd["default"])
 
 
 def _parse_account_tp_r(raw: Any, index: int) -> Optional[AccountTpR]:
@@ -217,7 +230,7 @@ def _parse_lot(d: Any) -> LotRule:
         v = d.get("volume")
         if v is None:
             raise ValueError("lot.mode=fixed cần volume")
-        return LotRuleFixed(volume=_parse_fixed_volume(v))
+        return LotRuleFixed(volume=_parse_plan_float_with_default(v, field_name="lot.mode=fixed volume"))
     if mode == "max_notional_usd":
         m = d.get("max_usd")
         if m is None:
@@ -227,7 +240,9 @@ def _parse_lot(d: Any) -> LotRule:
         m = d.get("max_usd")
         if m is None:
             raise ValueError("lot.mode=max_loss_usd cần max_usd")
-        return LotRuleMaxLossUsd(max_usd=float(m))
+        return LotRuleMaxLossUsd(
+            max_usd=_parse_plan_float_with_default(m, field_name="lot.mode=max_loss_usd max_usd")
+        )
     if mode == "from_trade":
         return LotRuleFromTrade()
     raise ValueError(f"lot.mode không hỗ trợ: {mode!r}")
@@ -686,6 +701,7 @@ def compute_lot_override(
     mt5: Any,
     resolved_symbol: str,
     dry_run: bool,
+    zone_label: Optional[str] = None,
 ) -> tuple[float, Optional[str]]:
     """
     Trả về (volume, warning_or_none).
@@ -697,7 +713,7 @@ def compute_lot_override(
     ``mt5.order_calc_profit`` với volume=1.0 (entry → SL). Thường yêu cầu ``trade.sl``.
     """
     if isinstance(rule, LotRuleFixed):
-        return fixed_lot_volume_for_label(rule, None), None
+        return fixed_lot_volume_for_label(rule, zone_label), None
 
     if isinstance(rule, LotRuleFromTrade):
         return float(trade.lot), None
@@ -765,13 +781,14 @@ def compute_lot_override(
         if loss_1lot <= 0:
             return float(trade.lot), f"loss_1lot<=0 (pl_1lot={pl_1lot}) — dùng lot từ trade_line"
 
-        raw_vol = float(rule.max_usd) / loss_1lot
+        max_usd = max_loss_usd_for_label(rule, zone_label)
+        raw_vol = max_usd / loss_1lot
         step = float(getattr(info, "volume_step", 0.01) or 0.01)
         vmin = float(getattr(info, "volume_min", 0.01) or 0.01)
         vmax = float(getattr(info, "volume_max", 100.0) or 100.0)
         vol = _round_volume_to_step(raw_vol, step, vmin, vmax)
         hint = (
-            f"max_loss_usd={rule.max_usd} entry={entry_px:.5f} sl={float(trade.sl):.5f} "
+            f"max_loss_usd={max_usd} entry={entry_px:.5f} sl={float(trade.sl):.5f} "
             f"loss_1lot≈{loss_1lot:.5f} → vol={vol}"
         )
         return vol, hint
@@ -839,6 +856,7 @@ def compute_volume_for_max_loss_live(
     server: str,
     symbol_override: Optional[str],
     account_symbol_map: Optional[dict[str, str]] = None,
+    zone_label: Optional[str] = None,
 ) -> tuple[float, Optional[str]]:
     """
     Đảm bảo phiên MT5 đúng terminal/account rồi tính volume theo max loss, không đóng phiên sau khi đọc.
@@ -875,4 +893,5 @@ def compute_volume_for_max_loss_live(
         mt5=mt5,
         resolved_symbol=rt.symbol,
         dry_run=False,
+        zone_label=zone_label,
     )

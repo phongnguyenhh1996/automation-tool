@@ -16,6 +16,7 @@ from automation_tool.mt5_accounts import (
     SOURCE_ALL_2,
     SOURCE_UPDATE_SCALP,
     account_tp_r_multiplier,
+    compute_lot_override,
     filter_mt5_accounts_for_entry_slot,
     load_mt5_accounts_from_path,
     load_mt5_accounts_for_zone_entry,
@@ -172,6 +173,93 @@ def test_load_max_loss_usd_rule() -> None:
         accs = load_mt5_accounts_from_path(p)
         assert isinstance(accs[0].lot, LotRuleMaxLossUsd)
         assert accs[0].lot.max_usd == 100.0
+
+
+def test_load_max_loss_usd_rule_accepts_budget_by_zone_label() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "accounts.json"
+        _write_accounts(
+            p,
+            [
+                {
+                    "id": "a",
+                    "terminal_path": "C:/MT5/A/metatrader64.exe",
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                    "lot": {
+                        "mode": "max_loss_usd",
+                        "max_usd": {
+                            "plan_chinh": 100,
+                            "plan_phu": 50,
+                            "default": 20,
+                        },
+                    },
+                },
+            ],
+        )
+        accs = load_mt5_accounts_from_path(p)
+        assert isinstance(accs[0].lot, LotRuleMaxLossUsd)
+        assert accs[0].lot.max_usd == {
+            "plan_chinh": 100.0,
+            "plan_phu": 50.0,
+            "default": 20.0,
+        }
+
+
+def test_compute_lot_override_max_loss_usd_uses_zone_label_budget() -> None:
+    class _FakeMt5:
+        ORDER_TYPE_BUY = 0
+
+        @staticmethod
+        def symbol_info(_symbol):
+            class _Info:
+                volume_step = 0.01
+                volume_min = 0.01
+                volume_max = 100.0
+
+            return _Info()
+
+        @staticmethod
+        def order_calc_profit(_order_type, _symbol, _volume, _entry, _sl):
+            return -200.0
+
+    trade = ParsedTrade(
+        symbol="XAUUSD",
+        side="BUY",
+        kind="LIMIT",
+        price=2600.0,
+        sl=2590.0,
+        tp1=2610.0,
+        tp2=2620.0,
+        lot=0.02,
+        raw_line="BUY LIMIT 2600.0 | SL 2590.0 | TP1 2610.0 | TP2 2620.0 | Lot 0.02",
+    )
+
+    vol_plan_chinh, _ = compute_lot_override(
+        trade,
+        LotRuleMaxLossUsd(
+            max_usd={"plan_chinh": 100.0, "plan_phu": 50.0, "default": 20.0}
+        ),
+        mt5=_FakeMt5(),
+        resolved_symbol="XAUUSD",
+        dry_run=False,
+        zone_label="plan_chinh",
+    )
+    vol_default, _ = compute_lot_override(
+        trade,
+        LotRuleMaxLossUsd(
+            max_usd={"plan_chinh": 100.0, "plan_phu": 50.0, "default": 20.0}
+        ),
+        mt5=_FakeMt5(),
+        resolved_symbol="XAUUSD",
+        dry_run=False,
+        zone_label="scalp",
+    )
+
+    assert vol_plan_chinh == 0.5
+    assert vol_default == 0.1
 
 
 def test_rejects_zero_primary() -> None:

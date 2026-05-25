@@ -71,6 +71,7 @@ def _lot_override_for_entry(
                 mt5=None,  # type: ignore[arg-type]
                 resolved_symbol=trade.symbol,
                 dry_run=True,
+                zone_label=zone_label,
             )
             return vol, hint
         vol, hint = compute_volume_for_max_notional_live(
@@ -92,6 +93,7 @@ def _lot_override_for_entry(
                 mt5=None,  # type: ignore[arg-type]
                 resolved_symbol=trade.symbol,
                 dry_run=True,
+                zone_label=zone_label,
             )
             return vol, hint
         vol, hint = compute_volume_for_max_loss_live(
@@ -103,6 +105,7 @@ def _lot_override_for_entry(
             server=acc.server,
             symbol_override=symbol_override,
             account_symbol_map=acc.symbol_map or None,
+            zone_label=zone_label,
         )
         return vol, hint
     return None, f"lot rule không hỗ trợ: {rule!r}"
