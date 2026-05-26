@@ -1,5 +1,5 @@
 #property strict
-#property description "EA Zone NeverDie MT5 v2.21"
+#property description "EA Zone NeverDie MT5 v2.22"
 
 #include <Trade/Trade.mqh>
 
@@ -86,7 +86,7 @@ input group "=== DEBUG ==="
 input bool           InpDebugLog               = true;
 input bool           InpDebugTraceDecisions    = false;
 
-const string EA_VERSION = "2.21";
+const string EA_VERSION = "2.22";
 const int JSON_FETCH_WINDOW_MINUTES = 30;
 const int JSON_FETCH_SLOT_COUNT = 3;
 const int PANEL_LINE_COUNT = 24;
@@ -663,6 +663,15 @@ bool IsExpectedJsonFetchLabel(const string label, const string expectedLabel)
    return(value == expected);
   }
 
+bool LabelsEqualIgnoreCase(const string left, const string right)
+  {
+   string leftValue = left;
+   string rightValue = right;
+   StringToLower(leftValue);
+   StringToLower(rightValue);
+   return(leftValue == rightValue);
+  }
+
 void NormalizeZonePrices(double &low, double &high)
   {
    double minPrice = MathMin(low, high);
@@ -713,6 +722,15 @@ void LoadWatchZone(const ENUM_POSITION_TYPE side, double low, double high, const
       DebugTrace("Skip JSON zone with non-plan_chinh label. side=" + SideText(side) + " label=" + label);
    if(!IsPlanChinhLabel(label)) return;
 
+   int index = FindMainZoneIndexBySide(side);
+   if(index >= 0 &&
+      g_zones[index].status == ZONE_STATUS_TRADE &&
+      LabelsEqualIgnoreCase(g_zones[index].label, label))
+     {
+      DebugLog("Skip JSON zone because matching label is already trading. side=" + SideText(side) + " label=" + label);
+      return;
+     }
+
    double jsonLow = low;
    NormalizeZonePrices(low, high);
    long magic = StableDailyZoneMagic(side);
@@ -721,7 +739,6 @@ void LoadWatchZone(const ENUM_POSITION_TYPE side, double low, double high, const
       ClearZoneStoppedOut(side, magic);
       DebugLog("Cleared stopped-out flag for new JSON fetch window. side=" + SideText(side) + " magic=" + IntegerToString(magic) + " label=" + label);
      }
-   int index = FindMainZoneIndexBySide(side);
    g_zoneFetchSequence++;
 
    if(index >= 0)

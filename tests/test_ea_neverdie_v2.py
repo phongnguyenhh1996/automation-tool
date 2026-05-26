@@ -32,7 +32,7 @@ def _function_body(source: str, name: str) -> str:
 def test_v2_ea_file_declares_required_inputs_and_versioned_title() -> None:
     source = _source()
 
-    assert '#property description "EA Zone NeverDie MT5 v2.20"' in source
+    assert '#property description "EA Zone NeverDie MT5 v2.22"' in source
     assert "input bool           InpSessionStopEnabled" in source
     assert "input int            InpSessionStopHour        = 2" in source
     assert "input int            InpSessionStopUtcOffsetMin = 420" in source
