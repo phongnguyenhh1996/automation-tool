@@ -41,6 +41,34 @@ _MT5_ZONE_LABEL_DISPLAY_VN: dict[str, str] = {
     "plan_phu": "Plan phụ",
     "scalp": "Scalp",
 }
+_RE_MT5_ZONE_LABEL_WITH_SLOT = re.compile(
+    r"^(?P<label>.+?)__(?P<slot>sang|chieu|toi)(?:-\d+)?$",
+    re.IGNORECASE,
+)
+_RE_MT5_SCALP_INDEXED_LABEL = re.compile(r"^scalp_(\d+)$", re.IGNORECASE)
+
+
+def _split_mt5_zone_label_slot(zone_label: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    raw = str(zone_label or "").strip().lower()
+    if not raw:
+        return None, None
+    m = _RE_MT5_ZONE_LABEL_WITH_SLOT.match(raw)
+    if not m:
+        return raw, None
+    return m.group("label"), m.group("slot")
+
+
+def _mt5_zone_label_base_display_vn(label_key: Optional[str]) -> Optional[str]:
+    key = str(label_key or "").strip().lower()
+    if not key:
+        return None
+    display = _MT5_ZONE_LABEL_DISPLAY_VN.get(key)
+    if display:
+        return display
+    scalp_match = _RE_MT5_SCALP_INDEXED_LABEL.match(key)
+    if scalp_match:
+        return f"Scalp {int(scalp_match.group(1))}"
+    return None
 
 
 def mt5_zone_label_display_vn(zone_label: Optional[str]) -> Optional[str]:
@@ -50,8 +78,8 @@ def mt5_zone_label_display_vn(zone_label: Optional[str]) -> Optional[str]:
     """
     if not zone_label or not str(zone_label).strip():
         return None
-    key = str(zone_label).strip().lower()
-    return _MT5_ZONE_LABEL_DISPLAY_VN.get(key)
+    key, _slot = _split_mt5_zone_label_slot(zone_label)
+    return _mt5_zone_label_base_display_vn(key)
 
 
 def _mt5_plan_slot_quoted_vn(
@@ -62,11 +90,14 @@ def _mt5_plan_slot_quoted_vn(
 ) -> Optional[str]:
     if not zone_label or not str(zone_label).strip():
         return None
-    key = str(zone_label).strip().lower()
-    display = _MT5_ZONE_LABEL_DISPLAY_VN.get(key)
+    key, embedded_slot = _split_mt5_zone_label_slot(zone_label)
+    display = _mt5_zone_label_base_display_vn(key)
     if not display:
         return None
-    slot_vn = session_slot_display_vn(session_slot, second_flow=second_flow) if session_slot else None
+    effective_slot = session_slot or embedded_slot
+    slot_vn = (
+        session_slot_display_vn(effective_slot, second_flow=second_flow) if effective_slot else None
+    )
     return f"{display} - {slot_vn}" if slot_vn else display
 
 

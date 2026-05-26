@@ -20,6 +20,10 @@ def test_mt5_zone_entry_line_vn_with_session_slot():
         == 'Đã vào lệnh cho "Scalp - Chiều".'
     )
     assert (
+        mt5_zone_entry_line_vn("scalp_2__chieu")
+        == 'Đã vào lệnh cho "Scalp 2 - Chiều".'
+    )
+    assert (
         mt5_zone_entry_line_vn("plan_chinh", session_slot="sang")
         == 'Đã vào lệnh cho "Plan chính - Sáng".'
     )
@@ -43,6 +47,7 @@ def test_mt5_zone_label_display_vn_known_labels():
     assert mt5_zone_label_display_vn("plan_chinh") == "Plan chính"
     assert mt5_zone_label_display_vn("PLAN_PHU") == "Plan phụ"
     assert mt5_zone_label_display_vn("scalp") == "Scalp"
+    assert mt5_zone_label_display_vn("scalp_2__chieu") == "Scalp 2"
 
 
 def test_mt5_zone_label_display_vn_absent_or_unknown():

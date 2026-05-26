@@ -375,6 +375,7 @@ def test_load_account_tp_r_by_plan() -> None:
         }
         assert account_tp_r_multiplier(accs[0].tp_r, "plan_phu") == 1.1
         assert account_tp_r_multiplier(accs[0].tp_r, "plan_chinh") == 0.0
+        assert account_tp_r_multiplier(accs[0].tp_r, "scalp_2__chieu") == 1.1
 
 
 def test_resolve_account_entry_tp_price_zero_uses_trade_tp1() -> None:

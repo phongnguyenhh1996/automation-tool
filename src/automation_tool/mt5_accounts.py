@@ -55,6 +55,25 @@ FixedLotVolume = PlanFloatValue
 MaxLossUsdBudget = PlanFloatValue
 AccountTpR = PlanFloatValue
 
+_RE_PLAN_KEY_WITH_SLOT = re.compile(
+    r"^(?P<label>.+?)__(?P<slot>sang|chieu|toi)(?:-\d+)?$",
+    re.IGNORECASE,
+)
+
+
+def _plan_lookup_candidates(zone_label: Optional[str]) -> tuple[str, ...]:
+    raw = str(zone_label or "").strip().lower()
+    if not raw:
+        return ()
+    out: list[str] = [raw]
+    m = _RE_PLAN_KEY_WITH_SLOT.match(raw)
+    base = m.group("label") if m else raw
+    if base not in out:
+        out.append(base)
+    if base.startswith("scalp_") and "scalp" not in out:
+        out.append("scalp")
+    return tuple(out)
+
 
 @dataclass(frozen=True)
 class LotRuleFixed:
@@ -151,9 +170,9 @@ def fixed_lot_volume_for_label(rule: LotRuleFixed, zone_label: Optional[str]) ->
     volume = rule.volume
     if not isinstance(volume, dict):
         return float(volume)
-    label = str(zone_label or "").strip().lower()
-    if label and label in volume:
-        return float(volume[label])
+    for key in _plan_lookup_candidates(zone_label):
+        if key in volume:
+            return float(volume[key])
     return float(volume["default"])
 
 
@@ -162,9 +181,9 @@ def max_loss_usd_for_label(rule: LotRuleMaxLossUsd, zone_label: Optional[str]) -
     max_usd = rule.max_usd
     if not isinstance(max_usd, dict):
         return float(max_usd)
-    label = str(zone_label or "").strip().lower()
-    if label and label in max_usd:
-        return float(max_usd[label])
+    for key in _plan_lookup_candidates(zone_label):
+        if key in max_usd:
+            return float(max_usd[key])
     return float(max_usd["default"])
 
 
@@ -196,9 +215,9 @@ def account_tp_r_multiplier(tp_r: Optional[AccountTpR], zone_label: Optional[str
         return None
     if not isinstance(tp_r, dict):
         return float(tp_r)
-    label = str(zone_label or "").strip().lower()
-    if label and label in tp_r:
-        return float(tp_r[label])
+    for key in _plan_lookup_candidates(zone_label):
+        if key in tp_r:
+            return float(tp_r[key])
     if "default" in tp_r:
         return float(tp_r["default"])
     return None

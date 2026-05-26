@@ -1,5 +1,5 @@
 #property strict
-#property description "EA Zone NeverDie MT5 v2.20"
+#property description "EA Zone NeverDie MT5 v2.21"
 
 #include <Trade/Trade.mqh>
 
@@ -63,6 +63,7 @@ input ENUM_ND_DCA_TF InpDcaGridTimeframe       = ND_DCA_M15;
 input int            InpDcaClosedBarsRequired  = 1;
 input int            InpDcaPrevOrderDistance   = 12000;
 input double         InpZoneActivateBand       = 3.0;
+input bool           InpBlockNewEntryWhenOtherBasketOpen = true;
 
 input group "=== DISPLAY ==="
 input bool           InpShowPanel              = true;
@@ -85,7 +86,7 @@ input group "=== DEBUG ==="
 input bool           InpDebugLog               = true;
 input bool           InpDebugTraceDecisions    = false;
 
-const string EA_VERSION = "2.20";
+const string EA_VERSION = "2.21";
 const int JSON_FETCH_WINDOW_MINUTES = 30;
 const int JSON_FETCH_SLOT_COUNT = 3;
 const int PANEL_LINE_COUNT = 24;
@@ -1265,7 +1266,7 @@ void OpenPlanFollowCampaign(const int campaignIndex, const string sourceReason)
       DebugTrace("FOLLOW entry skipped: basket already has positions. reason=" + sourceReason + " magic=" + IntegerToString(campaign.magic) + " " + BasketDebugText(basket));
       return;
      }
-   if(HasAnyOpenBasketPositions(campaign.magic))
+   if(InpBlockNewEntryWhenOtherBasketOpen && HasAnyOpenBasketPositions(campaign.magic))
      {
       DebugLog("FOLLOW entry skipped: another unfinished basket still has open positions. reason=" + sourceReason + " magic=" + IntegerToString(campaign.magic));
       return;
@@ -1540,7 +1541,7 @@ void ManageActiveTradeEntry()
       DebugTrace("START entry skipped: basket already has positions. " + BasketDebugText(basket) + " zone={" + ZoneDebugText(zone) + "}");
       return;
      }
-   if(HasAnyOpenBasketPositions(zone.magic))
+   if(InpBlockNewEntryWhenOtherBasketOpen && HasAnyOpenBasketPositions(zone.magic))
      {
       DebugLog("START entry skipped: another unfinished basket still has open positions. zone={" + ZoneDebugText(zone) + "}");
       return;
@@ -1878,7 +1879,7 @@ void UpdatePanel()
 int OnInit()
   {
    if(!ValidateInputs()) return(INIT_PARAMETERS_INCORRECT);
-   DebugLog("OnInit started. version=" + EA_VERSION + " symbol=" + _Symbol + " period=" + IntegerToString(_Period) + " lot=" + DoubleToString(InpLotSize, 2) + " followLot=" + DoubleToString(InpPlanFollowLotSize, 2) + " multiplier=" + DoubleToString(InpMultiplier, 2) + " gridStep=" + IntegerToString(InpGridStep) + " maxLevels=" + IntegerToString(InpMaxGridLevels) + " tp=" + IntegerToString(InpTakeProfit) + " dcaTf=" + EnumToString(DcaTimeframe()) + " debugTrace=" + BoolText(InpDebugTraceDecisions));
+   DebugLog("OnInit started. version=" + EA_VERSION + " symbol=" + _Symbol + " period=" + IntegerToString(_Period) + " lot=" + DoubleToString(InpLotSize, 2) + " followLot=" + DoubleToString(InpPlanFollowLotSize, 2) + " multiplier=" + DoubleToString(InpMultiplier, 2) + " gridStep=" + IntegerToString(InpGridStep) + " maxLevels=" + IntegerToString(InpMaxGridLevels) + " tp=" + IntegerToString(InpTakeProfit) + " dcaTf=" + EnumToString(DcaTimeframe()) + " blockNewEntryWhenOtherBasketOpen=" + BoolText(InpBlockNewEntryWhenOtherBasketOpen) + " debugTrace=" + BoolText(InpDebugTraceDecisions));
    g_trade.SetExpertMagicNumber(InpMagicNumber);
    g_trade.SetDeviationInPoints(20);
    g_trade.SetTypeFillingBySymbol(_Symbol);
