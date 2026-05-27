@@ -1472,7 +1472,7 @@ bool CloseCampaign(const CampaignData &campaign)
 
 int DcaPrevOrderDistanceRequired(const int basketCount)
   {
-   return(InpDcaPrevOrderDistance + 1000 * basketCount);
+   return((int)MathRound((double)InpDcaPrevOrderDistance * MathPow(1.5, basketCount)));
   }
 
 bool DcaPrevOrderDistanceReached(const double distance, const int basketCount)
