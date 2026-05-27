@@ -234,7 +234,8 @@ def test_v2_orders_use_price_tp_dca_and_side_wide_sl() -> None:
     assert "if(g_zones[i].fetchSequence >= bestFetchSequence)" in source
     assert 'basket.floatingProfit >= 0.0' in source
     assert 'distance < InpGridStep' in source
-    assert 'DcaPrevOrderDistanceReached(distance)' in source
+    assert "return(InpDcaPrevOrderDistance + 1000 * basketCount);" in source
+    assert "DcaPrevOrderDistanceReached(distance, basket.count)" in source
     assert 'if(!prevOrderDistanceReached)' in source
     assert 'g_campaigns[i].baseLot * MathPow(InpMultiplier, basket.count)' in source
     assert 'HighestSellStopLoss() + InpZonesSlBuffer' in source

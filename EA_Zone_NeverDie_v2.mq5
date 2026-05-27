@@ -1470,10 +1470,16 @@ bool CloseCampaign(const CampaignData &campaign)
    return(allClosed);
   }
 
-bool DcaPrevOrderDistanceReached(const double distance)
+int DcaPrevOrderDistanceRequired(const int basketCount)
   {
-   if(InpDcaPrevOrderDistance <= 0) return(false);
-   return(distance >= InpDcaPrevOrderDistance);
+   return(InpDcaPrevOrderDistance + 1000 * basketCount);
+  }
+
+bool DcaPrevOrderDistanceReached(const double distance, const int basketCount)
+  {
+   int requiredDistance = DcaPrevOrderDistanceRequired(basketCount);
+   if(requiredDistance <= 0) return(false);
+   return(distance >= requiredDistance);
   }
 
 bool ShouldOpenDca(const CampaignData &campaign, const BasketInfo &basket, const bool onFirstTick)
@@ -1514,7 +1520,7 @@ bool ShouldOpenDca(const CampaignData &campaign, const BasketInfo &basket, const
       return(false);
      }
 
-   bool prevOrderDistanceReached = DcaPrevOrderDistanceReached(distance);
+   bool prevOrderDistanceReached = DcaPrevOrderDistanceReached(distance, basket.count);
    if(!prevOrderDistanceReached)
      {
       if(distance < InpGridStep)
