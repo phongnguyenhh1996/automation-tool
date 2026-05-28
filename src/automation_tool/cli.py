@@ -772,7 +772,7 @@ def _parser() -> argparse.ArgumentParser:
         "update-scalp",
         help=(
             "Scalp intraday: TradingView 15m ICT + 5m rồi chỉ Coinmap M5 → OpenAI follow-up tìm plan scalp; "
-            "zones lưu vào data/<SYM>/zones/ với label scalp_<id>."
+            "vector store giống all-2; zones lưu vào data/<SYM>/zones/ với label scalp_<id>."
         ),
     )
     ups.add_argument("--config", type=Path, default=None, help="Coinmap yaml for capture only (default: coinmap_update.yaml)")
@@ -3347,6 +3347,7 @@ def cmd_update(args: argparse.Namespace) -> None:
 def cmd_update_scalp(args: argparse.Namespace) -> None:
     """
     Luồng ``update-scalp``: chỉ capture và gửi Coinmap **M5** → OpenAI, yêu cầu tìm plan scalp đẹp nhất.
+    - Vector store giống ``all-2`` (``_ALL_SECOND_FLOW_VECTOR_STORE_ID``), không dùng ``OPENAI_VECTOR_STORE_IDS``.
     - Thread OpenAI riêng (``last_scalp_response_id.txt``).
     - Zone labels dạng ``scalp_<id>`` (ví dụ: ``scalp_1``, ``scalp_2``, ``scalp_3``).
     - Zones lưu vào ``data/<SYM>/zones/`` cùng với zones thông thường.
@@ -3455,7 +3456,7 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
             coinmap_json_paths=coinmap_paths,
             extra_chart_payloads=tv_chart_payloads,
             previous_response_id=prev_for_openai,
-            vector_store_ids=s.openai_vector_store_ids,
+            vector_store_ids=[_ALL_SECOND_FLOW_VECTOR_STORE_ID],
             store=s.openai_responses_store,
             include=s.openai_responses_include,
             model=resolved_openai_model(s, getattr(args, "model", None)),
@@ -3465,7 +3466,11 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
 
     print(out_text)
     write_last_scalp_response_id(new_id)
-    _log.info("update-scalp: OpenAI follow-up xong | new_response_id=%s", new_id)
+    _log.info(
+        "update-scalp: OpenAI follow-up xong | new_response_id=%s | vector_store=%s",
+        new_id,
+        _ALL_SECOND_FLOW_VECTOR_STORE_ID,
+    )
 
     update_payload = parse_analysis_from_openai_text(out_text)
 
