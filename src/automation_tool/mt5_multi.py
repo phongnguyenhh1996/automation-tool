@@ -17,6 +17,7 @@ from automation_tool.mt5_accounts import (
     compute_lot_override,
     compute_volume_for_max_loss_live,
     compute_volume_for_max_notional_live,
+    filter_mt5_accounts_for_zone_label,
     fixed_lot_volume_for_label,
     primary_account,
     resolve_account_entry_tp_price,
@@ -118,6 +119,7 @@ def execute_trade_all_accounts(
     dry_run: bool = True,
     symbol_override: Optional[str] = None,
     zone_label: Optional[str] = None,
+    zone_id: Optional[str] = None,
     deviation: int = 20,
     magic: Optional[int] = None,
     log_tp2: bool = True,
@@ -126,7 +128,13 @@ def execute_trade_all_accounts(
     """
     Gửi lệnh lần lượt qua từng tài khoản (``execute_trade`` shutdown sau mỗi lần).
     """
+    accounts = filter_mt5_accounts_for_zone_label(
+        accounts, zone_label, zone_id=zone_id or zone_label
+    )
     out = MT5MultiExecutionSummary()
+    if not accounts:
+        out.ok_all = False
+        return out
 
     def _run_one(acc: MT5AccountEntry) -> MT5ExecutionResult:
         lot_ov, _hint = _lot_override_for_entry(

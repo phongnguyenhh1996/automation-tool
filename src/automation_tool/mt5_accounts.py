@@ -24,6 +24,10 @@ lọc ra ``accounts-scalp.json`` cho luồng ``coinmap-automation update-scalp``
 Zone ``source=all-2`` chỉ vào lệnh qua account trong file đó; zone ``source=all`` **không** dùng
 các account có flag này (chỉ luồng 1 / shard không suffix ``-2``).
 
+**only_plan_chinh:** optional ``\"only_plan_chinh\": true`` — account đó **chỉ** vào lệnh thuộc
+họ plan chính: ``plan_chinh``, ``plan_chinh__sang``, ``plan_chinh__chieu``, ``plan_chinh__toi-2``,
+…; ``plan_phu``, ``plan_phu__*``, ``scalp``, ``scalp_*`` bị skip.
+
 **Bảo mật:** không commit file chứa mật khẩu; hạn chế quyền đọc (ví dụ ``chmod 600``).
 """
 
@@ -130,6 +134,8 @@ class MT5AccountEntry:
     #: Chỉ cho account này vào lệnh ở các shard ``*_sang/_chieu/_toi`` được liệt kê.
     #: ``None`` = không giới hạn, giữ hành vi cũ là vào cả ba khung.
     entry_slots: Optional[tuple[EntrySlot, ...]] = None
+    #: Chỉ vào lệnh họ plan chính (``plan_chinh``, ``plan_chinh__*``); plan phụ/scalp bị skip.
+    only_plan_chinh: bool = False
 
 
 def _parse_symbol_map(obj: Any, index: int) -> dict[str, str]:
@@ -334,6 +340,7 @@ def _parse_one(
     tp_r = _parse_account_tp_r(obj.get("tp"), index)
     entry_slots = _parse_entry_slots(obj.get("entry_slots"), index)
     sym_map = _parse_symbol_map(obj.get("symbol_map"), index)
+    only_plan_chinh = obj.get("only_plan_chinh") is True
     return MT5AccountEntry(
         id=acc_id,
         terminal_path=terminal_path_s,
@@ -346,6 +353,7 @@ def _parse_one(
         tp_r=tp_r,
         entry_slots=entry_slots,
         symbol_map=sym_map,
+        only_plan_chinh=only_plan_chinh,
     )
 
 
@@ -360,12 +368,78 @@ def mt5_account_allows_entry_slot(acc: MT5AccountEntry, slot: Optional[str]) -> 
     return s in allowed
 
 
+def base_plan_label_from_zone_label(zone_label: Optional[str]) -> str:
+    """``plan_chinh__sang-2`` → ``plan_chinh``; ``scalp_1`` → ``scalp_1``."""
+    raw = str(zone_label or "").strip().lower()
+    if not raw:
+        return ""
+    m = _RE_PLAN_KEY_WITH_SLOT.match(raw)
+    if m:
+        return m.group("label")
+    return raw
+
+
+def is_plan_chinh_family(*zone_refs: Optional[str]) -> bool:
+    """
+    True nếu zone thuộc plan chính: ``plan_chinh``, ``plan_chinh__sang``, ``plan_chinh__toi-2``, …
+
+    Nhận ``zone.label`` (thường ``plan_chinh``) hoặc ``zone.id`` (``plan_chinh__<slot>``).
+    """
+    for ref in zone_refs:
+        raw = str(ref or "").strip().lower()
+        if not raw:
+            continue
+        if raw == "plan_chinh" or raw.startswith("plan_chinh__"):
+            return True
+        if "plan_chinh" in _plan_lookup_candidates(raw):
+            return True
+    return False
+
+
+def mt5_account_allows_zone_label(
+    acc: MT5AccountEntry,
+    zone_label: Optional[str],
+    *,
+    zone_id: Optional[str] = None,
+) -> bool:
+    """``only_plan_chinh`` → chỉ họ plan chính; plan phụ / scalp bị skip."""
+    if not acc.only_plan_chinh:
+        return True
+    return is_plan_chinh_family(zone_label, zone_id)
+
+
 def filter_mt5_accounts_for_entry_slot(
     accounts: list[MT5AccountEntry],
     slot: Optional[str],
 ) -> list[MT5AccountEntry]:
     """Filter multi-account entries by ``entry_slots`` for new order placement."""
     return [a for a in accounts if mt5_account_allows_entry_slot(a, slot)]
+
+
+def filter_mt5_accounts_for_zone_label(
+    accounts: list[MT5AccountEntry],
+    zone_label: Optional[str],
+    *,
+    zone_id: Optional[str] = None,
+) -> list[MT5AccountEntry]:
+    """Filter multi-account entries by ``only_plan_chinh`` (label và/hoặc zone id)."""
+    return [
+        a
+        for a in accounts
+        if mt5_account_allows_zone_label(a, zone_label, zone_id=zone_id)
+    ]
+
+
+def filter_mt5_accounts_for_zone_entry(
+    accounts: list[MT5AccountEntry],
+    slot: Optional[str],
+    zone_label: Optional[str],
+    *,
+    zone_id: Optional[str] = None,
+) -> list[MT5AccountEntry]:
+    """``entry_slots`` rồi ``only_plan_chinh`` — dùng trước khi ``execute_trade_all_accounts``."""
+    after_slot = filter_mt5_accounts_for_entry_slot(accounts, slot)
+    return filter_mt5_accounts_for_zone_label(after_slot, zone_label, zone_id=zone_id)
 
 
 def load_mt5_accounts_from_path(

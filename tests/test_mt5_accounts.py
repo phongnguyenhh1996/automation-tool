@@ -13,11 +13,15 @@ from automation_tool.mt5_accounts import (
     LotRuleFromTrade,
     LotRuleMaxLossUsd,
     LotRuleMaxNotionalUsd,
+    MT5AccountEntry,
     SOURCE_ALL_2,
     SOURCE_UPDATE_SCALP,
     account_tp_r_multiplier,
     compute_lot_override,
     filter_mt5_accounts_for_entry_slot,
+    filter_mt5_accounts_for_zone_entry,
+    filter_mt5_accounts_for_zone_label,
+    is_plan_chinh_family,
     load_mt5_accounts_from_path,
     load_mt5_accounts_for_zone_entry,
     resolve_account_entry_tp_price,
@@ -472,6 +476,90 @@ def test_load_entry_slots_per_account_defaults_to_all_slots() -> None:
             "day_runner",
             "all_day",
         ]
+
+
+def test_load_only_plan_chinh_flag() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "accounts.json"
+        _write_accounts(
+            p,
+            [
+                {
+                    "id": "chinh_only",
+                    "terminal_path": "C:/MT5/A/metatrader64.exe",
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                    "only_plan_chinh": True,
+                },
+                {
+                    "id": "all_plans",
+                    "terminal_path": "C:/MT5/B/metatrader64.exe",
+                    "login": 2,
+                    "password": "y",
+                    "server": "S",
+                    "primary": False,
+                },
+            ],
+        )
+        accs = load_mt5_accounts_from_path(p)
+        assert accs[0].only_plan_chinh is True
+        assert accs[1].only_plan_chinh is False
+
+
+def test_is_plan_chinh_family_includes_suffixed_zone_ids() -> None:
+    assert is_plan_chinh_family("plan_chinh")
+    assert is_plan_chinh_family("plan_chinh__sang")
+    assert is_plan_chinh_family("plan_chinh__toi-2")
+    assert is_plan_chinh_family(None, "plan_chinh__chieu")
+    assert not is_plan_chinh_family("plan_phu")
+    assert not is_plan_chinh_family("plan_phu__sang")
+    assert not is_plan_chinh_family("scalp", "scalp_1")
+
+
+def test_filter_only_plan_chinh_skips_other_labels() -> None:
+    chinh_only = MT5AccountEntry(
+        id="chinh_only",
+        terminal_path="/tmp/mt5-a.exe",
+        login=1,
+        password="p",
+        server="srv",
+        primary=True,
+        lot=LotRuleFromTrade(),
+        only_plan_chinh=True,
+    )
+    all_plans = MT5AccountEntry(
+        id="all_plans",
+        terminal_path="/tmp/mt5-b.exe",
+        login=2,
+        password="p",
+        server="srv",
+        primary=False,
+        lot=LotRuleFromTrade(),
+    )
+    accounts = [chinh_only, all_plans]
+
+    assert [a.id for a in filter_mt5_accounts_for_zone_label(accounts, "plan_chinh")] == [
+        "chinh_only",
+        "all_plans",
+    ]
+    assert [a.id for a in filter_mt5_accounts_for_zone_label(accounts, "plan_chinh__sang-2")] == [
+        "chinh_only",
+        "all_plans",
+    ]
+    assert [a.id for a in filter_mt5_accounts_for_zone_label(accounts, "plan_phu")] == ["all_plans"]
+    assert [a.id for a in filter_mt5_accounts_for_zone_label(accounts, "scalp_1")] == ["all_plans"]
+
+    assert [a.id for a in filter_mt5_accounts_for_zone_entry(accounts, "sang", "plan_phu")] == [
+        "all_plans"
+    ]
+    assert [a.id for a in filter_mt5_accounts_for_zone_entry(
+        accounts, "sang", "plan_chinh", zone_id="plan_chinh__sang-2"
+    )] == ["chinh_only", "all_plans"]
+    assert [a.id for a in filter_mt5_accounts_for_zone_entry(
+        accounts, "toi", "plan_phu", zone_id="plan_phu__toi-2"
+    )] == ["all_plans"]
 
 
 def test_rejects_missing_terminal_path() -> None:

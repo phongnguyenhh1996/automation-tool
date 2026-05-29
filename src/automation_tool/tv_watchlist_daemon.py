@@ -33,7 +33,7 @@ from automation_tool.images import (
 )
 from automation_tool.mt5_accounts import (
     MT5AccountEntry,
-    filter_mt5_accounts_for_entry_slot,
+    filter_mt5_accounts_for_zone_entry,
     load_mt5_accounts_for_cli,
     load_mt5_accounts_for_zone_entry,
     primary_account,
@@ -998,7 +998,9 @@ def _filter_entry_accounts_for_zone(
     params: WatchlistDaemonParams,
 ) -> tuple[list[MT5AccountEntry], Optional[str], list[str]]:
     slot = _entry_slot_for_zone(zone, params)
-    allowed = filter_mt5_accounts_for_entry_slot(accounts, slot)
+    allowed = filter_mt5_accounts_for_zone_entry(
+        accounts, slot, zone.label, zone_id=zone.id
+    )
     allowed_ids = {a.id for a in allowed}
     blocked_ids = [a.id for a in accounts if a.id not in allowed_ids]
     return allowed, slot, blocked_ids
@@ -2507,8 +2509,8 @@ def _auto_entry_job(
             if blocked_ae:
                 _send_log(
                     settings,
-                    "[auto-entry] accounts filtered by entry_slots | "
-                    f"zone_id={zone_id} slot={slot_ae or 'unknown'} blocked={blocked_ae}",
+                    "[auto-entry] accounts filtered (entry_slots / only_plan_chinh) | "
+                    f"zone_id={zone_id} label={z0.label!r} slot={slot_ae or 'unknown'} blocked={blocked_ae}",
                 )
             if not exec_accs_ae:
                 z0.status = "cham"
@@ -2517,8 +2519,9 @@ def _auto_entry_job(
                 _state_write(params, st0)
                 _send_user_notice(
                     settings,
-                    "Tự động vào lệnh bị chặn theo khung giờ.",
-                    f"Không account nào trong accounts.json cho phép vào lệnh khung {slot_ae or 'unknown'}.",
+                    "Tự động vào lệnh bị chặn theo cấu hình account.",
+                    f"Không account nào cho phép vào lệnh zone {z0.label!r} "
+                    f"(khung {slot_ae or 'unknown'}; kiểm tra entry_slots / only_plan_chinh).",
                     zone=z0,
                     params=params,
                 )
@@ -2529,6 +2532,7 @@ def _auto_entry_job(
                 dry_run=params.mt5_dry_run,
                 symbol_override=params.mt5_symbol,
                 zone_label=z0.label,
+                zone_id=zone_id,
                 order_comment=_mt5_entry_order_comment(zone_id),
             )
             multi_ae = format_mt5_multi_for_telegram(summary_ae)
@@ -3008,8 +3012,8 @@ def _zone_touch_job(
             if blocked_zt:
                 _send_log(
                     settings,
-                    "[zone-touch] accounts filtered by entry_slots | "
-                    f"zone_id={zone_id} slot={slot_zt or 'unknown'} blocked={blocked_zt}",
+                    "[zone-touch] accounts filtered (entry_slots / only_plan_chinh) | "
+                    f"zone_id={zone_id} label={z1.label!r} slot={slot_zt or 'unknown'} blocked={blocked_zt}",
                 )
             if not exec_accs_zt:
                 st_block = _state_read(params)
@@ -3024,8 +3028,9 @@ def _zone_touch_job(
                     _state_write(params, st_block)
                 _send_user_notice(
                     settings,
-                    "Vào lệnh bị chặn theo khung giờ.",
-                    f"Không account nào trong accounts.json cho phép vào lệnh khung {slot_zt or 'unknown'}.",
+                    "Vào lệnh bị chặn theo cấu hình account.",
+                    f"Không account nào cho phép vào lệnh zone {z1.label!r} "
+                    f"(khung {slot_zt or 'unknown'}; kiểm tra entry_slots / only_plan_chinh).",
                     zone=z1,
                     params=params,
                 )
@@ -3036,6 +3041,7 @@ def _zone_touch_job(
                 dry_run=params.mt5_dry_run,
                 symbol_override=params.mt5_symbol,
                 zone_label=z1.label,
+                zone_id=zone_id,
                 order_comment=_mt5_entry_order_comment(zone_id),
             )
             # MARKET: MT5 trả fill price; chỉ dùng giá từ account primary để update trade_line.

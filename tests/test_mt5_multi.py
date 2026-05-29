@@ -354,6 +354,63 @@ def test_execute_trade_all_accounts_passes_zone_id_comment(
     assert seen == ["plan_chinh__sang-2"]
 
 
+def test_execute_trade_all_accounts_skips_only_plan_chinh_on_other_labels(
+    sample_trade, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    accounts = [
+        MT5AccountEntry(
+            id="chinh_only",
+            terminal_path="/tmp/mt5-acc-a/terminal64.exe",
+            login=1,
+            password="p",
+            server="srv",
+            primary=True,
+            lot=LotRuleFromTrade(),
+            only_plan_chinh=True,
+        ),
+        MT5AccountEntry(
+            id="all_plans",
+            terminal_path="/tmp/mt5-acc-b/terminal64.exe",
+            login=2,
+            password="p",
+            server="srv",
+            primary=False,
+            lot=LotRuleFromTrade(),
+        ),
+    ]
+    seen: list[str] = []
+
+    def fake_execute_trade(trade, **kwargs):
+        seen.append(str(kwargs.get("account_id")))
+        return MT5ExecutionResult(
+            ok=True,
+            message=f"mock {kwargs.get('account_id')}",
+            order=7000 + len(seen),
+            account_id=kwargs.get("account_id"),
+        )
+
+    monkeypatch.setattr("automation_tool.mt5_multi.execute_trade", fake_execute_trade)
+
+    summ = execute_trade_all_accounts(
+        sample_trade,
+        accounts,
+        dry_run=True,
+        zone_label="plan_phu",
+    )
+    assert summ.ok_all
+    assert seen == ["all_plans"]
+
+    seen.clear()
+    summ2 = execute_trade_all_accounts(
+        sample_trade,
+        accounts,
+        dry_run=True,
+        zone_label="plan_chinh",
+    )
+    assert summ2.ok_all
+    assert seen == ["chinh_only", "all_plans"]
+
+
 def test_cancel_close_all_accounts_retries_failed_position_close(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
