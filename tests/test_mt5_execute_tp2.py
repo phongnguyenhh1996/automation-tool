@@ -94,6 +94,21 @@ def test_mt5_entry_order_comment_drops_plan_prefix() -> None:
     assert _mt5_entry_order_comment("scalp__chieu") == "scalp__chieu"
 
 
+def test_mt5_entry_order_comment_update_scalp() -> None:
+    from automation_tool.zones_state import Zone
+
+    z = Zone(
+        id="scalp__toi",
+        label="scalp",
+        vung_cho="1–2",
+        side="BUY",
+        hop_luu=67,
+        source="update-scalp",
+        session_slot="toi",
+    )
+    assert _mt5_entry_order_comment("scalp__toi", zone=z) == "update-scalp-toi-67"
+
+
 def test_build_request_can_use_tp1_even_when_tp2_is_present() -> None:
     mt5 = _FakeMT5()
     t = ParsedTrade(

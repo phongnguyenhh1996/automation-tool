@@ -33,6 +33,7 @@ from automation_tool.images import (
 )
 from automation_tool.mt5_accounts import (
     MT5AccountEntry,
+    SOURCE_UPDATE_SCALP,
     filter_mt5_accounts_for_zone_entry,
     load_mt5_accounts_for_cli,
     load_mt5_accounts_for_zone_entry,
@@ -999,14 +1000,36 @@ def _filter_entry_accounts_for_zone(
 ) -> tuple[list[MT5AccountEntry], Optional[str], list[str]]:
     slot = _entry_slot_for_zone(zone, params)
     allowed = filter_mt5_accounts_for_zone_entry(
-        accounts, slot, zone.label, zone_id=zone.id
+        accounts,
+        slot,
+        zone.label,
+        zone_id=zone.id,
+        zone_source=zone.source,
     )
     allowed_ids = {a.id for a in allowed}
     blocked_ids = [a.id for a in accounts if a.id not in allowed_ids]
     return allowed, slot, blocked_ids
 
 
-def _mt5_entry_order_comment(zone_id: str) -> str:
+def _mt5_entry_order_comment(
+    zone_id: str,
+    *,
+    zone: Optional[Zone] = None,
+    params: Optional[WatchlistDaemonParams] = None,
+) -> str:
+    """MT5 order comment: ``update-scalp-<slot>-<hop_luu>`` cho zone scalp; còn lại từ ``zone_id``."""
+    if zone is not None and (zone.source or "").strip().lower() == SOURCE_UPDATE_SCALP:
+        if params is not None:
+            slot = _entry_slot_for_zone(zone, params)
+        else:
+            slot = resolve_session_slot_raw(
+                zone_session_slot=getattr(zone, "session_slot", None),
+                shard_path=None,
+            )
+        slot_s = (slot or "unknown").strip()
+        hop = zone.hop_luu
+        hop_s = str(int(hop)) if hop is not None else "0"
+        return f"update-scalp-{slot_s}-{hop_s}"
     comment = str(zone_id or "").strip()
     if comment.startswith("plan_"):
         return comment[len("plan_") :]
@@ -2533,7 +2556,7 @@ def _auto_entry_job(
                 symbol_override=params.mt5_symbol,
                 zone_label=z0.label,
                 zone_id=zone_id,
-                order_comment=_mt5_entry_order_comment(zone_id),
+                order_comment=_mt5_entry_order_comment(zone_id, zone=z0, params=params),
             )
             multi_ae = format_mt5_multi_for_telegram(summary_ae)
             if not params.no_telegram:
@@ -2598,7 +2621,7 @@ def _auto_entry_job(
             parsed,
             dry_run=params.mt5_dry_run,
             symbol_override=params.mt5_symbol,
-            order_comment=_mt5_entry_order_comment(zone_id),
+            order_comment=_mt5_entry_order_comment(zone_id, zone=z0, params=params),
         )
         if not params.no_telegram:
             send_mt5_execution_log_to_ngan_gon_chat(
@@ -3042,7 +3065,7 @@ def _zone_touch_job(
                 symbol_override=params.mt5_symbol,
                 zone_label=z1.label,
                 zone_id=zone_id,
-                order_comment=_mt5_entry_order_comment(zone_id),
+                order_comment=_mt5_entry_order_comment(zone_id, zone=z1, params=params),
             )
             # MARKET: MT5 trả fill price; chỉ dùng giá từ account primary để update trade_line.
             try:
@@ -3109,7 +3132,7 @@ def _zone_touch_job(
             parsed,
             dry_run=params.mt5_dry_run,
             symbol_override=params.mt5_symbol,
-            order_comment=_mt5_entry_order_comment(zone_id),
+            order_comment=_mt5_entry_order_comment(zone_id, zone=z1, params=params),
         )
         # MARKET: MT5 trả fill price; update trade_line để theo dõi 1R/TP1.
         try:

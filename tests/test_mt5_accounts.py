@@ -17,14 +17,19 @@ from automation_tool.mt5_accounts import (
     SOURCE_ALL_2,
     SOURCE_UPDATE_SCALP,
     account_tp_r_multiplier,
+    account_row_in_all2_subset,
+    account_row_in_scalp_subset,
     compute_lot_override,
     filter_mt5_accounts_for_entry_slot,
     filter_mt5_accounts_for_zone_entry,
     filter_mt5_accounts_for_zone_label,
     is_plan_chinh_family,
+    is_plan_phu_family,
+    is_scalp_family,
     load_mt5_accounts_from_path,
     load_mt5_accounts_for_zone_entry,
     resolve_account_entry_tp_price,
+    resolve_trade_filter_key,
     trade_with_update_scalp_entry_lot_default,
     exclude_all2_dedicated_accounts,
     sync_accounts_all2_json,
@@ -1069,3 +1074,174 @@ def test_resolve_mt5_trade_symbol_uses_per_account_map() -> None:
     assert r2.symbol == "XAUUSD"
     r3 = resolve_mt5_trade_symbol(t, None, account_symbol_map=None)
     assert r3.symbol == "XAUUSDm"
+
+
+def test_resolve_trade_filter_key_mapping() -> None:
+    assert resolve_trade_filter_key(zone_label="plan_chinh", zone_source="all") == "chinh"
+    assert (
+        resolve_trade_filter_key(
+            zone_label="plan_chinh",
+            zone_id="plan_chinh__sang-2",
+            zone_source="all-2",
+        )
+        == "chinh-2"
+    )
+    assert resolve_trade_filter_key(zone_label="plan_phu", zone_id="plan_phu__toi") == "phu"
+    assert (
+        resolve_trade_filter_key(
+            zone_label="plan_phu",
+            zone_id="plan_phu__toi-2",
+            zone_source="all-2",
+        )
+        == "phu-2"
+    )
+    assert resolve_trade_filter_key(zone_label="scalp_1", zone_source="all") == "scalp"
+    assert (
+        resolve_trade_filter_key(
+            zone_label="scalp",
+            zone_id="scalp__toi-2",
+            zone_source="all-2",
+        )
+        == "scalp-2"
+    )
+    assert (
+        resolve_trade_filter_key(zone_label="scalp_1", zone_source=SOURCE_UPDATE_SCALP)
+        == "update-scalp"
+    )
+
+
+def test_is_plan_phu_and_scalp_family() -> None:
+    assert is_plan_phu_family("plan_phu__sang")
+    assert not is_plan_phu_family("plan_chinh")
+    assert is_scalp_family("scalp_1")
+    assert not is_scalp_family("plan_phu")
+
+
+def test_load_trade_filter_from_accounts_json() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "accounts.json"
+        _write_accounts(
+            p,
+            [
+                {
+                    "id": "mixed",
+                    "terminal_path": "C:/MT5/A/metatrader64.exe",
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                    "trade": {
+                        "chinh-2": True,
+                        "phu-2": False,
+                        "chinh": True,
+                        "phu": True,
+                        "update-scalp": True,
+                        "scalp": False,
+                        "scalp-2": True,
+                    },
+                },
+            ],
+        )
+        accs = load_mt5_accounts_from_path(p)
+        assert accs[0].trade == {
+            "chinh-2": True,
+            "phu-2": False,
+            "chinh": True,
+            "phu": True,
+            "update-scalp": True,
+            "scalp": False,
+            "scalp-2": True,
+        }
+
+
+def test_filter_trade_map_per_zone_type() -> None:
+    acc = MT5AccountEntry(
+        id="mixed",
+        terminal_path="/tmp/mt5.exe",
+        login=1,
+        password="p",
+        server="srv",
+        primary=True,
+        lot=LotRuleFromTrade(),
+        trade={
+            "chinh-2": True,
+            "phu-2": False,
+            "chinh": True,
+            "phu": True,
+            "update-scalp": True,
+            "scalp": False,
+            "scalp-2": True,
+        },
+    )
+    accounts = [acc]
+
+    assert [a.id for a in filter_mt5_accounts_for_zone_entry(
+        accounts, "sang", "plan_chinh", zone_source="all"
+    )] == ["mixed"]
+    assert [a.id for a in filter_mt5_accounts_for_zone_entry(
+        accounts, "sang", "plan_chinh", zone_id="plan_chinh__sang-2", zone_source="all-2"
+    )] == ["mixed"]
+    assert [a.id for a in filter_mt5_accounts_for_zone_entry(
+        accounts, "sang", "plan_phu", zone_source="all"
+    )] == ["mixed"]
+    assert [a.id for a in filter_mt5_accounts_for_zone_entry(
+        accounts, "sang", "plan_phu", zone_id="plan_phu__sang-2", zone_source="all-2"
+    )] == []
+    assert [a.id for a in filter_mt5_accounts_for_zone_entry(
+        accounts, "sang", "scalp_1", zone_source="all"
+    )] == []
+    assert [a.id for a in filter_mt5_accounts_for_zone_entry(
+        accounts, "toi", "scalp", zone_id="scalp__toi-2", zone_source="all-2"
+    )] == ["mixed"]
+    assert [a.id for a in filter_mt5_accounts_for_zone_entry(
+        accounts, "sang", "scalp_1", zone_source=SOURCE_UPDATE_SCALP
+    )] == ["mixed"]
+
+
+def test_sync_subset_from_trade_map() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "accounts.json"
+        _write_accounts(
+            p,
+            [
+                {
+                    "id": "main",
+                    "terminal_path": "C:/MT5/A/metatrader64.exe",
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                    "trade": {"chinh": True, "phu": True, "scalp": True},
+                },
+                {
+                    "id": "flow2",
+                    "terminal_path": "C:/MT5/B/metatrader64.exe",
+                    "login": 2,
+                    "password": "y",
+                    "server": "S",
+                    "primary": False,
+                    "trade": {"chinh-2": True, "update-scalp": True},
+                },
+                {
+                    "id": "only_l2",
+                    "terminal_path": "C:/MT5/C/metatrader64.exe",
+                    "login": 3,
+                    "password": "z",
+                    "server": "S",
+                    "primary": False,
+                    "trade": {"chinh-2": True, "phu-2": False},
+                },
+            ],
+        )
+        assert account_row_in_scalp_subset({"trade": {"update-scalp": True}})
+        assert account_row_in_all2_subset({"trade": {"phu-2": True}})
+        scalp_out = sync_accounts_scalp_json(p)
+        assert scalp_out is not None
+        scalp_rows = json.loads((Path(td) / "accounts-scalp.json").read_text(encoding="utf-8"))
+        assert [r["id"] for r in scalp_rows] == ["flow2"]
+        all2_out = sync_accounts_all2_json(p)
+        assert all2_out is not None
+        all2_rows = json.loads((Path(td) / "accounts-all2.json").read_text(encoding="utf-8"))
+        assert {r["id"] for r in all2_rows} == {"flow2", "only_l2"}
+        all_accs = exclude_all2_dedicated_accounts(load_mt5_accounts_from_path(p), p)
+        assert {a.id for a in all_accs} == {"main", "flow2"}

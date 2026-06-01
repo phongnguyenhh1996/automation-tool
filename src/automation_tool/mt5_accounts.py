@@ -26,7 +26,26 @@ các account có flag này (chỉ luồng 1 / shard không suffix ``-2``).
 
 **only_plan_chinh:** optional ``\"only_plan_chinh\": true`` — account đó **chỉ** vào lệnh thuộc
 họ plan chính: ``plan_chinh``, ``plan_chinh__sang``, ``plan_chinh__chieu``, ``plan_chinh__toi-2``,
-…; ``plan_phu``, ``plan_phu__*``, ``scalp``, ``scalp_*`` bị skip.
+…; ``plan_phu``, ``plan_phu__*``, ``scalp``, ``scalp_*`` bị skip. Khi có ``trade`` (bên dưới) thì
+bỏ qua ``only_plan_chinh`` cho account đó.
+
+**trade:** optional object — lọc loại lệnh trên **cùng** một account (thay cho nhiều flag rời)::
+
+    "trade": {
+      "chinh": true,
+      "chinh-2": false,
+      "phu": true,
+      "phu-2": false,
+      "scalp": false,
+      "scalp-2": true,
+      "update-scalp": true
+    }
+
+Key map từ zone: ``plan_chinh`` luồng 1 → ``chinh``; ``plan_chinh`` + luồng 2 / ``source=all-2`` →
+``chinh-2``; tương tự ``phu`` / ``phu-2``; ``scalp`` / ``scalp_*`` → ``scalp`` hoặc ``scalp-2``;
+``source=update-scalp`` → ``update-scalp``. Chỉ key ``true`` (JSON literal) mới được vào lệnh.
+``sync_accounts_scalp_json`` / ``sync_accounts_all2_json`` cũng đọc ``trade`` nếu không có flag
+``update-scalp`` / ``all-2`` cũ.
 
 **Bảo mật:** không commit file chứa mật khẩu; hạn chế quyền đọc (ví dụ ``chmod 600``).
 """
@@ -48,7 +67,22 @@ SOURCE_UPDATE_SCALP = "update-scalp"
 SOURCE_ALL_2 = "all-2"
 UPDATE_SCALP_DEFAULT_LOT = 0.01
 
+TRADE_FILTER_KEYS: frozenset[str] = frozenset(
+    {
+        "chinh",
+        "chinh-2",
+        "phu",
+        "phu-2",
+        "scalp",
+        "scalp-2",
+        "update-scalp",
+    }
+)
+TRADE_FILTER_SECOND_FLOW_KEYS: frozenset[str] = frozenset({"chinh-2", "phu-2", "scalp-2"})
+TradeFilterMap = dict[str, bool]
+
 from automation_tool.mt5_openai_parse import ParsedTrade
+from automation_tool.zones_paths import resolve_second_flow
 from automation_tool.zone_one_r import tp_at_r_multiple
 
 LotMode = Literal["fixed", "max_notional_usd", "max_loss_usd", "from_trade"]
@@ -136,6 +170,8 @@ class MT5AccountEntry:
     entry_slots: Optional[tuple[EntrySlot, ...]] = None
     #: Chỉ vào lệnh họ plan chính (``plan_chinh``, ``plan_chinh__*``); plan phụ/scalp bị skip.
     only_plan_chinh: bool = False
+    #: Lọc theo loại lệnh (``chinh``, ``phu-2``, ``update-scalp``, …). ``None`` = không lọc theo trade.
+    trade: Optional[TradeFilterMap] = None
 
 
 def _parse_symbol_map(obj: Any, index: int) -> dict[str, str]:
@@ -280,6 +316,31 @@ def _parse_entry_take_profit(obj: Any, index: int) -> EntryTakeProfitTarget:
     raise ValueError(f"accounts[{index}].entry_take_profit phải là 'tp1' hoặc 'tp2'")
 
 
+def _parse_trade_filter(raw: Any, index: int) -> Optional[TradeFilterMap]:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError(f"accounts[{index}].trade phải là object hoặc bỏ qua")
+    out: TradeFilterMap = {}
+    for k, v in raw.items():
+        key = str(k or "").strip().lower()
+        if not key:
+            raise ValueError(f"accounts[{index}].trade không được có key rỗng")
+        if key not in TRADE_FILTER_KEYS:
+            raise ValueError(
+                f"accounts[{index}].trade: key không hỗ trợ {key!r} "
+                f"(hỗ trợ: {', '.join(sorted(TRADE_FILTER_KEYS))})"
+            )
+        if v is not True and v is not False:
+            raise ValueError(
+                f"accounts[{index}].trade[{key!r}] phải là true hoặc false (JSON boolean)"
+            )
+        out[key] = v is True
+    if not out:
+        raise ValueError(f"accounts[{index}].trade không được rỗng")
+    return out
+
+
 def _parse_entry_slots(obj: Any, index: int) -> Optional[tuple[EntrySlot, ...]]:
     if obj is None:
         return None
@@ -341,6 +402,7 @@ def _parse_one(
     entry_slots = _parse_entry_slots(obj.get("entry_slots"), index)
     sym_map = _parse_symbol_map(obj.get("symbol_map"), index)
     only_plan_chinh = obj.get("only_plan_chinh") is True
+    trade = _parse_trade_filter(obj.get("trade"), index)
     return MT5AccountEntry(
         id=acc_id,
         terminal_path=terminal_path_s,
@@ -354,6 +416,7 @@ def _parse_one(
         entry_slots=entry_slots,
         symbol_map=sym_map,
         only_plan_chinh=only_plan_chinh,
+        trade=trade,
     )
 
 
@@ -396,13 +459,82 @@ def is_plan_chinh_family(*zone_refs: Optional[str]) -> bool:
     return False
 
 
+def is_plan_phu_family(*zone_refs: Optional[str]) -> bool:
+    """True nếu zone thuộc plan phụ (``plan_phu``, ``plan_phu__*``)."""
+    for ref in zone_refs:
+        raw = str(ref or "").strip().lower()
+        if not raw:
+            continue
+        if raw == "plan_phu" or raw.startswith("plan_phu__"):
+            return True
+        if "plan_phu" in _plan_lookup_candidates(raw):
+            return True
+    return False
+
+
+def is_scalp_family(*zone_refs: Optional[str]) -> bool:
+    """True nếu zone là scalp (``scalp``, ``scalp_1``, ``scalp__toi``, …)."""
+    for ref in zone_refs:
+        raw = str(ref or "").strip().lower()
+        if not raw:
+            continue
+        if raw == "scalp" or raw.startswith("scalp_") or raw.startswith("scalp__"):
+            return True
+        if "scalp" in _plan_lookup_candidates(raw):
+            return True
+    return False
+
+
+def resolve_trade_filter_key(
+    *,
+    zone_label: Optional[str],
+    zone_id: Optional[str] = None,
+    zone_source: Optional[str] = None,
+) -> Optional[str]:
+    """
+    Map zone → key trong ``accounts[].trade``.
+
+    ``None`` nếu không xác định được (không lọc theo trade).
+    """
+    if _is_update_scalp_zone_source(str(zone_source or "")):
+        return "update-scalp"
+    second = resolve_second_flow(zone_id=zone_id, source=zone_source)
+    if is_plan_chinh_family(zone_label, zone_id):
+        return "chinh-2" if second else "chinh"
+    if is_plan_phu_family(zone_label, zone_id):
+        return "phu-2" if second else "phu"
+    if is_scalp_family(zone_label, zone_id):
+        return "scalp-2" if second else "scalp"
+    return None
+
+
+def mt5_account_allows_trade_filter(
+    acc: MT5AccountEntry,
+    trade_key: Optional[str],
+) -> bool:
+    """``trade`` object: chỉ key ``true`` được vào lệnh; không có ``trade`` → không lọc."""
+    if acc.trade is None or not trade_key:
+        return True
+    return acc.trade.get(trade_key) is True
+
+
 def mt5_account_allows_zone_label(
     acc: MT5AccountEntry,
     zone_label: Optional[str],
     *,
     zone_id: Optional[str] = None,
+    zone_source: Optional[str] = None,
 ) -> bool:
-    """``only_plan_chinh`` → chỉ họ plan chính; plan phụ / scalp bị skip."""
+    """``trade`` hoặc ``only_plan_chinh`` — plan phụ / scalp bị skip khi chỉ plan chính."""
+    if acc.trade is not None:
+        key = resolve_trade_filter_key(
+            zone_label=zone_label,
+            zone_id=zone_id,
+            zone_source=zone_source,
+        )
+        if key is None:
+            return False
+        return mt5_account_allows_trade_filter(acc, key)
     if not acc.only_plan_chinh:
         return True
     return is_plan_chinh_family(zone_label, zone_id)
@@ -421,12 +553,18 @@ def filter_mt5_accounts_for_zone_label(
     zone_label: Optional[str],
     *,
     zone_id: Optional[str] = None,
+    zone_source: Optional[str] = None,
 ) -> list[MT5AccountEntry]:
-    """Filter multi-account entries by ``only_plan_chinh`` (label và/hoặc zone id)."""
+    """Filter theo ``trade`` hoặc ``only_plan_chinh`` (label và/hoặc zone id / source)."""
     return [
         a
         for a in accounts
-        if mt5_account_allows_zone_label(a, zone_label, zone_id=zone_id)
+        if mt5_account_allows_zone_label(
+            a,
+            zone_label,
+            zone_id=zone_id,
+            zone_source=zone_source,
+        )
     ]
 
 
@@ -436,10 +574,16 @@ def filter_mt5_accounts_for_zone_entry(
     zone_label: Optional[str],
     *,
     zone_id: Optional[str] = None,
+    zone_source: Optional[str] = None,
 ) -> list[MT5AccountEntry]:
-    """``entry_slots`` rồi ``only_plan_chinh`` — dùng trước khi ``execute_trade_all_accounts``."""
+    """``entry_slots`` rồi ``trade`` / ``only_plan_chinh`` — trước ``execute_trade_all_accounts``."""
     after_slot = filter_mt5_accounts_for_entry_slot(accounts, slot)
-    return filter_mt5_accounts_for_zone_label(after_slot, zone_label, zone_id=zone_id)
+    return filter_mt5_accounts_for_zone_label(
+        after_slot,
+        zone_label,
+        zone_id=zone_id,
+        zone_source=zone_source,
+    )
 
 
 def load_mt5_accounts_from_path(
@@ -464,6 +608,41 @@ def load_mt5_accounts_from_path(
     return accounts
 
 
+def account_row_in_scalp_subset(row: dict[str, Any]) -> bool:
+    """Account tham gia ``accounts-scalp.json`` (flag cũ hoặc ``trade.update-scalp``)."""
+    if row.get("update-scalp") is True:
+        return True
+    trade = row.get("trade")
+    return isinstance(trade, dict) and trade.get("update-scalp") is True
+
+
+def account_row_in_all2_subset(row: dict[str, Any]) -> bool:
+    """Account tham gia ``accounts-all2.json`` (flag ``all-2`` hoặc bất kỳ ``*-2`` trong ``trade``)."""
+    if row.get("all-2") is True:
+        return True
+    trade = row.get("trade")
+    if not isinstance(trade, dict):
+        return False
+    return any(trade.get(k) is True for k in TRADE_FILTER_SECOND_FLOW_KEYS)
+
+
+def account_only_second_flow_trade(row: dict[str, Any]) -> bool:
+    """
+    Account chỉ luồng 2 — loại khỏi ``source=all`` (tương đương ``all-2: true`` cũ).
+
+    Có bất kỳ key luồng 1 nào (``chinh``, ``phu``, ``scalp``, ``update-scalp``) trong ``trade``
+    → vẫn tham gia ``source=all``.
+    """
+    if row.get("all-2") is True:
+        return True
+    trade = row.get("trade")
+    if not isinstance(trade, dict):
+        return False
+    if any(trade.get(k) is True for k in ("chinh", "phu", "scalp", "update-scalp")):
+        return False
+    return any(trade.get(k) is True for k in TRADE_FILTER_SECOND_FLOW_KEYS)
+
+
 def sync_accounts_scalp_json(
     source_accounts_json: Path,
     *,
@@ -471,8 +650,8 @@ def sync_accounts_scalp_json(
 ) -> Optional[Path]:
     """
     Tạo (hoặc xoá) ``accounts-scalp.json`` cạnh ``accounts.json``: chỉ giữ object có
-    ``\"update-scalp\": true`` (đúng literal ``True`` trong JSON).     Key ``update-scalp`` không
-    ghi vào file đích. Nếu sau lọc không có dòng nào ``primary: true``, gán
+    ``\"update-scalp\": true`` hoặc ``trade.update-scalp: true``. Key ``update-scalp`` top-level
+    không ghi vào file đích. Nếu sau lọc không có dòng nào ``primary: true``, gán
     ``primary: true`` cho phần tử đầu (các dòng còn lại ``false``) để subset vẫn hợp lệ
     khi tài khoản primary toàn cục không tham gia scalp. Validate giống
     :func:`load_mt5_accounts_from_path`.
@@ -491,7 +670,7 @@ def sync_accounts_scalp_json(
     for i, row in enumerate(data):
         if not isinstance(row, dict):
             raise ValueError(f"accounts[{i}] phải là object")
-        if row.get("update-scalp") is not True:
+        if not account_row_in_scalp_subset(row):
             continue
         cleaned = {k: v for k, v in row.items() if k != "update-scalp"}
         cleaned["lot"] = {"mode": "fixed", "volume": UPDATE_SCALP_DEFAULT_LOT}
@@ -523,9 +702,9 @@ def sync_accounts_all2_json(
     dest_path: Optional[Path] = None,
 ) -> Optional[Path]:
     """
-    Tạo (hoặc xoá) ``accounts-all2.json``: chỉ object có ``\"all-2\": true`` (JSON literal).
-    Key ``all-2`` không ghi vào file đích. Nếu không có ``primary: true`` trong subset, gán
-    phần tử đầu làm primary.
+    Tạo (hoặc xoá) ``accounts-all2.json``: ``\"all-2\": true`` hoặc ``trade`` có
+    ``chinh-2`` / ``phu-2`` / ``scalp-2``. Key ``all-2`` top-level không ghi vào file đích.
+    Nếu không có ``primary: true`` trong subset, gán phần tử đầu làm primary.
     """
     src = source_accounts_json.expanduser()
     if not src.is_file():
@@ -538,7 +717,7 @@ def sync_accounts_all2_json(
     for i, row in enumerate(data):
         if not isinstance(row, dict):
             raise ValueError(f"accounts[{i}] phải là object")
-        if row.get("all-2") is not True:
+        if not account_row_in_all2_subset(row):
             continue
         cleaned = {k: v for k, v in row.items() if k != "all-2"}
         out_rows.append(cleaned)
@@ -601,7 +780,7 @@ def _is_all_zone_source(zone_source: str) -> bool:
 
 
 def all2_account_ids_from_accounts_json(path: Path) -> frozenset[str]:
-    """Account ids marked ``\"all-2\": true`` in the raw accounts array (JSON literal only)."""
+    """Account ids chỉ luồng 2 (``all-2`` hoặc ``trade`` chỉ bật ``*-2``)."""
     src = path.expanduser()
     if not src.is_file():
         return frozenset()
@@ -613,11 +792,11 @@ def all2_account_ids_from_accounts_json(path: Path) -> frozenset[str]:
     for i, row in enumerate(data):
         if not isinstance(row, dict):
             continue
-        if row.get("all-2") is not True:
+        if not account_only_second_flow_trade(row):
             continue
         acc_id = str(row.get("id") or "").strip()
         if not acc_id:
-            raise ValueError(f"accounts[{i}].id bắt buộc khi all-2=true")
+            raise ValueError(f"accounts[{i}].id bắt buộc khi account chỉ luồng 2")
         out.add(acc_id)
     return frozenset(out)
 
