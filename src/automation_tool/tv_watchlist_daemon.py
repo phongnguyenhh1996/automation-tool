@@ -2556,6 +2556,7 @@ def _auto_entry_job(
                 symbol_override=params.mt5_symbol,
                 zone_label=z0.label,
                 zone_id=zone_id,
+                zone_source=z0.source,
                 order_comment=_mt5_entry_order_comment(zone_id, zone=z0, params=params),
             )
             multi_ae = format_mt5_multi_for_telegram(summary_ae)
@@ -3065,6 +3066,7 @@ def _zone_touch_job(
                 symbol_override=params.mt5_symbol,
                 zone_label=z1.label,
                 zone_id=zone_id,
+                zone_source=z1.source,
                 order_comment=_mt5_entry_order_comment(zone_id, zone=z1, params=params),
             )
             # MARKET: MT5 trả fill price; chỉ dùng giá từ account primary để update trade_line.

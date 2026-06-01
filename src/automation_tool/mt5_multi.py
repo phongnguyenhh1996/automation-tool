@@ -120,6 +120,7 @@ def execute_trade_all_accounts(
     symbol_override: Optional[str] = None,
     zone_label: Optional[str] = None,
     zone_id: Optional[str] = None,
+    zone_source: Optional[str] = None,
     deviation: int = 20,
     magic: Optional[int] = None,
     log_tp2: bool = True,
@@ -129,7 +130,10 @@ def execute_trade_all_accounts(
     Gửi lệnh lần lượt qua từng tài khoản (``execute_trade`` shutdown sau mỗi lần).
     """
     accounts = filter_mt5_accounts_for_zone_label(
-        accounts, zone_label, zone_id=zone_id or zone_label
+        accounts,
+        zone_label,
+        zone_id=zone_id or zone_label,
+        zone_source=zone_source,
     )
     out = MT5MultiExecutionSummary()
     if not accounts:

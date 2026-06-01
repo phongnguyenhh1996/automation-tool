@@ -8,7 +8,12 @@ import time
 
 import pytest
 
-from automation_tool.mt5_accounts import MT5AccountEntry, LotRuleFixed, LotRuleFromTrade
+from automation_tool.mt5_accounts import (
+    MT5AccountEntry,
+    LotRuleFixed,
+    LotRuleFromTrade,
+    SOURCE_UPDATE_SCALP,
+)
 from automation_tool.mt5_execute import MT5ExecutionResult
 from automation_tool.mt5_manage import MT5ManageResult
 from automation_tool.mt5_multi import (
@@ -409,6 +414,66 @@ def test_execute_trade_all_accounts_skips_only_plan_chinh_on_other_labels(
     )
     assert summ2.ok_all
     assert seen == ["chinh_only", "all_plans"]
+
+
+def test_execute_trade_all_accounts_update_scalp_uses_zone_source_not_scalp_label(
+    sample_trade, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Vùng update-scalp phải lọc theo trade.update-scalp, không theo label scalp_1 → scalp."""
+    accounts = [
+        MT5AccountEntry(
+            id="main",
+            terminal_path="/tmp/mt5-main/terminal64.exe",
+            login=1,
+            password="p",
+            server="srv",
+            primary=True,
+            lot=LotRuleFromTrade(),
+            trade={"scalp": True, "update-scalp": True},
+        ),
+        MT5AccountEntry(
+            id="secondary",
+            terminal_path="/tmp/mt5-sec/terminal64.exe",
+            login=2,
+            password="p",
+            server="srv",
+            primary=False,
+            lot=LotRuleFromTrade(),
+            trade={"scalp": False, "update-scalp": True},
+        ),
+    ]
+    seen: list[str] = []
+
+    def fake_execute_trade(trade, **kwargs):
+        seen.append(str(kwargs.get("account_id")))
+        return MT5ExecutionResult(
+            ok=True,
+            message=f"mock {kwargs.get('account_id')}",
+            order=8000 + len(seen),
+            account_id=kwargs.get("account_id"),
+        )
+
+    monkeypatch.setattr("automation_tool.mt5_multi.execute_trade", fake_execute_trade)
+
+    summ = execute_trade_all_accounts(
+        sample_trade,
+        accounts,
+        dry_run=True,
+        zone_label="scalp_1",
+        zone_source=SOURCE_UPDATE_SCALP,
+    )
+    assert summ.ok_all
+    assert seen == ["main", "secondary"]
+
+    seen.clear()
+    summ2 = execute_trade_all_accounts(
+        sample_trade,
+        accounts,
+        dry_run=True,
+        zone_label="scalp_1",
+    )
+    assert summ2.ok_all
+    assert seen == ["main"]
 
 
 def test_cancel_close_all_accounts_retries_failed_position_close(
