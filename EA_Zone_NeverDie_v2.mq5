@@ -1457,7 +1457,7 @@ bool CampaignTakeProfitReached(const ENUM_POSITION_TYPE side, const BasketInfo &
 
 double MaxLossCloseBasketThresholdMoney()
   {
-   return(-(double)InpMaxLossCloseBasketCents / 100.0);
+   return(-(double)InpMaxLossCloseBasketCents);
   }
 
 int TodayLocalDateKey()
@@ -1488,7 +1488,7 @@ void EnsureTodayMaxBasketLossDay()
 int ProfitToLossCents(const double profit)
   {
    if(profit >= 0.0) return(0);
-   return((int)MathCeil(MathAbs(profit) * 100.0));
+   return((int)MathCeil(MathAbs(profit)));
   }
 
 void RecordTodayMaxBasketLossCents(const int lossCents)
@@ -2065,11 +2065,11 @@ void UpdatePanel()
    UpdateTodayMaxBasketLossTracking(currentWorstLossCents);
    AddPanelRow(lines, colors, row, "---- Max Loss ----", clrDimGray);
    if(InpMaxLossCloseBasketCents > 0)
-      AddPanelRow(lines, colors, row, "Limit:      " + IntegerToString(InpMaxLossCloseBasketCents) + " cent", clrBlack);
+      AddPanelRow(lines, colors, row, "Limit:      " + IntegerToString(InpMaxLossCloseBasketCents), clrBlack);
    else
       AddPanelRow(lines, colors, row, "Limit:      OFF", clrGray);
-   AddPanelRow(lines, colors, row, "Max Today:  " + IntegerToString(g_todayMaxBasketLossCents) + " cent", ProfitColor(-(double)g_todayMaxBasketLossCents));
-   AddPanelRow(lines, colors, row, "Basket Now: " + IntegerToString(currentWorstLossCents) + " cent", ProfitColor(-(double)currentWorstLossCents));
+   AddPanelRow(lines, colors, row, "Max Today:  " + IntegerToString(g_todayMaxBasketLossCents), ProfitColor(-(double)g_todayMaxBasketLossCents));
+   AddPanelRow(lines, colors, row, "Basket Now: " + IntegerToString(currentWorstLossCents), ProfitColor(-(double)currentWorstLossCents));
 
    if(InpSessionStopEnabled && RemoteJsonEnabled())
      {
