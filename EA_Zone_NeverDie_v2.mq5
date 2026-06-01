@@ -1,5 +1,5 @@
 #property strict
-#property description "EA Zone NeverDie MT5 v2.22"
+#property description "EA Zone NeverDie MT5 v2.23"
 
 #include <Trade/Trade.mqh>
 
@@ -64,6 +64,7 @@ input int            InpDcaClosedBarsRequired  = 1;
 input int            InpDcaPrevOrderDistance   = 12000;
 input double         InpZoneActivateBand       = 3.0;
 input bool           InpBlockNewEntryWhenOtherBasketOpen = true;
+input int            InpMaxLossCloseBasketCents        = 1000;
 
 input group "=== DISPLAY ==="
 input bool           InpShowPanel              = true;
@@ -86,10 +87,10 @@ input group "=== DEBUG ==="
 input bool           InpDebugLog               = true;
 input bool           InpDebugTraceDecisions    = false;
 
-const string EA_VERSION = "2.22";
+const string EA_VERSION = "2.23";
 const int JSON_FETCH_WINDOW_MINUTES = 30;
 const int JSON_FETCH_SLOT_COUNT = 3;
-const int PANEL_LINE_COUNT = 24;
+const int PANEL_LINE_COUNT = 27;
 const int PANEL_X = 12;
 const int PANEL_Y = 30;
 const int PANEL_MIN_WIDTH = 250;
@@ -111,6 +112,8 @@ int g_completedJsonFetchWindowKey = -1;
 int g_zoneFetchSequence = 0;
 int g_sessionStopClearedLocalDateKey = -1;
 int g_morningResumeLocalDateKey = -1;
+int g_todayMaxLossDateKey = -1;
+int g_todayMaxBasketLossCents = 0;
 string g_panelPrefix = "ZoneNeverDieV2Panel";
 
 string BoolText(const bool value)
@@ -203,6 +206,7 @@ bool ValidateInputs()
    if(InpDcaClosedBarsRequired < 1) { DebugLog("Invalid input: InpDcaClosedBarsRequired must be >= 1"); return(false); }
    if(InpDcaPrevOrderDistance < 0) { DebugLog("Invalid input: InpDcaPrevOrderDistance must be >= 0"); return(false); }
    if(InpZoneActivateBand < 0.0) { DebugLog("Invalid input: InpZoneActivateBand must be >= 0"); return(false); }
+   if(InpMaxLossCloseBasketCents < 0) { DebugLog("Invalid input: InpMaxLossCloseBasketCents must be >= 0"); return(false); }
    if(InpZonesPollSeconds < 0) { DebugLog("Invalid input: InpZonesPollSeconds must be >= 0"); return(false); }
    if(InpSessionStopHour < 0 || InpSessionStopHour > 23) { DebugLog("Invalid input: InpSessionStopHour must be 0-23"); return(false); }
    if(InpSessionStopMinute < 0 || InpSessionStopMinute > 59) { DebugLog("Invalid input: InpSessionStopMinute must be 0-59"); return(false); }
@@ -1451,6 +1455,212 @@ bool CampaignTakeProfitReached(const ENUM_POSITION_TYPE side, const BasketInfo &
    return(false);
   }
 
+double MaxLossCloseBasketThresholdMoney()
+  {
+   return(-(double)InpMaxLossCloseBasketCents / 100.0);
+  }
+
+int TodayLocalDateKey()
+  {
+   MqlDateTime tm;
+   TimeToStruct(TimeCurrent(), tm);
+   return(tm.year * 10000 + tm.mon * 100 + tm.day);
+  }
+
+string TodayMaxBasketLossGlobalName(const int dateKey)
+  {
+   return("ZND_V2_MAXLOSS_" + IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN)) + "_" + _Symbol + "_" + IntegerToString(dateKey));
+  }
+
+void EnsureTodayMaxBasketLossDay()
+  {
+   int dateKey = TodayLocalDateKey();
+   if(g_todayMaxLossDateKey == dateKey) return;
+
+   g_todayMaxLossDateKey = dateKey;
+   string gvName = TodayMaxBasketLossGlobalName(dateKey);
+   if(GlobalVariableCheck(gvName))
+      g_todayMaxBasketLossCents = (int)GlobalVariableGet(gvName);
+   else
+      g_todayMaxBasketLossCents = 0;
+  }
+
+int ProfitToLossCents(const double profit)
+  {
+   if(profit >= 0.0) return(0);
+   return((int)MathCeil(MathAbs(profit) * 100.0));
+  }
+
+void RecordTodayMaxBasketLossCents(const int lossCents)
+  {
+   if(lossCents <= 0) return;
+   EnsureTodayMaxBasketLossDay();
+   if(lossCents <= g_todayMaxBasketLossCents) return;
+
+   g_todayMaxBasketLossCents = lossCents;
+   GlobalVariableSet(TodayMaxBasketLossGlobalName(g_todayMaxLossDateKey), (double)g_todayMaxBasketLossCents);
+  }
+
+void UpdateTodayMaxBasketLossTracking(int &currentWorstLossCents)
+  {
+   currentWorstLossCents = 0;
+   EnsureTodayMaxBasketLossDay();
+
+   long checkedMagics[];
+   ArrayResize(checkedMagics, 0);
+   double worstProfit = 0.0;
+   bool hasBasket = false;
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0 || !PositionSelectByTicket(ticket)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+
+      long magic = PositionGetInteger(POSITION_MAGIC);
+      if(!IsOurMagic(magic)) continue;
+
+      bool alreadyChecked = false;
+      for(int j = 0; j < ArraySize(checkedMagics); j++)
+        {
+         if(checkedMagics[j] == magic)
+           {
+            alreadyChecked = true;
+            break;
+           }
+        }
+      if(alreadyChecked) continue;
+
+      int size = ArraySize(checkedMagics);
+      ArrayResize(checkedMagics, size + 1);
+      checkedMagics[size] = magic;
+
+      ENUM_POSITION_TYPE side = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      BasketInfo basket;
+      BuildBasket(side, magic, basket);
+      if(basket.count <= 0) continue;
+
+      if(!hasBasket || basket.floatingProfit < worstProfit)
+        {
+         worstProfit = basket.floatingProfit;
+         hasBasket = true;
+        }
+     }
+
+   if(!hasBasket || worstProfit >= 0.0) return;
+
+   currentWorstLossCents = ProfitToLossCents(worstProfit);
+   RecordTodayMaxBasketLossCents(currentWorstLossCents);
+  }
+
+void ClearAllZonesForMaxLoss()
+  {
+   for(int i = ArraySize(g_zones) - 1; i >= 0; i--)
+     {
+      DebugLog("Max loss removed zone. " + ZoneDebugText(g_zones[i]));
+      ArrayRemove(g_zones, i, 1);
+     }
+  }
+
+void ClearAllCampaigns()
+  {
+   if(ArraySize(g_campaigns) <= 0) return;
+   DebugLog("Max loss clearing all campaigns. count=" + IntegerToString(ArraySize(g_campaigns)));
+   ArrayResize(g_campaigns, 0);
+  }
+
+bool CloseAllEaBaskets()
+  {
+   bool allClosed = true;
+   DebugLog("Closing all EA basket positions for max loss.");
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0 || !PositionSelectByTicket(ticket)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+
+      long magic = PositionGetInteger(POSITION_MAGIC);
+      if(!IsOurMagic(magic)) continue;
+
+      g_trade.SetExpertMagicNumber(magic);
+      bool ok = g_trade.PositionClose(ticket);
+      DebugLog("Max loss close position result. ok=" + BoolText(ok) + " ticket=" + IntegerToString((long)ticket) + " magic=" + IntegerToString(magic) + " retcode=" + IntegerToString((long)g_trade.ResultRetcode()) + " desc=" + g_trade.ResultRetcodeDescription());
+      if(!ok) allClosed = false;
+     }
+   DebugLog("Max loss close all baskets complete. allClosed=" + BoolText(allClosed));
+   return(allClosed);
+  }
+
+bool AnyBasketExceedsMaxLoss(double &triggerProfit, long &triggerMagic)
+  {
+   triggerProfit = 0.0;
+   triggerMagic = 0;
+   if(InpMaxLossCloseBasketCents <= 0) return(false);
+
+   double threshold = MaxLossCloseBasketThresholdMoney();
+   long checkedMagics[];
+   ArrayResize(checkedMagics, 0);
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0 || !PositionSelectByTicket(ticket)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+
+      long magic = PositionGetInteger(POSITION_MAGIC);
+      if(!IsOurMagic(magic)) continue;
+
+      bool alreadyChecked = false;
+      for(int j = 0; j < ArraySize(checkedMagics); j++)
+        {
+         if(checkedMagics[j] == magic)
+           {
+            alreadyChecked = true;
+            break;
+           }
+        }
+      if(alreadyChecked) continue;
+
+      int size = ArraySize(checkedMagics);
+      ArrayResize(checkedMagics, size + 1);
+      checkedMagics[size] = magic;
+
+      ENUM_POSITION_TYPE side = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      BasketInfo basket;
+      BuildBasket(side, magic, basket);
+      if(basket.count <= 0) continue;
+      if(basket.floatingProfit > threshold) continue;
+
+      triggerProfit = basket.floatingProfit;
+      triggerMagic = magic;
+      DebugLog(StringFormat("Max loss basket threshold reached. limitCents=%d thresholdMoney=%.2f triggerMagic=%s triggerProfit=%.2f %s",
+                            InpMaxLossCloseBasketCents,
+                            threshold,
+                            IntegerToString(triggerMagic),
+                            triggerProfit,
+                            BasketDebugText(basket)));
+      return(true);
+     }
+   return(false);
+  }
+
+bool HandleMaxLossCloseBasket()
+  {
+   double triggerProfit = 0.0;
+   long triggerMagic = 0;
+   if(!AnyBasketExceedsMaxLoss(triggerProfit, triggerMagic)) return(false);
+
+   DebugLog(StringFormat("Max loss close basket executing. limitCents=%d triggerMagic=%s triggerProfit=%.2f",
+                         InpMaxLossCloseBasketCents,
+                         IntegerToString(triggerMagic),
+                         triggerProfit));
+   RecordTodayMaxBasketLossCents(ProfitToLossCents(triggerProfit));
+   ClearAllZonesForMaxLoss();
+   ClearAllCampaigns();
+   CloseAllEaBaskets();
+   return(true);
+  }
+
 bool CloseCampaign(const CampaignData &campaign)
   {
    bool allClosed = true;
@@ -1850,6 +2060,17 @@ void UpdatePanel()
    AddPanelRow(lines, colors, row, "Profit Today: " + DoubleToString(todayProfit, 2), ProfitColor(todayProfit));
    AddPanelRow(lines, colors, row, "Orders Today: " + IntegerToString(TodayClosedOrderCount()), clrBlack);
    AddPanelRow(lines, colors, row, "Open Orders:  " + IntegerToString(TotalOpenEaOrders()), clrBlack);
+
+   int currentWorstLossCents = 0;
+   UpdateTodayMaxBasketLossTracking(currentWorstLossCents);
+   AddPanelRow(lines, colors, row, "---- Max Loss ----", clrDimGray);
+   if(InpMaxLossCloseBasketCents > 0)
+      AddPanelRow(lines, colors, row, "Limit:      " + IntegerToString(InpMaxLossCloseBasketCents) + " cent", clrBlack);
+   else
+      AddPanelRow(lines, colors, row, "Limit:      OFF", clrGray);
+   AddPanelRow(lines, colors, row, "Max Today:  " + IntegerToString(g_todayMaxBasketLossCents) + " cent", ProfitColor(-(double)g_todayMaxBasketLossCents));
+   AddPanelRow(lines, colors, row, "Basket Now: " + IntegerToString(currentWorstLossCents) + " cent", ProfitColor(-(double)currentWorstLossCents));
+
    if(InpSessionStopEnabled && RemoteJsonEnabled())
      {
       if(IsSessionTradingPaused())
@@ -1902,7 +2123,7 @@ void UpdatePanel()
 int OnInit()
   {
    if(!ValidateInputs()) return(INIT_PARAMETERS_INCORRECT);
-   DebugLog("OnInit started. version=" + EA_VERSION + " symbol=" + _Symbol + " period=" + IntegerToString(_Period) + " lot=" + DoubleToString(InpLotSize, 2) + " followLot=" + DoubleToString(InpPlanFollowLotSize, 2) + " multiplier=" + DoubleToString(InpMultiplier, 2) + " gridStep=" + IntegerToString(InpGridStep) + " maxLevels=" + IntegerToString(InpMaxGridLevels) + " tp=" + IntegerToString(InpTakeProfit) + " dcaTf=" + EnumToString(DcaTimeframe()) + " blockNewEntryWhenOtherBasketOpen=" + BoolText(InpBlockNewEntryWhenOtherBasketOpen) + " debugTrace=" + BoolText(InpDebugTraceDecisions));
+   DebugLog("OnInit started. version=" + EA_VERSION + " symbol=" + _Symbol + " period=" + IntegerToString(_Period) + " lot=" + DoubleToString(InpLotSize, 2) + " followLot=" + DoubleToString(InpPlanFollowLotSize, 2) + " multiplier=" + DoubleToString(InpMultiplier, 2) + " gridStep=" + IntegerToString(InpGridStep) + " maxLevels=" + IntegerToString(InpMaxGridLevels) + " tp=" + IntegerToString(InpTakeProfit) + " maxLossCloseBasketCents=" + IntegerToString(InpMaxLossCloseBasketCents) + " dcaTf=" + EnumToString(DcaTimeframe()) + " blockNewEntryWhenOtherBasketOpen=" + BoolText(InpBlockNewEntryWhenOtherBasketOpen) + " debugTrace=" + BoolText(InpDebugTraceDecisions));
    g_trade.SetExpertMagicNumber(InpMagicNumber);
    g_trade.SetDeviationInPoints(20);
    g_trade.SetTypeFillingBySymbol(_Symbol);
@@ -1916,6 +2137,7 @@ int OnInit()
    FetchZonesOnInit();
    RestoreCampaignsFromOpenPositions();
    EnsureSessionStopZonesCleared();
+   EnsureTodayMaxBasketLossDay();
    if(InpShowPanel) CreatePanel();
    g_dcaBarOpenSeen = iTime(_Symbol, DcaTimeframe(), 0);
    UpdatePanel();
@@ -1946,6 +2168,12 @@ void OnTick()
      }
 
    RestoreCampaignsFromOpenPositions();
+
+   if(HandleMaxLossCloseBasket())
+     {
+      UpdatePanel();
+      return;
+     }
 
    bool onFirstTickOfNewDcaBar = false;
    datetime dcaBarOpen = iTime(_Symbol, DcaTimeframe(), 0);
