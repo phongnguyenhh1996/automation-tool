@@ -184,9 +184,82 @@ async def _login_form_is_visible_async(
 ) -> bool:
     try:
         await page.locator(email_sel).first.wait_for(state="visible", timeout=timeout_ms)
-        return await page.locator(password_sel).first.is_visible()
+        await page.locator(password_sel).first.wait_for(state="visible", timeout=timeout_ms)
+        return True
     except Exception:
         return False
+
+
+async def _coinmap_page_on_login_url(page: Page, login_cfg: dict[str, Any]) -> bool:
+    login_url = str(login_cfg.get("login_url") or "https://coinmap.tech/login").strip().lower()
+    u = (page.url or "").strip().lower()
+    if not u:
+        return False
+    if "login" in u:
+        return True
+    if login_url and u.rstrip("/") == login_url.rstrip("/"):
+        return True
+    return False
+
+
+async def _coinmap_needs_login_async(
+    page: Page,
+    login_cfg: dict[str, Any],
+    *,
+    email_sel: str,
+    password_sel: str,
+) -> bool:
+    if await _coinmap_page_on_login_url(page, login_cfg):
+        return True
+    return await _login_form_is_visible_async(page, email_sel, password_sel, timeout_ms=3000)
+
+
+async def _coinmap_maybe_login_if_needed_async(
+    page: Page,
+    cd: dict[str, Any],
+    login_cfg: dict[str, Any],
+    *,
+    email: Optional[str],
+    password: Optional[str],
+    settle_ms: int,
+    chart_url: str,
+) -> None:
+    """Submit login only when chart navigation landed on /login or the login form is visible."""
+    if not email or not password:
+        return
+    email_sel = login_cfg.get("email_selector") or 'input[type="email"]'
+    password_sel = login_cfg.get("password_selector") or 'input[type="password"]'
+    submit_sel = login_cfg.get("submit_selector") or 'button[type="submit"]'
+    post_wait = (login_cfg.get("post_login_wait_selector") or "").strip()
+
+    if not await _coinmap_needs_login_async(
+        page, login_cfg, email_sel=email_sel, password_sel=password_sel
+    ):
+        return
+
+    await _coinmap_fill_and_submit_login_async(
+        page,
+        email=email,
+        password=password,
+        email_sel=email_sel,
+        password_sel=password_sel,
+        submit_sel=submit_sel,
+        settle_ms=settle_ms,
+    )
+    if post_wait:
+        try:
+            await page.locator(post_wait).first.wait_for(state="visible", timeout=30_000)
+        except Exception:
+            pass
+    if await _coinmap_page_on_login_url(page, login_cfg) or await _login_form_is_visible_async(
+        page, email_sel, password_sel, timeout_ms=2_000
+    ):
+        await page.goto(chart_url, wait_until="domcontentloaded", timeout=90_000)
+        await page.wait_for_timeout(settle_ms)
+        await _maybe_dismiss_coinmap_symbol_search_modal_async(page, cd)
+        await _maybe_switch_to_dark_mode_async(page, cd)
+        await _maybe_dismiss_light_theme_modal_async(page, cd)
+        await _maybe_dismiss_coinmap_symbol_search_modal_async(page, cd)
 
 
 async def _coinmap_fill_and_submit_login_async(
@@ -199,8 +272,12 @@ async def _coinmap_fill_and_submit_login_async(
     submit_sel: str,
     settle_ms: int,
 ) -> None:
-    await page.locator(email_sel).first.fill(email, timeout=15_000)
-    await page.locator(password_sel).first.fill(password, timeout=15_000)
+    email_loc = page.locator(email_sel).first
+    password_loc = page.locator(password_sel).first
+    await email_loc.wait_for(state="visible", timeout=15_000)
+    await email_loc.fill(email, timeout=15_000)
+    await password_loc.wait_for(state="visible", timeout=15_000)
+    await password_loc.fill(password, timeout=15_000)
     await page.wait_for_timeout(300)
 
     submit_ok = False
@@ -612,36 +689,22 @@ async def coinmap_warmup_tab_async(
     password: Optional[str],
     settle_ms: int,
 ) -> None:
-    """Login (if needed) and open chart page with modals dismissed."""
-    login_url = login_cfg.get("login_url") or "https://coinmap.tech/login"
-    email_sel = login_cfg.get("email_selector") or 'input[type="email"]'
-    password_sel = login_cfg.get("password_selector") or 'input[type="password"]'
-    submit_sel = login_cfg.get("submit_selector") or 'button[type="submit"]'
-    post_wait = (login_cfg.get("post_login_wait_selector") or "").strip()
-
-    await page.goto(login_url, wait_until="domcontentloaded", timeout=60_000)
-    await page.wait_for_timeout(settle_ms)
-
-    if email and password:
-        if await _login_form_is_visible_async(page, email_sel, password_sel):
-            await _coinmap_fill_and_submit_login_async(
-                page,
-                email=email,
-                password=password,
-                email_sel=email_sel,
-                password_sel=password_sel,
-                submit_sel=submit_sel,
-                settle_ms=settle_ms,
-            )
-        if post_wait:
-            try:
-                await page.locator(post_wait).first.wait_for(state="visible", timeout=30_000)
-            except Exception:
-                pass
-
+    """Open chart directly; login only when redirected to /login or the login form appears."""
     chart_url = cd.get("chart_page_url") or "https://coinmap.tech/chart"
+
     await page.goto(chart_url, wait_until="domcontentloaded", timeout=90_000)
     await page.wait_for_timeout(settle_ms)
+
+    await _coinmap_maybe_login_if_needed_async(
+        page,
+        cd,
+        login_cfg,
+        email=email,
+        password=password,
+        settle_ms=settle_ms,
+        chart_url=str(chart_url),
+    )
+
     await _maybe_dismiss_coinmap_symbol_search_modal_async(page, cd)
     await _maybe_switch_to_dark_mode_async(page, cd)
     await _maybe_dismiss_light_theme_modal_async(page, cd)
