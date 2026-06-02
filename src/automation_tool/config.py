@@ -62,6 +62,8 @@ class Settings:
     # Optional model id for Responses API (overrides model saved on the dashboard prompt).
     openai_model: Optional[str]
     openai_vector_store_ids: list[str]
+    #: ``update-scalp`` / ``OPENAI_UPDATE_SCALP_VECTOR_STORE_ID(S)``; rỗng → caller dùng fallback (vd. all-2).
+    openai_update_scalp_vector_store_ids: list[str]
     openai_responses_store: bool
     openai_responses_include: List[str]
     telegram_bot_token: str
@@ -141,6 +143,26 @@ def _parse_vector_store_ids() -> list[str]:
     return [p.strip() for p in raw.split(",") if p.strip()]
 
 
+def _parse_update_scalp_vector_store_ids() -> list[str]:
+    raw = (
+        os.getenv("OPENAI_UPDATE_SCALP_VECTOR_STORE_IDS")
+        or os.getenv("OPENAI_UPDATE_SCALP_VECTOR_STORE_ID")
+        or ""
+    )
+    return [p.strip() for p in raw.split(",") if p.strip()]
+
+
+def resolve_update_scalp_vector_store_ids(
+    settings: Settings,
+    *,
+    fallback: list[str],
+) -> list[str]:
+    """Vector store cho ``update-scalp``: env trước, rồi ``fallback`` (mặc định caller: all-2)."""
+    if settings.openai_update_scalp_vector_store_ids:
+        return list(settings.openai_update_scalp_vector_store_ids)
+    return list(fallback)
+
+
 def _parse_telegram_parse_mode() -> Optional[str]:
     raw = (os.getenv("TELEGRAM_PARSE_MODE") or "").strip()
     if not raw:
@@ -164,6 +186,7 @@ def load_settings() -> Settings:
         openai_prompt_version=ver if ver else None,
         openai_model=((os.getenv("OPENAI_MODEL") or "").strip() or None),
         openai_vector_store_ids=_parse_vector_store_ids(),
+        openai_update_scalp_vector_store_ids=_parse_update_scalp_vector_store_ids(),
         openai_responses_store=_env_bool("OPENAI_RESPONSES_STORE", True),
         openai_responses_include=_parse_include(),
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),

@@ -61,6 +61,7 @@ If you set `tradingview_capture.required_indicators_enabled: true`, the browser-
 - Set **`OPENAI_PROMPT_ID`** to your dashboard prompt (required for `analyze` / `all` / `chatgpt-project`).
 - Optional **`OPENAI_PROMPT_VERSION`** — if unset, the `version` field is omitted from the API request.
 - **`OPENAI_VECTOR_STORE_IDS`** — comma-separated vector store ids; enables the **file_search** tool when non-empty.
+- **`OPENAI_UPDATE_SCALP_VECTOR_STORE_ID`** / **`OPENAI_UPDATE_SCALP_VECTOR_STORE_IDS`** — vector store for `update-scalp` only (comma-separated). If unset, `update-scalp` uses the same built-in default as the `all-2` second flow.
 - **`OPENAI_RESPONSES_STORE`** — default `true` (server-side conversation storage).
 - **`OPENAI_RESPONSES_INCLUDE`** — comma-separated include list; default adds `reasoning.encrypted_content` and `web_search_call.action.sources`.
 

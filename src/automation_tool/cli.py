@@ -17,6 +17,7 @@ from typing import Optional, Sequence
 
 from automation_tool.coinmap import capture_charts, load_coinmap_yaml
 from automation_tool.config import (
+    resolve_update_scalp_vector_store_ids,
     default_charts_dir,
     default_coinmap_config_path,
     default_coinmap_update_config_path,
@@ -771,8 +772,9 @@ def _parser() -> argparse.ArgumentParser:
     ups = sub.add_parser(
         "update-scalp",
         help=(
-            "Scalp intraday: TradingView 15m ICT + 5m rồi chỉ Coinmap M5 → OpenAI follow-up tìm plan scalp; "
-            "vector store giống all-2; zones lưu vào data/<SYM>/zones/ với label scalp_<id>."
+            "Scalp intraday: TradingView M15 thường + 15m ICT + 5m rồi chỉ Coinmap M5 → OpenAI follow-up tìm plan scalp; "
+            "vector store từ OPENAI_UPDATE_SCALP_VECTOR_STORE_ID(S) hoặc mặc định all-2; "
+            "zones lưu vào data/<SYM>/zones/ với label scalp_<id>."
         ),
     )
     ups.add_argument("--config", type=Path, default=None, help="Coinmap yaml for capture only (default: coinmap_update.yaml)")
@@ -796,7 +798,7 @@ def _parser() -> argparse.ArgumentParser:
     ups.add_argument(
         "--no-tradingview",
         action="store_true",
-        help="Bỏ qua chụp TradingView (15m ICT + 5m); chỉ export Coinmap M5",
+        help="Bỏ qua chụp TradingView (M15 thường + 15m ICT + 5m); chỉ export Coinmap M5",
     )
     ups.add_argument(
         "--zones-json",
@@ -1991,6 +1993,26 @@ def _tradingview_slot_openai_payload(
     return []
 
 
+def _intraday_tradingview_interval_specs(*, include_m15_regular: bool) -> list[dict[str, str]]:
+    """TV shots for intraday flows: optional plain M15, then M15 ICT, then M5."""
+    specs: list[dict[str, str]] = []
+    if include_m15_regular:
+        specs.append({"label": "15 phút", "slug": "15m"})
+    specs.extend(
+        [
+            {"label": "15 phút", "slug": "15m_ict", "indicator_profile": "ict_killzones"},
+            {"label": "5 phút", "slug": "5m"},
+        ]
+    )
+    return specs
+
+
+def _intraday_tradingview_openai_slugs(*, include_m15_regular: bool) -> tuple[str, ...]:
+    if include_m15_regular:
+        return ("15m", "15m_ict", "5m")
+    return ("15m_ict", "5m")
+
+
 def _intraday_tv_then_coinmap_m5_capture(
     *,
     cfg_tv: Path,
@@ -2006,11 +2028,13 @@ def _intraday_tv_then_coinmap_m5_capture(
     no_tradingview: bool,
     flow_label: str,
     coinmap_capture_intervals: tuple[str, ...] = ("15m", "5m"),
+    include_tv_m15_regular: bool = False,
 ) -> tuple[list[Path], str | None, str, list[ChartOpenAIPayload]]:
     """
     Shared capture for ``update`` / ``update-scalp``: TradingView 15m ICT + 5m, then
     Coinmap export(s) reusing the same ``stamp`` (default M15+M5; ``update-scalp`` may pass chỉ ``5m``);
-    or Coinmap-only when ``no_tradingview``.
+    ``update-scalp`` may also set ``include_tv_m15_regular`` for an extra TV M15 chart URL/PNG.
+    Coinmap-only when ``no_tradingview``.
     """
     from automation_tool.images import get_active_main_symbol, read_main_chart_symbol
 
@@ -2022,14 +2046,9 @@ def _intraday_tv_then_coinmap_m5_capture(
         tv_plan = [
             {
                 "symbol": main_for_tv,
-                "intervals": [
-                    {
-                        "label": "15 phút",
-                        "slug": "15m_ict",
-                        "indicator_profile": "ict_killzones",
-                    },
-                    {"label": "5 phút", "slug": "5m"},
-                ],
+                "intervals": _intraday_tradingview_interval_specs(
+                    include_m15_regular=include_tv_m15_regular
+                ),
             }
         ]
         tv_paths = capture_charts(
@@ -2075,22 +2094,25 @@ def _intraday_tv_then_coinmap_m5_capture(
             write_coinmap_merged_after_capture=False,
         )
         paths.extend(cm_paths)
-        for slug in ("15m_ict", "5m"):
+        tv_slugs = _intraday_tradingview_openai_slugs(include_m15_regular=include_tv_m15_regular)
+        for slug in tv_slugs:
             tv_chart_payloads.extend(
                 _tradingview_slot_openai_payload(
                     charts_dir, stamp=stamp, symbol=main_s, interval_slug=slug
                 )
             )
         _log.info(
-            "%s: TradingView 15m_ict+M5 trước Coinmap | tv_files=%s | stamp=%s | tv_payloads=%s",
+            "%s: TradingView %s trước Coinmap | tv_files=%s | stamp=%s | tv_payloads=%s",
             flow_label,
+            "+".join(tv_slugs),
             len(tv_paths),
             stamp,
             len(tv_chart_payloads),
         )
-        if len(tv_chart_payloads) < 2:
+        expected_tv = len(tv_slugs)
+        if len(tv_chart_payloads) < expected_tv:
             print(
-                f"Warning: expected 2 TradingView slots (15m_ict, 5m) for OpenAI; "
+                f"Warning: expected {expected_tv} TradingView slot(s) ({', '.join(tv_slugs)}) for OpenAI; "
                 f"got {len(tv_chart_payloads)} payload(s) (stamp={stamp!r}, symbol={main_s}).",
                 file=sys.stderr,
             )
@@ -3346,8 +3368,9 @@ def cmd_update(args: argparse.Namespace) -> None:
 
 def cmd_update_scalp(args: argparse.Namespace) -> None:
     """
-    Luồng ``update-scalp``: chỉ capture và gửi Coinmap **M5** → OpenAI, yêu cầu tìm plan scalp đẹp nhất.
-    - Vector store giống ``all-2`` (``_ALL_SECOND_FLOW_VECTOR_STORE_ID``), không dùng ``OPENAI_VECTOR_STORE_IDS``.
+    Luồng ``update-scalp``: TradingView **M15 thường** + 15m ICT + 5m, chỉ Coinmap **M5** → OpenAI, tìm plan scalp đẹp nhất.
+    - Vector store: ``OPENAI_UPDATE_SCALP_VECTOR_STORE_ID(S)``; nếu không set thì giống ``all-2``
+      (``_ALL_SECOND_FLOW_VECTOR_STORE_ID``), không dùng ``OPENAI_VECTOR_STORE_IDS``.
     - Thread OpenAI riêng (``last_scalp_response_id.txt``).
     - Zone labels dạng ``scalp_<id>`` (ví dụ: ``scalp_1``, ``scalp_2``, ``scalp_3``).
     - Zones lưu vào ``data/<SYM>/zones/`` cùng với zones thông thường.
@@ -3413,12 +3436,13 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
         no_tradingview=args.no_tradingview,
         flow_label="update-scalp",
         coinmap_capture_intervals=("5m",),
+        include_tv_m15_regular=True,
     )
 
     print(f"Captured {len(paths)} file(s) for update-scalp run.")
     m5 = coinmap_main_pair_interval_json_path(charts_dir, "5m", stamp=stamp)
     _log.info(
-        "update-scalp: capture xong | %s file(s) | stamp=%s | M5 raw OpenAI=%s (+ TV 15m_ict/5m nếu bật)",
+        "update-scalp: capture xong | %s file(s) | stamp=%s | M5 raw OpenAI=%s (+ TV 15m/15m_ict/5m nếu bật)",
         len(paths),
         stamp,
         m5,
@@ -3442,9 +3466,14 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
     )
     if tv_chart_payloads:
         user_msg += (
-            "\nĐính kèm thêm ảnh TradingView cặp chính sau JSON Coinmap: **15m** Session Liquidity Check "
-            "/ ICT Killzones và **5m** khung thường (không ICT).\n"
+            "\nĐính kèm thêm ảnh TradingView cặp chính sau JSON Coinmap (theo thứ tự): **M15** khung thường, "
+            "**M15** Session Liquidity Check / ICT Killzones, và **M5** khung thường.\n"
         )
+
+    scalp_vector_store_ids = resolve_update_scalp_vector_store_ids(
+        s,
+        fallback=[_ALL_SECOND_FLOW_VECTOR_STORE_ID],
+    )
 
     try:
         out_text, new_id = run_single_followup_responses(
@@ -3456,7 +3485,7 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
             coinmap_json_paths=coinmap_paths,
             extra_chart_payloads=tv_chart_payloads,
             previous_response_id=prev_for_openai,
-            vector_store_ids=[_ALL_SECOND_FLOW_VECTOR_STORE_ID],
+            vector_store_ids=scalp_vector_store_ids,
             store=s.openai_responses_store,
             include=s.openai_responses_include,
             model=resolved_openai_model(s, getattr(args, "model", None)),
@@ -3469,7 +3498,7 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
     _log.info(
         "update-scalp: OpenAI follow-up xong | new_response_id=%s | vector_store=%s",
         new_id,
-        _ALL_SECOND_FLOW_VECTOR_STORE_ID,
+        scalp_vector_store_ids,
     )
 
     update_payload = parse_analysis_from_openai_text(out_text)
