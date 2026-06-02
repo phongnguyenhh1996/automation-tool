@@ -6,6 +6,7 @@ Warm tab prewarm + network_capture multi-shot on a long-lived chart page.
 
 from __future__ import annotations
 
+import asyncio
 import re
 import time
 from pathlib import Path
@@ -39,7 +40,7 @@ class CoinmapNetworkCaptureAsync:
 
     def install(self) -> None:
         def handler(response) -> None:
-            self._on_response(response)
+            asyncio.create_task(self._on_response_async(response))
 
         self._handler = handler
         self.page.on("response", self._handler)
@@ -52,7 +53,7 @@ class CoinmapNetworkCaptureAsync:
                 pass
             self._handler = None
 
-    def _on_response(self, response) -> None:
+    async def _on_response_async(self, response) -> None:
         url = response.url
         if "gw.coinmap.tech" not in url and not self.api_cd.get("capture_any_host", False):
             return
@@ -64,9 +65,9 @@ class CoinmapNetworkCaptureAsync:
             status = response.status
             ok = 200 <= status < 300
             try:
-                body: Any = response.json()
+                body: Any = await response.json()
             except Exception:
-                text = response.text()
+                text = await response.text()
                 body = text if len(text) <= max_ch else text[:max_ch] + "...(truncated)"
             self._records.append(
                 {"key": key, "url": url, "status": status, "ok": ok, "body": body}
