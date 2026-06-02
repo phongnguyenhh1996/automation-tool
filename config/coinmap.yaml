@@ -326,6 +326,14 @@ tradingview_capture:
     - "Smart Money Concepts (SMC) [LuxAlgo]"
     - "VSA Volume"
   after_indicator_add_ms: 500
+  # Chờ legend hết "đang tải..." / loading trước khi chụp screenshot (LuxAlgo SMC, v.v.).
+  indicator_loading_timeout_ms: 45000
+  indicator_loading_poll_ms: 500
+  indicator_loading_settle_ms: 300
+  indicator_loading_texts:
+    - "đang tải"
+    - "loading..."
+  # indicator_loading_wait_disabled: false
   # Extensible: add more indicators later by appending to this list.
   # Each entry is one required indicator, matched by any alias in legend item text.
   required_indicators:

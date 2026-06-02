@@ -3158,6 +3158,56 @@ def _tradingview_ensure_required_indicators(page, tv: dict[str, Any]) -> None:
     )
 
 
+def _tradingview_indicator_loading_markers(tv: dict[str, Any]) -> list[str]:
+    markers = tv.get("indicator_loading_texts")
+    if isinstance(markers, list) and markers:
+        return [str(x).strip().lower() for x in markers if str(x).strip()]
+    return ["đang tải", "loading..."]
+
+
+def _tradingview_texts_have_indicator_loading(texts: list[str], tv: dict[str, Any]) -> bool:
+    needles = _tradingview_indicator_loading_markers(tv)
+    if not needles:
+        return False
+    for text in texts:
+        lower = (text or "").lower()
+        if any(needle in lower for needle in needles):
+            return True
+    return False
+
+
+def _wait_tradingview_indicators_loaded(page, tv: dict[str, Any]) -> None:
+    """Wait until legend items no longer show TradingView indicator loading text (e.g. ``đang tải...``)."""
+    if tv.get("indicator_loading_wait_disabled", False):
+        return
+    timeout_ms = int(tv.get("indicator_loading_timeout_ms", 45_000))
+    poll_ms = int(tv.get("indicator_loading_poll_ms", 500))
+    settle_ms = int(tv.get("indicator_loading_settle_ms", 300))
+    log = logging.getLogger("automation_tool")
+    deadline = time.monotonic() + max(0, timeout_ms) / 1000.0
+    saw_loading = False
+    while time.monotonic() < deadline:
+        texts = _tradingview_list_legend_item_texts(page, tv)
+        if not _tradingview_texts_have_indicator_loading(texts, tv):
+            if saw_loading:
+                log.info("tv: indicators loaded | legend ready for screenshot")
+            if settle_ms > 0:
+                page.wait_for_timeout(settle_ms)
+            return
+        if not saw_loading:
+            log.info(
+                "tv: indicators loading | waiting up to %sms for legend to finish (markers=%s)",
+                timeout_ms,
+                _tradingview_indicator_loading_markers(tv),
+            )
+            saw_loading = True
+        page.wait_for_timeout(poll_ms)
+    log.warning(
+        "tv: indicators still loading after %sms; proceeding with screenshot anyway",
+        timeout_ms,
+    )
+
+
 def _tradingview_snapshot_url_capture(
     page,
     tv: dict[str, Any],
@@ -3229,6 +3279,7 @@ def _tradingview_capture_one_chart_frame(
     dest_url_path: Optional[Path] = None,
 ) -> Path:
     """One TradingView frame: snapshot-URL flow (default) or legacy fullscreen PNG."""
+    _wait_tradingview_indicators_loaded(page, tv)
     if bool(tv.get("tradingview_snapshot_url_flow", True)):
         return _tradingview_snapshot_url_capture(
             page,

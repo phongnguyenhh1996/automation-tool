@@ -15,8 +15,10 @@ from typing import Any, Optional
 from playwright.async_api import Locator, Page
 
 from automation_tool.coinmap import (
+    _tradingview_indicator_loading_markers,
     _tradingview_interval_slug,
     _tradingview_is_delete_indicator_label,
+    _tradingview_texts_have_indicator_loading,
     _tv_apply_indicator_profile,
     _tv_forbidden_indicator_groups,
     _tv_required_indicator_groups,
@@ -673,6 +675,36 @@ async def tv_ensure_required_indicators_async(page: Page, tv: dict[str, Any]) ->
     )
 
 
+async def tv_wait_for_indicators_loaded_async(page: Page, tv: dict[str, Any]) -> None:
+    if tv.get("indicator_loading_wait_disabled", False):
+        return
+    timeout_ms = int(tv.get("indicator_loading_timeout_ms", 45_000))
+    poll_ms = int(tv.get("indicator_loading_poll_ms", 500))
+    settle_ms = int(tv.get("indicator_loading_settle_ms", 300))
+    deadline = time.monotonic() + max(0, timeout_ms) / 1000.0
+    saw_loading = False
+    while time.monotonic() < deadline:
+        texts = await tv_list_legend_item_texts_async(page, tv)
+        if not _tradingview_texts_have_indicator_loading(texts, tv):
+            if saw_loading:
+                _log_tv.info("tv: indicators loaded | legend ready for screenshot")
+            if settle_ms > 0:
+                await page.wait_for_timeout(settle_ms)
+            return
+        if not saw_loading:
+            _log_tv.info(
+                "tv: indicators loading | waiting up to %sms for legend to finish (markers=%s)",
+                timeout_ms,
+                _tradingview_indicator_loading_markers(tv),
+            )
+            saw_loading = True
+        await page.wait_for_timeout(poll_ms)
+    _log_tv.warning(
+        "tv: indicators still loading after %sms; proceeding with screenshot anyway",
+        timeout_ms,
+    )
+
+
 async def tv_snapshot_url_capture_async(
     page: Page,
     tv: dict[str, Any],
@@ -736,6 +768,7 @@ async def tv_capture_one_chart_frame_async(
     *,
     dest_url_path: Optional[Path] = None,
 ) -> Path:
+    await tv_wait_for_indicators_loaded_async(page, tv)
     if bool(tv.get("tradingview_snapshot_url_flow", True)):
         return await tv_snapshot_url_capture_async(
             page,

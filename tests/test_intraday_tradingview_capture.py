@@ -12,7 +12,7 @@ def test_intraday_tradingview_specs_update_default() -> None:
     assert specs[0]["indicator_profile"] == "ict_killzones"
 
 
-def test_intraday_tradingview_specs_update_scalp_includes_plain_m15() -> None:
+def test_intraday_tradingview_specs_optional_plain_m15() -> None:
     specs = _intraday_tradingview_interval_specs(include_m15_regular=True)
     assert [s["slug"] for s in specs] == ["15m", "15m_ict", "5m"]
     assert "indicator_profile" not in specs[0]
