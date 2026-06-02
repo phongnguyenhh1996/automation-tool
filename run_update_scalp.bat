@@ -9,7 +9,7 @@ echo CWD    : %cd%
 echo Args   : %*
 echo ============================================================
 
-REM Scalp intraday update: TradingView M15 + 15m ICT + 5m then Coinmap M5, OpenAI asks for best scalp plan.
+REM Scalp intraday update: TradingView M15 + 15m ICT + 5m then Coinmap M15 + M5, OpenAI asks for best scalp plan.
 REM - Thread OpenAI rieng (last_scalp_response_id.txt)
 REM - Zone labels: scalp_<id> (vi du: scalp_1, scalp_2, scalp_3)
 REM - Zones luu vao data\XAUUSD\zones\ cung voi zones thuong

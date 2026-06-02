@@ -182,6 +182,15 @@ def test_build_scalp_update_user_text_merged_m5_only_alias() -> None:
     assert a == b
 
 
+def test_build_scalp_update_user_text_first_after_all_legacy_m15_m5() -> None:
+    t = build_scalp_update_user_text(first_after_all=True, coinmap_attachment_mode="legacy")
+    assert "[INTRADAY_UPDATE]" in t
+    assert "ba" in t
+    assert "morning_full_analysis" in t
+    assert "M15" in t and "M5" in t
+    assert "scalp" in t.lower()
+
+
 def test_format_intraday_update_time_line() -> None:
     from automation_tool.zones_state import format_intraday_update_time_line
 
