@@ -260,6 +260,24 @@ def test_v2_basket_take_profit_scales_down_for_large_baskets() -> None:
     assert "DirectionMultiplier(side) * takeProfitPoints * _Point" in take_profit_body
 
 
+def test_v2_basket_duration_tracks_first_open_time_and_panel_display() -> None:
+    source = _source()
+    build_body = _function_body(source, "BuildBasket")
+    duration_body = _function_body(source, "BasketDurationText")
+    panel_body = _function_body(source, "UpdatePanel")
+
+    assert "datetime firstOpenTime;" in source
+    assert "basket.firstOpenTime = 0;" in build_body
+    assert "opened < basket.firstOpenTime" in build_body
+    assert 'return(StringFormat("%d:%02d:%02d", hours, minutes, seconds));' in duration_body
+    assert 'return(StringFormat("%d:%02d", minutes, seconds));' in duration_body
+    assert "if(hours > 0)" in duration_body
+    assert "BasketDurationText(openBasket)" in panel_body
+    assert 'AddPanelRow(lines, colors, row, "Basket Time: " + BasketDurationText(openBasket), clrBlack);' in panel_body
+    assert "duration=" in source
+    assert "FindPrimaryOpenBasket(openBasket)" in panel_body
+
+
 def test_v2_start_and_follow_entries_block_when_any_other_basket_has_positions() -> None:
     source = _source()
     open_basket_body = _function_body(source, "HasAnyOpenBasketPositions")

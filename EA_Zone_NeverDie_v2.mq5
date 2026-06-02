@@ -49,6 +49,7 @@ struct BasketInfo
    double   floatingProfit;
    double   lastOpenPrice;
    datetime lastOpenTime;
+   datetime firstOpenTime;
   };
 
 input group "=== TRADE SETTINGS ==="
@@ -180,15 +181,32 @@ string CampaignDebugText(const CampaignData &campaign)
                        BoolText(campaign.active)));
   }
 
+string BasketDurationText(const BasketInfo &basket)
+  {
+   if(basket.count <= 0 || basket.firstOpenTime <= 0) return("-");
+
+   int elapsedSeconds = (int)(TimeCurrent() - basket.firstOpenTime);
+   if(elapsedSeconds < 0) elapsedSeconds = 0;
+
+   int hours = elapsedSeconds / 3600;
+   int minutes = (elapsedSeconds % 3600) / 60;
+   int seconds = elapsedSeconds % 60;
+   if(hours > 0)
+      return(StringFormat("%d:%02d:%02d", hours, minutes, seconds));
+   return(StringFormat("%d:%02d", minutes, seconds));
+  }
+
 string BasketDebugText(const BasketInfo &basket)
   {
-   return(StringFormat("count=%d volume=%.2f avg=%s profit=%.2f lastPrice=%s lastTime=%s",
+   return(StringFormat("count=%d volume=%.2f avg=%s profit=%.2f duration=%s lastPrice=%s lastTime=%s firstTime=%s",
                        basket.count,
                        basket.totalVolume,
                        PriceText(basket.averagePrice),
                        basket.floatingProfit,
+                       BasketDurationText(basket),
                        PriceText(basket.lastOpenPrice),
-                       TimeToString(basket.lastOpenTime, TIME_DATE | TIME_SECONDS)));
+                       TimeToString(basket.lastOpenTime, TIME_DATE | TIME_SECONDS),
+                       TimeToString(basket.firstOpenTime, TIME_DATE | TIME_SECONDS)));
   }
 
 ENUM_TIMEFRAMES DcaTimeframe()
@@ -1308,6 +1326,7 @@ void BuildBasket(const ENUM_POSITION_TYPE side, const long magic, BasketInfo &ba
    basket.floatingProfit = 0.0;
    basket.lastOpenPrice = 0.0;
    basket.lastOpenTime = 0;
+   basket.firstOpenTime = 0;
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
      {
@@ -1330,10 +1349,61 @@ void BuildBasket(const ENUM_POSITION_TYPE side, const long magic, BasketInfo &ba
          basket.lastOpenTime = opened;
          basket.lastOpenPrice = openPrice;
         }
+      if(basket.firstOpenTime <= 0 || opened < basket.firstOpenTime)
+         basket.firstOpenTime = opened;
      }
 
    if(basket.totalVolume > 0.0)
       basket.averagePrice = basket.weightedPriceSum / basket.totalVolume;
+  }
+
+bool FindPrimaryOpenBasket(BasketInfo &basket)
+  {
+   basket.count = 0;
+
+   long checkedMagics[];
+   ArrayResize(checkedMagics, 0);
+   bool found = false;
+   double worstProfit = 0.0;
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0 || !PositionSelectByTicket(ticket)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+
+      long magic = PositionGetInteger(POSITION_MAGIC);
+      if(!IsOurMagic(magic)) continue;
+
+      bool alreadyChecked = false;
+      for(int j = 0; j < ArraySize(checkedMagics); j++)
+        {
+         if(checkedMagics[j] == magic)
+           {
+            alreadyChecked = true;
+            break;
+           }
+        }
+      if(alreadyChecked) continue;
+
+      int size = ArraySize(checkedMagics);
+      ArrayResize(checkedMagics, size + 1);
+      checkedMagics[size] = magic;
+
+      ENUM_POSITION_TYPE side = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      BasketInfo current;
+      BuildBasket(side, magic, current);
+      if(current.count <= 0) continue;
+
+      if(!found || current.floatingProfit < worstProfit)
+        {
+         basket = current;
+         worstProfit = current.floatingProfit;
+         found = true;
+        }
+     }
+
+   return(found);
   }
 
 int VolumeDigits(const double step)
@@ -2110,6 +2180,11 @@ void UpdatePanel()
       AddPanelRow(lines, colors, row, "Limit:      OFF", clrGray);
    AddPanelRow(lines, colors, row, "Max Today:  " + IntegerToString(g_todayMaxBasketLossCents), ProfitColor(-(double)g_todayMaxBasketLossCents));
    AddPanelRow(lines, colors, row, "Basket Now: " + IntegerToString(currentWorstLossCents), ProfitColor(-(double)currentWorstLossCents));
+   BasketInfo openBasket;
+   if(FindPrimaryOpenBasket(openBasket))
+      AddPanelRow(lines, colors, row, "Basket Time: " + BasketDurationText(openBasket), clrBlack);
+   else
+      AddPanelRow(lines, colors, row, "Basket Time: -", clrGray);
 
    if(InpSessionStopEnabled && RemoteJsonEnabled())
      {
