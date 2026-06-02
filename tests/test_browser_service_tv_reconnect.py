@@ -43,42 +43,43 @@ def test_tv_capture_frame_clicks_reconnect_dialog_before_using_warm_tab(
     tmp_path: Path,
 ) -> None:
     calls: list[str] = []
-    service = BrowserServiceState()
-    service._tv_warm["default"] = _TvWarmTab(
-        _FakePage(calls),
-        "default",
-        "BTCUSD",
-        "15 phút",
-    )
 
-    async def noop_ensure() -> None:
-        return None
+    async def run() -> None:
+        service = BrowserServiceState()
+        service._tv_warm["default"] = _TvWarmTab(
+            _FakePage(calls),
+            "default",
+            "BTCUSD",
+            "15 phút",
+        )
 
-    async def fake_select_symbol(_page, _tv, symbol: str) -> None:
-        calls.append(f"select:{symbol}")
+        async def noop_ensure() -> None:
+            return None
 
-    async def fake_reset(_page, _tv) -> None:
-        calls.append("reset")
+        async def fake_select_symbol(_page, _tv, symbol: str) -> None:
+            calls.append(f"select:{symbol}")
 
-    async def fake_ensure_indicators(_page, _tv) -> None:
-        calls.append("ensure_indicators")
+        async def fake_reset(_page, _tv) -> None:
+            calls.append("reset")
 
-    async def fake_capture(_page, _tv, charts_dir, stamp, sym_key, slug):
-        calls.append("capture")
-        return tmp_path / "chart.png"
+        async def fake_ensure_indicators(_page, _tv) -> None:
+            calls.append("ensure_indicators")
 
-    service._ensure_tv_warm_tabs = noop_ensure  # type: ignore[method-assign]
-    monkeypatch.setattr(coinmap_tradingview_async, "tv_select_symbol_async", fake_select_symbol)
-    monkeypatch.setattr(coinmap_tradingview_async, "tv_reset_chart_position_async", fake_reset)
-    monkeypatch.setattr(
-        coinmap_tradingview_async,
-        "tv_ensure_required_indicators_async",
-        fake_ensure_indicators,
-    )
-    monkeypatch.setattr(coinmap_tradingview_async, "tv_capture_one_chart_frame_async", fake_capture)
+        async def fake_capture(_page, _tv, charts_dir, stamp, sym_key, slug):
+            calls.append("capture")
+            return tmp_path / "chart.png"
 
-    result = asyncio.run(
-        service.tv_capture_frame(
+        service._ensure_tv_warm_tabs = noop_ensure  # type: ignore[method-assign]
+        monkeypatch.setattr(coinmap_tradingview_async, "tv_select_symbol_async", fake_select_symbol)
+        monkeypatch.setattr(coinmap_tradingview_async, "tv_reset_chart_position_async", fake_reset)
+        monkeypatch.setattr(
+            coinmap_tradingview_async,
+            "tv_ensure_required_indicators_async",
+            fake_ensure_indicators,
+        )
+        monkeypatch.setattr(coinmap_tradingview_async, "tv_capture_one_chart_frame_async", fake_capture)
+
+        result = await service.tv_capture_frame(
             tv={},
             charts_dir=tmp_path,
             stamp="s",
@@ -87,9 +88,9 @@ def test_tv_capture_frame_clicks_reconnect_dialog_before_using_warm_tab(
             slug="15m",
             indicator_profile="",
         )
-    )
+        assert result == {"path": str(tmp_path / "chart.png")}
 
-    assert result == {"path": str(tmp_path / "chart.png")}
+    asyncio.run(run())
     assert calls == ["connect", "select:ETHUSD", "reset", "ensure_indicators", "capture"]
 
 
@@ -100,11 +101,15 @@ def test_tv_prewarm_background_catches_system_exit() -> None:
         async def fail_prewarm() -> None:
             raise SystemExit("boom")
 
-        service._prewarm_tradingview_tabs_async = fail_prewarm  # type: ignore[method-assign]
-        service.schedule_tv_prewarm_background()
-        await asyncio.sleep(0)
+        async def noop_coinmap_prewarm() -> None:
+            return None
 
+        service._prewarm_tradingview_tabs_async = fail_prewarm  # type: ignore[method-assign]
+        service._prewarm_coinmap_tab_async = noop_coinmap_prewarm  # type: ignore[method-assign]
+        service.schedule_tv_prewarm_background()
         assert service._prewarm_bg_task is not None
+        await service._prewarm_bg_task
+
         assert service._prewarm_bg_task.done()
         assert service._prewarm_bg_task.exception() is None
 

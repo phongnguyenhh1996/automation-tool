@@ -1,7 +1,7 @@
-# Intraday update: Coinmap XAUUSD M15 + M5 JSON (bearer_request; 4 endpoint cm-api / shot song song).
+# Intraday update: Coinmap XAUUSD M15 + M5 JSON (network_capture trên tab warm; browser up bắt buộc).
 # Use with: coinmap-automation update --config config/coinmap_update.yaml
 # TradingView alert sync reads tradingview_capture from config/coinmap.yaml by default.
-# api_data_export: mặc định bearer_request + skip Coinmap UI; chỉ login, trigger chart, Bearer, httpx song song.
+# api_data_export: network_capture — warm tab + chart UI; không gọi httpx với query_template tự build.
 
 clear_charts_before_capture: true
 base_url: "https://coinmap.tech"
@@ -13,6 +13,7 @@ post_login_wait_selector: "main, [data-testid='chart'], canvas, .chart"
 
 chart_download:
   enabled: true
+  prewarm_enabled: true
   chart_page_url: "https://coinmap.tech/chart"
   dismiss_symbol_search_modal: true
   symbol_search_modal_escape_presses: 2
@@ -99,10 +100,11 @@ chart_download:
 
   api_data_export:
     enabled: true
-    mode: bearer_request
-    bearer_skip_chart_ui: true
+    mode: network_capture
+    bearer_skip_chart_ui: false
     bearer_http_parallel: true
     bearer_parallel_max_concurrency: 0
+    bearer_token_cache: false
     bearer_ready_timeout_ms: 25000
     bearer_trigger_url: "https://coinmap.tech/chart"
     bearer_capture_url_substrings: []

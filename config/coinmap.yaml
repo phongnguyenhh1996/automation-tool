@@ -13,6 +13,7 @@ post_login_wait_selector: "main, [data-testid='chart'], canvas, .chart"
 # After login: open chart page — multi-shot via right sidebar (3 images), or one fullscreen of whatever is already open
 chart_download:
   enabled: true
+  prewarm_enabled: true
   chart_page_url: "https://coinmap.tech/chart"
   # Coinmap often auto-opens symbol search on /chart — close it (automation no longer uses that modal).
   dismiss_symbol_search_modal: true
@@ -121,17 +122,16 @@ chart_download:
   layer_tooltip_min_height_px: 19
   after_layer_toggle_click_ms: 400
 
-  # JSON Coinmap: mặc định bearer_request — bắt Bearer từ trình duyệt rồi gọi cm-api bằng httpx (3 endpoint song song / shot; API-only: các shot capture_plan song song).
-  # mode: bearer_request (mặc định trong code nếu không khai báo) | network_capture (bắt response khi chart load) | request (Bearer tĩnh trong request_headers).
-  # network_capture: merge_repeated_endpoint_responses / network_capture_* áp dụng khi mode: network_capture.
-  # bearer_skip_chart_ui: true = không mở sidebar multi-shot Coinmap; chỉ trigger + Bearer + JSON. false = UI đầy đủ + Bearer sau mỗi bước.
-  # bearer_http_parallel: true = httpx song song các endpoint cm-api (getcandlehistory + CVD + orderflow + vwap); bearer_parallel_max_concurrency: 0 = không giới hạn shot API-only.
+  # JSON Coinmap: network_capture trên tab warm (browser up) — bắt response gateway khi chart load; params khớp UI Coinmap.
+  # mode: network_capture (mặc định capture qua warm tab) | bearer_request (legacy httpx) | request (Bearer tĩnh).
+  # Capture JSON bắt buộc browser service: coinmap-automation browser up (tab Coinmap prewarm).
   api_data_export:
     enabled: true
-    mode: bearer_request
-    bearer_skip_chart_ui: true
+    mode: network_capture
+    bearer_skip_chart_ui: false
     bearer_http_parallel: true
     bearer_parallel_max_concurrency: 0
+    bearer_token_cache: false
     bearer_ready_timeout_ms: 25000
     bearer_trigger_url: "https://coinmap.tech/chart"
     bearer_capture_url_substrings: []

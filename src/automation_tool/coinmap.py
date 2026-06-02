@@ -3446,6 +3446,98 @@ def _run_tradingview_via_browser_service(
     return out if out else None
 
 
+def _run_coinmap_via_browser_service(
+    *,
+    cd: dict[str, Any],
+    api_cd: dict[str, Any],
+    cfg: dict[str, Any],
+    charts_dir: Path,
+    stamp: str,
+    settle_ms: int,
+    coinmap_capture_intervals: Optional[Sequence[str]] = None,
+    coinmap_only_retry_paths: Optional[list[Path]] = None,
+) -> list[Path]:
+    """
+    Capture Coinmap JSON via long-lived warm tab + ``coinmap_capture_plan`` RPC
+    (network_capture from chart UI). Browser service must be running.
+    """
+    if _api_export_mode(api_cd) != "network_capture":
+        raise SystemExit(
+            "Coinmap JSON capture requires api_data_export.mode network_capture "
+            "(warm tab captures gateway responses from the chart UI)."
+        )
+    plan = _coinmap_resolve_capture_plan(cd)
+    if not plan:
+        raise SystemExit(
+            "Coinmap warm-tab capture requires multi_shot capture_plan in chart_download YAML."
+        )
+    if coinmap_only_retry_paths:
+        from automation_tool.chart_payload_validate import filter_coinmap_plan_for_retry_paths
+
+        plan = filter_coinmap_plan_for_retry_paths(plan, stamp, list(coinmap_only_retry_paths))
+        if not plan:
+            raise SystemExit(
+                "coinmap bearer retry: no capture_plan steps match the target files "
+                f"(stamp={stamp!r})."
+            )
+    if coinmap_capture_intervals:
+        plan = _coinmap_filter_capture_plan_by_intervals(plan, coinmap_capture_intervals)
+        if not plan:
+            raise SystemExit(
+                "coinmap_capture_intervals removed all capture_plan steps "
+                f"(filter={list(coinmap_capture_intervals)!r})."
+            )
+
+    from automation_tool.browser_client import BrowserClient, is_service_responding
+    from automation_tool.browser_protocol import METHOD_COINMAP_CAPTURE_PLAN
+
+    if not is_service_responding():
+        raise SystemExit(
+            "Coinmap capture requires browser service (warm tab). "
+            "Run: coinmap-automation browser up "
+            f"(state file: {browser_service_state_path()})."
+        )
+    c = BrowserClient.from_state_file()
+    if not c:
+        raise SystemExit(
+            "Coinmap capture requires browser service state. "
+            "Run: coinmap-automation browser up "
+            f"(state file: {browser_service_state_path()})."
+        )
+    try:
+        resp = c.request(
+            METHOD_COINMAP_CAPTURE_PLAN,
+            {
+                "cd": cd,
+                "api_cd": api_cd,
+                "plan": plan,
+                "charts_dir": str(charts_dir),
+                "stamp": stamp,
+                "settle_ms": settle_ms,
+                "login_cfg": cfg,
+            },
+            timeout_s=900.0,
+        )
+    except OSError as e:
+        raise SystemExit(
+            "coinmap_capture_plan RPC failed (browser service unreachable). "
+            f"Run: coinmap-automation browser up. Error: {e}"
+        ) from e
+    if not resp.get("ok"):
+        err = resp.get("error") or {}
+        msg = err.get("message") if isinstance(err, dict) else str(err)
+        raise SystemExit(f"coinmap_capture_plan RPC failed: {msg}")
+    result = resp.get("result") or {}
+    paths_raw = result.get("paths") or []
+    out: list[Path] = []
+    for p in paths_raw:
+        if isinstance(p, str) and p.strip():
+            out.append(Path(p))
+    if not out:
+        raise SystemExit("coinmap_capture_plan RPC returned no JSON paths.")
+    return out
+
+
 def _wait_tradingview_fullscreen_notice_gone(page, tv: dict[str, Any]) -> None:
     """After TV fullscreen, wait for the 'panels hidden' toast container to disappear before screenshot."""
     notice_sel = (tv.get("tradingview_fullscreen_notice_selector") or "").strip()
@@ -3593,7 +3685,15 @@ def _capture_charts_in_context(
     if not isinstance(cd, dict):
         cd = {}
     coinmap_bearer_satisfied_from_cache = False
+    coinmap_satisfied_via_rpc = False
     api_cd_cache = _api_export_config(cd) if cd.get("enabled", False) else None
+    cm_chart_enabled = bool(cd.get("enabled", False))
+    use_coinmap_warm_rpc = (
+        cm_chart_enabled
+        and api_cd_cache is not None
+        and api_cd_cache.get("enabled", True)
+        and _api_export_mode(api_cd_cache) == "network_capture"
+    )
     if (
         api_cd_cache is not None
         and _api_export_mode(api_cd_cache) == "bearer_request"
@@ -3644,11 +3744,39 @@ def _capture_charts_in_context(
     if not isinstance(tv_cfg, dict):
         tv_cfg = {}
     tv_enabled = bool(tv_cfg.get("enabled", False))
-    cm_chart_enabled = bool(cd.get("enabled", False))
     skip_coinmap_ui = tv_enabled and not cm_chart_enabled and not coinmap_only_retry_paths
+
+    if use_coinmap_warm_rpc and not skip_coinmap_ui:
+        try:
+            if progress_hook is not None:
+                progress_hook()
+            cm_paths = _run_coinmap_via_browser_service(
+                cd=cd,
+                api_cd=api_cd_cache,
+                cfg=cfg,
+                charts_dir=charts_dir,
+                stamp=stamp,
+                settle_ms=settle_ms,
+                coinmap_capture_intervals=coinmap_capture_intervals,
+                coinmap_only_retry_paths=coinmap_only_retry_paths,
+            )
+            written.extend(cm_paths)
+            coinmap_satisfied_via_rpc = True
+            if progress_hook is not None:
+                progress_hook()
+            if coinmap_only_retry_paths:
+                return written
+        except SystemExit:
+            raise
+        except Exception as e:
+            raise SystemExit(
+                "Coinmap warm-tab capture failed. Ensure browser up completed Coinmap prewarm "
+                f"and chart_download selectors in config/coinmap.yaml are valid. Error: {e}."
+            ) from e
+
     skip_coinmap_nav = skip_coinmap_ui or (
         coinmap_bearer_satisfied_from_cache and not coinmap_only_retry_paths
-    )
+    ) or coinmap_satisfied_via_rpc
     if coinmap_bearer_satisfied_from_cache and not skip_coinmap_ui:
         _coinmap_bearer_log(
             api_cd_cache,
@@ -3703,7 +3831,7 @@ def _capture_charts_in_context(
                 except Exception:
                     pass
 
-            if cd.get("enabled", False) and not coinmap_bearer_satisfied_from_cache:
+            if cd.get("enabled", False) and not coinmap_bearer_satisfied_from_cache and not coinmap_satisfied_via_rpc:
                 try:
                     if progress_hook is not None:
                         progress_hook()
@@ -3801,7 +3929,7 @@ def _capture_charts_in_context(
         if page is not None:
             screenshot_after = bool(cfg.get("screenshot_after_chart_download", True))
             skip_canvas = bool(cd.get("enabled")) and not screenshot_after
-            if coinmap_bearer_satisfied_from_cache:
+            if coinmap_bearer_satisfied_from_cache or coinmap_satisfied_via_rpc:
                 # Chart page was never opened; avoid canvas/fullpage shots of the wrong view.
                 skip_canvas = True
 
@@ -3933,13 +4061,10 @@ def capture_charts(
         if not isinstance(cd_retry, dict) or not cd_retry.get("enabled", False):
             raise SystemExit("coinmap_only_retry_paths requires chart_download.enabled in YAML.")
         api_retry = _api_export_config(cd_retry)
-        if api_retry is None or _api_export_mode(api_retry) != "bearer_request":
+        if api_retry is None or _api_export_mode(api_retry) != "network_capture":
             raise SystemExit(
-                "coinmap_only_retry_paths requires api_data_export.mode bearer_request (API-only flow)."
-            )
-        if api_retry.get("bearer_skip_chart_ui") is False:
-            raise SystemExit(
-                "coinmap_only_retry_paths is not supported when bearer_skip_chart_ui is false."
+                "coinmap_only_retry_paths requires api_data_export.mode network_capture "
+                "(warm-tab network capture)."
             )
 
     # For multi-symbol runs: allow disabling one side (Coinmap vs TradingView) per phase.
