@@ -113,7 +113,7 @@ chart_download:
   chart_pan_y_ratio: 0.52
   chart_pan_drag_steps: 14
   chart_after_adjust_ms: 800
-  # false = không chụp PNG Coinmap, chỉ lưu JSON API. Với mode network_capture + UI chart, tool vẫn pan để merge response; với bearer_request + skip UI thì không pan. TradingView không đổi.
+  # false = không chụp PNG Coinmap, chỉ lưu JSON API. network_capture: không kéo chart (lấy response gateway lần load đầu). Pan chỉ khi chụp PNG hoặc chart_view_adjustments_for_network_capture: true.
   coinmap_screenshot_enabled: false
   # Before screenshot: if layer tooltip is open (height > threshold), click layer-list toggle.
   layer_tooltip_toggle_before_screenshot: true
@@ -144,9 +144,10 @@ chart_download:
     vn_session_start_hour: 5
     auto_countback: 150
     auto_time_padding_ms: 0
-    # Gộp response khi mode: network_capture (kéo chart → API gọi lại).
-    merge_repeated_endpoint_responses: true
-    network_capture_max_responses_per_endpoint: 0
+    # network_capture: chỉ giữ response gateway đầu tiên mỗi endpoint (sau chọn symbol/interval).
+    network_capture_use_first_response_only: true
+    merge_repeated_endpoint_responses: false
+    network_capture_max_responses_per_endpoint: 1
     relax_symbol_filter_if_empty: true
     # Merged OpenAI JSON (``*_merged.json``) needs full per-TF exports; no on-disk slim.
     use_merged_coinmap_for_openai: true

@@ -124,6 +124,28 @@ def _api_export_mode(api_cd: dict[str, Any]) -> str:
     return "network_capture"
 
 
+def _coinmap_should_pan_chart(
+    cd: dict[str, Any], api_cd: Optional[dict[str, Any]] = None
+) -> bool:
+    """
+    Chart pan/zoom is for PNG fullscreen framing. JSON ``network_capture`` only needs
+    the gateway responses from the first chart load after symbol/interval selection.
+    """
+    if not cd.get("chart_view_adjustments_enabled", True):
+        return False
+    if api_cd is not None and _api_export_mode(api_cd) == "network_capture":
+        if not cd.get("coinmap_screenshot_enabled", True):
+            return bool(cd.get("chart_view_adjustments_for_network_capture", False))
+    return True
+
+
+def _network_capture_use_first_response_only(api_cd: dict[str, Any]) -> bool:
+    """When true, keep the first captured response per endpoint (no pan-merge)."""
+    if "network_capture_use_first_response_only" in api_cd:
+        return bool(api_cd["network_capture_use_first_response_only"])
+    return True
+
+
 def _coinmap_endpoint_key_from_response_url(url: str) -> Optional[str]:
     try:
         path = urlparse(url).path or ""
@@ -311,13 +333,19 @@ class CoinmapNetworkCapture:
     ) -> dict[str, Any]:
         sym = (step_ctx or {}).get("symbol")
         iv = (step_ctx or {}).get("interval")
+        first_only = _network_capture_use_first_response_only(self.api_cd)
         merge = bool(self.api_cd.get("merge_repeated_endpoint_responses", True))
+        if first_only:
+            merge = False
         max_per = int(self.api_cd.get("network_capture_max_responses_per_endpoint", 2))
         relax = _relax_symbol_filter_from_api_cd(self.api_cd)
         out: dict[str, Any] = {}
         for key in _COINMAP_API_KEYS:
             matching = [r for r in slice_ if r.get("key") == key]
-            if max_per > 0 and len(matching) > max_per:
+            if first_only:
+                if matching:
+                    matching = [matching[0]]
+            elif max_per > 0 and len(matching) > max_per:
                 matching = matching[:max_per]
             if not matching:
                 out[key] = {
@@ -1364,7 +1392,9 @@ def _chart_drag_in_box(
     page.mouse.up()
 
 
-def _apply_coinmap_chart_view_adjustments(page, cd: dict[str, Any]) -> None:
+def _apply_coinmap_chart_view_adjustments(
+    page, cd: dict[str, Any], api_cd: Optional[dict[str, Any]] = None
+) -> None:
     """
     After fullscreen: optional drags — time pan at bottom edge (horizontal), price pan at
     right edge (vertical), then main chart pan — same gesture as chart drag, cursor position differs.
@@ -1372,7 +1402,7 @@ def _apply_coinmap_chart_view_adjustments(page, cd: dict[str, Any]) -> None:
     Uses bounding_box + mouse.move instead of locator.hover(): Coinmap stacks react-stockcharts
     SVG/crosshair layers above the background canvas, so hovering the canvas times out.
     """
-    if not cd.get("chart_view_adjustments_enabled", True):
+    if not _coinmap_should_pan_chart(cd, api_cd):
         return
     sel = (cd.get("chart_interaction_selector") or "").strip()
     if not sel:
@@ -1761,7 +1791,7 @@ def _coinmap_one_capture_fullscreen_esc(
     interval_slug: str,
 ) -> Path:
     """Pan/zoom chart, optional layer toggle, fullscreen, screenshot, exit fullscreen."""
-    _apply_coinmap_chart_view_adjustments(page, cd)
+    _apply_coinmap_chart_view_adjustments(page, cd, api_cd=None)
     _maybe_click_layer_toggle_if_tooltip_tall(page, cd)
     _coinmap_click_fullscreen_button(page, cd)  # enter fullscreen
     page.wait_for_timeout(int(cd.get("fullscreen_screenshot_settle_ms", 1500)))
@@ -1886,8 +1916,9 @@ def _run_coinmap_multi_shot_flow(
                 )
             )
         else:
-            _apply_coinmap_chart_view_adjustments(page, cd)
-            page.wait_for_timeout(int(cd.get("chart_after_adjust_ms", 800)))
+            if _coinmap_should_pan_chart(cd, api_cd):
+                _apply_coinmap_chart_view_adjustments(page, cd, api_cd)
+                page.wait_for_timeout(int(cd.get("chart_after_adjust_ms", 800)))
             if json_path is not None:
                 written.append(json_path)
             else:
@@ -2270,14 +2301,15 @@ def _run_chart_screenshot_flow(
 
         shot_enabled = bool(cd.get("coinmap_screenshot_enabled", True))
         if not shot_enabled:
-            _apply_coinmap_chart_view_adjustments(page, cd)
-            page.wait_for_timeout(int(cd.get("chart_after_adjust_ms", 800)))
+            if _coinmap_should_pan_chart(cd, api_cd):
+                _apply_coinmap_chart_view_adjustments(page, cd, api_cd)
+                page.wait_for_timeout(int(cd.get("chart_after_adjust_ms", 800)))
             if json_path is not None:
                 return [json_path]
             _coinmap_click_fullscreen_button(page, cd)
             fs_wait = int(cd.get("fullscreen_screenshot_settle_ms", 2000))
             page.wait_for_timeout(fs_wait)
-            _apply_coinmap_chart_view_adjustments(page, cd)
+            _apply_coinmap_chart_view_adjustments(page, cd, api_cd)
             _maybe_click_layer_toggle_if_tooltip_tall(page, cd)
             full_page = bool(cd.get("fullscreen_screenshot_full_page", True))
             dest = charts_dir / f"{stamp}_chart_fullscreen.png"
@@ -2287,7 +2319,7 @@ def _run_chart_screenshot_flow(
         _coinmap_click_fullscreen_button(page, cd)
         fs_wait = int(cd.get("fullscreen_screenshot_settle_ms", 2000))
         page.wait_for_timeout(fs_wait)
-        _apply_coinmap_chart_view_adjustments(page, cd)
+        _apply_coinmap_chart_view_adjustments(page, cd, api_cd)
         _maybe_click_layer_toggle_if_tooltip_tall(page, cd)
         full_page = bool(cd.get("fullscreen_screenshot_full_page", True))
         dest = charts_dir / f"{stamp}_chart_fullscreen.png"

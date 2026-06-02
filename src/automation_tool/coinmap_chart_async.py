@@ -22,8 +22,10 @@ from automation_tool.coinmap import (
     _coinmap_filter_capture_plan_by_intervals,
     _coinmap_maybe_fail_api_shot,
     _coinmap_resolve_api_bump_interval,
+    _coinmap_should_pan_chart,
     _filter_coinmap_api_array_by_step,
     _merge_coinmap_bar_arrays,
+    _network_capture_use_first_response_only,
     _relax_symbol_filter_from_api_cd,
     _write_coinmap_api_shot_json,
 )
@@ -102,13 +104,19 @@ class CoinmapNetworkCaptureAsync:
     ) -> dict[str, Any]:
         sym = (step_ctx or {}).get("symbol")
         iv = (step_ctx or {}).get("interval")
+        first_only = _network_capture_use_first_response_only(self.api_cd)
         merge = bool(self.api_cd.get("merge_repeated_endpoint_responses", True))
+        if first_only:
+            merge = False
         max_per = int(self.api_cd.get("network_capture_max_responses_per_endpoint", 2))
         relax = _relax_symbol_filter_from_api_cd(self.api_cd)
         out: dict[str, Any] = {}
         for key in _COINMAP_API_KEYS:
             matching = [r for r in slice_ if r.get("key") == key]
-            if max_per > 0 and len(matching) > max_per:
+            if first_only:
+                if matching:
+                    matching = [matching[0]]
+            elif max_per > 0 and len(matching) > max_per:
                 matching = matching[:max_per]
             if not matching:
                 out[key] = {
@@ -604,8 +612,10 @@ async def _chart_drag_in_box_async(
     await page.mouse.up()
 
 
-async def _apply_coinmap_chart_view_adjustments_async(page: Page, cd: dict[str, Any]) -> None:
-    if not cd.get("chart_view_adjustments_enabled", True):
+async def _apply_coinmap_chart_view_adjustments_async(
+    page: Page, cd: dict[str, Any], api_cd: Optional[dict[str, Any]] = None
+) -> None:
+    if not _coinmap_should_pan_chart(cd, api_cd):
         return
     sel = (cd.get("chart_interaction_selector") or "").strip()
     if not sel:
@@ -797,8 +807,9 @@ async def coinmap_capture_plan_async(
                 raise RuntimeError(
                     "coinmap_screenshot_enabled is not supported on warm-tab RPC capture; set false in YAML"
                 )
-            await _apply_coinmap_chart_view_adjustments_async(page, cd)
-            await page.wait_for_timeout(int(cd.get("chart_after_adjust_ms", 800)))
+            if _coinmap_should_pan_chart(cd, api_cd):
+                await _apply_coinmap_chart_view_adjustments_async(page, cd, api_cd)
+                await page.wait_for_timeout(int(cd.get("chart_after_adjust_ms", 800)))
             written.append(json_path)
             prev_symbol = sym
     finally:

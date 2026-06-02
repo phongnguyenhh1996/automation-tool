@@ -117,8 +117,9 @@ chart_download:
     auto_countback: 150
     auto_to_padding_ms: 180000
     auto_time_padding_ms: 0
-    merge_repeated_endpoint_responses: true
-    network_capture_max_responses_per_endpoint: 0
+    network_capture_use_first_response_only: true
+    merge_repeated_endpoint_responses: false
+    network_capture_max_responses_per_endpoint: 1
     relax_symbol_filter_if_empty: true
     use_merged_coinmap_for_openai: true
     slim_export_on_disk: false
