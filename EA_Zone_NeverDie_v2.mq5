@@ -52,18 +52,19 @@ struct BasketInfo
   };
 
 input group "=== TRADE SETTINGS ==="
-input double         InpLotSize                = 0.06;
-input double         InpPlanFollowLotSize      = 0.03;
-input double         InpMultiplier             = 1.25;
-input int            InpGridStep               = 5000;
+input double         InpLotSize                = 0.1;
+input double         InpPlanFollowLotSize      = 0.08;
+input double         InpMultiplier             = 1.3;
+input int            InpGridStep               = 4000;
 input int            InpMaxGridLevels          = 50;
 input long           InpMagicNumber            = 20250215;
 input int            InpTakeProfit             = 3000;
 input ENUM_ND_DCA_TF InpDcaGridTimeframe       = ND_DCA_M15;
 input int            InpDcaClosedBarsRequired  = 1;
-input int            InpDcaPrevOrderDistance   = 12000;
+input int            InpDcaPrevOrderDistance   = 25000;
 input double         InpZoneActivateBand       = 3.0;
 input bool           InpBlockNewEntryWhenOtherBasketOpen = true;
+input double         InpCloseBasketByProfit            = 0.0;
 input int            InpMaxLossCloseBasketCents        = 1000;
 
 input group "=== DISPLAY ==="
@@ -87,7 +88,7 @@ input group "=== DEBUG ==="
 input bool           InpDebugLog               = true;
 input bool           InpDebugTraceDecisions    = false;
 
-const string EA_VERSION = "2.23";
+const string EA_VERSION = "2.25";
 const int JSON_FETCH_WINDOW_MINUTES = 30;
 const int JSON_FETCH_SLOT_COUNT = 3;
 const int PANEL_LINE_COUNT = 27;
@@ -206,6 +207,7 @@ bool ValidateInputs()
    if(InpDcaClosedBarsRequired < 1) { DebugLog("Invalid input: InpDcaClosedBarsRequired must be >= 1"); return(false); }
    if(InpDcaPrevOrderDistance < 0) { DebugLog("Invalid input: InpDcaPrevOrderDistance must be >= 0"); return(false); }
    if(InpZoneActivateBand < 0.0) { DebugLog("Invalid input: InpZoneActivateBand must be >= 0"); return(false); }
+   if(InpCloseBasketByProfit < 0.0) { DebugLog("Invalid input: InpCloseBasketByProfit must be >= 0"); return(false); }
    if(InpMaxLossCloseBasketCents < 0) { DebugLog("Invalid input: InpMaxLossCloseBasketCents must be >= 0"); return(false); }
    if(InpZonesPollSeconds < 0) { DebugLog("Invalid input: InpZonesPollSeconds must be >= 0"); return(false); }
    if(InpSessionStopHour < 0 || InpSessionStopHour > 23) { DebugLog("Invalid input: InpSessionStopHour must be 0-23"); return(false); }
@@ -1430,6 +1432,18 @@ double CampaignTakeProfitPoints(const BasketInfo &basket)
    return((double)InpTakeProfit);
   }
 
+bool CampaignCloseByProfitReached(const BasketInfo &basket)
+  {
+   if(InpCloseBasketByProfit <= 0.0) return(false);
+   if(basket.count <= 0) return(false);
+   if(basket.floatingProfit < InpCloseBasketByProfit) return(false);
+
+   DebugLog(StringFormat("Campaign close-by-profit reached. targetProfit=%.2f %s",
+                         InpCloseBasketByProfit,
+                         BasketDebugText(basket)));
+   return(true);
+  }
+
 bool CampaignTakeProfitReached(const ENUM_POSITION_TYPE side, const BasketInfo &basket)
   {
    if(basket.count <= 0 || basket.totalVolume <= 0.0) return(false);
@@ -1453,6 +1467,26 @@ bool CampaignTakeProfitReached(const ENUM_POSITION_TYPE side, const BasketInfo &
      }
    DebugTrace("Campaign TP not reached. side=" + SideText(side) + " current=" + PriceText(currentPrice) + " target=" + PriceText(targetPrice) + " " + BasketDebugText(basket));
    return(false);
+  }
+
+bool SessionStopBreakevenCloseReached(const BasketInfo &basket)
+  {
+   if(!IsSessionTradingPaused()) return(false);
+   if(basket.count <= 0) return(false);
+   if(basket.floatingProfit < 0.0) return(false);
+
+   DebugLog(StringFormat("Session stop breakeven close. profit=%.2f %s",
+                         basket.floatingProfit,
+                         BasketDebugText(basket)));
+   return(true);
+  }
+
+bool CampaignCloseTargetReached(const ENUM_POSITION_TYPE side, const BasketInfo &basket)
+  {
+   if(SessionStopBreakevenCloseReached(basket)) return(true);
+   if(InpCloseBasketByProfit > 0.0)
+      return(CampaignCloseByProfitReached(basket));
+   return(CampaignTakeProfitReached(side, basket));
   }
 
 double MaxLossCloseBasketThresholdMoney()
@@ -1680,6 +1714,11 @@ bool CloseCampaign(const CampaignData &campaign)
    return(allClosed);
   }
 
+int GridStepRequired(const int basketCount)
+  {
+   return((int)MathRound((double)InpGridStep * MathPow(1.25, basketCount)));
+  }
+
 int DcaPrevOrderDistanceRequired(const int basketCount)
   {
    return((int)MathRound((double)InpDcaPrevOrderDistance * MathPow(1.25, basketCount)));
@@ -1733,9 +1772,10 @@ bool ShouldOpenDca(const CampaignData &campaign, const BasketInfo &basket, const
    bool prevOrderDistanceReached = DcaPrevOrderDistanceReached(distance, basket.count);
    if(!prevOrderDistanceReached)
      {
-      if(distance < InpGridStep)
+      int requiredGridStep = GridStepRequired(basket.count);
+      if(distance < requiredGridStep)
         {
-         DebugTrace("DCA skipped: grid distance too small. distance=" + DoubleToString(distance, 1) + " required=" + IntegerToString(InpGridStep));
+         DebugTrace("DCA skipped: grid distance too small. distance=" + DoubleToString(distance, 1) + " required=" + IntegerToString(requiredGridStep));
          return(false);
         }
       if(!onFirstTick)
@@ -1809,12 +1849,12 @@ void ManageCampaigns(const bool onFirstTickOfNewDcaBar)
          continue;
         }
 
-      if(CampaignTakeProfitReached(g_campaigns[i].side, basket))
+      if(CampaignCloseTargetReached(g_campaigns[i].side, basket))
         {
-         DebugLog("Closing campaign after TP. campaign={" + CampaignDebugText(g_campaigns[i]) + "} basket={" + BasketDebugText(basket) + "}");
+         DebugLog("Closing campaign after close target. campaign={" + CampaignDebugText(g_campaigns[i]) + "} basket={" + BasketDebugText(basket) + "}");
          if(CloseCampaign(g_campaigns[i]))
            {
-            DebugLog("Removed campaign after successful TP close. " + CampaignDebugText(g_campaigns[i]));
+            DebugLog("Removed campaign after successful close. " + CampaignDebugText(g_campaigns[i]));
             ArrayRemove(g_campaigns, i, 1);
            }
          continue;
@@ -2123,7 +2163,7 @@ void UpdatePanel()
 int OnInit()
   {
    if(!ValidateInputs()) return(INIT_PARAMETERS_INCORRECT);
-   DebugLog("OnInit started. version=" + EA_VERSION + " symbol=" + _Symbol + " period=" + IntegerToString(_Period) + " lot=" + DoubleToString(InpLotSize, 2) + " followLot=" + DoubleToString(InpPlanFollowLotSize, 2) + " multiplier=" + DoubleToString(InpMultiplier, 2) + " gridStep=" + IntegerToString(InpGridStep) + " maxLevels=" + IntegerToString(InpMaxGridLevels) + " tp=" + IntegerToString(InpTakeProfit) + " maxLossCloseBasketCents=" + IntegerToString(InpMaxLossCloseBasketCents) + " dcaTf=" + EnumToString(DcaTimeframe()) + " blockNewEntryWhenOtherBasketOpen=" + BoolText(InpBlockNewEntryWhenOtherBasketOpen) + " debugTrace=" + BoolText(InpDebugTraceDecisions));
+   DebugLog("OnInit started. version=" + EA_VERSION + " symbol=" + _Symbol + " period=" + IntegerToString(_Period) + " lot=" + DoubleToString(InpLotSize, 2) + " followLot=" + DoubleToString(InpPlanFollowLotSize, 2) + " multiplier=" + DoubleToString(InpMultiplier, 2) + " gridStep=" + IntegerToString(InpGridStep) + " maxLevels=" + IntegerToString(InpMaxGridLevels) + " tp=" + IntegerToString(InpTakeProfit) + " closeBasketByProfit=" + DoubleToString(InpCloseBasketByProfit, 2) + " maxLossCloseBasketCents=" + IntegerToString(InpMaxLossCloseBasketCents) + " dcaTf=" + EnumToString(DcaTimeframe()) + " blockNewEntryWhenOtherBasketOpen=" + BoolText(InpBlockNewEntryWhenOtherBasketOpen) + " debugTrace=" + BoolText(InpDebugTraceDecisions));
    g_trade.SetExpertMagicNumber(InpMagicNumber);
    g_trade.SetDeviationInPoints(20);
    g_trade.SetTypeFillingBySymbol(_Symbol);
