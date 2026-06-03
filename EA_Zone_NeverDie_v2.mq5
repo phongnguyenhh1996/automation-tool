@@ -15,6 +15,13 @@ enum ENUM_ND_DCA_TF
    ND_DCA_M15 = 1
   };
 
+enum ENUM_ND_FOLLOW_MODE
+  {
+   ND_FOLLOW_OFF  = 0,
+   ND_FOLLOW_BUY  = 1,
+   ND_FOLLOW_SELL = 2
+  };
+
 struct ZoneData
   {
    ENUM_POSITION_TYPE side;
@@ -55,6 +62,7 @@ struct BasketInfo
 input group "=== TRADE SETTINGS ==="
 input double         InpLotSize                = 0.1;
 input double         InpPlanFollowLotSize      = 0.08;
+input ENUM_ND_FOLLOW_MODE InpFollowMode        = ND_FOLLOW_OFF;
 input double         InpMultiplier             = 1.3;
 input int            InpGridStep               = 4000;
 input int            InpMaxGridLevels          = 50;
@@ -89,7 +97,7 @@ input group "=== DEBUG ==="
 input bool           InpDebugLog               = true;
 input bool           InpDebugTraceDecisions    = false;
 
-const string EA_VERSION = "2.25";
+const string EA_VERSION = "2.26";
 const int JSON_FETCH_WINDOW_MINUTES = 30;
 const int JSON_FETCH_SLOT_COUNT = 3;
 const int PANEL_LINE_COUNT = 27;
@@ -135,6 +143,25 @@ string StatusText(const ENUM_ZONE_STATUS status)
    if(status == ZONE_STATUS_WATCH) return("WATCH");
    if(status == ZONE_STATUS_TRADE) return("TRADE");
    return("UNKNOWN");
+  }
+
+string FollowModeText(const ENUM_ND_FOLLOW_MODE mode)
+  {
+   if(mode == ND_FOLLOW_OFF) return("OFF");
+   if(mode == ND_FOLLOW_BUY) return("BUY");
+   if(mode == ND_FOLLOW_SELL) return("SELL");
+   return("UNKNOWN");
+  }
+
+bool IsManualFollowModeEnabled()
+  {
+   return(InpFollowMode != ND_FOLLOW_OFF);
+  }
+
+ENUM_POSITION_TYPE ManualFollowSide()
+  {
+   if(InpFollowMode == ND_FOLLOW_SELL) return(POSITION_TYPE_SELL);
+   return(POSITION_TYPE_BUY);
   }
 
 string PriceText(const double value)
@@ -1014,6 +1041,31 @@ void KeepPlanFollowCampaignForZone(const ZoneData &zone)
    KeepCampaignForZoneWithMagic(zone, followMagic, InpPlanFollowLotSize);
   }
 
+void KeepManualFollowCampaign(const ENUM_POSITION_TYPE side)
+  {
+   long followMagic = StableDailyPlanFollowMagic(side);
+   int index = FindCampaignIndex(followMagic);
+   if(index >= 0)
+     {
+      g_campaigns[index].side = side;
+      g_campaigns[index].baseLot = InpPlanFollowLotSize;
+      g_campaigns[index].active = true;
+      DebugTrace("Updated manual follow campaign. " + CampaignDebugText(g_campaigns[index]));
+      return;
+     }
+
+   int size = ArraySize(g_campaigns);
+   ArrayResize(g_campaigns, size + 1);
+   g_campaigns[size].side = side;
+   g_campaigns[size].low = 0.0;
+   g_campaigns[size].high = 0.0;
+   g_campaigns[size].sl = 0.0;
+   g_campaigns[size].baseLot = InpPlanFollowLotSize;
+   g_campaigns[size].magic = followMagic;
+   g_campaigns[size].active = true;
+   DebugLog("Created manual follow campaign (no zone). " + CampaignDebugText(g_campaigns[size]));
+  }
+
 bool IsPlanFollowCampaign(const CampaignData &campaign)
   {
    return(campaign.magic == StableDailyPlanFollowMagic(campaign.side));
@@ -1265,8 +1317,24 @@ int LatestPlanChinhZoneIndex()
    return(bestIndex);
   }
 
+void ManageManualFollowEntry()
+  {
+   if(!IsManualFollowModeEnabled()) return;
+
+   ENUM_POSITION_TYPE side = ManualFollowSide();
+   KeepManualFollowCampaign(side);
+   int campaignIndex = FindCampaignIndex(StableDailyPlanFollowMagic(side));
+   OpenPlanFollowCampaign(campaignIndex, "manual-follow-" + SideText(side));
+  }
+
 void ManagePlanChinhFollowEntry()
   {
+   if(IsManualFollowModeEnabled())
+     {
+      DebugTrace("Zone FOLLOW entry skipped: manual follow mode is " + FollowModeText(InpFollowMode));
+      return;
+     }
+
    if(ActiveTradeZoneIndex() >= 0)
       DebugTrace("FOLLOW entry skipped: active TRADE zone exists");
    if(ActiveTradeZoneIndex() >= 0) return;
@@ -2170,6 +2238,7 @@ void UpdatePanel()
    AddPanelRow(lines, colors, row, "Profit Today: " + DoubleToString(todayProfit, 2), ProfitColor(todayProfit));
    AddPanelRow(lines, colors, row, "Orders Today: " + IntegerToString(TodayClosedOrderCount()), clrBlack);
    AddPanelRow(lines, colors, row, "Open Orders:  " + IntegerToString(TotalOpenEaOrders()), clrBlack);
+   AddPanelRow(lines, colors, row, "Follow Mode:  " + FollowModeText(InpFollowMode), (IsManualFollowModeEnabled() ? clrDarkGreen : clrGray));
 
    int currentWorstLossCents = 0;
    UpdateTodayMaxBasketLossTracking(currentWorstLossCents);
@@ -2238,7 +2307,7 @@ void UpdatePanel()
 int OnInit()
   {
    if(!ValidateInputs()) return(INIT_PARAMETERS_INCORRECT);
-   DebugLog("OnInit started. version=" + EA_VERSION + " symbol=" + _Symbol + " period=" + IntegerToString(_Period) + " lot=" + DoubleToString(InpLotSize, 2) + " followLot=" + DoubleToString(InpPlanFollowLotSize, 2) + " multiplier=" + DoubleToString(InpMultiplier, 2) + " gridStep=" + IntegerToString(InpGridStep) + " maxLevels=" + IntegerToString(InpMaxGridLevels) + " tp=" + IntegerToString(InpTakeProfit) + " closeBasketByProfit=" + DoubleToString(InpCloseBasketByProfit, 2) + " maxLossCloseBasketCents=" + IntegerToString(InpMaxLossCloseBasketCents) + " dcaTf=" + EnumToString(DcaTimeframe()) + " blockNewEntryWhenOtherBasketOpen=" + BoolText(InpBlockNewEntryWhenOtherBasketOpen) + " debugTrace=" + BoolText(InpDebugTraceDecisions));
+   DebugLog("OnInit started. version=" + EA_VERSION + " symbol=" + _Symbol + " period=" + IntegerToString(_Period) + " lot=" + DoubleToString(InpLotSize, 2) + " followLot=" + DoubleToString(InpPlanFollowLotSize, 2) + " followMode=" + FollowModeText(InpFollowMode) + " multiplier=" + DoubleToString(InpMultiplier, 2) + " gridStep=" + IntegerToString(InpGridStep) + " maxLevels=" + IntegerToString(InpMaxGridLevels) + " tp=" + IntegerToString(InpTakeProfit) + " closeBasketByProfit=" + DoubleToString(InpCloseBasketByProfit, 2) + " maxLossCloseBasketCents=" + IntegerToString(InpMaxLossCloseBasketCents) + " dcaTf=" + EnumToString(DcaTimeframe()) + " blockNewEntryWhenOtherBasketOpen=" + BoolText(InpBlockNewEntryWhenOtherBasketOpen) + " debugTrace=" + BoolText(InpDebugTraceDecisions));
    g_trade.SetExpertMagicNumber(InpMagicNumber);
    g_trade.SetDeviationInPoints(20);
    g_trade.SetTypeFillingBySymbol(_Symbol);
@@ -2308,10 +2377,17 @@ void OnTick()
      }
 
    CleanupCampaignsWithoutPositions();
-   ActivateNearestWatchZone();
-   RemoveTouchedTradeZone();
-   ManagePlanChinhFollowEntry();
-   ManageActiveTradeEntry();
+   if(IsManualFollowModeEnabled())
+     {
+      ManageManualFollowEntry();
+     }
+   else
+     {
+      ActivateNearestWatchZone();
+      RemoveTouchedTradeZone();
+      ManagePlanChinhFollowEntry();
+      ManageActiveTradeEntry();
+     }
    ManageCampaigns(onFirstTickOfNewDcaBar);
    UpdatePanel();
   }
