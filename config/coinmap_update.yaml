@@ -51,7 +51,7 @@ chart_download:
   after_interval_select_ms: 800
   after_interval_change_settle_ms: 2000
   # Chỉ dùng khi mode: network_capture (bắt response từ chart). Với bearer_request + skip UI, bước bump không chạy.
-  api_network_capture_bump_interval: "15m"
+  api_network_capture_bump_interval: "30m"
   after_fullscreen_escape_ms: 600
   coinmap_fullscreen_exit_use_toolbar_click: true
   coinmap_fullscreen_exit_action_button_index: 0
