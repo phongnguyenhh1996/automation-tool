@@ -23,7 +23,6 @@ from automation_tool.coinmap import (
     _coinmap_maybe_fail_api_shot,
     _coinmap_resolve_api_bump_interval,
     _coinmap_should_pan_chart,
-    _coinmap_should_reload_after_interval,
     _filter_coinmap_api_array_by_step,
     _merge_coinmap_bar_arrays,
     _network_capture_use_first_response_only,
@@ -593,39 +592,6 @@ async def _coinmap_maybe_bump_interval_before_target_async(
     await page.wait_for_timeout(int(cd.get("after_interval_change_settle_ms", settle_ms)))
 
 
-async def _coinmap_reload_chart_after_interval_setup_async(
-    page: Page,
-    cd: dict[str, Any],
-    *,
-    login_email: Optional[str] = None,
-    login_password: Optional[str] = None,
-    login_cfg: Optional[dict[str, Any]] = None,
-    settle_ms: int,
-) -> None:
-    """Async wrapper: reload chart after interval selection (see sync helper in coinmap.py)."""
-    wait_until = (cd.get("api_network_capture_reload_wait_until") or "domcontentloaded").strip()
-    timeout_ms = int(cd.get("api_network_capture_reload_timeout_ms", 90_000))
-    await page.reload(wait_until=wait_until, timeout=timeout_ms)
-    reload_settle = int(cd.get("api_network_capture_reload_settle_ms", settle_ms))
-    await page.wait_for_timeout(reload_settle)
-    await _coinmap_maybe_relogin_if_login_form_visible_async(
-        page,
-        cd,
-        email=login_email,
-        password=login_password,
-        login_cfg=login_cfg,
-        settle_ms=settle_ms,
-    )
-    await _maybe_dismiss_coinmap_symbol_search_modal_async(page, cd)
-    ready_sel = (cd.get("api_network_capture_reload_chart_ready_selector") or "").strip()
-    ready_timeout = int(cd.get("api_network_capture_reload_chart_ready_timeout_ms", 30_000))
-    if ready_sel:
-        await page.locator(ready_sel).first.wait_for(state="visible", timeout=ready_timeout)
-    else:
-        iv_prefix = (cd.get("interval_select_class_prefix") or "IntervalSelect_intervalSelect__").strip()
-        await page.locator(f'[class*="{iv_prefix}"]').first.wait_for(state="visible", timeout=ready_timeout)
-
-
 async def _chart_drag_in_box_async(
     page: Page,
     box: dict[str, float],
@@ -779,8 +745,7 @@ async def coinmap_capture_plan_async(
     prev_symbol: Optional[str] = None
     try:
         for step in plan:
-            use_reload = _coinmap_should_reload_after_interval(cd, api_cd)
-            net_start = len(net_capture._records) if not use_reload else 0
+            net_start = len(net_capture._records)
             await _coinmap_unstick_fullscreen_loop_start_async(page, cd)
             sym = step["symbol"]
             interval = step["interval"]
@@ -816,16 +781,6 @@ async def coinmap_capture_plan_async(
             )
             await _coinmap_select_interval_async(page, cd, interval)
             await page.wait_for_timeout(int(cd.get("after_interval_change_settle_ms", settle_ms)))
-            if use_reload:
-                await _coinmap_reload_chart_after_interval_setup_async(
-                    page,
-                    cd,
-                    login_email=coinmap_email,
-                    login_password=coinmap_password,
-                    login_cfg=login_cfg,
-                    settle_ms=settle_ms,
-                )
-                net_start = len(net_capture._records)
 
             step_ctx: dict[str, Any] = {
                 "symbol": sym,

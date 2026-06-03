@@ -1758,56 +1758,6 @@ def _coinmap_maybe_bump_interval_before_target(
     page.wait_for_timeout(int(cd.get("after_interval_change_settle_ms", settle_ms)))
 
 
-def _coinmap_should_reload_after_interval(
-    cd: dict[str, Any], api_cd: Optional[dict[str, Any]]
-) -> bool:
-    """Reload chart after interval UI step so network_capture only sees post-reload gateway calls."""
-    if api_cd is None or _api_export_mode(api_cd) != "network_capture":
-        return False
-    if "api_network_capture_reload_after_interval" in cd:
-        return bool(cd["api_network_capture_reload_after_interval"])
-    return True
-
-
-def _coinmap_reload_chart_after_interval_setup(
-    page,
-    cd: dict[str, Any],
-    *,
-    login_email: Optional[str] = None,
-    login_password: Optional[str] = None,
-    login_cfg: Optional[dict[str, Any]] = None,
-    settle_ms: int,
-) -> None:
-    """
-    Reload the warm chart tab after symbol/interval are set; Coinmap restores last chart state.
-    """
-    wait_until = (cd.get("api_network_capture_reload_wait_until") or "domcontentloaded").strip()
-    timeout_ms = int(cd.get("api_network_capture_reload_timeout_ms", 90_000))
-    page.reload(wait_until=wait_until, timeout=timeout_ms)
-    reload_settle = int(cd.get("api_network_capture_reload_settle_ms", settle_ms))
-    page.wait_for_timeout(reload_settle)
-    _coinmap_maybe_relogin_if_login_form_visible(
-        page,
-        cd,
-        email=login_email,
-        password=login_password,
-        login_cfg=login_cfg,
-        settle_ms=settle_ms,
-    )
-    _maybe_dismiss_coinmap_symbol_search_modal(page, cd)
-    ready_sel = (cd.get("api_network_capture_reload_chart_ready_selector") or "").strip()
-    if ready_sel:
-        page.locator(ready_sel).first.wait_for(
-            state="visible", timeout=int(cd.get("api_network_capture_reload_chart_ready_timeout_ms", 30_000))
-        )
-    else:
-        iv_prefix = (cd.get("interval_select_class_prefix") or "IntervalSelect_intervalSelect__").strip()
-        page.locator(f'[class*="{iv_prefix}"]').first.wait_for(
-            state="visible",
-            timeout=int(cd.get("api_network_capture_reload_chart_ready_timeout_ms", 30_000)),
-        )
-
-
 def _coinmap_click_fullscreen_button(
     page,
     cd: dict[str, Any],
@@ -1871,8 +1821,7 @@ def _run_coinmap_multi_shot_flow(
     written: list[Path] = []
     prev_symbol: Optional[str] = None
     for step in plan:
-        use_reload = _coinmap_should_reload_after_interval(cd, api_cd) and net_capture is not None
-        net_start = len(net_capture._records) if net_capture is not None and not use_reload else 0
+        net_start = len(net_capture._records) if net_capture is not None else 0
         # If exit-after-capture missed, Escape only (toolbar click would toggle ON when not fullscreen).
         _coinmap_unstick_fullscreen_loop_start(page, cd)
         sym = step["symbol"]
@@ -1910,16 +1859,6 @@ def _run_coinmap_multi_shot_flow(
         )
         _coinmap_select_interval(page, cd, interval)
         page.wait_for_timeout(int(cd.get("after_interval_change_settle_ms", settle_ms)))
-        if use_reload:
-            _coinmap_reload_chart_after_interval_setup(
-                page,
-                cd,
-                login_email=coinmap_email,
-                login_password=coinmap_password,
-                login_cfg=coinmap_login_cfg,
-                settle_ms=settle_ms,
-            )
-            net_start = len(net_capture._records)
 
         step_ctx: dict[str, Any] = {
             "symbol": sym,

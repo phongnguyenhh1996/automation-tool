@@ -3,23 +3,8 @@ from __future__ import annotations
 from automation_tool.coinmap import (
     CoinmapNetworkCapture,
     _coinmap_should_pan_chart,
-    _coinmap_should_reload_after_interval,
     _network_capture_use_first_response_only,
 )
-
-
-def test_should_reload_after_interval_for_network_capture_by_default() -> None:
-    cd: dict = {}
-    api_cd = {"mode": "network_capture"}
-    assert _coinmap_should_reload_after_interval(cd, api_cd) is True
-
-
-def test_should_not_reload_when_disabled_or_not_network_capture() -> None:
-    assert _coinmap_should_reload_after_interval(
-        {"api_network_capture_reload_after_interval": False},
-        {"mode": "network_capture"},
-    ) is False
-    assert _coinmap_should_reload_after_interval({}, {"mode": "bearer_request"}) is False
 
 
 def test_should_not_pan_for_network_capture_json_only() -> None:
