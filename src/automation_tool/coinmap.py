@@ -1937,9 +1937,9 @@ def _run_coinmap_multi_shot_flow(
             for_api_capture=api_cd is not None
             and (net_capture is not None or bearer_authorization is not None),
         )
+        net_start = len(net_capture._records) if net_capture is not None else 0
         _coinmap_select_interval(page, cd, interval)
         page.wait_for_timeout(int(cd.get("after_interval_change_settle_ms", settle_ms)))
-        net_start = len(net_capture._records) if net_capture is not None else 0
 
         step_ctx: dict[str, Any] = {
             "symbol": sym,

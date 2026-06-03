@@ -85,3 +85,34 @@ def test_network_capture_skips_empty_first_response_when_prefer_nonempty() -> No
         records, step_ctx={"symbol": "XAUUSD", "interval": "5m"}, api_cd=api_cd
     )
     assert out["getcandlehistory"]["body"] == [{"t": 2, "i": "5m", "s": "XAUUSD"}]
+
+
+def test_network_capture_slice_includes_responses_during_settle_window() -> None:
+    """Responses that arrive during interval select + settle must fall after net_start."""
+    api_cd = {"mode": "network_capture"}
+    # net_start=0 simulates marker placed before select_interval; records are target-TF responses.
+    records = [
+        {
+            "key": "getcandlehistory",
+            "ok": True,
+            "status": 200,
+            "body": [{"t": 1, "i": "5m", "s": "XAUUSD"}],
+        },
+        {
+            "key": "getorderflowhistory",
+            "ok": True,
+            "status": 200,
+            "body": [{"t": 1, "i": "5m", "s": "XAUUSD"}],
+        },
+        {
+            "key": "getindicatorsvwap",
+            "ok": True,
+            "status": 200,
+            "body": [{"t": 1, "i": "5m", "s": "XAUUSD", "data": {}}],
+        },
+    ]
+    out = coinmap_network_last_body_per_key(
+        records, step_ctx={"symbol": "XAUUSD", "interval": "5m"}, api_cd=api_cd
+    )
+    assert out["getcandlehistory"]["ok"] is True
+    assert len(out["getcandlehistory"]["body"]) == 1

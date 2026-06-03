@@ -726,9 +726,9 @@ async def coinmap_capture_plan_async(
                 settle_ms=settle_ms,
                 for_api_capture=True,
             )
+            net_start = len(net_capture._records)
             await _coinmap_select_interval_async(page, cd, interval)
             await page.wait_for_timeout(int(cd.get("after_interval_change_settle_ms", settle_ms)))
-            net_start = len(net_capture._records)
 
             step_ctx: dict[str, Any] = {
                 "symbol": sym,
