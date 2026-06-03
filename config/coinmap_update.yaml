@@ -115,6 +115,7 @@ chart_download:
     vn_session_start_hour: 5
     # Chỉ cho update-scalp (file này). Luồng update thường dùng coinmap.yaml → auto_countback: 100.
     auto_countback: 150
+    export_max_array_items: 150
     auto_to_padding_ms: 180000
     auto_time_padding_ms: 0
     network_capture_use_first_response_only: true

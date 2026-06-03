@@ -8,6 +8,7 @@ from automation_tool.coinmap_openai_slim import (
     should_slim_coinmap_json_path,
     slim_coinmap_export_for_openai,
     slim_limits_for_interval,
+    trim_coinmap_export_arrays,
 )
 
 
@@ -67,3 +68,17 @@ def test_should_slim_skips_merged_outputs() -> None:
         is False
     )
     assert should_slim_coinmap_json_path(Path("20260101_120000_coinmap_XAUUSD_5m.json")) is True
+
+
+def test_trim_export_arrays_keeps_first_n() -> None:
+    data = {
+        "getcandlehistory": [{"t": i} for i in range(200)],
+        "getorderflowhistory": [{"t": i} for i in range(180)],
+        "getindicatorsvwap": [{"t": i} for i in range(300)],
+        "getcandlehistorycvd": [{"t": i} for i in range(200)],
+    }
+    out = trim_coinmap_export_arrays(data, 150)
+    assert len(out["getcandlehistory"]) == 150
+    assert len(out["getorderflowhistory"]) == 150
+    assert len(out["getindicatorsvwap"]) == 150
+    assert len(out["getcandlehistorycvd"]) == 200

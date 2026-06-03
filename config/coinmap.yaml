@@ -146,6 +146,7 @@ chart_download:
     vn_session_timezone: Asia/Ho_Chi_Minh
     vn_session_start_hour: 5
     auto_countback: 150
+    export_max_array_items: 150
     auto_time_padding_ms: 0
     # network_capture: chỉ giữ response gateway đầu tiên mỗi endpoint (sau chọn symbol/interval).
     network_capture_use_first_response_only: true

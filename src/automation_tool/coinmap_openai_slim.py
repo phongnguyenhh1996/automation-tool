@@ -20,6 +20,30 @@ from pathlib import Path
 from typing import Any, Optional
 
 
+_COINMAP_TRIM_ARRAY_KEYS: tuple[str, ...] = (
+    "getcandlehistory",
+    "getorderflowhistory",
+    "getindicatorsvwap",
+)
+
+
+def trim_coinmap_export_arrays(
+    data: dict[str, Any],
+    max_items: int,
+) -> dict[str, Any]:
+    """
+    Keep at most ``max_items`` leading elements per export array (newest-first order).
+    """
+    if not isinstance(data, dict) or max_items <= 0:
+        return data
+    out = dict(data)
+    for key in _COINMAP_TRIM_ARRAY_KEYS:
+        val = out.get(key)
+        if isinstance(val, list) and len(val) > max_items:
+            out[key] = val[:max_items]
+    return out
+
+
 def _env_int(name: str, default: int) -> int:
     raw = os.getenv(name, "").strip()
     if raw.isdigit() or (raw.startswith("-") and raw[1:].isdigit()):

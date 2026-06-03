@@ -19,7 +19,10 @@ import httpx
 import yaml
 from playwright.sync_api import BrowserContext, Page, Playwright, sync_playwright
 
-from automation_tool.coinmap_openai_slim import slim_coinmap_export_for_openai
+from automation_tool.coinmap_openai_slim import (
+    slim_coinmap_export_for_openai,
+    trim_coinmap_export_arrays,
+)
 from automation_tool.config import default_coinmap_bearer_cache_path
 from automation_tool.browser_client import browser_service_state_path, try_attach_playwright_via_service
 from automation_tool.playwright_browser import close_browser_and_context, launch_chrome_context
@@ -1201,6 +1204,27 @@ def _api_export_slim_disk_enabled(api_cd: Optional[dict[str, Any]]) -> bool:
     return bool(api_cd.get("slim_export_on_disk", True))
 
 
+def _api_export_max_array_items(api_cd: Optional[dict[str, Any]]) -> Optional[int]:
+    """
+    Max elements kept per ``getcandlehistory`` / ``getorderflowhistory`` / ``getindicatorsvwap``
+    when writing JSON. Uses ``export_max_array_items``, else ``auto_countback``, else 150.
+    Set ``export_max_array_items: 0`` to disable trimming.
+    """
+    if api_cd is None:
+        return 150
+    if "export_max_array_items" in api_cd:
+        raw = api_cd["export_max_array_items"]
+        if raw is None:
+            return None
+        n = int(raw)
+        return None if n <= 0 else n
+    raw_cb = api_cd.get("auto_countback")
+    if raw_cb is not None:
+        n = int(raw_cb)
+        return None if n <= 0 else n
+    return 150
+
+
 def _write_coinmap_api_shot_json(
     charts_dir: Path,
     *,
@@ -1226,6 +1250,9 @@ def _write_coinmap_api_shot_json(
             export_symbol=ex.strip(),
         )
     payload.pop("export_symbol", None)
+    max_items = _api_export_max_array_items(api_cd)
+    if max_items is not None:
+        payload = trim_coinmap_export_arrays(payload, max_items)
     if _api_export_slim_disk_enabled(api_cd):
         payload = slim_coinmap_export_for_openai(payload, path=path)
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
