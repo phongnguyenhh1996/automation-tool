@@ -15,7 +15,6 @@ from typing import Any, Callable, Optional
 from playwright.async_api import Page
 
 from automation_tool.coinmap import (
-    _COINMAP_API_KEYS,
     _COINMAP_NETWORK_CAPTURE_WAIT_KEYS,
     _api_export_mode,
     _coinmap_endpoint_key_from_response_url,
@@ -23,11 +22,9 @@ from automation_tool.coinmap import (
     _coinmap_maybe_fail_api_shot,
     _coinmap_resolve_api_bump_interval,
     _coinmap_should_pan_chart,
-    _filter_coinmap_api_array_by_step,
-    _merge_coinmap_bar_arrays,
-    _network_capture_use_first_response_only,
-    _relax_symbol_filter_from_api_cd,
+    _network_capture_require_nonempty,
     _write_coinmap_api_shot_json,
+    coinmap_network_last_body_per_key,
 )
 
 
@@ -86,90 +83,41 @@ class CoinmapNetworkCaptureAsync:
         poll_ms = max(50, int(self.api_cd.get("network_capture_poll_ms") or 300))
         deadline = time.monotonic() + wait_ms / 1000.0
         while time.monotonic() < deadline:
-            if self._shot_has_all_keys(start_index):
+            if self._shot_has_all_keys(start_index, step_ctx):
                 break
             await self.page.wait_for_timeout(poll_ms)
         slice_ = self._records[start_index:]
         return self._last_body_per_key(slice_, step_ctx=step_ctx)
 
-    def _shot_has_all_keys(self, start_index: int) -> bool:
+    def _shot_has_all_keys(
+        self, start_index: int, step_ctx: Optional[dict[str, Any]] = None
+    ) -> bool:
         slice_ = self._records[start_index:]
         seen = {r["key"] for r in slice_}
-        return all(k in seen for k in _COINMAP_NETWORK_CAPTURE_WAIT_KEYS)
+        if not all(k in seen for k in _COINMAP_NETWORK_CAPTURE_WAIT_KEYS):
+            return False
+        if step_ctx is None or not _network_capture_require_nonempty(self.api_cd):
+            return True
+        grouped = coinmap_network_last_body_per_key(
+            slice_, step_ctx=step_ctx, api_cd=self.api_cd
+        )
+        for key in _COINMAP_NETWORK_CAPTURE_WAIT_KEYS:
+            block = grouped.get(key)
+            if not isinstance(block, dict) or not block.get("ok"):
+                return False
+            body = block.get("body")
+            if not isinstance(body, list) or len(body) == 0:
+                return False
+        return True
 
     def _last_body_per_key(
         self,
         slice_: list[dict[str, Any]],
         step_ctx: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
-        sym = (step_ctx or {}).get("symbol")
-        iv = (step_ctx or {}).get("interval")
-        first_only = _network_capture_use_first_response_only(self.api_cd)
-        merge = bool(self.api_cd.get("merge_repeated_endpoint_responses", True))
-        if first_only:
-            merge = False
-        max_per = int(self.api_cd.get("network_capture_max_responses_per_endpoint", 2))
-        relax = _relax_symbol_filter_from_api_cd(self.api_cd)
-        out: dict[str, Any] = {}
-        for key in _COINMAP_API_KEYS:
-            matching = [r for r in slice_ if r.get("key") == key]
-            if first_only:
-                if matching:
-                    matching = [matching[0]]
-            elif max_per > 0 and len(matching) > max_per:
-                matching = matching[:max_per]
-            if not matching:
-                out[key] = {
-                    "ok": False,
-                    "status": 0,
-                    "body": "no matching response captured (timeout or chart did not call this endpoint)",
-                }
-                continue
-
-            if merge:
-                ok_lists: list[Any] = []
-                last_list_record: Optional[dict[str, Any]] = None
-                for r in matching:
-                    if r.get("ok") and isinstance(r.get("body"), list):
-                        filtered = _filter_coinmap_api_array_by_step(
-                            r["body"],
-                            symbol=sym,
-                            interval=iv,
-                            relax_symbol_if_empty=relax,
-                        )
-                        ok_lists.append(filtered)
-                        last_list_record = r
-                if ok_lists:
-                    merged = _merge_coinmap_bar_arrays(ok_lists)
-                    last = last_list_record or matching[-1]
-                    entry: dict[str, Any] = {
-                        "ok": True,
-                        "status": int(last.get("status") or 200),
-                        "body": merged,
-                    }
-                    if last.get("url"):
-                        entry["url"] = last["url"]
-                    out[key] = entry
-                    continue
-
-            last = matching[-1]
-            raw_body = last.get("body")
-            if isinstance(raw_body, list):
-                raw_body = _filter_coinmap_api_array_by_step(
-                    raw_body,
-                    symbol=sym,
-                    interval=iv,
-                    relax_symbol_if_empty=relax,
-                )
-            entry = {
-                "ok": bool(last.get("ok")),
-                "status": int(last.get("status") or 0),
-                "body": raw_body,
-            }
-            if last.get("url"):
-                entry["url"] = last["url"]
-            out[key] = entry
-        return out
+        return coinmap_network_last_body_per_key(
+            slice_, step_ctx=step_ctx, api_cd=self.api_cd
+        )
 
 
 async def _coinmap_shot_from_network_async(
@@ -745,7 +693,6 @@ async def coinmap_capture_plan_async(
     prev_symbol: Optional[str] = None
     try:
         for step in plan:
-            net_start = len(net_capture._records)
             await _coinmap_unstick_fullscreen_loop_start_async(page, cd)
             sym = step["symbol"]
             interval = step["interval"]
@@ -781,6 +728,7 @@ async def coinmap_capture_plan_async(
             )
             await _coinmap_select_interval_async(page, cd, interval)
             await page.wait_for_timeout(int(cd.get("after_interval_change_settle_ms", settle_ms)))
+            net_start = len(net_capture._records)
 
             step_ctx: dict[str, Any] = {
                 "symbol": sym,

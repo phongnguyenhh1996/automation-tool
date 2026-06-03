@@ -146,6 +146,136 @@ def _network_capture_use_first_response_only(api_cd: dict[str, Any]) -> bool:
     return True
 
 
+def _network_capture_prefer_nonempty_response(api_cd: dict[str, Any]) -> bool:
+    """When true with first-only mode, skip empty/stale filtered arrays and take the next response."""
+    if "network_capture_prefer_nonempty_response" in api_cd:
+        return bool(api_cd["network_capture_prefer_nonempty_response"])
+    return True
+
+
+def _network_capture_require_nonempty(api_cd: dict[str, Any]) -> bool:
+    """Wait until required endpoints have a non-empty filtered body before ending the shot."""
+    if "network_capture_require_nonempty" in api_cd:
+        return bool(api_cd["network_capture_require_nonempty"])
+    return True
+
+
+def _coinmap_filtered_list_for_step(
+    body: Any,
+    *,
+    step_ctx: Optional[dict[str, Any]],
+    api_cd: dict[str, Any],
+) -> list[Any]:
+    sym = (step_ctx or {}).get("symbol")
+    iv = (step_ctx or {}).get("interval")
+    relax = _relax_symbol_filter_from_api_cd(api_cd)
+    filtered = _filter_coinmap_api_array_by_step(
+        body, symbol=sym, interval=iv, relax_symbol_if_empty=relax
+    )
+    return filtered if isinstance(filtered, list) else []
+
+
+def _coinmap_pick_network_record(
+    matching: list[dict[str, Any]],
+    *,
+    step_ctx: Optional[dict[str, Any]],
+    api_cd: dict[str, Any],
+) -> Optional[dict[str, Any]]:
+    """Choose one gateway response for an endpoint within a shot slice."""
+    if not matching:
+        return None
+    first_only = _network_capture_use_first_response_only(api_cd)
+    prefer_nonempty = _network_capture_prefer_nonempty_response(api_cd)
+    if first_only:
+        if prefer_nonempty:
+            for r in matching:
+                if r.get("ok") and isinstance(r.get("body"), list):
+                    if len(_coinmap_filtered_list_for_step(r["body"], step_ctx=step_ctx, api_cd=api_cd)) > 0:
+                        return r
+            for r in reversed(matching):
+                if r.get("ok") and isinstance(r.get("body"), list):
+                    return r
+        return matching[0]
+    max_per = int(api_cd.get("network_capture_max_responses_per_endpoint", 2))
+    if max_per > 0 and len(matching) > max_per:
+        matching = matching[:max_per]
+    return matching[-1]
+
+
+def coinmap_network_last_body_per_key(
+    slice_: list[dict[str, Any]],
+    *,
+    step_ctx: Optional[dict[str, Any]],
+    api_cd: dict[str, Any],
+) -> dict[str, Any]:
+    """Build per-endpoint bodies from captured gateway responses for one chart shot."""
+    sym = (step_ctx or {}).get("symbol")
+    iv = (step_ctx or {}).get("interval")
+    merge = bool(api_cd.get("merge_repeated_endpoint_responses", True))
+    if _network_capture_use_first_response_only(api_cd):
+        merge = False
+    max_per = int(api_cd.get("network_capture_max_responses_per_endpoint", 2))
+    relax = _relax_symbol_filter_from_api_cd(api_cd)
+    out: dict[str, Any] = {}
+    for key in _COINMAP_API_KEYS:
+        matching = [r for r in slice_ if r.get("key") == key]
+        if not _network_capture_use_first_response_only(api_cd) and max_per > 0 and len(matching) > max_per:
+            matching = matching[:max_per]
+        if not matching:
+            out[key] = {
+                "ok": False,
+                "status": 0,
+                "body": "no matching response captured (timeout or chart did not call this endpoint)",
+            }
+            continue
+
+        if merge:
+            ok_lists: list[Any] = []
+            last_list_record: Optional[dict[str, Any]] = None
+            for r in matching:
+                if r.get("ok") and isinstance(r.get("body"), list):
+                    filtered = _filter_coinmap_api_array_by_step(
+                        r["body"],
+                        symbol=sym,
+                        interval=iv,
+                        relax_symbol_if_empty=relax,
+                    )
+                    ok_lists.append(filtered)
+                    last_list_record = r
+            if ok_lists:
+                merged = _merge_coinmap_bar_arrays(ok_lists)
+                last = last_list_record or matching[-1]
+                entry: dict[str, Any] = {
+                    "ok": True,
+                    "status": int(last.get("status") or 200),
+                    "body": merged,
+                }
+                if last.get("url"):
+                    entry["url"] = last["url"]
+                out[key] = entry
+                continue
+
+        picked = _coinmap_pick_network_record(matching, step_ctx=step_ctx, api_cd=api_cd)
+        last = picked or matching[-1]
+        raw_body = last.get("body")
+        if isinstance(raw_body, list):
+            raw_body = _filter_coinmap_api_array_by_step(
+                raw_body,
+                symbol=sym,
+                interval=iv,
+                relax_symbol_if_empty=relax,
+            )
+        entry = {
+            "ok": bool(last.get("ok")),
+            "status": int(last.get("status") or 0),
+            "body": raw_body,
+        }
+        if last.get("url"):
+            entry["url"] = last["url"]
+        out[key] = entry
+    return out
+
+
 def _coinmap_endpoint_key_from_response_url(url: str) -> Optional[str]:
     try:
         path = urlparse(url).path or ""
@@ -315,90 +445,41 @@ class CoinmapNetworkCapture:
         poll_ms = max(50, int(self.api_cd.get("network_capture_poll_ms") or 300))
         deadline = time.monotonic() + wait_ms / 1000.0
         while time.monotonic() < deadline:
-            if self._shot_has_all_keys(start_index):
+            if self._shot_has_all_keys(start_index, step_ctx):
                 break
             self.page.wait_for_timeout(poll_ms)
         slice_ = self._records[start_index:]
         return self._last_body_per_key(slice_, step_ctx=step_ctx)
 
-    def _shot_has_all_keys(self, start_index: int) -> bool:
+    def _shot_has_all_keys(
+        self, start_index: int, step_ctx: Optional[dict[str, Any]] = None
+    ) -> bool:
         slice_ = self._records[start_index:]
         seen = {r["key"] for r in slice_}
-        return all(k in seen for k in _COINMAP_NETWORK_CAPTURE_WAIT_KEYS)
+        if not all(k in seen for k in _COINMAP_NETWORK_CAPTURE_WAIT_KEYS):
+            return False
+        if step_ctx is None or not _network_capture_require_nonempty(self.api_cd):
+            return True
+        grouped = coinmap_network_last_body_per_key(
+            slice_, step_ctx=step_ctx, api_cd=self.api_cd
+        )
+        for key in _COINMAP_NETWORK_CAPTURE_WAIT_KEYS:
+            block = grouped.get(key)
+            if not isinstance(block, dict) or not block.get("ok"):
+                return False
+            body = block.get("body")
+            if not isinstance(body, list) or len(body) == 0:
+                return False
+        return True
 
     def _last_body_per_key(
         self,
         slice_: list[dict[str, Any]],
         step_ctx: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
-        sym = (step_ctx or {}).get("symbol")
-        iv = (step_ctx or {}).get("interval")
-        first_only = _network_capture_use_first_response_only(self.api_cd)
-        merge = bool(self.api_cd.get("merge_repeated_endpoint_responses", True))
-        if first_only:
-            merge = False
-        max_per = int(self.api_cd.get("network_capture_max_responses_per_endpoint", 2))
-        relax = _relax_symbol_filter_from_api_cd(self.api_cd)
-        out: dict[str, Any] = {}
-        for key in _COINMAP_API_KEYS:
-            matching = [r for r in slice_ if r.get("key") == key]
-            if first_only:
-                if matching:
-                    matching = [matching[0]]
-            elif max_per > 0 and len(matching) > max_per:
-                matching = matching[:max_per]
-            if not matching:
-                out[key] = {
-                    "ok": False,
-                    "status": 0,
-                    "body": "no matching response captured (timeout or chart did not call this endpoint)",
-                }
-                continue
-
-            if merge:
-                ok_lists: list[Any] = []
-                last_list_record: Optional[dict[str, Any]] = None
-                for r in matching:
-                    if r.get("ok") and isinstance(r.get("body"), list):
-                        filtered = _filter_coinmap_api_array_by_step(
-                            r["body"],
-                            symbol=sym,
-                            interval=iv,
-                            relax_symbol_if_empty=relax,
-                        )
-                        ok_lists.append(filtered)
-                        last_list_record = r
-                if ok_lists:
-                    merged = _merge_coinmap_bar_arrays(ok_lists)
-                    last = last_list_record or matching[-1]
-                    entry: dict[str, Any] = {
-                        "ok": True,
-                        "status": int(last.get("status") or 200),
-                        "body": merged,
-                    }
-                    if last.get("url"):
-                        entry["url"] = last["url"]
-                    out[key] = entry
-                    continue
-
-            last = matching[-1]
-            raw_body = last.get("body")
-            if isinstance(raw_body, list):
-                raw_body = _filter_coinmap_api_array_by_step(
-                    raw_body,
-                    symbol=sym,
-                    interval=iv,
-                    relax_symbol_if_empty=relax,
-                )
-            entry = {
-                "ok": bool(last.get("ok")),
-                "status": int(last.get("status") or 0),
-                "body": raw_body,
-            }
-            if last.get("url"):
-                entry["url"] = last["url"]
-            out[key] = entry
-        return out
+        return coinmap_network_last_body_per_key(
+            slice_, step_ctx=step_ctx, api_cd=self.api_cd
+        )
 
 
 class CoinmapBearerCapture:
@@ -1821,7 +1902,6 @@ def _run_coinmap_multi_shot_flow(
     written: list[Path] = []
     prev_symbol: Optional[str] = None
     for step in plan:
-        net_start = len(net_capture._records) if net_capture is not None else 0
         # If exit-after-capture missed, Escape only (toolbar click would toggle ON when not fullscreen).
         _coinmap_unstick_fullscreen_loop_start(page, cd)
         sym = step["symbol"]
@@ -1859,6 +1939,7 @@ def _run_coinmap_multi_shot_flow(
         )
         _coinmap_select_interval(page, cd, interval)
         page.wait_for_timeout(int(cd.get("after_interval_change_settle_ms", settle_ms)))
+        net_start = len(net_capture._records) if net_capture is not None else 0
 
         step_ctx: dict[str, Any] = {
             "symbol": sym,

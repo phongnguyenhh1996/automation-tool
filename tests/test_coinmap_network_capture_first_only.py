@@ -4,6 +4,7 @@ from automation_tool.coinmap import (
     CoinmapNetworkCapture,
     _coinmap_should_pan_chart,
     _network_capture_use_first_response_only,
+    coinmap_network_last_body_per_key,
 )
 
 
@@ -50,3 +51,37 @@ def test_network_capture_keeps_first_response_per_endpoint() -> None:
     out = cap._last_body_per_key(cap._records, {"symbol": "XAUUSD", "interval": "5m"})
     assert out["getcandlehistory"]["body"] == [{"t": 1, "i": "5m", "s": "XAUUSD"}]
     assert _network_capture_use_first_response_only({"mode": "network_capture"}) is True
+
+
+def test_network_capture_skips_empty_first_response_when_prefer_nonempty() -> None:
+    api_cd = {"mode": "network_capture"}
+    records = [
+        {
+            "key": "getcandlehistory",
+            "ok": True,
+            "status": 200,
+            "body": [{"t": 99, "i": "15m", "s": "XAUUSD"}],
+        },
+        {
+            "key": "getcandlehistory",
+            "ok": True,
+            "status": 200,
+            "body": [{"t": 2, "i": "5m", "s": "XAUUSD"}],
+        },
+        {
+            "key": "getorderflowhistory",
+            "ok": True,
+            "status": 200,
+            "body": [{"t": 2, "i": "5m", "s": "XAUUSD"}],
+        },
+        {
+            "key": "getindicatorsvwap",
+            "ok": True,
+            "status": 200,
+            "body": [{"t": 2, "i": "5m", "s": "XAUUSD"}],
+        },
+    ]
+    out = coinmap_network_last_body_per_key(
+        records, step_ctx={"symbol": "XAUUSD", "interval": "5m"}, api_cd=api_cd
+    )
+    assert out["getcandlehistory"]["body"] == [{"t": 2, "i": "5m", "s": "XAUUSD"}]
