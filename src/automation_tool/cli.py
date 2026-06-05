@@ -42,18 +42,24 @@ from automation_tool.openai_prompt_flow import (
     build_intraday_update_user_text,
     build_scalp_update_user_text,
     default_analysis_prompt,
+    default_gc_analysis_prompt,
     is_first_intraday_update_after_all,
     run_analysis_responses_flow,
     run_single_followup_responses,
 )
 from automation_tool.images import (
     CHART_SLOT_COUNT,
+    GC_CHART_SLOT_COUNT,
     ChartOpenAIPayload,
     coinmap_main_pair_interval_json_path,
     effective_chart_image_order,
+    ensure_gc_manual_url_placeholders,
+    is_gc_mode,
     latest_chart_stamp,
     ordered_chart_openai_payloads,
     stamp_from_capture_paths,
+    wait_for_gc_manual_urls,
+    write_gc_mode_marker,
 )
 from automation_tool.chart_payload_validate import list_invalid_chart_slots_for_stamp
 from automation_tool.chart_recapture import recapture_failed_chart_slots
@@ -590,6 +596,20 @@ def _parser() -> argparse.ArgumentParser:
             "Không xóa zones_state.json trước capture/phân tích "
             "(mặc định: chỉ xóa khi `all` chạy trong slot sáng)"
         ),
+    )
+    al.add_argument(
+        "--gc",
+        action="store_true",
+        help=(
+            "Chỉ TradingView + ảnh GC Vàng Futures manual (gc_m15.url, gc_m5.url); "
+            "bỏ Coinmap"
+        ),
+    )
+    al.add_argument(
+        "--gc-poll-seconds",
+        type=float,
+        default=30.0,
+        help="Khoảng cách poll khi chờ URL GC (mặc định: 30)",
     )
     al.add_argument(
         "--mt5-accounts-json",
@@ -1934,7 +1954,10 @@ def _resolved_analysis_prompt(args: argparse.Namespace, charts_dir: Path) -> str
         return str(p)
     from automation_tool.images import read_main_chart_symbol
 
-    return default_analysis_prompt(read_main_chart_symbol(charts_dir))
+    sym = read_main_chart_symbol(charts_dir)
+    if is_gc_mode(charts_dir):
+        return default_gc_analysis_prompt(sym)
+    return default_analysis_prompt(sym)
 
 
 def _warn_if_incomplete_chart_payloads(
@@ -1949,10 +1972,11 @@ def _warn_if_incomplete_chart_payloads(
     )
 
     main_sym = read_main_chart_symbol(charts_dir)
-    _dxy, main_m = coinmap_merged_openai_files(charts_dir, st, main_sym)
     expected = len(effective_chart_image_order(charts_dir))
-    if main_m is not None:
-        expected -= 1
+    if not is_gc_mode(charts_dir):
+        _dxy, main_m = coinmap_merged_openai_files(charts_dir, st, main_sym)
+        if main_m is not None:
+            expected -= 1
     if len(payloads) < expected:
         print(
             f"Warning: expected {expected} chart slot(s) in fixed order, found {len(payloads)} file(s) on disk.",
@@ -2762,10 +2786,12 @@ def cmd_all(args: argparse.Namespace) -> None:
 
     cfg = args.config or default_coinmap_config_path()
     storage = args.storage_state or default_storage_state_path()
+    gc_mode = bool(getattr(args, "gc", False))
     _log.info(
-        "all: bắt đầu | tv_yaml=%s charts=%s no_tradingview=%s no_tv_journal=%s",
+        "all: bắt đầu | tv_yaml=%s charts=%s gc=%s no_tradingview=%s no_tv_journal=%s",
         cfg,
         args.charts_dir if args.charts_dir is not None else "(default)",
+        gc_mode,
         args.no_tradingview,
         args.no_tv_journal_monitor,
     )
@@ -2774,24 +2800,29 @@ def cmd_all(args: argparse.Namespace) -> None:
         title=f"Phân tích vào lúc {_now_clock_hcm()} bắt đầu chạy",
         no_telegram=args.no_telegram,
     )
-    paths = capture_charts(
-        coinmap_yaml=cfg,
-        charts_dir=args.charts_dir,
-        storage_state_path=storage,
-        email=s.coinmap_email,
-        password=s.coinmap_password,
-        tradingview_password=s.tradingview_password,
-        save_storage_state=not args.no_save_storage,
-        headless=not args.headed,
-        reuse_browser_context=None,
-        main_chart_symbol=args.main_symbol,
-        tradingview_force_screenshot=True,
-        write_coinmap_merged_after_capture=False,
-    )
+    capture_kw: dict[str, object] = {
+        "coinmap_yaml": cfg,
+        "charts_dir": args.charts_dir,
+        "storage_state_path": storage,
+        "email": s.coinmap_email,
+        "password": s.coinmap_password,
+        "tradingview_password": s.tradingview_password,
+        "save_storage_state": not args.no_save_storage,
+        "headless": not args.headed,
+        "reuse_browser_context": None,
+        "main_chart_symbol": args.main_symbol,
+        "tradingview_force_screenshot": True,
+        "write_coinmap_merged_after_capture": False,
+    }
+    if gc_mode:
+        capture_kw["enable_coinmap"] = False
+    paths = capture_charts(**capture_kw)
     charts_dir = args.charts_dir or default_charts_dir()
+    if gc_mode:
+        write_gc_mode_marker(charts_dir)
     n_art = len(paths)
     print(f"Captured {n_art} file(s) (screenshots and/or API JSON paths returned by capture).")
-    _log.info("all: capture xong | %s artifact(s)", n_art)
+    _log.info("all: capture xong | %s artifact(s) | gc=%s", n_art, gc_mode)
     if not paths:
         raise SystemExit("No chart artifacts captured; aborting analyze step.")
 
@@ -2800,7 +2831,13 @@ def cmd_all(args: argparse.Namespace) -> None:
         raise SystemExit("Could not determine capture stamp from chart artifacts; aborting.")
     _CHART_JSON_VALIDATE_MAX_ROUNDS = 3
     for attempt in range(_CHART_JSON_VALIDATE_MAX_ROUNDS + 1):
-        bad = list_invalid_chart_slots_for_stamp(charts_dir, stamp)
+        bad = list_invalid_chart_slots_for_stamp(
+            charts_dir,
+            stamp,
+            include_gc_url_slots=not gc_mode,
+        )
+        if gc_mode:
+            bad = [x for x in bad if x.source == "tradingview"]
         if not bad:
             break
         if attempt >= _CHART_JSON_VALIDATE_MAX_ROUNDS:
@@ -2836,6 +2873,10 @@ def cmd_all(args: argparse.Namespace) -> None:
         except Exception as e:
             raise SystemExit(f"Recapture after validation failed: {e}") from e
 
+    if gc_mode:
+        ensure_gc_manual_url_placeholders(charts_dir)
+        wait_for_gc_manual_urls(charts_dir, poll_seconds=float(args.gc_poll_seconds))
+
     require_openai(s)
     payloads = ordered_chart_openai_payloads(charts_dir)
     _warn_if_incomplete_chart_payloads(charts_dir, payloads)
@@ -2846,12 +2887,15 @@ def cmd_all(args: argparse.Namespace) -> None:
         )
 
     prompt_all = _resolved_analysis_prompt(args, charts_dir)
+    max_images = args.max_images_per_call
+    if gc_mode and max_images == CHART_SLOT_COUNT:
+        max_images = GC_CHART_SLOT_COUNT
     try:
         out = _run_openai_flow(
             s,
             charts_dir,
             prompt_all,
-            args.max_images_per_call,
+            max_images,
             chart_payloads=payloads,
             on_first_model_text=None,
             model=resolved_openai_model(s, getattr(args, "model", None)),
@@ -2934,7 +2978,7 @@ def cmd_all(args: argparse.Namespace) -> None:
         s,
         charts_dir=charts_dir,
         analysis_prompt=prompt_all,
-        max_images_per_call=args.max_images_per_call,
+        max_images_per_call=max_images,
         chart_payloads=payloads,
         no_telegram=args.no_telegram,
         model=getattr(args, "model", None),

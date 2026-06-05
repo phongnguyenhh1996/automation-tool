@@ -72,7 +72,7 @@ def test_list_invalid_slots_missing_json(tmp_path: Path) -> None:
     write_main_chart_symbol_marker(tmp_path, "XAUUSD")
     stamp = "20260101_120000"
     bad = list_invalid_chart_slots_for_stamp(tmp_path, stamp)
-    assert len(bad) == 10
+    assert len(bad) == 11
     assert all(isinstance(x, ChartSlotIssue) for x in bad)
     assert all("missing" in x.reason.lower() for x in bad)
 
@@ -81,7 +81,9 @@ def test_tradingview_slots_skip_json_when_https_url(tmp_path: Path) -> None:
     write_main_chart_symbol_marker(tmp_path, "XAUUSD")
     stamp = "20260101_120000"
     for sym in ("DXY", "XAUUSD"):
-        intervals = ("4h", "1h", "15m", "5m") if sym == "XAUUSD" else ("4h", "1h", "15m")
+        intervals = (
+            ("4h", "1h", "15m", "15m_ict", "5m") if sym == "XAUUSD" else ("4h", "1h", "15m")
+        )
         for iv in intervals:
             p = tmp_path / f"{stamp}_tradingview_{sym}_{iv}.url"
             p.write_text("https://example.invalid/snap\n", encoding="utf-8")
@@ -100,6 +102,7 @@ def test_tradingview_slots_skip_json_when_png_only(tmp_path: Path) -> None:
         ("XAUUSD", "4h"),
         ("XAUUSD", "1h"),
         ("XAUUSD", "15m"),
+        ("XAUUSD", "15m_ict"),
         ("XAUUSD", "5m"),
     ):
         (tmp_path / f"{stamp}_tradingview_{sym}_{iv}.png").write_bytes(b"\x89PNG\r\n\x1a\n")
