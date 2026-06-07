@@ -87,7 +87,7 @@ coinmap-automation chatgpt-project --no-telegram
 Options:
 
 - `--prompt` — User message before chart images (default: Vietnamese XAUUSD workflow + JSON schema hints).
-- `--max-images-per-call` — Split payloads across multiple API calls (default `14` = 11 slots + 3 Coinmap PNG extras; `10` for `all --gc`).
+- `--max-images-per-call` — Split payloads across multiple API calls (default `14` = 11 slots + 3 Coinmap PNG extras).
 - `--no-telegram` — Print only; do not send to Telegram (`analyze`, `all`, `chatgpt-project`).
 - `--no-tradingview` / `--no-tv-journal-monitor` — On **`all`**, skip TradingView alert sync / skip the journal monitor step after sync (see `coinmap-automation all --help`).
 - **`all`** — Before capture, deletes `last_alert_prices.json` for the active symbol (or `--last-alert-json` path) so the run does not inherit yesterday’s statuses / `trade_line` / tickets. Pass **`--no-clear-last-alert`** to keep the existing file and merge as before. On OpenAI success, writes **`last_response_id.txt`** and **`last_all_response_id.txt`** (same response id for intraday routing). On success, if the model output parses as JSON, **`data/{SYMBOL}/morning_full_analysis.json`** is written (exact Schema A object for intraday).

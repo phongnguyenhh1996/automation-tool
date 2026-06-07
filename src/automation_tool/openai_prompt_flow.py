@@ -82,26 +82,6 @@ def default_analysis_prompt(main_symbol: str | None = None) -> str:
     )
 
 
-def default_gc_analysis_prompt(main_symbol: str | None = None) -> str:
-    """
-    User message for ``all --gc``: TradingView as usual; GC Futures M15/M5 from manual URLs.
-    """
-    sym = DEFAULT_MAIN_CHART_SYMBOL
-    if main_symbol and str(main_symbol).strip():
-        try:
-            sym = normalize_main_chart_symbol(str(main_symbol).strip())
-        except ValueError:
-            pass
-    return (
-        "[FULL_ANALYSIS]\n"
-        f"Cặp chính: {sym}.\n"
-        "Đính kèm theo thứ tự, 10 dữ liệu: "
-        "TradingView DXY (H4, H1, M15) → "
-        f"TradingView {sym} (H4, H1, M15, M15 Session Liquidity Check / ICT Killzones, M5) → "
-        "GC Vàng Futures M15 + M5 (ảnh screenshot manual từ gc_m15.url / gc_m5.url).\n"
-    )
-
-
 # Tương thích ngược: prompt mặc định khi cặp = XAUUSD
 DEFAULT_ANALYSIS_PROMPT = default_analysis_prompt(DEFAULT_MAIN_CHART_SYMBOL)
 DEFAULT_FIRST_PROMPT = DEFAULT_ANALYSIS_PROMPT

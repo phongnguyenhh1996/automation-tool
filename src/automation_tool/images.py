@@ -3,11 +3,9 @@ from __future__ import annotations
 import base64
 import mimetypes
 import re
-import sys
-import time
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Literal, Optional, Tuple, Union
+from typing import Optional, Tuple, Union
 
 # OpenAI multimodal slot: ``json`` → Path; ``image`` → PNG on disk; ``image_url`` → https string.
 ChartOpenAIPayload = Tuple[str, Union[Path, str]]
@@ -16,11 +14,6 @@ ChartOpenAIPayload = Tuple[str, Union[Path, str]]
 MAIN_CHART_SYMBOL_FILENAME = ".main_chart_symbol"
 GLOBAL_MAIN_CHART_SYMBOL_FILENAME = ".main_chart_symbol"
 DEFAULT_MAIN_CHART_SYMBOL = "XAUUSD"
-
-GC_MANUAL_URL_M15 = "gc_m15.url"
-GC_MANUAL_URL_M5 = "gc_m5.url"
-GC_MODE_MARKER = ".gc_mode"
-
 
 def normalize_main_chart_symbol(s: str) -> str:
     """Uppercase forex/crypto pair id for filenames (watchlist id on Coinmap / TV label)."""
@@ -150,33 +143,6 @@ def openai_payload_max_for_order(
 OPENAI_PAYLOAD_MAX = openai_payload_max_for_order(CHART_IMAGE_ORDER)
 
 
-def chart_image_order_for_gc(main_sym: str) -> tuple[tuple[str, str, str], ...]:
-    """
-    ``all --gc``: TradingView slots unchanged; Coinmap replaced by manual GC Futures URLs.
-
-    **10 slots:** DXY TV H4/H1/M15 → main TV H4/H1/M15/M15 ICT/M5 → GC M15 + M5 (``gc_*.url``).
-    """
-    m = normalize_main_chart_symbol(main_sym)
-    return (
-        ("tradingview", "DXY", "4h"),
-        ("tradingview", "DXY", "1h"),
-        ("tradingview", "DXY", "15m"),
-        ("tradingview", m, "4h"),
-        ("tradingview", m, "1h"),
-        ("tradingview", m, "15m"),
-        ("tradingview", m, "15m_ict"),
-        ("tradingview", m, "5m"),
-        ("gc_url", "GC", "15m"),
-        ("gc_url", "GC", "5m"),
-    )
-
-
-GC_CHART_SLOT_COUNT = len(chart_image_order_for_gc(DEFAULT_MAIN_CHART_SYMBOL))
-GC_OPENAI_PAYLOAD_MAX = openai_payload_max_for_order(
-    chart_image_order_for_gc(DEFAULT_MAIN_CHART_SYMBOL)
-)
-
-
 def read_main_chart_symbol(charts_dir: Optional[Path] = None) -> str:
     """
     Main pair for filename slots.
@@ -218,80 +184,7 @@ def clear_main_chart_symbol_marker(charts_dir: Path) -> None:
         pass
 
 
-def is_gc_mode(charts_dir: Path) -> bool:
-    """True when ``charts_dir`` has a ``.gc_mode`` marker (``all --gc`` batch)."""
-    return (charts_dir / GC_MODE_MARKER).is_file()
-
-
-def write_gc_mode_marker(charts_dir: Path) -> None:
-    """Mark charts_dir as GC manual-URL mode for ordering, validation, and prompts."""
-    charts_dir.mkdir(parents=True, exist_ok=True)
-    (charts_dir / GC_MODE_MARKER).write_text("1\n", encoding="utf-8")
-
-
-def _gc_manual_url_path(charts_dir: Path, which: Literal["m15", "m5"]) -> Path:
-    name = GC_MANUAL_URL_M15 if which == "m15" else GC_MANUAL_URL_M5
-    return charts_dir / name
-
-
-def _read_url_first_line(path: Path) -> Optional[str]:
-    if not path.is_file():
-        return None
-    try:
-        raw = path.read_text(encoding="utf-8").strip().splitlines()
-    except OSError:
-        return None
-    line = (raw[0] if raw else "").strip()
-    if line.startswith("http://") or line.startswith("https://"):
-        return line
-    return None
-
-
-def read_gc_manual_url(charts_dir: Path, which: Literal["m15", "m5"]) -> Optional[str]:
-    """First https line from ``gc_m15.url`` or ``gc_m5.url``, or ``None``."""
-    return _read_url_first_line(_gc_manual_url_path(charts_dir, which))
-
-
-def ensure_gc_manual_url_placeholders(charts_dir: Path) -> tuple[Path, Path]:
-    """Create empty ``gc_m15.url`` / ``gc_m5.url`` if missing (user fills with screenshot URLs)."""
-    charts_dir.mkdir(parents=True, exist_ok=True)
-    p15 = _gc_manual_url_path(charts_dir, "m15")
-    p5 = _gc_manual_url_path(charts_dir, "m5")
-    for p in (p15, p5):
-        if not p.is_file():
-            p.write_text("", encoding="utf-8")
-    return p15, p5
-
-
-def wait_for_gc_manual_urls(charts_dir: Path, *, poll_seconds: float = 30.0) -> None:
-    """
-    Block until both GC manual URL files have a valid https first line.
-    Polls indefinitely (``poll_seconds`` between checks).
-    """
-    poll = max(1.0, float(poll_seconds))
-    p15, p5 = ensure_gc_manual_url_placeholders(charts_dir)
-    while True:
-        u15 = read_gc_manual_url(charts_dir, "m15")
-        u5 = read_gc_manual_url(charts_dir, "m5")
-        if u15 and u5:
-            return
-        missing: list[str] = []
-        if not u15:
-            missing.append(p15.name)
-        if not u5:
-            missing.append(p5.name)
-        print(
-            f"Chờ URL GC Vàng Futures: dán https vào {', '.join(missing)} "
-            f"trong {charts_dir} (poll {poll:.0f}s)...",
-            flush=True,
-            file=sys.stderr,
-        )
-        time.sleep(poll)
-
-
 def effective_chart_image_order(charts_dir: Path) -> tuple[tuple[str, str, str], ...]:
-    if is_gc_mode(charts_dir):
-        return chart_image_order_for_gc(read_main_chart_symbol(charts_dir))
     return chart_image_order_for_main_symbol(read_main_chart_symbol(charts_dir))
 
 _STAMP_RE = re.compile(r"^(\d{8}_\d{6})_(?:tradingview|coinmap)_")
@@ -415,12 +308,7 @@ def ordered_chart_openai_payloads(
     order = effective_chart_image_order(charts_dir)
     out: list[ChartOpenAIPayload] = []
     for src, sym, iv in order:
-        if src == "gc_url":
-            which: Literal["m15", "m5"] = "m15" if iv == "15m" else "m5"
-            line = read_gc_manual_url(charts_dir, which)
-            if line:
-                out.append(("image_url", line))
-        elif src == "coinmap":
+        if src == "coinmap":
             if dxy_merged is not None and sym == "DXY" and iv == "15m":
                 _append_coinmap_openai_payloads(
                     out,

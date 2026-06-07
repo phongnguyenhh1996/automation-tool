@@ -17,8 +17,6 @@ from typing import Any, Optional
 
 from automation_tool.coinmap_merged import validate_coinmap_merged_payload
 from automation_tool.images import (
-    GC_MANUAL_URL_M15,
-    GC_MANUAL_URL_M5,
     coinmap_merged_openai_files,
     effective_chart_image_order,
     read_main_chart_symbol,
@@ -65,7 +63,7 @@ def _load_json(path: Path) -> tuple[Optional[dict[str, Any]], Optional[str]]:
 class ChartSlotIssue:
     """One failed slot in fixed chart order."""
 
-    source: str  # "coinmap" | "tradingview" | "gc_url"
+    source: str  # "coinmap" | "tradingview"
     symbol: str
     interval: str
     expected_path: Path
@@ -142,48 +140,9 @@ def _tradingview_slot_validation_issue(
     )
 
 
-def _gc_url_slot_validation_issue(
-    charts_dir: Path,
-    iv: str,
-) -> Optional[ChartSlotIssue]:
-    """None if ``gc_m15.url`` / ``gc_m5.url`` has a valid https first line."""
-    fname = GC_MANUAL_URL_M15 if iv == "15m" else GC_MANUAL_URL_M5
-    up = charts_dir / fname
-    if not up.is_file():
-        return ChartSlotIssue(
-            source="gc_url",
-            symbol="GC",
-            interval=iv,
-            expected_path=up,
-            reason=f"missing {fname}",
-        )
-    try:
-        raw = up.read_text(encoding="utf-8").strip().splitlines()
-    except OSError as e:
-        return ChartSlotIssue(
-            source="gc_url",
-            symbol="GC",
-            interval=iv,
-            expected_path=up,
-            reason=f"read error: {e}",
-        )
-    line = (raw[0] if raw else "").strip()
-    if line.startswith("http://") or line.startswith("https://"):
-        return None
-    return ChartSlotIssue(
-        source="gc_url",
-        symbol="GC",
-        interval=iv,
-        expected_path=up,
-        reason=f"{fname} first line is not http(s)",
-    )
-
-
 def list_invalid_chart_slots_for_stamp(
     charts_dir: Path,
     stamp: str,
-    *,
-    include_gc_url_slots: bool = True,
 ) -> list[ChartSlotIssue]:
     """
     Check each slot in ``effective_chart_image_order`` against what
@@ -191,7 +150,6 @@ def list_invalid_chart_slots_for_stamp(
 
     Coinmap slots require ``.json`` (or merged paths) with valid payload.
     TradingView accepts ``.json`` (validated), else ``.url`` (https) or ``.png``.
-    GC mode skips Coinmap; ``gc_url`` slots use ``gc_m15.url`` / ``gc_m5.url``.
     """
     if not stamp or not charts_dir.is_dir():
         return []
@@ -200,13 +158,6 @@ def list_invalid_chart_slots_for_stamp(
     order = effective_chart_image_order(charts_dir)
     issues: list[ChartSlotIssue] = []
     for src, sym, iv in order:
-        if src == "gc_url":
-            if not include_gc_url_slots:
-                continue
-            gc_issue = _gc_url_slot_validation_issue(charts_dir, iv)
-            if gc_issue is not None:
-                issues.append(gc_issue)
-            continue
         if src == "coinmap" and dxy_m is not None and sym == "DXY" and iv == "15m":
             jp = dxy_m
         elif src == "coinmap" and main_m is not None and sym == main_sym and iv == "15m":
