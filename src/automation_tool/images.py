@@ -139,6 +139,17 @@ CHART_IMAGE_ORDER: tuple[tuple[str, str, str], ...] = chart_image_order_for_main
 CHART_SLOT_COUNT = len(CHART_IMAGE_ORDER)
 
 
+def openai_payload_max_for_order(
+    order: tuple[tuple[str, str, str], ...],
+) -> int:
+    """Upper bound when each Coinmap slot sends JSON + PNG alongside other slot payloads."""
+    return len(order) + sum(1 for src, _, _ in order if src == "coinmap")
+
+
+# Default ``--max-images-per-call`` for full analysis (11 slots + 3 Coinmap PNG extras).
+OPENAI_PAYLOAD_MAX = openai_payload_max_for_order(CHART_IMAGE_ORDER)
+
+
 def chart_image_order_for_gc(main_sym: str) -> tuple[tuple[str, str, str], ...]:
     """
     ``all --gc``: TradingView slots unchanged; Coinmap replaced by manual GC Futures URLs.
@@ -161,6 +172,9 @@ def chart_image_order_for_gc(main_sym: str) -> tuple[tuple[str, str, str], ...]:
 
 
 GC_CHART_SLOT_COUNT = len(chart_image_order_for_gc(DEFAULT_MAIN_CHART_SYMBOL))
+GC_OPENAI_PAYLOAD_MAX = openai_payload_max_for_order(
+    chart_image_order_for_gc(DEFAULT_MAIN_CHART_SYMBOL)
+)
 
 
 def read_main_chart_symbol(charts_dir: Optional[Path] = None) -> str:
@@ -356,6 +370,28 @@ def coinmap_merged_openai_files(
     return d_ok, m_ok
 
 
+def _append_coinmap_openai_payloads(
+    out: list[ChartOpenAIPayload],
+    *,
+    charts_dir: Path,
+    stamp: str,
+    sym: str,
+    iv: str,
+    json_path: Optional[Path] = None,
+) -> None:
+    """Append Coinmap JSON and/or PNG for one slot (both when present)."""
+    jp = (
+        json_path
+        if json_path is not None
+        else charts_dir / f"{stamp}_coinmap_{sym}_{iv}.json"
+    )
+    pp = charts_dir / f"{stamp}_coinmap_{sym}_{iv}.png"
+    if jp.is_file():
+        out.append(("json", jp))
+    if pp.is_file():
+        out.append(("image", pp))
+
+
 def ordered_chart_openai_payloads(
     charts_dir: Path, *, stamp: Optional[str] = None
 ) -> list[ChartOpenAIPayload]:
@@ -363,11 +399,11 @@ def ordered_chart_openai_payloads(
     Same slot order as ``effective_chart_image_order(charts_dir)`` (for OpenAI step 2).
 
     * **TradingView** — prefer ``.json`` (tvdatafeed OHLC) else ``.url`` (snapshot) else ``.png``.
-    * **Coinmap** — prefer ``.json`` (API export) over ``.png`` so analysis can run
-      without screenshots while keeping the same ordering as when images were used.
+    * **Coinmap** — attach ``.json`` (API export) when present, and **also** ``.png`` when present
+      (JSON-only still works when screenshots are disabled).
     * When **merged** files exist (see :func:`coinmap_merged_openai_files`), DXY 15m uses
       ``DXY_merged.json``; main M15 + M5 collapse to a single ``{MAIN}_merged.json`` attachment
-      (9 total payloads with both merges vs 10 with raw per-TF).
+      (merged main M5 JSON slot skipped; PNG for M5 still attached when on disk).
     """
     if not charts_dir.is_dir():
         return []
@@ -386,19 +422,33 @@ def ordered_chart_openai_payloads(
                 out.append(("image_url", line))
         elif src == "coinmap":
             if dxy_merged is not None and sym == "DXY" and iv == "15m":
-                out.append(("json", dxy_merged))
+                _append_coinmap_openai_payloads(
+                    out,
+                    charts_dir=charts_dir,
+                    stamp=st,
+                    sym=sym,
+                    iv=iv,
+                    json_path=dxy_merged,
+                )
                 continue
             if main_merged is not None and sym == main_sym and iv == "15m":
-                out.append(("json", main_merged))
+                _append_coinmap_openai_payloads(
+                    out,
+                    charts_dir=charts_dir,
+                    stamp=st,
+                    sym=sym,
+                    iv=iv,
+                    json_path=main_merged,
+                )
                 continue
             if main_merged is not None and sym == main_sym and iv == "5m":
+                _append_coinmap_openai_payloads(
+                    out, charts_dir=charts_dir, stamp=st, sym=sym, iv=iv, json_path=None
+                )
                 continue
-            jp = charts_dir / f"{st}_coinmap_{sym}_{iv}.json"
-            pp = charts_dir / f"{st}_coinmap_{sym}_{iv}.png"
-            if jp.is_file():
-                out.append(("json", jp))
-            elif pp.is_file():
-                out.append(("image", pp))
+            _append_coinmap_openai_payloads(
+                out, charts_dir=charts_dir, stamp=st, sym=sym, iv=iv
+            )
         else:
             jp = charts_dir / f"{st}_tradingview_{sym}_{iv}.json"
             up = charts_dir / f"{st}_tradingview_{sym}_{iv}.url"

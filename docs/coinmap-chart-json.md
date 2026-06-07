@@ -8,7 +8,7 @@ Tài liệu này mô tả **cấu trúc và ý nghĩa từng field** trong file 
 
 | Thuộc tính | Ý nghĩa |
 |------------|---------|
-| **Nguồn** | **Mặc định (`api_data_export.mode: network_capture`):** tab Coinmap warm sau `coinmap-automation browser up`; capture qua RPC `coinmap_capture_plan` — drive sidebar watchlist/interval trên chart và **bắt response gateway** (`getcandlehistory`, `getorderflowhistory`, `getindicatorsvwap`) với query params do UI Coinmap gửi. Mặc định **không kéo chart** thêm; `network_capture_use_first_response_only` giữ response đầu tiên mỗi endpoint. `api_network_capture_bump_interval` (nếu bật) chỉ đổi interval trước khi chọn khung đích. **`bearer_request` (legacy):** bắt Bearer rồi gọi cm-api bằng httpx với `query_template` — dễ lệch khi Coinmap đổi API. Browser service **bắt buộc** cho capture JSON mặc định. |
+| **Nguồn** | **Mặc định (`api_data_export.mode: bearer_request`):** drive sidebar watchlist/interval trên chart, chụp fullscreen PNG (nếu bật), đồng thời bắt Bearer từ gateway rồi gọi cm-api bằng httpx với `query_template`. Set `bearer_skip_chart_ui: true` để chỉ httpx API (không UI). **`network_capture`:** tab Coinmap warm sau `browser up`; bắt response gateway (`getcandlehistory`, `getorderflowhistory`, `getindicatorsvwap`) với query params do UI gửi. |
 | **Tên file** | `{stamp}_coinmap_{SYMBOL}_{interval}.json` (ví dụ `20260329_164526_coinmap_XAUUSD_5m.json`). |
 | **Không bọc lỗi HTTP** | Mỗi khóa API chứa **body JSON đã parse** (mảng/object) hoặc `null` nếu không bắt được response. |
 | **Đúng khung thời gian** | Khi ghi file, tool **chỉ giữ** các phần tử có `i` trùng `interval` của shot (và `s` trùng `symbol` watchlist nếu có). Nếu sau lọc strict không còn dòng và `relax_symbol_filter_if_empty: true`, tool thử lọc **chỉ theo `i`** (cùng khung thời gian). |
@@ -24,6 +24,11 @@ Tài liệu này mô tả **cấu trúc và ý nghĩa từng field** trong file 
 | `coinmap_symbol` | string \| omitted | Chỉ có khi `symbol` khác mã watchlist: mã thật trên Coinmap (ví dụ `USDINDEX`). |
 | `interval` | string | Khung thời gian (ví dụ `5m`, `15m`, `1h`). |
 | `watchlist_category` | string \| null | Danh mục watchlist nếu có. |
+| `typedata` | string \| omitted | Từ `query_template` (ví dụ `dly`) — loại dữ liệu cm-api. |
+| `exchange` | string \| omitted | Sàn trong `query_template` (ví dụ `AXI`). |
+| `type` | string \| omitted | Loại tài sản (`forex`, …) từ `query_template`. |
+| `resolution` | string \| omitted | Độ phân giải nến (phút) đã resolve từ `{resolution}`. |
+| `period`, `source`, `bandsmultiplier`, `from`, `to`, `countback` | string \| omitted | Các tham số cm-api khác sau khi thay placeholder (nếu có trong `query_template`). Cấu hình danh sách: `api_data_export.export_query_keys`. |
 | `getcandlehistory` | array \| null | Lịch sử nến + chỉ số tổng hợp. |
 | `getorderflowhistory` | array \| null | Order flow theo **mức giá** trong từng nến. |
 | `getindicatorsvwap` | array \| null | Chuỗi điểm **VWAP + dải độ lệch chuẩn**. |

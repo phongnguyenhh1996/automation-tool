@@ -48,8 +48,8 @@ from automation_tool.openai_prompt_flow import (
     run_single_followup_responses,
 )
 from automation_tool.images import (
-    CHART_SLOT_COUNT,
-    GC_CHART_SLOT_COUNT,
+    GC_OPENAI_PAYLOAD_MAX,
+    OPENAI_PAYLOAD_MAX,
     ChartOpenAIPayload,
     coinmap_main_pair_interval_json_path,
     effective_chart_image_order,
@@ -296,7 +296,7 @@ def _parser() -> argparse.ArgumentParser:
     a.add_argument(
         "--max-images-per-call",
         type=int,
-        default=CHART_SLOT_COUNT,
+        default=OPENAI_PAYLOAD_MAX,
         help="Max items per OpenAI call (TradingView images + Coinmap JSON blocks)",
     )
     a.add_argument(
@@ -482,7 +482,7 @@ def _parser() -> argparse.ArgumentParser:
     am.add_argument(
         "--max-images-per-call",
         type=int,
-        default=CHART_SLOT_COUNT,
+        default=OPENAI_PAYLOAD_MAX,
         help="Max items per OpenAI call (TradingView images + Coinmap JSON blocks)",
     )
     am.add_argument(
@@ -532,7 +532,7 @@ def _parser() -> argparse.ArgumentParser:
     al.add_argument(
         "--max-images-per-call",
         type=int,
-        default=CHART_SLOT_COUNT,
+        default=OPENAI_PAYLOAD_MAX,
         help="Max items per OpenAI call (images + Coinmap JSON)",
     )
     al.add_argument("--no-telegram", action="store_true")
@@ -650,7 +650,7 @@ def _parser() -> argparse.ArgumentParser:
     al2.add_argument(
         "--max-images-per-call",
         type=int,
-        default=CHART_SLOT_COUNT,
+        default=OPENAI_PAYLOAD_MAX,
         help="Max items per OpenAI call (images + Coinmap JSON)",
     )
     al2.add_argument("--no-telegram", action="store_true")
@@ -1277,7 +1277,7 @@ def _parser() -> argparse.ArgumentParser:
     g.add_argument(
         "--max-images-per-call",
         type=int,
-        default=CHART_SLOT_COUNT,
+        default=OPENAI_PAYLOAD_MAX,
         help="Max items per OpenAI call (images + Coinmap JSON)",
     )
     g.add_argument(
@@ -2888,8 +2888,8 @@ def cmd_all(args: argparse.Namespace) -> None:
 
     prompt_all = _resolved_analysis_prompt(args, charts_dir)
     max_images = args.max_images_per_call
-    if gc_mode and max_images == CHART_SLOT_COUNT:
-        max_images = GC_CHART_SLOT_COUNT
+    if gc_mode and max_images == OPENAI_PAYLOAD_MAX:
+        max_images = GC_OPENAI_PAYLOAD_MAX
     try:
         out = _run_openai_flow(
             s,

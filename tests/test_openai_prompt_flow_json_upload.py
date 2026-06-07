@@ -15,6 +15,7 @@ from automation_tool.state_files import MORNING_FULL_ANALYSIS_FILENAME
 from automation_tool.openai_prompt_flow import (
     _build_mixed_chart_user_content,
     _prepare_json_headers_bodies,
+    default_analysis_prompt,
     run_analysis_responses_flow,
 )
 from automation_tool.cloudinary_json import purge_json_attachment_folder
@@ -205,3 +206,31 @@ def test_purge_json_folder_calls_cloudinary_api() -> None:
     call_kw = d.call_args
     assert call_kw[0][0]  # prefix non-empty
     assert call_kw[1].get("resource_type") == "raw"
+
+
+def test_default_analysis_prompt_describes_json_and_png() -> None:
+    p = default_analysis_prompt("XAUUSD")
+    assert "[FULL_ANALYSIS]" in p
+    assert "14 payload" in p
+    assert "PNG" in p
+    assert "Ưu tiên đọc ảnh chart" in p
+    assert "Coinmap DXY M15" in p
+
+
+def test_build_mixed_coinmap_json_then_png_header(tmp_path: Path) -> None:
+    j = tmp_path / "stamp_coinmap_DXY_15m.json"
+    png = tmp_path / "stamp_coinmap_DXY_15m.png"
+    j.write_text("{}", encoding="utf-8")
+    png.write_bytes(b"png")
+
+    parts = _build_mixed_chart_user_content(
+        "p",
+        [("json", j), ("image", png)],
+        max_json_chars=100_000,
+    )
+    assert parts[0] == {"type": "input_text", "text": "p"}
+    assert "Coinmap API export" in parts[1]["text"]
+    assert parts[2]["type"] == "input_file"
+    assert "Coinmap fullscreen chart" in parts[3]["text"]
+    assert png.name in parts[3]["text"]
+    assert parts[4]["type"] == "input_image"

@@ -61,7 +61,7 @@ chart_download:
   interval_option_visible_timeout_ms: 15000
   after_interval_select_ms: 800
   after_interval_change_settle_ms: 2000
-  # Chỉ dùng khi mode: network_capture (bắt response từ chart). Với bearer_request + skip UI, bước bump không chạy.
+  # Chỉ dùng khi mode: network_capture (bắt response từ chart). Với bearer_request mặc định (chart UI), bump vẫn chạy khi có bearer/httpx.
   # Trước khung đích: chọn khung khác để gateway refetch (click lại cùng khung thường không gọi API).
   api_network_capture_bump_interval: "30m"
   after_fullscreen_escape_ms: 600
@@ -117,7 +117,7 @@ chart_download:
   chart_pan_drag_steps: 14
   chart_after_adjust_ms: 800
   # false = không chụp PNG Coinmap, chỉ lưu JSON API. network_capture: không kéo chart (lấy response gateway lần load đầu). Pan chỉ khi chụp PNG hoặc chart_view_adjustments_for_network_capture: true.
-  coinmap_screenshot_enabled: false
+  coinmap_screenshot_enabled: true
   # Before screenshot: if layer tooltip is open (height > threshold), click layer-list toggle.
   layer_tooltip_toggle_before_screenshot: true
   layer_tooltip_selector: '[class*="layerTooltip"]'
@@ -125,12 +125,12 @@ chart_download:
   layer_tooltip_min_height_px: 19
   after_layer_toggle_click_ms: 400
 
-  # JSON Coinmap: network_capture trên tab warm (browser up) — bắt response gateway khi chart load; params khớp UI Coinmap.
-  # mode: network_capture (mặc định capture qua warm tab) | bearer_request (legacy httpx) | request (Bearer tĩnh).
-  # Capture JSON bắt buộc browser service: coinmap-automation browser up (tab Coinmap prewarm).
+  # JSON Coinmap: mặc định bearer_request — bắt Bearer từ gateway, gọi cm-api bằng httpx, đồng thời drive chart UI + fullscreen PNG.
+  # mode: bearer_request (mặc định) | network_capture (bắt response gateway trên tab warm) | request (Bearer tĩnh).
+  # bearer_skip_chart_ui: true → chỉ httpx API (không sidebar / fullscreen). Mặc định false.
   api_data_export:
     enabled: true
-    mode: network_capture
+    mode: bearer_request
     bearer_skip_chart_ui: false
     bearer_http_parallel: true
     bearer_parallel_max_concurrency: 0

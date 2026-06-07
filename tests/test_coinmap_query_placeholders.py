@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from automation_tool.coinmap import (
     _api_export_mode,
+    _api_export_query_metadata,
     _coinmap_endpoint_key_from_response_url,
     _coinmap_auto_from_to_ms,
     _coinmap_interval_minutes,
@@ -11,6 +12,7 @@ from automation_tool.coinmap import (
     _merge_api_query_params,
     _merge_api_query_params_for_endpoint,
     _vn_session_anchor_utc_ms,
+    _write_coinmap_api_shot_json,
 )
 
 
@@ -153,9 +155,68 @@ def test_api_export_mode_defaults_to_bearer_request() -> None:
     assert _api_export_mode({}) == "bearer_request"
 
 
+def test_bearer_skip_chart_ui_defaults_to_false() -> None:
+    from automation_tool.coinmap import _bearer_skip_chart_ui
+
+    assert _bearer_skip_chart_ui({}) is False
+    assert _bearer_skip_chart_ui({"bearer_skip_chart_ui": False}) is False
+    assert _bearer_skip_chart_ui({"bearer_skip_chart_ui": True}) is True
+
+
 def test_bearer_http_parallel_enabled_default_and_off() -> None:
     from automation_tool.coinmap import _bearer_http_parallel_enabled
 
     assert _bearer_http_parallel_enabled({}) is True
     assert _bearer_http_parallel_enabled({"bearer_http_parallel": False}) is False
     assert _bearer_http_parallel_enabled({"bearer_http_parallel": True}) is True
+
+
+def test_api_export_query_metadata_from_template() -> None:
+    api_cd = {
+        "query_template": {
+            "typedata": "dly",
+            "exchange": "AXI",
+            "type": "forex",
+            "asset": "",
+            "symbol": "{symbol}",
+            "resolution": "{resolution}",
+            "countback": "{countback}",
+        },
+        "auto_countback": 500,
+    }
+    shot = {"symbol": "XAUUSD", "interval": "15m"}
+    meta = _api_export_query_metadata(api_cd, shot)
+    assert meta["typedata"] == "dly"
+    assert meta["exchange"] == "AXI"
+    assert meta["type"] == "forex"
+    assert meta["resolution"] == "15"
+    assert meta["countback"] == "500"
+    assert "asset" not in meta
+    assert "symbol" not in meta
+
+
+def test_write_coinmap_json_includes_query_metadata(tmp_path) -> None:
+    api_cd = {
+        "query_template": {"typedata": "dly", "exchange": "AXI", "type": "forex"},
+        "slim_export_on_disk": False,
+    }
+    shot = {
+        "symbol": "XAUUSD",
+        "interval": "5m",
+        "getcandlehistory": {"ok": True, "body": [{"t": 1, "s": "XAUUSD", "i": "5m"}]},
+        "getorderflowhistory": None,
+        "getindicatorsvwap": None,
+    }
+    path = _write_coinmap_api_shot_json(
+        tmp_path,
+        file_stem="stamp_coinmap_XAUUSD_5m",
+        stamp="stamp",
+        shot=shot,
+        api_cd=api_cd,
+    )
+    import json
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["typedata"] == "dly"
+    assert data["exchange"] == "AXI"
+    assert data["type"] == "forex"

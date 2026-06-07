@@ -20,6 +20,7 @@ import yaml
 from playwright.sync_api import BrowserContext, Page, Playwright, sync_playwright
 
 from automation_tool.coinmap_openai_slim import (
+    COINMAP_EXPORT_QUERY_META_KEYS,
     slim_coinmap_export_for_openai,
     trim_coinmap_export_arrays,
 )
@@ -125,6 +126,13 @@ def _api_export_mode(api_cd: dict[str, Any]) -> str:
     if raw in ("bearer_request", "request_bearer", "bearer"):
         return "bearer_request"
     return "network_capture"
+
+
+def _bearer_skip_chart_ui(api_cd: dict[str, Any]) -> bool:
+    """When true, bearer_request skips sidebar / fullscreen UI (httpx API-only). Default: false."""
+    if "bearer_skip_chart_ui" in api_cd:
+        return bool(api_cd["bearer_skip_chart_ui"])
+    return False
 
 
 def _coinmap_should_pan_chart(
@@ -869,6 +877,47 @@ def _merge_api_query_params_for_endpoint(
     return _apply_endpoint_query_overrides(out, api_cd, step, endpoint_key)
 
 
+def _shot_to_api_step(shot: dict[str, Any]) -> dict[str, Any]:
+    step: dict[str, Any] = {
+        "symbol": shot.get("symbol"),
+        "interval": shot.get("interval"),
+        "watchlist_category": shot.get("watchlist_category"),
+    }
+    ex = shot.get("export_symbol")
+    if isinstance(ex, str) and ex.strip():
+        step["export_symbol"] = ex.strip()
+    aq = shot.get("api_query")
+    if isinstance(aq, dict):
+        step["api_query"] = aq
+    return step
+
+
+def _api_export_query_metadata(
+    api_cd: Optional[dict[str, Any]], shot: dict[str, Any]
+) -> dict[str, str]:
+    """Merge ``query_template`` / ``extra_query`` / step ``api_query`` for JSON metadata."""
+    if not api_cd:
+        return {}
+    keys_raw = api_cd.get("export_query_keys")
+    if keys_raw is None:
+        keys = COINMAP_EXPORT_QUERY_META_KEYS
+    elif isinstance(keys_raw, (list, tuple)):
+        keys = tuple(str(k) for k in keys_raw)
+    else:
+        return {}
+    if not keys:
+        return {}
+    merged = _merge_api_query_params(api_cd, _shot_to_api_step(shot))
+    out: dict[str, str] = {}
+    for k in keys:
+        if k not in merged:
+            continue
+        val = str(merged[k]).strip()
+        if val:
+            out[k] = val
+    return out
+
+
 def _merged_coinmap_api_endpoints(api_cd: dict[str, Any]) -> dict[str, str]:
     d = dict(_DEFAULT_COINMAP_GW_ENDPOINTS)
     over = api_cd.get("endpoints")
@@ -1250,6 +1299,9 @@ def _write_coinmap_api_shot_json(
             export_symbol=ex.strip(),
         )
     payload.pop("export_symbol", None)
+    query_meta = _api_export_query_metadata(api_cd, shot)
+    if query_meta:
+        payload.update(query_meta)
     max_items = _api_export_max_array_items(api_cd)
     if max_items is not None:
         payload = trim_coinmap_export_arrays(payload, max_items)
@@ -2207,7 +2259,7 @@ def _run_bearer_request_api_only_flow(
     Login already completed; capture Bearer from network, optional one-shot navigation,
     then fetch cm-api JSON via ``context.request`` (no sidebar / watchlist / pan UI).
 
-    When ``bearer_skip_chart_ui: false``, this function is not used; the main chart flow
+    When ``bearer_skip_chart_ui: true``, this function is used; otherwise the main chart flow
     runs multi-shot UI and passes ``bearer_authorization`` into ``_run_coinmap_multi_shot_flow``.
     """
     _coinmap_bearer_log(
@@ -2269,15 +2321,11 @@ def _run_chart_screenshot_flow(
     """Open chart: multi-shot watchlist sidebar flow, or single fullscreen on current symbol (no modal search)."""
     api_cd = _api_export_config(cd)
     mode = _api_export_mode(api_cd) if api_cd else "network_capture"
-    # bearer_request + API-only: no sidebar / fullscreen PNG (legacy fast path).
-    if (
-        mode == "bearer_request"
-        and api_cd is not None
-        and api_cd.get("bearer_skip_chart_ui") is not False
-    ):
+    # bearer_request + bearer_skip_chart_ui: true — no sidebar / fullscreen PNG (fast path).
+    if mode == "bearer_request" and api_cd is not None and _bearer_skip_chart_ui(api_cd):
         _coinmap_bearer_log(
             api_cd,
-            "chart_download: bearer_request branch = API-only (set bearer_skip_chart_ui: false for full UI)",
+            "chart_download: bearer_request branch = API-only (set bearer_skip_chart_ui: true to skip UI)",
         )
         if bearer_capture is None:
             raise SystemExit(
@@ -2310,19 +2358,15 @@ def _run_chart_screenshot_flow(
         _maybe_dismiss_light_theme_modal(page, cd)
         _maybe_dismiss_coinmap_symbol_search_modal(page, cd)
 
-        if (
-            mode == "bearer_request"
-            and api_cd is not None
-            and api_cd.get("bearer_skip_chart_ui") is False
-        ):
+        if mode == "bearer_request" and api_cd is not None and not _bearer_skip_chart_ui(api_cd):
             _coinmap_bearer_log(
                 api_cd,
-                "chart_download: bearer_request + full UI — wait for Bearer after chart load, "
-                "then multi-shot + cm-api per step",
+                "chart_download: bearer_request + chart UI — wait for Bearer after chart load, "
+                "then multi-shot + cm-api httpx per step",
             )
             if bearer_capture is None:
                 raise SystemExit(
-                    "api_data_export bearer_request with bearer_skip_chart_ui: false requires "
+                    "api_data_export bearer_request with chart UI requires "
                     "bearer capture (internal error: bearer_capture missing)."
                 )
             timeout_ms = int(
@@ -3837,7 +3881,7 @@ def _capture_charts_in_context(
     if (
         api_cd_cache is not None
         and _api_export_mode(api_cd_cache) == "bearer_request"
-        and api_cd_cache.get("bearer_skip_chart_ui") is not False
+        and _bearer_skip_chart_ui(api_cd_cache)
         and _coinmap_bearer_token_cache_enabled(api_cd_cache)
     ):
         cache_p = _coinmap_bearer_token_cache_resolved_path(api_cd_cache)

@@ -20,6 +20,22 @@ from pathlib import Path
 from typing import Any, Optional
 
 
+# Keys from resolved ``query_template`` kept in slim exports and per-shot JSON metadata.
+COINMAP_EXPORT_QUERY_META_KEYS: tuple[str, ...] = (
+    "typedata",
+    "exchange",
+    "type",
+    "asset",
+    "period",
+    "source",
+    "resolution",
+    "bandsmultiplier",
+    "from",
+    "to",
+    "countback",
+)
+
+
 _COINMAP_TRIM_ARRAY_KEYS: tuple[str, ...] = (
     "getcandlehistory",
     "getorderflowhistory",
@@ -102,7 +118,16 @@ def slim_coinmap_export_for_openai(
     n_candles, n_fp = limits
 
     out: dict[str, Any] = {}
-    for k in ("generated_at", "stamp", "symbol", "interval", "watchlist_category"):
+    _preserve = (
+        "generated_at",
+        "stamp",
+        "symbol",
+        "coinmap_symbol",
+        "interval",
+        "watchlist_category",
+        *COINMAP_EXPORT_QUERY_META_KEYS,
+    )
+    for k in _preserve:
         if k in data:
             out[k] = data[k]
 

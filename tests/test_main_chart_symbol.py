@@ -8,12 +8,14 @@ from automation_tool.coinmap import apply_main_chart_symbol_to_config, load_coin
 from automation_tool.config import default_coinmap_config_path
 from automation_tool.images import (
     CHART_SLOT_COUNT,
+    OPENAI_PAYLOAD_MAX,
     chart_image_order_for_main_symbol,
     clear_main_chart_symbol_marker,
     coinmap_main_pair_5m_json_path,
     coinmap_main_pair_interval_json_path,
     effective_chart_image_order,
     normalize_main_chart_symbol,
+    openai_payload_max_for_order,
     read_main_chart_symbol,
     stamp_from_capture_paths,
     write_main_chart_symbol_marker,
@@ -47,6 +49,7 @@ def test_apply_main_chart_symbol_to_config() -> None:
 def test_chart_image_order_for_main_symbol() -> None:
     o = chart_image_order_for_main_symbol("EURUSD")
     assert len(o) == CHART_SLOT_COUNT == 11
+    assert OPENAI_PAYLOAD_MAX == openai_payload_max_for_order(o) == 14
     assert ("tradingview", "EURUSD", "5m") in o
     assert ("coinmap", "EURUSD", "5m") in o
     assert all("XAUUSD" not in x for x in o)

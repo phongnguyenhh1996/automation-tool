@@ -23,7 +23,9 @@ from automation_tool.coinmap_openai_slim import (
     slim_coinmap_export_for_openai,
 )
 from automation_tool.images import (
+    CHART_SLOT_COUNT,
     DEFAULT_MAIN_CHART_SYMBOL,
+    OPENAI_PAYLOAD_MAX,
     ChartOpenAIPayload,
     chunk_payloads,
     image_to_data_url,
@@ -67,11 +69,16 @@ def default_analysis_prompt(main_symbol: str | None = None) -> str:
     return (
         "[FULL_ANALYSIS]\n"
         f"Cặp chính: {sym}.\n"
-        "Đính kèm theo thứ tự (TradingView = JSON; Coinmap = JSON gộp nếu có _merged), "
-        "10–11 dữ liệu: "
+        f"Đính kèm theo thứ tự, tối đa {OPENAI_PAYLOAD_MAX} payload multimodal "
+        f"({CHART_SLOT_COUNT} slot chart; mỗi slot Coinmap có thể kèm JSON cm-api rồi ảnh fullscreen PNG ngay sau):\n"
         "TradingView DXY (H4, H1, M15) → "
-        f"TradingView {sym} (H4, H1, M15, M15 Session Liquidity Check / ICT Killzones, M5) → Coinmap DXY (M15) → "
-        f"Coinmap {sym} (M15 + M5 gộp nếu có file merged, hoặc 2 file riêng).\n"
+        f"TradingView {sym} (H4, H1, M15, M15 Session Liquidity Check / ICT Killzones, M5) "
+        "(snapshot URL/PNG hoặc JSON OHLC tvdatafeed) → "
+        "Coinmap DXY M15 (JSON footprint; PNG fullscreen ngay sau nếu có) → "
+        f"Coinmap {sym} M15 và M5 (mỗi khung: JSON; PNG ngay sau nếu có; hoặc merged JSON thay M15+M5, PNG M5 vẫn riêng).\n"
+        "Ưu tiên đọc ảnh chart (Coinmap PNG, TradingView snapshot); khi dữ liệu không rõ, "
+        "không đọc được trên chart, hoặc cần con số chính xác (order flow, CVD, VWAP, delta, OHLC) "
+        "thì tra JSON cm-api / tvdatafeed tương ứng.\n"
     )
 
 
@@ -235,6 +242,12 @@ def _image_paths_to_data_urls(paths: list[Path]) -> dict[Path, str]:
     return dict(zip(unique, urls))
 
 
+def _coinmap_png_attachment_header(path: Path) -> Optional[str]:
+    if path.suffix.lower() != ".png" or "_coinmap_" not in path.name:
+        return None
+    return f"[Coinmap fullscreen chart — file: {path.name}]\n"
+
+
 def _build_mixed_chart_user_content(
     prompt: str,
     payloads: list[ChartOpenAIPayload],
@@ -273,6 +286,9 @@ def _build_mixed_chart_user_content(
             )
         else:
             assert isinstance(p, Path)
+            hdr = _coinmap_png_attachment_header(p)
+            if hdr:
+                parts.append({"type": "input_text", "text": hdr})
             parts.append(
                 {
                     "type": "input_image",
@@ -492,7 +508,7 @@ def run_analysis_responses_flow(
             n_json = sum(1 for k, _ in batch if k == "json")
             p_text = (
                 f"{analysis_prompt}\n\n"
-                f"(Batch {bi + 1} of {total}: {n_img} image(s), {n_json} Coinmap JSON block(s).)"
+                f"(Batch {bi + 1} of {total}: {n_img} image(s)/URL(s), {n_json} JSON block(s).)"
             )
         try:
             content = _build_mixed_chart_user_content(
