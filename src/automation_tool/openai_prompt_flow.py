@@ -3,8 +3,8 @@ from __future__ import annotations
 """
 OpenAI Responses: user turns are short routing tags + context.
 
-Full trading/output rules live in the OpenAI Prompt (``OPENAI_PROMPT_ID``) — keep that
-prompt in sync with ``system-prompt.md`` at the repo root. Do not duplicate schema here.
+Full trading/output rules live in ``system-prompt.md`` at the repo root (loaded via
+``automation_tool.prompts``). User messages carry mode tags like ``[FULL_ANALYSIS]``.
 """
 
 import base64
@@ -22,6 +22,7 @@ from automation_tool.coinmap_openai_slim import (
     should_slim_coinmap_json_path,
     slim_coinmap_export_for_openai,
 )
+from automation_tool.prompts import responses_input_messages
 from automation_tool.images import (
     CHART_SLOT_COUNT,
     DEFAULT_MAIN_CHART_SYMBOL,
@@ -57,8 +58,7 @@ def default_analysis_prompt(main_symbol: str | None = None) -> str:
     Default user message for multimodal analysis.
 
     ``main_symbol`` is the main pair (TradingView/Coinmap); invalid/empty →
-    ``DEFAULT_MAIN_CHART_SYMBOL``. Schema and rules are defined in Prompt Studio
-    (``system-prompt.md``): ``[FULL_ANALYSIS]`` → Schema A.
+    ``DEFAULT_MAIN_CHART_SYMBOL``. Schema and rules are in ``system-prompt.md`` (``[FULL_ANALYSIS]`` → Schema A).
     """
     sym = DEFAULT_MAIN_CHART_SYMBOL
     if main_symbol and str(main_symbol).strip():
@@ -299,16 +299,14 @@ def _build_mixed_chart_user_content(
     return parts
 
 
-def _prompt_dict(prompt_id: str, prompt_version: str | None) -> dict[str, Any]:
-    d: dict[str, Any] = {"id": prompt_id}
-    if prompt_version:
-        d["version"] = prompt_version
-    return d
-
-
 def _merge_model(common: dict[str, Any], model: str | None) -> None:
-    if model and str(model).strip():
-        common["model"] = str(model).strip()
+    m = (model or "").strip()
+    if not m:
+        raise ValueError(
+            "OpenAI model is required (set OPENAI_MODEL or pass --model). "
+            "Dashboard prompt objects are no longer used."
+        )
+    common["model"] = m
 
 
 def _payload_counts(payloads: Sequence[ChartOpenAIPayload]) -> tuple[int, int, int]:
@@ -324,7 +322,6 @@ def _log_openai_send(
     batch_index: int,
     total_batches: int,
     payloads: Sequence[ChartOpenAIPayload],
-    prompt_id: str,
     model: str | None,
     chained: bool,
 ) -> None:
@@ -332,7 +329,7 @@ def _log_openai_send(
     _log.info(
         (
             "OpenAI: đã gửi data lên OpenAI | flow=%s batch=%d/%d "
-            "payloads=%d json=%d image=%d image_url=%d prompt_id=%s model=%s chained=%s"
+            "payloads=%d json=%d image=%d image_url=%d model=%s chained=%s"
         ),
         flow,
         batch_index,
@@ -341,8 +338,7 @@ def _log_openai_send(
         json_count,
         image_count,
         image_url_count,
-        prompt_id,
-        (model or "").strip() or "prompt-default",
+        (model or "").strip() or "?",
         chained,
     )
 
@@ -394,8 +390,6 @@ def _log_openai_error(
 def run_analysis_responses_flow(
     *,
     api_key: str,
-    prompt_id: str,
-    prompt_version: str | None,
     charts_dir: Path,
     analysis_prompt: str,
     max_images_per_call: int,
@@ -427,7 +421,6 @@ def run_analysis_responses_flow(
     if not (analysis_prompt or "").strip():
         analysis_prompt = default_analysis_prompt(read_main_chart_symbol(charts_dir))
     client = OpenAI(api_key=api_key)
-    prompt = _prompt_dict(prompt_id, prompt_version)
     tools: list[dict[str, Any]] = []
     if vector_store_ids:
         tools.append(
@@ -440,7 +433,6 @@ def run_analysis_responses_flow(
     reasoning: dict[str, Any] = {"summary": reasoning_summary}
 
     common: dict[str, Any] = {
-        "prompt": prompt,
         "store": store,
         "include": include,
         "reasoning": reasoning,
@@ -469,12 +461,14 @@ def run_analysis_responses_flow(
             batch_index=1,
             total_batches=1,
             payloads=empty_payloads,
-            prompt_id=prompt_id,
             model=model,
             chained=False,
         )
         try:
-            r = client.responses.create(**common, input=analysis_prompt.strip())
+            r = client.responses.create(
+                **common,
+                input=responses_input_messages(user_content=analysis_prompt.strip()),
+            )
         except Exception:
             _log_openai_error(
                 flow="analysis",
@@ -516,13 +510,7 @@ def run_analysis_responses_flow(
             )
             kwargs: dict[str, Any] = {
                 **common,
-                "input": [
-                    {
-                        "type": "message",
-                        "role": "user",
-                        "content": content,
-                    }
-                ],
+                "input": responses_input_messages(user_content=content),
             }
             if prev_id is not None:
                 kwargs["previous_response_id"] = prev_id
@@ -531,7 +519,6 @@ def run_analysis_responses_flow(
                 batch_index=bi + 1,
                 total_batches=total,
                 payloads=batch,
-                prompt_id=prompt_id,
                 model=model,
                 chained=prev_id is not None,
             )
@@ -567,8 +554,6 @@ def run_analysis_responses_flow(
 def run_prompt_two_step_flow(
     *,
     api_key: str,
-    prompt_id: str,
-    prompt_version: str | None,
     charts_dir: Path,
     first_prompt: str,
     follow_up_prompt: str,
@@ -595,8 +580,6 @@ def run_prompt_two_step_flow(
         analysis_prompt = a or default_analysis_prompt(read_main_chart_symbol(charts_dir))
     return run_analysis_responses_flow(
         api_key=api_key,
-        prompt_id=prompt_id,
-        prompt_version=prompt_version,
         charts_dir=charts_dir,
         analysis_prompt=analysis_prompt,
         max_images_per_call=max_images_per_call,
@@ -902,8 +885,6 @@ R1_POST_TOUCH_USER_TEMPLATE = (
 def run_single_followup_responses(
     *,
     api_key: str,
-    prompt_id: str,
-    prompt_version: str | None,
     user_text: str,
     coinmap_json_paths: Sequence[Path],
     extra_chart_payloads: Sequence[ChartOpenAIPayload] | None = None,
@@ -926,8 +907,8 @@ def run_single_followup_responses(
     Otherwise chains to that id (intraday alert, TP1, etc.).
 
     ``reasoning_summary`` / ``reasoning_effort``: when ``reasoning_summary`` is ``None``, the request
-    omits the ``reasoning`` field so the stored prompt (dashboard) controls reasoning. Otherwise
-    ``reasoning`` is sent; non-empty ``reasoning_effort`` adds ``reasoning.effort``.
+    omits the ``reasoning`` field. Otherwise ``reasoning`` is sent; non-empty ``reasoning_effort``
+    adds ``reasoning.effort``.
     """
     paths: list[Path] = []
     if morning_snapshot_path is not None:
@@ -947,7 +928,6 @@ def run_single_followup_responses(
             raise FileNotFoundError(f"JSON attachment not found: {p}")
 
     client = OpenAI(api_key=api_key)
-    prompt = _prompt_dict(prompt_id, prompt_version)
     tools: list[dict[str, Any]] = []
     if vector_store_ids:
         tools.append(
@@ -958,7 +938,6 @@ def run_single_followup_responses(
         )
 
     common: dict[str, Any] = {
-        "prompt": prompt,
         "store": store,
         "include": include,
     }
@@ -986,13 +965,7 @@ def run_single_followup_responses(
     )
     create_kw: dict[str, Any] = {
         **common,
-        "input": [
-            {
-                "type": "message",
-                "role": "user",
-                "content": content,
-            }
-        ],
+        "input": responses_input_messages(user_content=content),
     }
     if previous_response_id is not None and str(previous_response_id).strip():
         create_kw["previous_response_id"] = str(previous_response_id).strip()
@@ -1004,8 +977,6 @@ def run_single_followup_responses(
 def run_text_followup_responses(
     *,
     api_key: str,
-    prompt_id: str,
-    prompt_version: str | None,
     user_text: str,
     previous_response_id: str,
     vector_store_ids: list[str],
@@ -1020,7 +991,6 @@ def run_text_followup_responses(
     Returns ``(output_text, new_response_id)``.
     """
     client = OpenAI(api_key=api_key)
-    prompt = _prompt_dict(prompt_id, prompt_version)
     tools: list[dict[str, Any]] = []
     if vector_store_ids:
         tools.append(
@@ -1033,7 +1003,6 @@ def run_text_followup_responses(
     reasoning: dict[str, Any] = {"summary": reasoning_summary}
 
     common: dict[str, Any] = {
-        "prompt": prompt,
         "store": store,
         "include": include,
         "reasoning": reasoning,
@@ -1045,7 +1014,7 @@ def run_text_followup_responses(
     r = client.responses.create(
         **common,
         previous_response_id=previous_response_id,
-        input=(user_text or "").strip(),
+        input=responses_input_messages(user_content=(user_text or "").strip()),
     )
     out = (r.output_text or "").strip()
     return out, r.id

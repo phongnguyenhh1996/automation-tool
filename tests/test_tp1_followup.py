@@ -193,8 +193,6 @@ def test_chinh_trade_line_failure_does_not_create_new_order(monkeypatch, tmp_pat
     settings.telegram_bot_token = ""
     settings.telegram_parse_mode = None
     settings.openai_api_key = "key"
-    settings.openai_prompt_id = "prompt"
-    settings.openai_prompt_version = None
     settings.openai_vector_store_ids = []
     settings.openai_responses_store = True
     settings.openai_responses_include = None
@@ -310,8 +308,6 @@ def test_chinh_trade_line_success_keeps_status_and_sends_manage_action(monkeypat
     settings.telegram_log_chat_id = None
     settings.telegram_parse_mode = None
     settings.openai_api_key = "key"
-    settings.openai_prompt_id = "prompt"
-    settings.openai_prompt_version = None
     settings.openai_vector_store_ids = []
     settings.openai_responses_store = True
     settings.openai_responses_include = None
@@ -423,8 +419,6 @@ def test_trade_management_does_not_send_raw_json_to_telegram(monkeypatch, tmp_pa
     settings.telegram_log_chat_id = None
     settings.telegram_parse_mode = None
     settings.openai_api_key = "key"
-    settings.openai_prompt_id = "prompt"
-    settings.openai_prompt_version = None
     settings.openai_vector_store_ids = []
     settings.openai_responses_store = True
     settings.openai_responses_include = None
@@ -518,8 +512,6 @@ def test_tp1_followup_prompt_includes_current_sltp(monkeypatch, tmp_path) -> Non
     settings.telegram_bot_token = ""
     settings.telegram_parse_mode = None
     settings.openai_api_key = "key"
-    settings.openai_prompt_id = "prompt"
-    settings.openai_prompt_version = None
     settings.openai_vector_store_ids = []
     settings.openai_responses_store = True
     settings.openai_responses_include = None

@@ -1,16 +1,16 @@
-# Coinmap → OpenAI Responses (prompt id) → Telegram
+# Coinmap → OpenAI Responses (inline system prompt) → Telegram
 
 Python CLI that:
 
 1. **capture** — Before running, optionally **clears** `data/charts/*.png` / `.json` (keeps `.gitkeep`) when `clear_charts_before_capture` is true. Then opens Coinmap in **Google Chrome** via Playwright. Default **`api_data_export.mode`** is **`bearer_request`**: capture **Authorization** from gateway traffic, fetch **cm-api** JSON with **httpx**, and drive the Coinmap chart UI (sidebar / intervals / fullscreen PNG). Set **`bearer_skip_chart_ui: true`** for API-only httpx without chart UI. Set **`chart_download.coinmap_screenshot_enabled: false`** to skip fullscreen PNGs and only save **API JSON** (`{stamp}_coinmap_{SYMBOL}_{interval}.json`). With **`api_data_export`**, JSON is always written when enabled. If **`tradingview_capture.enabled`** is true, it opens a **second tab** for TradingView and saves **`data/charts/*_tradingview_*.png`**. (The two sites run one after another.)
-2. **analyze** / **chatgpt-project** — **OpenAI Responses API** with a **dashboard prompt id**. One **multimodal** user message: prompt text plus charts in **fixed order** (`automation_tool/images.py` → `CHART_IMAGE_ORDER`, **11 slots** by default: DXY TV H4/H1/M15 → main TV H4/H1/M15/M15 ICT/M5 → DXY Coinmap M15 → main Coinmap M15/M5): **TradingView** slots use snapshot **URL/PNG** or **tvdatafeed JSON**; **Coinmap** slots attach **JSON** (cm-api) **and PNG** when both exist on disk. Extra batches (if over `--max-images-per-call`) chain with `previous_response_id`. Optional **`COINMAP_JSON_MAX_CHARS`** caps embedded JSON size. Default prompt asks for **structured JSON** output (see `DEFAULT_ANALYSIS_PROMPT` in `openai_prompt_flow.py`). **Telegram** receives the analysis output; stdout prints the same (multi-batch runs join with `---`).
+2. **analyze** / **chatgpt-project** — **OpenAI Responses API** with the **system prompt** from `system-prompt.md` (repo root). One **multimodal** user message: prompt text plus charts in **fixed order** (`automation_tool/images.py` → `CHART_IMAGE_ORDER`, **11 slots** by default: DXY TV H4/H1/M15 → main TV H4/H1/M15/M15 ICT/M5 → DXY Coinmap M15 → main Coinmap M15/M5): **TradingView** slots use snapshot **URL/PNG** or **tvdatafeed JSON**; **Coinmap** slots attach **JSON** (cm-api) **and PNG** when both exist on disk. Extra batches (if over `--max-images-per-call`) chain with `previous_response_id`. Optional **`COINMAP_JSON_MAX_CHARS`** caps embedded JSON size. Default user prompt asks for **structured JSON** output (see `DEFAULT_ANALYSIS_PROMPT` in `openai_prompt_flow.py`). **Telegram** receives the analysis output; stdout prints the same (multi-batch runs join with `---`).
 3. **all** — Runs **capture**, then the same OpenAI flow as **analyze**, then **sends Telegram** (unless `--no-telegram`), then parses three zone prices, persists them, **syncs TradingView alerts**, and **by default runs `tv-journal-monitor`** (long-running; use `--no-tv-journal-monitor` to stop after sync). Skipped when `--no-tradingview` or zone prices could not be parsed.
 
 ## Requirements
 
 - Python 3.9+
 - **Google Chrome** installed on the machine (Playwright uses `channel="chrome"` for **capture** only)
-- OpenAI API key and a **Prompt** created in the OpenAI dashboard (id like `pmpt_...`)
+- OpenAI API key, **`OPENAI_MODEL`**, and **`system-prompt.md`** at the repo root (trading rules / JSON schemas)
 - Telegram bot token from [@BotFather](https://t.me/BotFather) and your `chat_id` (if you use Telegram delivery)
 
 #### Persistent Chrome profile (capture only)
@@ -30,7 +30,7 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e .
 playwright install   # OS/browser glue for Playwright; Chrome itself must be installed separately
 cp .env.example .env
-# Edit .env: OPENAI_API_KEY, OPENAI_PROMPT_ID, OPENAI_VECTOR_STORE_IDS (optional), Telegram, Coinmap
+# Edit .env: OPENAI_API_KEY, OPENAI_MODEL, OPENAI_VECTOR_STORE_IDS (optional), Telegram, Coinmap
 ```
 
 **`command not found: coinmap-automation`** — activate the venv in each new terminal (`source .venv/bin/activate`), or call the script by path: `.venv/bin/coinmap-automation …` from the project root.
@@ -39,7 +39,7 @@ cp .env.example .env
 
 | File | Purpose |
 |------|---------|
-| `.env` | `OPENAI_API_KEY`, `OPENAI_PROMPT_ID`, optional `OPENAI_PROMPT_VERSION`, optional `OPENAI_VECTOR_STORE_IDS`, `OPENAI_RESPONSES_STORE`, `OPENAI_RESPONSES_INCLUDE`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, optional `TELEGRAM_LOG_CHAT_ID` (channel nhận log bước chạy + **log phản hồi đầu** hop_luu/vùng/lý do bỏ qua MT5 + **log chi tiết kết quả MT5** `execution_ok` + nội dung broker), optional `TELEGRAM_ANALYSIS_DETAIL_CHAT_ID` (kênh nhận `phan_tich_cham_diem` cho luồng `analyze-many` khi set `--telegram-detail-chat-id` hoặc dùng mặc định từ `.env`), optional `TELEGRAM_OUTPUT_NGAN_GON_CHAT_ID` (`output_ngan_gon` từ phân tích; tin MT5 tóm tắt thành công vẫn tới `TELEGRAM_CHAT_ID`), optional `TELEGRAM_PARSE_MODE`, optional `COINMAP_*` |
+| `.env` | `OPENAI_API_KEY`, **`OPENAI_MODEL`**, optional `OPENAI_SYSTEM_PROMPT_PATH`, optional `OPENAI_VECTOR_STORE_IDS`, `OPENAI_RESPONSES_STORE`, `OPENAI_RESPONSES_INCLUDE`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, optional `TELEGRAM_LOG_CHAT_ID` (channel nhận log bước chạy + **log phản hồi đầu** hop_luu/vùng/lý do bỏ qua MT5 + **log chi tiết kết quả MT5** `execution_ok` + nội dung broker), optional `TELEGRAM_ANALYSIS_DETAIL_CHAT_ID` (kênh nhận `phan_tich_cham_diem` cho luồng `analyze-many` khi set `--telegram-detail-chat-id` hoặc dùng mặc định từ `.env`), optional `TELEGRAM_OUTPUT_NGAN_GON_CHAT_ID` (`output_ngan_gon` từ phân tích; tin MT5 tóm tắt thành công vẫn tới `TELEGRAM_CHAT_ID`), optional `TELEGRAM_PARSE_MODE`, optional `COINMAP_*` |
 
 **Telegram formatting:** mặc định không có `parse_mode` → plain text. Để **in đậm / tiêu đề** từ output kiểu markdown của model, đặt **`TELEGRAM_PARSE_MODE=HTML`**. Code sẽ chuyển `**bold**`, dòng `## tiêu đề`, và `` `code` `` sang thẻ HTML mà Telegram hỗ trợ (`<b>`, `<code>`), đồng thời escape `& < >` ở phần còn lại. **`MarkdownV2`** vẫn được hỗ trợ nhưng toàn bộ nội dung bị escape nên **trông như chữ thường** (tránh lỗi 400 với `+`, v.v.) — không dùng MDV2 nếu bạn muốn thấy định dạng.
 | `config/coinmap.yaml` | Login URL, **`chart_download`**, optional **`tradingview_capture`**, and optional canvas screenshot selectors |
@@ -56,10 +56,10 @@ When `enabled`, after the Coinmap step the tool opens a new page, loads `chart_u
 
 If you set `tradingview_capture.required_indicators_enabled: true`, the browser-based TradingView capture will **verify required indicators via legend items** (`[data-qa-id="legend-source-item"]`) before taking each snapshot. If one is missing, it will right-click the chart, click `Xóa 1 chỉ báo`/`Xóa 2 chỉ báo`, then re-add indicators from the “Chỉ báo yêu thích” menu.
 
-### OpenAI Responses (prompt template)
+### OpenAI Responses (inline prompts)
 
-- Set **`OPENAI_PROMPT_ID`** to your dashboard prompt (required for `analyze` / `all` / `chatgpt-project`).
-- Optional **`OPENAI_PROMPT_VERSION`** — if unset, the `version` field is omitted from the API request.
+- **`system-prompt.md`** at the repo root is the system message for every Responses call (version with git; override path via **`OPENAI_SYSTEM_PROMPT_PATH`**).
+- Set **`OPENAI_MODEL`** (required for `analyze` / `all` / `chatgpt-project`; CLI `--model` overrides).
 - **`OPENAI_VECTOR_STORE_IDS`** — comma-separated vector store ids; enables the **file_search** tool when non-empty.
 - **`OPENAI_UPDATE_SCALP_VECTOR_STORE_ID`** / **`OPENAI_UPDATE_SCALP_VECTOR_STORE_IDS`** — vector store for `update-scalp` only (comma-separated). If unset, `update-scalp` uses the same built-in default as the `all-2` second flow.
 - **`OPENAI_RESPONSES_STORE`** — default `true` (server-side conversation storage).

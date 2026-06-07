@@ -460,8 +460,6 @@ def run_intraday_touch_flow(
             out_text, new_id = _run_worker_in_background_with_poll(
                 worker=lambda: run_single_followup_responses(
                     api_key=settings.openai_api_key,
-                    prompt_id=settings.openai_prompt_id,
-                    prompt_version=settings.openai_prompt_version,
                     user_text=user_msg,
                     coinmap_json_paths=[openai_merged],
                     previous_response_id=prev_id,

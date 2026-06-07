@@ -57,9 +57,7 @@ class Settings:
     coinmap_password: Optional[str]
     tradingview_password: Optional[str]
     openai_api_key: str
-    openai_prompt_id: str
-    openai_prompt_version: Optional[str]
-    # Optional model id for Responses API (overrides model saved on the dashboard prompt).
+    # Model id for Responses API (required; replaces model on deprecated dashboard prompts).
     openai_model: Optional[str]
     openai_vector_store_ids: list[str]
     #: ``update-scalp`` / ``OPENAI_UPDATE_SCALP_VECTOR_STORE_ID(S)``; rỗng → caller dùng fallback (vd. all-2).
@@ -176,14 +174,11 @@ def _parse_telegram_parse_mode() -> Optional[str]:
 
 
 def load_settings() -> Settings:
-    ver = (os.getenv("OPENAI_PROMPT_VERSION") or "").strip()
     return Settings(
         coinmap_email=os.getenv("COINMAP_EMAIL") or None,
         coinmap_password=os.getenv("COINMAP_PASSWORD") or None,
         tradingview_password=os.getenv("TRADINGVIEW_PASSWORD") or None,
         openai_api_key=os.getenv("OPENAI_API_KEY", ""),
-        openai_prompt_id=(os.getenv("OPENAI_PROMPT_ID") or "").strip(),
-        openai_prompt_version=ver if ver else None,
         openai_model=((os.getenv("OPENAI_MODEL") or "").strip() or None),
         openai_vector_store_ids=_parse_vector_store_ids(),
         openai_update_scalp_vector_store_ids=_parse_update_scalp_vector_store_ids(),
@@ -214,7 +209,6 @@ def load_settings() -> Settings:
 def resolved_openai_model(settings: Settings, override: Optional[str] = None) -> Optional[str]:
     """
     Model id for ``responses.create``: ``override`` (e.g. CLI ``--model``) wins, else ``OPENAI_MODEL``.
-    Returns None to let the API use the model configured on the stored prompt.
     """
     o = (override or "").strip()
     if o:
@@ -226,8 +220,11 @@ def resolved_openai_model(settings: Settings, override: Optional[str] = None) ->
 def require_openai(s: Settings) -> None:
     if not s.openai_api_key:
         raise SystemExit("OPENAI_API_KEY is required.")
-    if not s.openai_prompt_id:
-        raise SystemExit("OPENAI_PROMPT_ID is required (dashboard prompt id, e.g. pmpt_...).")
+    if not (s.openai_model or "").strip():
+        raise SystemExit(
+            "OPENAI_MODEL is required (e.g. gpt-5.2). "
+            "System instructions are loaded from system-prompt.md in the repo."
+        )
 
 
 def require_telegram(s: Settings) -> None:

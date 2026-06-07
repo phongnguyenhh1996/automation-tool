@@ -192,8 +192,6 @@ def _handle_telegram_ask_followup(
     try:
         out_text, new_id = run_text_followup_responses(
             api_key=settings.openai_api_key,
-            prompt_id=settings.openai_prompt_id,
-            prompt_version=settings.openai_prompt_version,
             user_text=ask_body,
             previous_response_id=openai_response_id,
             vector_store_ids=settings.openai_vector_store_ids,

@@ -1815,8 +1815,6 @@ def _tp1_followup_job(
         )
         out_text, new_id = run_single_followup_responses(
             api_key=settings.openai_api_key,
-            prompt_id=settings.openai_prompt_id,
-            prompt_version=settings.openai_prompt_version,
             user_text=user_text,
             coinmap_json_paths=[openai_merged],
             previous_response_id=prev or "",
@@ -2169,8 +2167,6 @@ def _r1_followup_job(
         )
         out_text, new_id = run_single_followup_responses(
             api_key=settings.openai_api_key,
-            prompt_id=settings.openai_prompt_id,
-            prompt_version=settings.openai_prompt_version,
             user_text=user_text,
             coinmap_json_paths=[openai_merged],
             previous_response_id=prev or "",
@@ -2834,8 +2830,6 @@ def _zone_touch_job(
         )
         out_text, new_id = run_single_followup_responses(
             api_key=settings.openai_api_key,
-            prompt_id=settings.openai_prompt_id,
-            prompt_version=settings.openai_prompt_version,
             user_text=user_text,
             coinmap_json_paths=[openai_merged],
             previous_response_id=prev or "",

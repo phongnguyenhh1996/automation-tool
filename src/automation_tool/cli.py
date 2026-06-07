@@ -182,8 +182,7 @@ def _telegram_log_technical(settings, text: str) -> None:
         pass
 
 _OPENAI_MODEL_HELP = (
-    "OpenAI Responses API model id (e.g. gpt-5.2). "
-    "Overrides OPENAI_MODEL env and the model configured on the dashboard prompt."
+    "OpenAI Responses API model id (e.g. gpt-5.2). Overrides OPENAI_MODEL env."
 )
 
 _MT5_ACCOUNTS_JSON_HELP = (
@@ -275,7 +274,7 @@ def _parser() -> argparse.ArgumentParser:
 
     a = sub.add_parser(
         "analyze",
-        help="OpenAI: một lần gọi multimodal với chart (no capture; uses OPENAI_PROMPT_ID)",
+        help="OpenAI: một lần gọi multimodal với chart (no capture; system prompt từ system-prompt.md)",
     )
     a.add_argument("--charts-dir", type=Path, default=None)
     a.add_argument(
@@ -1656,8 +1655,6 @@ def _run_openai_flow(
 ) -> PromptTwoStepResult:
     return run_analysis_responses_flow(
         api_key=s.openai_api_key,
-        prompt_id=s.openai_prompt_id,
-        prompt_version=s.openai_prompt_version,
         charts_dir=charts_dir,
         analysis_prompt=analysis_prompt,
         max_images_per_call=max_images,
@@ -3230,8 +3227,6 @@ def cmd_update(args: argparse.Namespace) -> None:
     try:
         out_text, new_id = run_single_followup_responses(
             api_key=s.openai_api_key,
-            prompt_id=s.openai_prompt_id,
-            prompt_version=s.openai_prompt_version,
             user_text=user_msg,
             morning_snapshot_path=morning_snapshot,
             coinmap_json_paths=coinmap_paths,
@@ -3505,8 +3500,6 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
     try:
         out_text, new_id = run_single_followup_responses(
             api_key=s.openai_api_key,
-            prompt_id=s.openai_prompt_id,
-            prompt_version=s.openai_prompt_version,
             user_text=user_msg,
             morning_snapshot_path=morning_snapshot,
             coinmap_json_paths=coinmap_paths,

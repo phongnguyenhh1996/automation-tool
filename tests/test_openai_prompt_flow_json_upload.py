@@ -113,8 +113,6 @@ def test_run_analysis_merged_json_inline_no_cloudinary_purge(tmp_path: Path) -> 
     ) as purge:
         run_analysis_responses_flow(
             api_key="sk-test",
-            prompt_id="prompt",
-            prompt_version=None,
             charts_dir=tmp_path,
             analysis_prompt="p",
             max_images_per_call=10,
@@ -122,11 +120,14 @@ def test_run_analysis_merged_json_inline_no_cloudinary_purge(tmp_path: Path) -> 
             store=True,
             include=[],
             chart_payloads=[("json", j)],
+            model="gpt-5.2",
             purge_json_attachment_storage=True,
         )
 
     purge.assert_not_called()
-    content = client.responses.create.call_args.kwargs["input"][0]["content"]
+    api_input = client.responses.create.call_args.kwargs["input"]
+    assert api_input[0]["role"] == "system"
+    content = api_input[1]["content"]
     assert content[2]["type"] == "input_text"
     assert '"frames"' in content[2]["text"] or "{}" in content[2]["text"]
 
@@ -144,8 +145,6 @@ def test_run_analysis_logs_openai_send_and_receive(caplog, tmp_path: Path) -> No
     ):
         run_analysis_responses_flow(
             api_key="sk-test",
-            prompt_id="prompt",
-            prompt_version=None,
             charts_dir=tmp_path,
             analysis_prompt="p",
             max_images_per_call=10,
@@ -153,6 +152,7 @@ def test_run_analysis_logs_openai_send_and_receive(caplog, tmp_path: Path) -> No
             store=True,
             include=[],
             chart_payloads=[("json", j)],
+            model="gpt-5.2",
         )
 
     messages = "\n".join(record.getMessage() for record in caplog.records)
@@ -175,8 +175,6 @@ def test_run_analysis_logs_openai_errors(caplog, tmp_path: Path) -> None:
     ), pytest.raises(RuntimeError, match="boom"):
         run_analysis_responses_flow(
             api_key="sk-test",
-            prompt_id="prompt",
-            prompt_version=None,
             charts_dir=tmp_path,
             analysis_prompt="p",
             max_images_per_call=10,
@@ -184,6 +182,7 @@ def test_run_analysis_logs_openai_errors(caplog, tmp_path: Path) -> None:
             store=True,
             include=[],
             chart_payloads=[("json", j)],
+            model="gpt-5.2",
         )
 
     messages = "\n".join(record.getMessage() for record in caplog.records)

@@ -387,8 +387,6 @@ def _run_tp1_openai_and_act(
     )
     out_text, new_id = run_single_followup_responses(
         api_key=settings.openai_api_key,
-        prompt_id=settings.openai_prompt_id,
-        prompt_version=settings.openai_prompt_version,
         user_text=user_msg,
         coinmap_json_paths=[openai_merged],
         previous_response_id=prev_response_id,
