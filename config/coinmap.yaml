@@ -109,7 +109,7 @@ chart_download:
   chart_price_edge_pan_enabled: true
   chart_price_edge_pan_x_ratio: 0.98
   chart_price_edge_pan_start_y_ratio: 0.42
-  chart_price_edge_pan_end_y_ratio: 0.38
+  chart_price_edge_pan_end_y_ratio: 0.33
   # Main chart area: horizontal pan (middle of SVG).
   chart_pan_start_x_ratio: 0.28
   chart_pan_end_x_ratio: 0.4
