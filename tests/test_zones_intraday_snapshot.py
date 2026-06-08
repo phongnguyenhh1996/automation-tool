@@ -188,6 +188,8 @@ def test_build_scalp_update_user_text_first_after_all_legacy_m15_m5() -> None:
     assert "ba" in t
     assert "morning_full_analysis" in t
     assert "M15" in t and "M5" in t
+    assert "PNG" in t
+    assert "Ưu tiên đọc ảnh chart (Coinmap PNG" in t
     assert "scalp" in t.lower()
 
 

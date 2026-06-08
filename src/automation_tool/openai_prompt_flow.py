@@ -31,6 +31,7 @@ from automation_tool.images import (
     chunk_payloads,
     image_to_data_url,
     normalize_main_chart_symbol,
+    openai_payloads_for_attachment_paths,
     ordered_chart_openai_payloads,
     read_main_chart_symbol,
 )
@@ -610,6 +611,18 @@ _SCALP_UPDATE_PLAN_HINT = (
     "Không dùng label `plan_chinh` hay `plan_phu` cho luồng scalp này.\n"
 )
 
+_COINMAP_LEGACY_PNG_HINT = (
+    " (mỗi khung: JSON footprint; ảnh PNG fullscreen Coinmap ngay sau JSON tương ứng nếu có)."
+)
+
+_INTRADAY_CHART_READ_PRIORITY_HINT = (
+    "Ưu tiên đọc ảnh chart (Coinmap PNG, TradingView snapshot nếu có); JSON Coinmap chỉ khi "
+    "trên chart không rõ, không đọc được, hoặc cần con số chính xác (order flow, CVD, VWAP, delta, OHLC).\n"
+)
+
+_INTRADAY_UPDATE_SUFFIX = _INTRADAY_CHART_READ_PRIORITY_HINT + _INTRADAY_UPDATE_PLAN_HINT
+_SCALP_UPDATE_SUFFIX = _INTRADAY_CHART_READ_PRIORITY_HINT + _SCALP_UPDATE_PLAN_HINT
+
 
 def is_first_intraday_update_after_all(
     *,
@@ -661,7 +674,7 @@ def build_intraday_update_user_text(
                 "**Coinmap merged** cho cặp chính (cùng schema ``coinmap_merged`` nhưng ``frames`` chỉ có "
                 "khung **5m**; không đính kèm M15).\n"
                 f"{_MORNING_CONTEXT_HINT}"
-                f"{_INTRADAY_UPDATE_PLAN_HINT}"
+                f"{_INTRADAY_UPDATE_SUFFIX}"
             )
         return (
             "[INTRADAY_UPDATE]\n"
@@ -669,7 +682,7 @@ def build_intraday_update_user_text(
             "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
             "Đính kèm **một** file JSON: **Coinmap merged** cho cặp chính (schema ``coinmap_merged`` chỉ có "
             "khung **5m**; không M15).\n"
-            f"{_INTRADAY_UPDATE_PLAN_HINT}"
+            f"{_INTRADAY_UPDATE_SUFFIX}"
         )
 
     if m5_only:
@@ -681,14 +694,14 @@ def build_intraday_update_user_text(
                 "Đính kèm **hai** file JSON theo thứ tự: **(1)** morning_full_analysis.json, **(2)** một file "
                 "**Coinmap M5** (footprint cặp chính; không đính kèm M15).\n"
                 f"{_MORNING_CONTEXT_HINT}"
-                f"{_INTRADAY_UPDATE_PLAN_HINT}"
+                f"{_INTRADAY_UPDATE_SUFFIX}"
             )
         return (
             "[INTRADAY_UPDATE]\n"
             f"{time_line}"
             "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
             "Đính kèm **một** file JSON: **Coinmap M5** (footprint cặp chính; không M15).\n"
-            f"{_INTRADAY_UPDATE_PLAN_HINT}"
+            f"{_INTRADAY_UPDATE_SUFFIX}"
         )
 
     if first_after_all:
@@ -701,7 +714,7 @@ def build_intraday_update_user_text(
                 "**Coinmap merged** cho cặp chính (cùng schema ``coinmap_merged``: khung 15m và 5m trong ``frames``, "
                 "footprint và summary theo từng khung).\n"
                 f"{_MORNING_CONTEXT_HINT}"
-                f"{_INTRADAY_UPDATE_PLAN_HINT}"
+                f"{_INTRADAY_UPDATE_SUFFIX}"
             )
         return (
             "[INTRADAY_UPDATE]\n"
@@ -710,7 +723,7 @@ def build_intraday_update_user_text(
             "Đính kèm **ba** file JSON theo thứ tự: **(1)** morning_full_analysis.json, **(2)** M15, **(3)** M5 "
             "(footprint cặp chính).\n"
             f"{_MORNING_CONTEXT_HINT}"
-            f"{_INTRADAY_UPDATE_PLAN_HINT}"
+            f"{_INTRADAY_UPDATE_SUFFIX}"
         )
 
     if merged:
@@ -719,14 +732,14 @@ def build_intraday_update_user_text(
             f"{time_line}"
             "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
             "Đính kèm **một** file JSON: **Coinmap merged** cho cặp chính (15m và 5m trong cùng file).\n"
-            f"{_INTRADAY_UPDATE_PLAN_HINT}"
+            f"{_INTRADAY_UPDATE_SUFFIX}"
         )
     return (
         "[INTRADAY_UPDATE]\n"
         f"{time_line}"
         "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
         "Đính kèm **hai** file JSON theo thứ tự: **(1) M15**, **(2) M5** (footprint cặp chính).\n"
-        f"{_INTRADAY_UPDATE_PLAN_HINT}"
+        f"{_INTRADAY_UPDATE_SUFFIX}"
     )
 
 def build_scalp_update_user_text(
@@ -760,7 +773,7 @@ def build_scalp_update_user_text(
                 "**Coinmap merged** cho cặp chính (cùng schema ``coinmap_merged`` nhưng ``frames`` chỉ có "
                 "khung **5m**; không đính kèm M15).\n"
                 f"{_MORNING_CONTEXT_HINT}"
-                f"{_SCALP_UPDATE_PLAN_HINT}"
+                f"{_SCALP_UPDATE_SUFFIX}"
             )
         return (
             "[INTRADAY_UPDATE]\n"
@@ -768,7 +781,7 @@ def build_scalp_update_user_text(
             "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
             "Đính kèm **một** file JSON: **Coinmap merged** cho cặp chính (schema ``coinmap_merged`` chỉ có "
             "khung **5m**; không M15).\n"
-            f"{_SCALP_UPDATE_PLAN_HINT}"
+            f"{_SCALP_UPDATE_SUFFIX}"
         )
 
     if m5_only:
@@ -780,14 +793,14 @@ def build_scalp_update_user_text(
                 "Đính kèm **hai** file JSON theo thứ tự: **(1)** morning_full_analysis.json, **(2)** một file "
                 "**Coinmap M5** (footprint cặp chính; không đính kèm M15).\n"
                 f"{_MORNING_CONTEXT_HINT}"
-                f"{_SCALP_UPDATE_PLAN_HINT}"
+                f"{_SCALP_UPDATE_SUFFIX}"
             )
         return (
             "[INTRADAY_UPDATE]\n"
             f"{time_line}"
             "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
             "Đính kèm **một** file JSON: **Coinmap M5** (footprint cặp chính; không M15).\n"
-            f"{_SCALP_UPDATE_PLAN_HINT}"
+            f"{_SCALP_UPDATE_SUFFIX}"
         )
 
     if first_after_all:
@@ -800,16 +813,16 @@ def build_scalp_update_user_text(
                 "**Coinmap merged** cho cặp chính (cùng schema ``coinmap_merged``: khung 15m và 5m trong ``frames``, "
                 "footprint và summary theo từng khung).\n"
                 f"{_MORNING_CONTEXT_HINT}"
-                f"{_SCALP_UPDATE_PLAN_HINT}"
+                f"{_SCALP_UPDATE_SUFFIX}"
             )
         return (
             "[INTRADAY_UPDATE]\n"
             f"{time_line}"
             "Phân tích buổi sáng (Schema A) nằm trong file **morning_full_analysis.json** đính kèm đầu tiên.\n"
             "Đính kèm **ba** file JSON theo thứ tự: **(1)** morning_full_analysis.json, **(2)** M15, **(3)** M5 "
-            "(footprint cặp chính).\n"
+            f"(footprint cặp chính{_COINMAP_LEGACY_PNG_HINT}\n"
             f"{_MORNING_CONTEXT_HINT}"
-            f"{_SCALP_UPDATE_PLAN_HINT}"
+            f"{_SCALP_UPDATE_SUFFIX}"
         )
 
     if merged:
@@ -818,14 +831,15 @@ def build_scalp_update_user_text(
             f"{time_line}"
             "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
             "Đính kèm **một** file JSON: **Coinmap merged** cho cặp chính (15m và 5m trong cùng file).\n"
-            f"{_SCALP_UPDATE_PLAN_HINT}"
+            f"{_SCALP_UPDATE_SUFFIX}"
         )
     return (
         "[INTRADAY_UPDATE]\n"
         f"{time_line}"
         "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
-        "Đính kèm **hai** file JSON theo thứ tự: **(1) M15**, **(2) M5** (footprint cặp chính).\n"
-        f"{_SCALP_UPDATE_PLAN_HINT}"
+        "Đính kèm **hai** file JSON theo thứ tự: **(1) M15**, **(2) M5** "
+        f"(footprint cặp chính{_COINMAP_LEGACY_PNG_HINT}\n"
+        f"{_SCALP_UPDATE_SUFFIX}"
     )
 
 
@@ -886,7 +900,8 @@ def run_single_followup_responses(
     """
     One multimodal user turn: optional ``morning_snapshot_path`` + Coinmap JSON paths,
     plus optional chart payloads, uploaded in order (Coinmap raw JSON: base64
-    ``input_file.file_data``; other JSON: inline ``input_text``; image payloads as images).
+    ``input_file.file_data``; sibling Coinmap PNG immediately after each Coinmap JSON
+    when on disk; other JSON: inline ``input_text``; image payloads as images).
 
     If ``previous_response_id`` is ``None``, starts a **new** Responses thread (no chain).
     Otherwise chains to that id (intraday alert, TP1, etc.).
@@ -942,7 +957,7 @@ def run_single_followup_responses(
         else _default_max_coinmap_json_chars()
     )
 
-    json_payloads: list[ChartOpenAIPayload] = [("json", p) for p in paths]
+    json_payloads = openai_payloads_for_attachment_paths(paths)
     content = _build_mixed_chart_user_content(
         user_text,
         json_payloads + extra_payloads,

@@ -89,8 +89,9 @@ Không được dùng logic của mode khác để trả output cho mode hiện 
   + Footprint cặp chính (Coinmap): M15, M5 — mỗi khung JSON cm-api (+ PNG fullscreen ngay sau nếu có); có thể dùng merged JSON thay hai file riêng, PNG M5 vẫn có thể đính kèm riêng
   + Ưu tiên đọc ảnh chart (Coinmap PNG, TradingView snapshot); JSON Coinmap / tvdatafeed chỉ khi trên chart không rõ, không đọc được, hoặc cần con số chính xác (order flow, CVD, VWAP, delta, OHLC)
 - [INTRADAY_UPDATE] file đính kèm:
-  + Lần đầu sau [FULL_ANALYSIS]: `morning_full_analysis.json` + Coinmap M15/M5 của cặp chính (merged hoặc 2 file riêng) + TradingView 15m Session Liquidity Check / ICT Killzones.
-  + Các lần sau: Coinmap M15/M5 của cặp chính (merged hoặc 2 file riêng) + TradingView 15m Session Liquidity Check / ICT Killzones.
+  + Lần đầu sau [FULL_ANALYSIS]: `morning_full_analysis.json` + Coinmap M15/M5 của cặp chính (merged hoặc 2 file riêng; mỗi khung JSON cm-api + PNG fullscreen ngay sau JSON nếu có) + TradingView 15m Session Liquidity Check / ICT Killzones khi có.
+  + Các lần sau: Coinmap M15/M5 của cặp chính (merged hoặc 2 file riêng; JSON + PNG như trên) + TradingView 15m Session Liquidity Check / ICT Killzones khi có; tiếp nối chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.
+  + Ưu tiên đọc ảnh chart (Coinmap PNG, TradingView snapshot nếu có); JSON Coinmap chỉ khi trên chart không rõ, không đọc được, hoặc cần con số chính xác (order flow, CVD, VWAP, delta, OHLC).
   + TradingView 15m Session Liquidity Check / ICT Killzones là ảnh/chart bổ sung để kiểm tra liquidity pool/sweep theo từng phiên và đối chiếu SMC/time-killzone với footprint; không thay thế Coinmap M15/M5.
 - [INTRADAY_ALERT] yêu cầu footprint M5 tại vùng chờ hiện tại; nếu có context plan trước đó thì dùng để đối chiếu.
 - [TRADE_MANAGEMENT] dùng footprint M5 mới nhất và context lệnh đang chạy.

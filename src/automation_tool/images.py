@@ -285,6 +285,57 @@ def _append_coinmap_openai_payloads(
         out.append(("image", pp))
 
 
+_COINMAP_MERGED_JSON_RE = re.compile(
+    r"^(?P<stamp>\d{8}_\d{6})_coinmap_(?P<sym>[^_]+)_merged\.json$"
+)
+
+
+def coinmap_png_path_for_json(json_path: Path) -> Optional[Path]:
+    """Sibling fullscreen PNG for a per-interval Coinmap JSON export, if on disk."""
+    if "_coinmap_" not in json_path.name or json_path.suffix.lower() != ".json":
+        return None
+    if json_path.name.endswith("_merged.json"):
+        return None
+    pp = json_path.with_suffix(".png")
+    return pp if pp.is_file() else None
+
+
+def _coinmap_merged_interval_png_paths(json_path: Path) -> list[Path]:
+    """M15/M5 PNG paths for a ``*_coinmap_*_merged.json`` attachment (same as ``all`` slot order)."""
+    m = _COINMAP_MERGED_JSON_RE.match(json_path.name)
+    if not m:
+        return []
+    charts_dir = json_path.parent
+    stamp = m.group("stamp")
+    sym = m.group("sym")
+    out: list[Path] = []
+    for iv in ("15m", "5m"):
+        pp = charts_dir / f"{stamp}_coinmap_{sym}_{iv}.png"
+        if pp.is_file():
+            out.append(pp)
+    return out
+
+
+def openai_payloads_for_attachment_paths(paths: Sequence[Path]) -> list[ChartOpenAIPayload]:
+    """
+    Build OpenAI payloads from JSON attachment paths; for each Coinmap JSON, append
+    sibling PNG immediately after (per-interval or M15+M5 for merged), matching ``all``.
+    """
+    out: list[ChartOpenAIPayload] = []
+    for p in paths:
+        out.append(("json", p))
+        if "_coinmap_" not in p.name or p.suffix.lower() != ".json":
+            continue
+        if p.name.endswith("_merged.json"):
+            for pp in _coinmap_merged_interval_png_paths(p):
+                out.append(("image", pp))
+            continue
+        pp = coinmap_png_path_for_json(p)
+        if pp is not None:
+            out.append(("image", pp))
+    return out
+
+
 def ordered_chart_openai_payloads(
     charts_dir: Path, *, stamp: Optional[str] = None
 ) -> list[ChartOpenAIPayload]:

@@ -771,7 +771,7 @@ def _parser() -> argparse.ArgumentParser:
     ups = sub.add_parser(
         "update-scalp",
         help=(
-            "Scalp intraday: chỉ Coinmap M15 + M5 → OpenAI follow-up tìm plan scalp; "
+            "Scalp intraday: Coinmap M15 + M5 (JSON + PNG fullscreen) → OpenAI follow-up tìm plan scalp; "
             "vector store từ OPENAI_UPDATE_SCALP_VECTOR_STORE_ID(S) hoặc mặc định all-2; "
             "zones lưu vào data/<SYM>/zones/ với label scalp_<id>."
         ),
@@ -3355,7 +3355,8 @@ def cmd_update(args: argparse.Namespace) -> None:
 
 def cmd_update_scalp(args: argparse.Namespace) -> None:
     """
-    Luồng ``update-scalp``: chỉ Coinmap **M15 + M5** → OpenAI, tìm plan scalp đẹp nhất (không chụp TradingView).
+    Luồng ``update-scalp``: Coinmap **M15 + M5** (JSON + PNG fullscreen, giống ``all``) → OpenAI,
+    tìm plan scalp đẹp nhất (không chụp TradingView).
     - Vector store: ``OPENAI_UPDATE_SCALP_VECTOR_STORE_ID(S)``; nếu không set thì giống ``all-2``
       (``_ALL_SECOND_FLOW_VECTOR_STORE_ID``), không dùng ``OPENAI_VECTOR_STORE_IDS``.
     - Thread OpenAI riêng (``last_scalp_response_id.txt``).
@@ -3365,7 +3366,10 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
       tạo ``accounts-scalp.json`` cạnh file nguồn với các account có ``\"update-scalp\": true``,
       rồi đặt ``MT5_ACCOUNTS_JSON`` cho tiến trình (reconcile spawn ``daemon-plan`` kế thừa env).
     """
-    from automation_tool.images import set_active_main_symbol_file
+    from automation_tool.images import (
+        coinmap_png_path_for_json,
+        set_active_main_symbol_file,
+    )
 
     s = load_settings()
     if getattr(args, "main_symbol", None):
@@ -3439,6 +3443,20 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
             "Check coinmap_update.yaml capture_plan and api_data_export."
         )
     coinmap_paths: list[Path] = [m15, m5]
+    m15_png = coinmap_png_path_for_json(m15)
+    m5_png = coinmap_png_path_for_json(m5)
+    _log.info(
+        "update-scalp: Coinmap PNG | M15=%s | M5=%s",
+        m15_png,
+        m5_png,
+    )
+    if m15_png is None or m5_png is None:
+        print(
+            "Warning: thiếu PNG Coinmap fullscreen sau capture "
+            f"(M15={m15_png is not None}, M5={m5_png is not None}). "
+            "Kiểm tra chart_download.coinmap_screenshot_enabled trong coinmap_update.yaml.",
+            file=sys.stderr,
+        )
 
     require_openai(s)
 
