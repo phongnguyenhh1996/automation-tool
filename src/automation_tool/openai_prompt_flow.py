@@ -39,6 +39,8 @@ from automation_tool.zones_state import format_intraday_update_time_line
 
 _log = logging.getLogger(__name__)
 
+DEFAULT_REASONING_EFFORT = "medium"
+
 
 class PromptTwoStepResult(NamedTuple):
     """``first_text`` luôn rỗng; ``after_charts`` chứa toàn bộ output phân tích (một hoặc nhiều batch)."""
@@ -410,7 +412,10 @@ def run_analysis_responses_flow(
             }
         )
 
-    reasoning: dict[str, Any] = {"summary": reasoning_summary}
+    reasoning: dict[str, Any] = {
+        "summary": reasoning_summary,
+        "effort": DEFAULT_REASONING_EFFORT,
+    }
 
     common: dict[str, Any] = {
         "store": store,
@@ -874,7 +879,7 @@ def run_single_followup_responses(
     store: bool,
     include: list[str],
     reasoning_summary: str | None = "auto",
-    reasoning_effort: str | None = None,
+    reasoning_effort: str | None = DEFAULT_REASONING_EFFORT,
     max_coinmap_json_chars: int | None = None,
     model: str | None = None,
 ) -> tuple[str, str]:
@@ -980,7 +985,10 @@ def run_text_followup_responses(
             }
         )
 
-    reasoning: dict[str, Any] = {"summary": reasoning_summary}
+    reasoning: dict[str, Any] = {
+        "summary": reasoning_summary,
+        "effort": DEFAULT_REASONING_EFFORT,
+    }
 
     common: dict[str, Any] = {
         "store": store,

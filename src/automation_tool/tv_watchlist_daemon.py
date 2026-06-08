@@ -1824,7 +1824,7 @@ def _tp1_followup_job(
             # Force config for [TRADE_MANAGEMENT]
             model="gpt-5.4-mini",
             reasoning_summary="auto",
-            reasoning_effort="high",
+            reasoning_effort="medium",
         )
         _openai_followup_persist_new_id(params, new_id)
         _send_log(settings, "[tp1] OpenAI TRADE_MANAGEMENT xong (ẩn raw JSON).")
@@ -2176,7 +2176,7 @@ def _r1_followup_job(
             # Force config for [TRADE_MANAGEMENT]
             model="gpt-5.4-mini",
             reasoning_summary="auto",
-            reasoning_effort="high",
+            reasoning_effort="medium",
         )
         _openai_followup_persist_new_id(params, new_id)
         _send_log(settings, "[r1] OpenAI TRADE_MANAGEMENT xong (ẩn raw JSON).")
@@ -2839,7 +2839,7 @@ def _zone_touch_job(
             # Force config for [INTRADAY_ALERT]
             model="gpt-5.4-mini",
             reasoning_summary="auto",
-            reasoning_effort="high",
+            reasoning_effort="medium",
         )
         if _should_write_intraday_alert_anchor(params):
             _openai_followup_persist_new_id(params, new_id)

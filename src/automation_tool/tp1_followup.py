@@ -396,7 +396,7 @@ def _run_tp1_openai_and_act(
         # Force config for [TRADE_MANAGEMENT]
         model="gpt-5.4-mini",
         reasoning_summary="auto",
-        reasoning_effort="high",
+        reasoning_effort="medium",
     )
     update_plan_tp1_followup_done(label, True, path=last_alert_path)
     _log_tp1.info(

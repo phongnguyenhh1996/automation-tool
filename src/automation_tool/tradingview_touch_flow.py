@@ -469,7 +469,7 @@ def run_intraday_touch_flow(
                     # Force config for [INTRADAY_ALERT]
                     model="gpt-5.4-mini",
                     reasoning_summary="auto",
-                    reasoning_effort="high",
+                    reasoning_effort="medium",
                 ),
                 poll_abort=lambda: _poll_abort_during_long_ops(phase="waiting_openai"),
                 poll_interval_s=0.75,

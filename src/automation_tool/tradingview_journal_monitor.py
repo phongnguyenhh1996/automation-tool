@@ -572,7 +572,7 @@ def _run_intraday_touch_loop(
                 # Force config for [INTRADAY_ALERT]
                 model="gpt-5.4-mini",
                 reasoning_summary="auto",
-                reasoning_effort="high",
+                reasoning_effort="medium",
             )
         except Exception as e:
             re_raise_unless_openai(e)
