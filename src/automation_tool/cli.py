@@ -771,12 +771,18 @@ def _parser() -> argparse.ArgumentParser:
     ups = sub.add_parser(
         "update-scalp",
         help=(
-            "Scalp intraday: Coinmap M15 + M5 (JSON + PNG fullscreen) → OpenAI follow-up tìm plan scalp; "
+            "Scalp intraday: TradingView 15m ICT + 5m rồi Coinmap M15 + M5 (JSON + PNG) → OpenAI tìm plan scalp; "
             "vector store từ OPENAI_UPDATE_SCALP_VECTOR_STORE_ID(S) hoặc mặc định all-2; "
             "zones lưu vào data/<SYM>/zones/ với label scalp_<id>."
         ),
     )
     ups.add_argument("--config", type=Path, default=None, help="Coinmap yaml for capture only (default: coinmap_update.yaml)")
+    ups.add_argument(
+        "--tv-config",
+        type=Path,
+        default=None,
+        help="Yaml chứa tradingview_capture cho bước TV (default: config/coinmap.yaml)",
+    )
     ups.add_argument("--charts-dir", type=Path, default=None)
     ups.add_argument("--storage-state", type=Path, default=None)
     ups.add_argument("--no-save-storage", action="store_true")
@@ -788,6 +794,11 @@ def _parser() -> argparse.ArgumentParser:
         help="Giống capture: thay XAUUSD trong yaml chụp (mặc định coinmap_update.yaml)",
     )
     ups.add_argument("--no-telegram", action="store_true")
+    ups.add_argument(
+        "--no-tradingview",
+        action="store_true",
+        help="Bỏ qua chụp TradingView (15m ICT + 5m) trước Coinmap; chỉ export Coinmap",
+    )
     ups.add_argument(
         "--zones-json",
         type=Path,
@@ -2021,7 +2032,7 @@ def _intraday_tv_then_coinmap_m5_capture(
     Shared capture for ``update`` / ``update-scalp``: TradingView 15m ICT + 5m, then
     Coinmap export(s) reusing the same ``stamp`` (default M15+M5).
     ``update`` may set ``include_tv_m15_regular`` for an extra TV M15 chart URL/PNG.
-    Coinmap-only when ``no_tradingview`` (``update-scalp`` luôn bật).
+    Coinmap-only when ``no_tradingview`` is true.
     """
     from automation_tool.images import get_active_main_symbol, read_main_chart_symbol
 
@@ -3355,8 +3366,8 @@ def cmd_update(args: argparse.Namespace) -> None:
 
 def cmd_update_scalp(args: argparse.Namespace) -> None:
     """
-    Luồng ``update-scalp``: Coinmap **M15 + M5** (JSON + PNG fullscreen, ``bearer_request`` giống ``all``;
-    không cần ``browser up`` / tab Coinmap warm) → OpenAI, tìm plan scalp đẹp nhất (không chụp TradingView).
+    Luồng ``update-scalp``: TradingView **15m ICT + 5m**, rồi Coinmap **M15 + M5** (JSON + PNG,
+    ``bearer_request``) → OpenAI, tìm plan scalp đẹp nhất. Dùng ``--no-tradingview`` để chỉ Coinmap.
     - Vector store: ``OPENAI_UPDATE_SCALP_VECTOR_STORE_ID(S)``; nếu không set thì giống ``all-2``
       (``_ALL_SECOND_FLOW_VECTOR_STORE_ID``), không dùng ``OPENAI_VECTOR_STORE_IDS``.
     - Thread OpenAI riêng (``last_scalp_response_id.txt``).
@@ -3391,8 +3402,14 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
                 base_acc,
             )
     cfg_cap = args.config or default_coinmap_update_config_path()
+    cfg_tv = args.tv_config or default_coinmap_config_path()
     storage = args.storage_state or default_storage_state_path()
-    _log.info("update-scalp: bắt đầu | capture_yaml=%s (Coinmap only, no TradingView)", cfg_cap)
+    _log.info(
+        "update-scalp: bắt đầu | capture_yaml=%s tv_yaml=%s no_tradingview=%s",
+        cfg_cap,
+        cfg_tv,
+        args.no_tradingview,
+    )
 
     mp = default_morning_full_analysis_path()
     if not mp.is_file():
@@ -3407,8 +3424,8 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
         no_telegram=args.no_telegram,
     )
     charts_dir = args.charts_dir or default_charts_dir()
-    paths, stamp, _main_s, _tv_chart_payloads = _intraday_tv_then_coinmap_m5_capture(
-        cfg_tv=default_coinmap_config_path(),
+    paths, stamp, _main_s, tv_chart_payloads = _intraday_tv_then_coinmap_m5_capture(
+        cfg_tv=cfg_tv,
         cfg_cap=cfg_cap,
         charts_dir=charts_dir,
         storage=storage,
@@ -3418,7 +3435,7 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
         save_storage=not args.no_save_storage,
         headless=not args.headed,
         main_chart_symbol=args.main_symbol,
-        no_tradingview=True,
+        no_tradingview=args.no_tradingview,
         flow_label="update-scalp",
     )
 
@@ -3468,6 +3485,11 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
         first_after_all=True,
         coinmap_attachment_mode="legacy",
     )
+    if tv_chart_payloads:
+        user_msg += (
+            "\nĐính kèm thêm ảnh TradingView cặp chính sau JSON Coinmap: **15m** Session Liquidity Check "
+            "/ ICT Killzones và **5m** khung thường (không ICT).\n"
+        )
 
     scalp_vector_store_ids = resolve_update_scalp_vector_store_ids(
         s,
@@ -3480,7 +3502,7 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
             user_text=user_msg,
             morning_snapshot_path=morning_snapshot,
             coinmap_json_paths=coinmap_paths,
-            extra_chart_payloads=[],
+            extra_chart_payloads=tv_chart_payloads,
             previous_response_id=prev_for_openai,
             vector_store_ids=scalp_vector_store_ids,
             store=s.openai_responses_store,
@@ -3493,9 +3515,10 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
     print(out_text)
     write_last_scalp_response_id(new_id)
     _log.info(
-        "update-scalp: OpenAI follow-up xong | new_response_id=%s | vector_store=%s",
+        "update-scalp: OpenAI follow-up xong | new_response_id=%s | vector_store=%s | tv_payloads=%s",
         new_id,
         scalp_vector_store_ids,
+        len(tv_chart_payloads),
     )
 
     update_payload = parse_analysis_from_openai_text(out_text)
