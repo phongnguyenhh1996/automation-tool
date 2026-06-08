@@ -3355,8 +3355,8 @@ def cmd_update(args: argparse.Namespace) -> None:
 
 def cmd_update_scalp(args: argparse.Namespace) -> None:
     """
-    Luồng ``update-scalp``: Coinmap **M15 + M5** (JSON + PNG fullscreen, giống ``all``) → OpenAI,
-    tìm plan scalp đẹp nhất (không chụp TradingView).
+    Luồng ``update-scalp``: Coinmap **M15 + M5** (JSON + PNG fullscreen, ``bearer_request`` giống ``all``;
+    không cần ``browser up`` / tab Coinmap warm) → OpenAI, tìm plan scalp đẹp nhất (không chụp TradingView).
     - Vector store: ``OPENAI_UPDATE_SCALP_VECTOR_STORE_ID(S)``; nếu không set thì giống ``all-2``
       (``_ALL_SECOND_FLOW_VECTOR_STORE_ID``), không dùng ``OPENAI_VECTOR_STORE_IDS``.
     - Thread OpenAI riêng (``last_scalp_response_id.txt``).
