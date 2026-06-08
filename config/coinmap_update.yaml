@@ -81,7 +81,7 @@ chart_download:
   chart_time_edge_pan_repeats: 1
   chart_time_edge_pan_y_ratio: 0.98
   chart_time_edge_pan_start_x_ratio: 0.1
-  chart_time_edge_pan_end_x_ratio: 0.8
+  chart_time_edge_pan_end_x_ratio: 0.5
   chart_price_edge_pan_enabled: true
   chart_price_edge_pan_x_ratio: 0.98
   chart_price_edge_pan_start_y_ratio: 0.42
