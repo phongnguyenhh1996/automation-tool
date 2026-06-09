@@ -329,6 +329,11 @@ def _settings_skip_intraday_alert_cooldown_seconds(settings: Any) -> int:
         return 120
 
 
+def _settings_skip_trade_management(settings: Any) -> bool:
+    """Chỉ ``True`` thật (tránh object mock truthy trong test)."""
+    return getattr(settings, "skip_trade_management", False) is True
+
+
 @dataclass(frozen=True)
 class WatchlistDaemonParams:
     coinmap_tv_yaml: Path
@@ -1082,6 +1087,8 @@ def _zone_label_slot_display_vn(zone: Zone, params: Optional[WatchlistDaemonPara
 
 def _send_entry_management_notice(settings: Settings, zone: Zone, text: str) -> None:
     """Notice ngắn cho luồng quản lý lệnh sau khi đã has_position."""
+    if _settings_skip_trade_management(settings):
+        return
     title = (text or "").strip()
     if not title:
         return
@@ -1574,6 +1581,19 @@ def _tp1_followup_job(
     - act on MT5 and update zones_state
     """
     try:
+        if _settings_skip_trade_management(settings):
+            st_skip = _state_read(params)
+            if st_skip is not None:
+                z_skip = next((z for z in st_skip.zones if z.id == zone_id), None)
+                if z_skip is not None and z_skip.status not in ("done", "loai"):
+                    z_skip.status = "cho_tp1"
+                    z_skip.tp1_followup_done = True
+                    _state_write(params, st_skip)
+            _send_log(
+                settings,
+                f"[tp1] skip TRADE_MANAGEMENT (SKIP_TRADE_MANAGEMENT) | zone_id={zone_id}",
+            )
+            return
         st0 = _state_read(params)
         if st0 is None:
             return
@@ -2066,6 +2086,24 @@ def _r1_followup_job(
     from automation_tool.tp1_followup import parse_tp1_followup_decision
 
     try:
+        if _settings_skip_trade_management(settings):
+            st_skip = _state_read(params)
+            if st_skip is not None:
+                z_skip = next((z for z in st_skip.zones if z.id == zone_id), None)
+                if z_skip is not None and z_skip.status not in ("done", "loai"):
+                    z_skip.status = prev_status  # type: ignore[assignment]
+                    z_skip.r1_followup_done = False
+                    z_skip.last_r_followup_level = max(
+                        int(getattr(z_skip, "last_r_followup_level", 0) or 0),
+                        int(reached_r_level),
+                    )
+                    _state_write(params, st_skip)
+            _send_log(
+                settings,
+                f"[r1] skip TRADE_MANAGEMENT (SKIP_TRADE_MANAGEMENT) at {_r_level_text(reached_r_level)}R "
+                f"| zone_id={zone_id}",
+            )
+            return
         st0 = _state_read(params)
         if st0 is None:
             return
@@ -3730,6 +3768,18 @@ def _daemon_plan_main_loop(
                         reached_r_level = _max_r_multiple_reached(z, parsed_r1, float(p_last), eps=_TP1_EPS)
                         if reached_r_level <= int(getattr(z, "last_r_followup_level", 0) or 0):
                             continue
+                        if _settings_skip_trade_management(settings):
+                            z.last_r_followup_level = max(
+                                int(getattr(z, "last_r_followup_level", 0) or 0),
+                                int(reached_r_level),
+                            )
+                            _state_write(params, st_r1)
+                            _send_log(
+                                settings,
+                                f"[r1] skip TRADE_MANAGEMENT (SKIP_TRADE_MANAGEMENT) at {reached_r_level}R "
+                                f"| zone_id={z.id} last={p_last}",
+                            )
+                            continue
                         prev_status = z.status
                         z.status = "dang_thuc_thi"
                         z.r1_followup_done = True
@@ -3837,6 +3887,15 @@ def _daemon_plan_main_loop(
                                     )
                                     continue
                             if not _tp1_touched(parsed, float(p_last)):
+                                continue
+                            if _settings_skip_trade_management(settings):
+                                z.tp1_followup_done = True
+                                _state_write(params, st_tp1b)
+                                _send_log(
+                                    settings,
+                                    f"[tp1] skip TRADE_MANAGEMENT (SKIP_TRADE_MANAGEMENT) | zone_id={z.id} "
+                                    f"chạm TP1 last={p_last}",
+                                )
                                 continue
                             z.status = "dang_thuc_thi"
                             z.tp1_followup_done = True

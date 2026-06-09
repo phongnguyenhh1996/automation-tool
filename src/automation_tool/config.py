@@ -84,6 +84,8 @@ class Settings:
     # Zone-touch [INTRADAY_ALERT]: bỏ Coinmap + OpenAI, chỉ Telegram rồi trả zone về ``vung_cho``.
     skip_intraday_alert_openai: bool = False
     skip_intraday_alert_cooldown_seconds: int = 120
+    # [TRADE_MANAGEMENT]: bỏ capture Coinmap + OpenAI + thao tác MT5 theo quyết định AI.
+    skip_trade_management: bool = False
 
 
 def _root() -> Path:
@@ -203,6 +205,7 @@ def load_settings() -> Settings:
         skip_intraday_alert_cooldown_seconds=max(
             0, _env_int("SKIP_INTRADAY_ALERT_COOLDOWN_SECONDS", 120)
         ),
+        skip_trade_management=_env_bool("SKIP_TRADE_MANAGEMENT", False),
     )
 
 

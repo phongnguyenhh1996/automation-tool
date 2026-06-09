@@ -292,6 +292,12 @@ def _run_tp1_openai_and_act(
     browser_context: BrowserContext,
     prev_response_id: str,
 ) -> Optional[str]:
+    if getattr(settings, "skip_trade_management", False) is True:
+        _log_tp1.info(
+            "tp1-followup: bỏ qua TRADE_MANAGEMENT (SKIP_TRADE_MANAGEMENT) | label=%s",
+            label,
+        )
+        return None
     capture_yaml = params.capture_coinmap_yaml
     charts_dir = params.charts_dir
     storage = params.storage_state_path
@@ -739,6 +745,13 @@ def maybe_post_entry_tp1_tick(
                 touched,
             )
             if not touched:
+                continue
+            if getattr(settings, "skip_trade_management", False) is True:
+                update_plan_tp1_followup_done(lab, True, path=last_alert_path)
+                _log_tp1.info(
+                    "tp1 TP1: bỏ qua TRADE_MANAGEMENT (SKIP_TRADE_MANAGEMENT) | label=%s",
+                    lab,
+                )
                 continue
             # Scalp: chạm TP1 → kiểm tra has_position.
             # Nếu chưa có position (lệnh pending) → huỷ lệnh ngay, không gọi OpenAI.
