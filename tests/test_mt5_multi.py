@@ -21,7 +21,7 @@ from automation_tool.mt5_multi import (
     mt5_cancel_pending_or_close_all_accounts,
     mt5_partial_close_tp1_all_accounts,
 )
-from automation_tool.mt5_openai_parse import parse_openai_output_md
+from automation_tool.mt5_openai_parse import ParsedTrade, parse_openai_output_md
 
 
 @pytest.fixture
@@ -704,3 +704,72 @@ def test_partial_close_tp1_skips_when_ticket_not_yet_position(
     assert summary.ok_all
     assert calls == []
     assert "primary chưa có position" in summary.results[0][1].message
+
+
+def test_execute_trade_all_accounts_short_scalp_overrides_sl_tp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scalp_trade = ParsedTrade(
+        symbol="XAUUSD",
+        side="BUY",
+        kind="LIMIT",
+        price=4742.0,
+        sl=4735.0,
+        tp1=4755.0,
+        tp2=4765.0,
+        lot=0.01,
+        raw_line="BUY LIMIT 4742.0 | SL 4735.0 | TP1 4755.0 | TP2 4765.0 | Lot 0.01",
+    )
+    accounts = [
+        MT5AccountEntry(
+            id="short",
+            terminal_path="/tmp/mt5-acc-a/terminal64.exe",
+            login=1,
+            password="p",
+            server="srv",
+            primary=True,
+            lot=LotRuleFromTrade(),
+            short_scalp=True,
+            tp_r={"scalp": 1.1},
+        ),
+        MT5AccountEntry(
+            id="normal",
+            terminal_path="/tmp/mt5-acc-b/terminal64.exe",
+            login=2,
+            password="p",
+            server="srv",
+            primary=False,
+            lot=LotRuleFromTrade(),
+            tp_r={"scalp": 1.1},
+        ),
+    ]
+    seen: list[tuple[float, float, float | None, str | None]] = []
+
+    def fake_execute_trade(trade, **kwargs):
+        seen.append(
+            (
+                float(trade.sl),
+                float(trade.tp1),
+                kwargs.get("take_profit_override"),
+                kwargs.get("take_profit_target"),
+            )
+        )
+        return MT5ExecutionResult(
+            ok=True,
+            message="mock",
+            order=8000 + len(seen),
+            account_id=kwargs.get("account_id"),
+        )
+
+    monkeypatch.setattr("automation_tool.mt5_multi.execute_trade", fake_execute_trade)
+
+    execute_trade_all_accounts(
+        scalp_trade,
+        accounts,
+        dry_run=True,
+        zone_label="scalp_1",
+    )
+    assert seen[0] == (4739.0, 4750.0, 4750.0, "tp1")
+    assert seen[1][0] == pytest.approx(4735.0)
+    assert seen[1][1] == pytest.approx(4755.0)
+    assert seen[1][2] == pytest.approx(4749.7)

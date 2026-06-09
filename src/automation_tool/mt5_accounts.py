@@ -29,6 +29,10 @@ họ plan chính: ``plan_chinh``, ``plan_chinh__sang``, ``plan_chinh__chieu``, `
 …; ``plan_phu``, ``plan_phu__*``, ``scalp``, ``scalp_*`` bị skip. Khi có ``trade`` (bên dưới) thì
 bỏ qua ``only_plan_chinh`` cho account đó.
 
+**short-scalp:** optional ``\"short-scalp\": true`` — account này vào lệnh scalp (``scalp``, ``scalp_*``)
+với SL cách entry **3 giá**, TP **8 giá** (BUY: entry−3 / entry+8; SELL: entry+3 / entry−8),
+bỏ TP2. Mặc định ``false`` — giữ SL/TP từ ``trade_line`` như hiện tại.
+
 **trade:** optional object — lọc loại lệnh trên **cùng** một account (thay cho nhiều flag rời)::
 
     "trade": {
@@ -66,6 +70,8 @@ _log = logging.getLogger(__name__)
 SOURCE_UPDATE_SCALP = "update-scalp"
 SOURCE_ALL_2 = "all-2"
 UPDATE_SCALP_DEFAULT_LOT = 0.01
+SHORT_SCALP_SL_DISTANCE = 3.0
+SHORT_SCALP_TP_DISTANCE = 8.0
 
 TRADE_FILTER_KEYS: frozenset[str] = frozenset(
     {
@@ -81,7 +87,7 @@ TRADE_FILTER_KEYS: frozenset[str] = frozenset(
 TRADE_FILTER_SECOND_FLOW_KEYS: frozenset[str] = frozenset({"chinh-2", "phu-2", "scalp-2"})
 TradeFilterMap = dict[str, bool]
 
-from automation_tool.mt5_openai_parse import ParsedTrade
+from automation_tool.mt5_openai_parse import ParsedTrade, format_parsed_trade_line
 from automation_tool.zones_paths import resolve_second_flow
 from automation_tool.zone_one_r import tp_at_r_multiple
 
@@ -172,6 +178,8 @@ class MT5AccountEntry:
     only_plan_chinh: bool = False
     #: Lọc theo loại lệnh (``chinh``, ``phu-2``, ``update-scalp``, …). ``None`` = không lọc theo trade.
     trade: Optional[TradeFilterMap] = None
+    #: Scalp: SL 3 giá / TP 8 giá từ entry thay vì SL/TP trong ``trade_line``.
+    short_scalp: bool = False
 
 
 def _parse_symbol_map(obj: Any, index: int) -> dict[str, str]:
@@ -403,6 +411,7 @@ def _parse_one(
     sym_map = _parse_symbol_map(obj.get("symbol_map"), index)
     only_plan_chinh = obj.get("only_plan_chinh") is True
     trade = _parse_trade_filter(obj.get("trade"), index)
+    short_scalp = obj.get("short-scalp") is True
     return MT5AccountEntry(
         id=acc_id,
         terminal_path=terminal_path_s,
@@ -417,6 +426,7 @@ def _parse_one(
         symbol_map=sym_map,
         only_plan_chinh=only_plan_chinh,
         trade=trade,
+        short_scalp=short_scalp,
     )
 
 
@@ -470,6 +480,43 @@ def is_plan_phu_family(*zone_refs: Optional[str]) -> bool:
         if "plan_phu" in _plan_lookup_candidates(raw):
             return True
     return False
+
+
+def account_uses_short_scalp_for_zone(
+    acc: MT5AccountEntry,
+    zone_label: Optional[str],
+) -> bool:
+    """Account bật ``short-scalp`` và zone thuộc họ scalp."""
+    return acc.short_scalp and is_scalp_family(zone_label)
+
+
+def apply_account_short_scalp_sl_tp(
+    trade: ParsedTrade,
+    acc: MT5AccountEntry,
+    zone_label: Optional[str],
+) -> ParsedTrade:
+    """
+    Ghi đè SL/TP cho lệnh scalp khi account có ``short-scalp: true``.
+
+    Dùng giá entry từ ``trade.price`` (LIMIT/STOP). MARKET không có entry → giữ nguyên.
+    """
+    if not account_uses_short_scalp_for_zone(acc, zone_label):
+        return trade
+    if trade.price is None:
+        _log.warning(
+            "short-scalp: bỏ qua ghi đè SL/TP — trade %s không có giá entry",
+            trade.kind,
+        )
+        return trade
+    entry = float(trade.price)
+    if trade.side == "BUY":
+        sl = entry - SHORT_SCALP_SL_DISTANCE
+        tp1 = entry + SHORT_SCALP_TP_DISTANCE
+    else:
+        sl = entry + SHORT_SCALP_SL_DISTANCE
+        tp1 = entry - SHORT_SCALP_TP_DISTANCE
+    updated = replace(trade, sl=sl, tp1=tp1, tp2=None)
+    return replace(updated, raw_line=format_parsed_trade_line(updated))
 
 
 def is_scalp_family(*zone_refs: Optional[str]) -> bool:

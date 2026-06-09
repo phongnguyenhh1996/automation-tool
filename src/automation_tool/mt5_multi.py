@@ -14,6 +14,8 @@ from automation_tool.mt5_accounts import (
     LotRuleFromTrade,
     LotRuleMaxLossUsd,
     LotRuleMaxNotionalUsd,
+    account_uses_short_scalp_for_zone,
+    apply_account_short_scalp_sl_tp,
     compute_lot_override,
     compute_volume_for_max_loss_live,
     compute_volume_for_max_notional_live,
@@ -141,16 +143,22 @@ def execute_trade_all_accounts(
         return out
 
     def _run_one(acc: MT5AccountEntry) -> MT5ExecutionResult:
+        trade_acc = apply_account_short_scalp_sl_tp(trade, acc, zone_label)
         lot_ov, _hint = _lot_override_for_entry(
-            trade,
+            trade_acc,
             acc,
             dry_run=dry_run,
             symbol_override=symbol_override,
             zone_label=zone_label,
         )
-        tp_ov = resolve_account_entry_tp_price(trade, acc, zone_label)
+        if account_uses_short_scalp_for_zone(acc, zone_label):
+            tp_ov: Optional[float] = float(trade_acc.tp1)
+            tp_target = "tp1"
+        else:
+            tp_ov = resolve_account_entry_tp_price(trade_acc, acc, zone_label)
+            tp_target = acc.entry_take_profit
         return execute_trade(
-            trade,
+            trade_acc,
             terminal_path=acc.terminal_path,
             login=acc.login,
             password=acc.password,
@@ -163,7 +171,7 @@ def execute_trade_all_accounts(
             lot_override=lot_ov,
             account_id=acc.id,
             account_symbol_map=acc.symbol_map or None,
-            take_profit_target=acc.entry_take_profit,
+            take_profit_target=tp_target,
             take_profit_override=tp_ov,
             order_comment=order_comment,
         )

@@ -16,6 +16,7 @@ from automation_tool.mt5_accounts import (
     MT5AccountEntry,
     SOURCE_ALL_2,
     SOURCE_UPDATE_SCALP,
+    apply_account_short_scalp_sl_tp,
     account_tp_r_multiplier,
     account_row_in_all2_subset,
     account_row_in_scalp_subset,
@@ -1245,3 +1246,125 @@ def test_sync_subset_from_trade_map() -> None:
         assert {r["id"] for r in all2_rows} == {"flow2", "only_l2"}
         all_accs = exclude_all2_dedicated_accounts(load_mt5_accounts_from_path(p), p)
         assert {a.id for a in all_accs} == {"main", "flow2"}
+
+
+def test_load_short_scalp_defaults_false() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "accounts.json"
+        _write_accounts(
+            p,
+            [
+                {
+                    "id": "a",
+                    "terminal_path": "C:/MT5/A/metatrader64.exe",
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                },
+            ],
+        )
+        assert load_mt5_accounts_from_path(p)[0].short_scalp is False
+
+
+def test_load_short_scalp_true() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "accounts.json"
+        _write_accounts(
+            p,
+            [
+                {
+                    "id": "a",
+                    "terminal_path": "C:/MT5/A/metatrader64.exe",
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                    "short-scalp": True,
+                },
+            ],
+        )
+        assert load_mt5_accounts_from_path(p)[0].short_scalp is True
+
+
+def test_apply_account_short_scalp_sl_tp_buy() -> None:
+    trade = ParsedTrade(
+        symbol="XAUUSD",
+        side="BUY",
+        kind="LIMIT",
+        price=4742.0,
+        sl=4735.0,
+        tp1=4750.0,
+        tp2=4760.0,
+        lot=0.01,
+        raw_line="BUY LIMIT 4742.0 | SL 4735.0 | TP1 4750.0 | TP2 4760.0 | Lot 0.01",
+    )
+    acc = MT5AccountEntry(
+        id="a",
+        terminal_path="/tmp/mt5.exe",
+        login=1,
+        password="p",
+        server="srv",
+        primary=True,
+        lot=LotRuleFromTrade(),
+        short_scalp=True,
+    )
+    out = apply_account_short_scalp_sl_tp(trade, acc, "scalp_1")
+    assert out.sl == pytest.approx(4739.0)
+    assert out.tp1 == pytest.approx(4750.0)
+    assert out.tp2 is None
+    assert "SL 4739" in out.raw_line
+    assert "TP1 4750" in out.raw_line
+    assert "TP2" not in out.raw_line
+
+
+def test_apply_account_short_scalp_sl_tp_sell() -> None:
+    trade = ParsedTrade(
+        symbol="XAUUSD",
+        side="SELL",
+        kind="LIMIT",
+        price=4738.0,
+        sl=4745.0,
+        tp1=4730.0,
+        tp2=None,
+        lot=0.01,
+        raw_line="SELL LIMIT 4738.0 | SL 4745.0 | TP1 4730.0 | Lot 0.01",
+    )
+    acc = MT5AccountEntry(
+        id="a",
+        terminal_path="/tmp/mt5.exe",
+        login=1,
+        password="p",
+        server="srv",
+        primary=True,
+        lot=LotRuleFromTrade(),
+        short_scalp=True,
+    )
+    out = apply_account_short_scalp_sl_tp(trade, acc, "scalp")
+    assert out.sl == pytest.approx(4741.0)
+    assert out.tp1 == pytest.approx(4730.0)
+
+
+def test_apply_account_short_scalp_skips_non_scalp_label() -> None:
+    trade = ParsedTrade(
+        symbol="XAUUSD",
+        side="BUY",
+        kind="LIMIT",
+        price=2600.0,
+        sl=2590.0,
+        tp1=2610.0,
+        tp2=2620.0,
+        lot=0.02,
+        raw_line="BUY LIMIT 2600.0 | SL 2590.0 | TP1 2610.0 | TP2 2620.0 | Lot 0.02",
+    )
+    acc = MT5AccountEntry(
+        id="a",
+        terminal_path="/tmp/mt5.exe",
+        login=1,
+        password="p",
+        server="srv",
+        primary=True,
+        lot=LotRuleFromTrade(),
+        short_scalp=True,
+    )
+    assert apply_account_short_scalp_sl_tp(trade, acc, "plan_chinh") is trade

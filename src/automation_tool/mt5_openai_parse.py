@@ -122,6 +122,26 @@ class ParsedTrade:
     raw_line: str
 
 
+def _format_trade_price(value: float) -> str:
+    return f"{float(value):g}"
+
+
+def format_parsed_trade_line(trade: ParsedTrade) -> str:
+    """Rebuild pipe trade_line từ ``ParsedTrade`` (LIMIT/STOP/MARKET)."""
+    lot_s = f"{float(trade.lot):.2f}"
+    sl_s = _format_trade_price(trade.sl)
+    tp1_s = _format_trade_price(trade.tp1)
+    if trade.kind == "MARKET":
+        head = f"{trade.side} MARKET"
+    else:
+        price_s = _format_trade_price(trade.price) if trade.price is not None else "0"
+        head = f"{trade.side} {trade.kind} {price_s}"
+    line = f"{head} | SL {sl_s} | TP1 {tp1_s}"
+    if trade.tp2 is not None:
+        line += f" | TP2 {_format_trade_price(trade.tp2)}"
+    return f"{line} | Lot {lot_s}"
+
+
 def is_last_price_hit_stop_loss(
     last_price: float,
     parsed: ParsedTrade,
