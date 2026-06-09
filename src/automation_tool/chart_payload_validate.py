@@ -12,8 +12,9 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 from automation_tool.coinmap_merged import validate_coinmap_merged_payload
 from automation_tool.images import (
@@ -28,13 +29,89 @@ COINMAP_OPENAI_KEYS: tuple[str, ...] = (
     "getindicatorsvwap",
 )
 
+# Max lag between ``generated_at`` and newest ``getcandlehistory[0].ct`` (minutes).
+COINMAP_MAX_LAG_MINUTES_BY_INTERVAL: dict[str, int] = {
+    "5m": 15,
+    "15m": 30,
+}
+
+
+def _coinmap_interval_from_payload(data: dict[str, Any]) -> str:
+    iv = str(data.get("interval") or "").strip().lower()
+    if iv:
+        return iv
+    candles = data.get("getcandlehistory")
+    if isinstance(candles, list) and candles and isinstance(candles[0], dict):
+        return str(candles[0].get("i") or "").strip().lower()
+    return ""
+
+
+def validate_coinmap_candle_freshness(data: dict[str, Any]) -> tuple[bool, str]:
+    """
+    Return (ok, reason). For 5m / 15m exports, newest candle must be within
+    ``COINMAP_MAX_LAG_MINUTES_BY_INTERVAL`` of ``generated_at``.
+    """
+    iv = _coinmap_interval_from_payload(data)
+    max_lag = COINMAP_MAX_LAG_MINUTES_BY_INTERVAL.get(iv)
+    if max_lag is None:
+        return True, ""
+
+    gen_raw = data.get("generated_at")
+    if not isinstance(gen_raw, str) or not gen_raw.strip():
+        return False, "generated_at missing (required for candle freshness check)"
+
+    candles = data.get("getcandlehistory")
+    if not isinstance(candles, list) or not candles:
+        return False, "getcandlehistory missing for freshness check"
+    newest = candles[0]
+    if not isinstance(newest, dict):
+        return False, "getcandlehistory[0] is not an object"
+
+    ct_raw = newest.get("ct")
+    if ct_raw is None:
+        t_raw = newest.get("t")
+        if t_raw is None:
+            return False, "getcandlehistory[0] missing t/ct"
+        ct_ms = int(t_raw)
+    else:
+        ct_ms = int(ct_raw)
+
+    try:
+        gen = datetime.fromisoformat(gen_raw.replace("Z", "+00:00"))
+    except ValueError:
+        return False, f"generated_at invalid: {gen_raw!r}"
+    if gen.tzinfo is None:
+        gen = gen.replace(tzinfo=timezone.utc)
+
+    ct_dt = datetime.fromtimestamp(ct_ms / 1000, tz=timezone.utc)
+    lag_min = (gen - ct_dt).total_seconds() / 60.0
+    if lag_min > max_lag:
+        return (
+            False,
+            f"Coinmap data stale: newest candle lags generated_at by "
+            f"{lag_min:.1f}m (max {max_lag}m for {iv})",
+        )
+    return True, ""
+
+
 def validate_coinmap_export_payload(data: dict[str, Any]) -> tuple[bool, str]:
     """Return (ok, reason)."""
     for key in COINMAP_OPENAI_KEYS:
         val = data.get(key)
         if not isinstance(val, list) or len(val) == 0:
             return False, f"{key} missing, null, or empty list"
+    ok, reason = validate_coinmap_candle_freshness(data)
+    if not ok:
+        return False, reason
     return True, ""
+
+
+def validate_coinmap_json_file(path: Path) -> tuple[bool, str]:
+    """Load a per-shot Coinmap export and run :func:`validate_coinmap_export_payload`."""
+    data, err = _load_json(path)
+    if err:
+        return False, err
+    return validate_coinmap_export_payload(data or {})
 
 
 def validate_tradingview_tvdatafeed_payload(data: dict[str, Any]) -> tuple[bool, str]:
@@ -140,6 +217,45 @@ def _tradingview_slot_validation_issue(
     )
 
 
+def _coinmap_raw_export_freshness_issues(
+    charts_dir: Path,
+    stamp: str,
+    *,
+    skip_paths: Optional[set[Path]] = None,
+) -> list[ChartSlotIssue]:
+    """Validate 5m/15m per-shot exports even when OpenAI uses ``*_merged.json``."""
+    skip = skip_paths or set()
+    issues: list[ChartSlotIssue] = []
+    for iv in ("5m", "15m"):
+        for jp in sorted(charts_dir.glob(f"{stamp}_coinmap_*_{iv}.json")):
+            if jp in skip or jp.name.endswith("_merged.json"):
+                continue
+            data, err = _load_json(jp)
+            if err:
+                issues.append(
+                    ChartSlotIssue(
+                        source="coinmap",
+                        symbol="",
+                        interval=iv,
+                        expected_path=jp,
+                        reason=err,
+                    )
+                )
+                continue
+            ok, r = validate_coinmap_candle_freshness(data or {})
+            if not ok:
+                issues.append(
+                    ChartSlotIssue(
+                        source="coinmap",
+                        symbol="",
+                        interval=iv,
+                        expected_path=jp,
+                        reason=r,
+                    )
+                )
+    return issues
+
+
 def list_invalid_chart_slots_for_stamp(
     charts_dir: Path,
     stamp: str,
@@ -157,6 +273,7 @@ def list_invalid_chart_slots_for_stamp(
     dxy_m, main_m = coinmap_merged_openai_files(charts_dir, stamp, main_sym)
     order = effective_chart_image_order(charts_dir)
     issues: list[ChartSlotIssue] = []
+    validated_export_paths: set[Path] = set()
     for src, sym, iv in order:
         if src == "coinmap" and dxy_m is not None and sym == "DXY" and iv == "15m":
             jp = dxy_m
@@ -207,6 +324,7 @@ def list_invalid_chart_slots_for_stamp(
                     )
                 )
         else:
+            validated_export_paths.add(jp)
             ok, r = validate_coinmap_export_payload(data or {})
             if not ok:
                 issues.append(
@@ -218,7 +336,53 @@ def list_invalid_chart_slots_for_stamp(
                         reason=r,
                     )
                 )
+    issues.extend(
+        _coinmap_raw_export_freshness_issues(
+            charts_dir, stamp, skip_paths=validated_export_paths
+        )
+    )
     return issues
+
+
+def coinmap_raw_export_paths_for_stamp(charts_dir: Path, stamp: str) -> list[Path]:
+    """Per-shot ``*_coinmap_*_{5m,15m}.json`` for ``stamp`` (excludes ``*_merged.json``)."""
+    if not stamp or not charts_dir.is_dir():
+        return []
+    out: list[Path] = []
+    for iv in ("15m", "5m"):
+        for jp in sorted(charts_dir.glob(f"{stamp}_coinmap_*_{iv}.json")):
+            if jp.name.endswith("_merged.json"):
+                continue
+            out.append(jp)
+    return out
+
+
+def is_coinmap_stale_chart_issue(issue: ChartSlotIssue) -> bool:
+    return "stale" in issue.reason.lower()
+
+
+def require_valid_coinmap_json_paths(paths: Sequence[Path]) -> None:
+    """Exit-style guard for intraday flows (``update`` / ``update-scalp``)."""
+    reasons: list[str] = []
+    for jp in paths:
+        ok, r = validate_coinmap_json_file(jp)
+        if not ok:
+            reasons.append(f"{jp.name}: {r}")
+    if reasons:
+        raise SystemExit(f"Coinmap JSON validation failed: {'; '.join(reasons)}")
+
+
+def require_valid_coinmap_exports_for_stamp(charts_dir: Path, stamp: str) -> None:
+    """
+    Validate endpoint payloads + 5m/15m freshness for every raw Coinmap export in ``stamp``.
+    Used by ``all``, ``all-2``, ``update``, and ``update-scalp``.
+    """
+    paths = coinmap_raw_export_paths_for_stamp(charts_dir, stamp)
+    if not paths:
+        raise SystemExit(
+            f"No Coinmap 5m/15m JSON exports for stamp {stamp!r} under {charts_dir}."
+        )
+    require_valid_coinmap_json_paths(paths)
 
 
 def filter_coinmap_plan_for_retry_paths(

@@ -55,7 +55,11 @@ from automation_tool.images import (
     ordered_chart_openai_payloads,
     stamp_from_capture_paths,
 )
-from automation_tool.chart_payload_validate import list_invalid_chart_slots_for_stamp
+from automation_tool.chart_payload_validate import (
+    is_coinmap_stale_chart_issue,
+    list_invalid_chart_slots_for_stamp,
+    require_valid_coinmap_exports_for_stamp,
+)
 from automation_tool.chart_recapture import recapture_failed_chart_slots
 from automation_tool.first_response_trade import apply_first_response_vao_lenh
 from automation_tool.state_files import (
@@ -2725,6 +2729,7 @@ def cmd_all_2(args: argparse.Namespace) -> None:
         )
 
     _log.info("all-2: bắt đầu | charts=%s stamp=%s no_telegram=%s", charts_dir, stamp, args.no_telegram)
+    require_valid_coinmap_exports_for_stamp(charts_dir, stamp)
     require_openai(s)
     payloads = ordered_chart_openai_payloads(charts_dir, stamp=stamp)
     _warn_if_incomplete_chart_payloads(charts_dir, payloads)
@@ -2811,6 +2816,10 @@ def cmd_all(args: argparse.Namespace) -> None:
     _CHART_JSON_VALIDATE_MAX_ROUNDS = 3
     for attempt in range(_CHART_JSON_VALIDATE_MAX_ROUNDS + 1):
         bad = list_invalid_chart_slots_for_stamp(charts_dir, stamp)
+        stale = [x for x in bad if is_coinmap_stale_chart_issue(x)]
+        if stale:
+            detail = "; ".join(f"{x.expected_path.name}: {x.reason}" for x in stale)
+            raise SystemExit(f"Coinmap data stale (aborting, no recapture): {detail}")
         if not bad:
             break
         if attempt >= _CHART_JSON_VALIDATE_MAX_ROUNDS:
@@ -2845,6 +2854,8 @@ def cmd_all(args: argparse.Namespace) -> None:
             raise
         except Exception as e:
             raise SystemExit(f"Recapture after validation failed: {e}") from e
+
+    require_valid_coinmap_exports_for_stamp(charts_dir, stamp)
 
     require_openai(s)
     payloads = ordered_chart_openai_payloads(charts_dir)
@@ -3165,7 +3176,7 @@ def cmd_update(args: argparse.Namespace) -> None:
             f"No 5m Coinmap JSON under {charts_dir} after capture (stamp={stamp!r}). "
             "Check coinmap_update.yaml capture_plan and api_data_export."
         )
-    coinmap_paths: list[Path] = [m15, m5]
+    require_valid_coinmap_exports_for_stamp(charts_dir, stamp)
 
     require_openai(s)
 
@@ -3459,6 +3470,7 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
             f"No 5m Coinmap JSON under {charts_dir} after capture (stamp={stamp!r}). "
             "Check coinmap_update.yaml capture_plan and api_data_export."
         )
+    require_valid_coinmap_exports_for_stamp(charts_dir, stamp)
     coinmap_paths: list[Path] = [m15, m5]
     m15_png = coinmap_png_path_for_json(m15)
     m5_png = coinmap_png_path_for_json(m5)
