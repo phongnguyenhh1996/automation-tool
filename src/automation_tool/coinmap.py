@@ -655,6 +655,17 @@ def _coinmap_write_bearer_token_cache(path: Path, authorization: str) -> None:
         pass
 
 
+def _coinmap_maybe_write_bearer_token_cache(
+    api_cd: dict[str, Any], authorization: Optional[str]
+) -> None:
+    auth = (authorization or "").strip()
+    if not auth or not _coinmap_bearer_token_cache_enabled(api_cd):
+        return
+    cache_path = _coinmap_bearer_token_cache_resolved_path(api_cd)
+    _coinmap_write_bearer_token_cache(cache_path, auth)
+    _coinmap_bearer_log(api_cd, f"Saved bearer token cache: {cache_path}")
+
+
 def _coinmap_bearer_shot_has_auth_failure(shot: dict[str, Any]) -> bool:
     for key in _COINMAP_API_KEYS:
         block = shot.get(key)
@@ -2298,9 +2309,7 @@ def _run_bearer_request_api_only_flow(
         coinmap_capture_intervals=coinmap_capture_intervals,
     )
     if _coinmap_bearer_token_cache_enabled(api_cd):
-        cache_path = _coinmap_bearer_token_cache_resolved_path(api_cd)
-        _coinmap_write_bearer_token_cache(cache_path, auth)
-        _coinmap_bearer_log(api_cd, f"Saved bearer token cache: {cache_path}")
+        _coinmap_maybe_write_bearer_token_cache(api_cd, auth)
     return written
 
 
@@ -2384,6 +2393,7 @@ def _run_chart_screenshot_flow(
                     "api_data_export bearer_request: no Authorization on requests to gw.coinmap.tech "
                     f"within {timeout_ms}ms. Check login, chart_page_url, or use mode network_capture."
                 )
+            _coinmap_maybe_write_bearer_token_cache(api_cd, bearer_auth)
 
         plan = _coinmap_resolve_capture_plan(cd)
         if plan is not None and coinmap_capture_intervals:

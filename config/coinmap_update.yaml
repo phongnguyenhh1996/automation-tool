@@ -106,7 +106,7 @@ chart_download:
     bearer_skip_chart_ui: false
     bearer_http_parallel: true
     bearer_parallel_max_concurrency: 0
-    bearer_token_cache: false
+    bearer_token_cache: true
     bearer_ready_timeout_ms: 25000
     bearer_trigger_url: "https://coinmap.tech/chart"
     bearer_capture_url_substrings: []
