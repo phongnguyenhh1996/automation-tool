@@ -706,7 +706,7 @@ def test_partial_close_tp1_skips_when_ticket_not_yet_position(
     assert "primary chưa có position" in summary.results[0][1].message
 
 
-def test_execute_trade_all_accounts_short_scalp_overrides_sl_tp(
+def test_execute_trade_all_accounts_short_tp_overrides_tp(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     scalp_trade = ParsedTrade(
@@ -769,7 +769,7 @@ def test_execute_trade_all_accounts_short_scalp_overrides_sl_tp(
         dry_run=True,
         zone_label="scalp_1",
     )
-    assert seen[0] == (4739.0, 4750.0, 4750.0, "tp1")
+    assert seen[0] == (4739.0, 4753.0, 4753.0, "tp1")
     assert seen[1][0] == pytest.approx(4735.0)
     assert seen[1][1] == pytest.approx(4755.0)
     assert seen[1][2] == pytest.approx(4749.7)

@@ -29,9 +29,12 @@ họ plan chính: ``plan_chinh``, ``plan_chinh__sang``, ``plan_chinh__chieu``, `
 …; ``plan_phu``, ``plan_phu__*``, ``scalp``, ``scalp_*`` bị skip. Khi có ``trade`` (bên dưới) thì
 bỏ qua ``only_plan_chinh`` cho account đó.
 
-**short-scalp:** optional ``\"short-scalp\": true`` — account này vào lệnh scalp (``scalp``, ``scalp_*``)
-với SL cách entry **3 giá**, TP **8 giá** (BUY: entry−3 / entry+8; SELL: entry+3 / entry−8),
-bỏ TP2. Mặc định ``false`` — giữ SL/TP từ ``trade_line`` như hiện tại.
+**short-scalp / short-chinh / short-phu:** optional ``\"short-scalp\"``, ``\"short-chinh\"``,
+``\"short-phu\"`` — account vào lệnh thuộc họ tương ứng (scalp / plan_chinh / plan_phu) với
+SL cách entry theo hằng ``SHORT_*_SL_DISTANCE``, TP = **TP1 trừ** ``SHORT_*_TP_TOWARD_ENTRY_OFFSET``
+**về phía entry** (BUY: TP1−offset; SELL: TP1+offset), bỏ TP2. Riêng scalp: sau khi rút TP, nếu
+|entry−TP| < ``SHORT_SCALP_TP_MIN_DISTANCE_FROM_ENTRY`` (mặc định 8) thì TP = entry ± hằng đó (lời
+tối thiểu 8 giá). Mặc định ``false`` — giữ SL/TP từ ``trade_line`` như hiện tại.
 
 **trade:** optional object — lọc loại lệnh trên **cùng** một account (thay cho nhiều flag rời)::
 
@@ -65,13 +68,20 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, Optional, Union
 
+ShortPlanKind = Literal["scalp", "chinh", "phu"]
+
 _log = logging.getLogger(__name__)
 
 SOURCE_UPDATE_SCALP = "update-scalp"
 SOURCE_ALL_2 = "all-2"
 UPDATE_SCALP_DEFAULT_LOT = 0.01
 SHORT_SCALP_SL_DISTANCE = 3.0
-SHORT_SCALP_TP_DISTANCE = 8.0
+SHORT_SCALP_TP_TOWARD_ENTRY_OFFSET = 1.0
+SHORT_SCALP_TP_MIN_DISTANCE_FROM_ENTRY = 8.0
+SHORT_CHINH_SL_DISTANCE = 6.0
+SHORT_CHINH_TP_TOWARD_ENTRY_OFFSET = 2.0
+SHORT_PHU_SL_DISTANCE = 5.0
+SHORT_PHU_TP_TOWARD_ENTRY_OFFSET = 3.0
 
 TRADE_FILTER_KEYS: frozenset[str] = frozenset(
     {
@@ -178,8 +188,12 @@ class MT5AccountEntry:
     only_plan_chinh: bool = False
     #: Lọc theo loại lệnh (``chinh``, ``phu-2``, ``update-scalp``, …). ``None`` = không lọc theo trade.
     trade: Optional[TradeFilterMap] = None
-    #: Scalp: SL 3 giá / TP 8 giá từ entry thay vì SL/TP trong ``trade_line``.
+    #: Scalp: SL/TP rút gọn theo ``SHORT_SCALP_*``; bỏ TP2.
     short_scalp: bool = False
+    #: Plan chính: SL/TP rút gọn theo ``SHORT_CHINH_*``; bỏ TP2.
+    short_chinh: bool = False
+    #: Plan phụ: SL/TP rút gọn theo ``SHORT_PHU_*``; bỏ TP2.
+    short_phu: bool = False
 
 
 def _parse_symbol_map(obj: Any, index: int) -> dict[str, str]:
@@ -412,6 +426,8 @@ def _parse_one(
     only_plan_chinh = obj.get("only_plan_chinh") is True
     trade = _parse_trade_filter(obj.get("trade"), index)
     short_scalp = obj.get("short-scalp") is True
+    short_chinh = obj.get("short-chinh") is True
+    short_phu = obj.get("short-phu") is True
     return MT5AccountEntry(
         id=acc_id,
         terminal_path=terminal_path_s,
@@ -427,6 +443,8 @@ def _parse_one(
         only_plan_chinh=only_plan_chinh,
         trade=trade,
         short_scalp=short_scalp,
+        short_chinh=short_chinh,
+        short_phu=short_phu,
     )
 
 
@@ -482,40 +500,120 @@ def is_plan_phu_family(*zone_refs: Optional[str]) -> bool:
     return False
 
 
-def account_uses_short_scalp_for_zone(
+def account_uses_short_tp_for_zone(
     acc: MT5AccountEntry,
     zone_label: Optional[str],
 ) -> bool:
-    """Account bật ``short-scalp`` và zone thuộc họ scalp."""
-    return acc.short_scalp and is_scalp_family(zone_label)
+    """Account bật short-* và zone thuộc họ tương ứng (scalp / plan chính / plan phụ)."""
+    return short_plan_kind_for_zone(acc, zone_label) is not None
 
 
-def apply_account_short_scalp_sl_tp(
+def short_plan_kind_for_zone(
+    acc: MT5AccountEntry,
+    zone_label: Optional[str],
+) -> Optional[ShortPlanKind]:
+    if acc.short_scalp and is_scalp_family(zone_label):
+        return "scalp"
+    if acc.short_chinh and is_plan_chinh_family(zone_label):
+        return "chinh"
+    if acc.short_phu and is_plan_phu_family(zone_label):
+        return "phu"
+    return None
+
+
+def short_sl_distance_for_kind(kind: ShortPlanKind) -> float:
+    if kind == "scalp":
+        return SHORT_SCALP_SL_DISTANCE
+    if kind == "chinh":
+        return SHORT_CHINH_SL_DISTANCE
+    return SHORT_PHU_SL_DISTANCE
+
+
+def short_tp_toward_entry_offset_for_kind(kind: ShortPlanKind) -> float:
+    if kind == "scalp":
+        return SHORT_SCALP_TP_TOWARD_ENTRY_OFFSET
+    if kind == "chinh":
+        return SHORT_CHINH_TP_TOWARD_ENTRY_OFFSET
+    return SHORT_PHU_TP_TOWARD_ENTRY_OFFSET
+
+
+def _sl_from_entry(trade: ParsedTrade, sl_distance: float) -> float:
+    entry = float(trade.price)  # caller ensures not None
+    if trade.side == "BUY":
+        return entry - sl_distance
+    return entry + sl_distance
+
+
+def _tp1_toward_entry(trade: ParsedTrade, offset: float) -> float:
+    tp1 = float(trade.tp1)  # caller ensures not None
+    if trade.side == "BUY":
+        return tp1 - offset
+    return tp1 + offset
+
+
+def _apply_scalp_tp_min_distance_from_entry(
+    trade: ParsedTrade,
+    tp1: float,
+    *,
+    min_distance: float = SHORT_SCALP_TP_MIN_DISTANCE_FROM_ENTRY,
+) -> float:
+    """Scalp: đảm bảo |entry−TP| >= ``min_distance`` sau khi rút TP về entry."""
+    if trade.price is None:
+        return tp1
+    entry = float(trade.price)
+    distance = abs(float(tp1) - entry)
+    if distance >= min_distance:
+        return tp1
+    if trade.side == "BUY":
+        return entry + min_distance
+    return entry - min_distance
+
+
+def apply_account_short_tp(
     trade: ParsedTrade,
     acc: MT5AccountEntry,
     zone_label: Optional[str],
 ) -> ParsedTrade:
     """
-    Ghi đè SL/TP cho lệnh scalp khi account có ``short-scalp: true``.
+    Ghi đè SL/TP cho lệnh short-*: SL cách entry, TP1 rút về entry, bỏ TP2.
 
-    Dùng giá entry từ ``trade.price`` (LIMIT/STOP). MARKET không có entry → giữ nguyên.
+    Thiếu entry → giữ SL gốc; thiếu TP1 → giữ TP gốc. Không có gì để ghi đè → giữ nguyên trade.
     """
-    if not account_uses_short_scalp_for_zone(acc, zone_label):
+    kind = short_plan_kind_for_zone(acc, zone_label)
+    if kind is None:
         return trade
-    if trade.price is None:
+
+    sl_distance = short_sl_distance_for_kind(kind)
+    tp_offset = short_tp_toward_entry_offset_for_kind(kind)
+    sl = trade.sl
+    tp1 = trade.tp1
+    tp2 = trade.tp2
+
+    if trade.price is not None:
+        sl = _sl_from_entry(trade, sl_distance)
+    else:
         _log.warning(
-            "short-scalp: bỏ qua ghi đè SL/TP — trade %s không có giá entry",
+            "short-%s: bỏ qua ghi đè SL — trade %s không có giá entry",
+            kind,
             trade.kind,
         )
-        return trade
-    entry = float(trade.price)
-    if trade.side == "BUY":
-        sl = entry - SHORT_SCALP_SL_DISTANCE
-        tp1 = entry + SHORT_SCALP_TP_DISTANCE
+
+    if trade.tp1 is not None:
+        tp1 = _tp1_toward_entry(trade, tp_offset)
+        if kind == "scalp":
+            tp1 = _apply_scalp_tp_min_distance_from_entry(trade, tp1)
+        tp2 = None
     else:
-        sl = entry + SHORT_SCALP_SL_DISTANCE
-        tp1 = entry - SHORT_SCALP_TP_DISTANCE
-    updated = replace(trade, sl=sl, tp1=tp1, tp2=None)
+        _log.warning(
+            "short-%s: bỏ qua ghi đè TP — trade %s không có TP1",
+            kind,
+            trade.kind,
+        )
+
+    if sl == trade.sl and tp1 == trade.tp1 and tp2 == trade.tp2:
+        return trade
+
+    updated = replace(trade, sl=sl, tp1=tp1, tp2=tp2)
     return replace(updated, raw_line=format_parsed_trade_line(updated))
 
 
