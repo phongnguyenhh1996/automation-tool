@@ -20,6 +20,72 @@ def test_ask_high_model_is_full_gpt_54() -> None:
     assert _ASK_HIGH_FOLLOWUP_MODEL == "gpt-5.4"
 
 
+def test_tim_scalp_command_blocked_when_slot_limit_reached(monkeypatch) -> None:
+    sent: list[str] = []
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "ok": True,
+                "result": [
+                    {
+                        "update_id": 123,
+                        "message": {
+                            "message_id": 456,
+                            "chat": {"id": 789},
+                            "text": "/tim-scalp",
+                        },
+                    }
+                ],
+            }
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs) -> None:
+            self.calls = 0
+
+        def __enter__(self) -> "FakeClient":
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+        def get(self, *args, **kwargs) -> FakeResponse:
+            self.calls += 1
+            if self.calls > 1:
+                raise KeyboardInterrupt
+            return FakeResponse()
+
+    def fake_send_status(_settings, _chat_id, text: str) -> None:
+        sent.append(text)
+
+    monkeypatch.setattr("automation_tool.telegram_listen.httpx.Client", FakeClient)
+    monkeypatch.setattr("automation_tool.telegram_listen._tim_scalp_slot_context", lambda: ("sang", "2026-06-11-sang"))
+    monkeypatch.setattr(
+        "automation_tool.telegram_listen._tim_scalp_run_allowed",
+        lambda _slot, _key: (False, "⛔ /tim-scalp bị giới hạn: slot Sáng đã chạy thành công 2/2 lần."),
+    )
+    monkeypatch.setattr("automation_tool.telegram_listen._send_status", fake_send_status)
+
+    settings = SimpleNamespace(
+        telegram_bot_token="token",
+        telegram_listen_chat_id="789",
+        telegram_chat_id="789",
+        telegram_parse_mode=None,
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        run_telegram_listener(
+            settings=settings,
+            params=TelegramListenParams(update_main_symbol="xauusd"),
+        )
+
+    assert len(sent) == 1
+    assert "2/2" in sent[0]
+
+
 def test_tim_scalp_command_starts_update_scalp_runner(monkeypatch) -> None:
     threads: list[dict] = []
 
@@ -92,6 +158,8 @@ def test_tim_scalp_command_starts_update_scalp_runner(monkeypatch) -> None:
     assert threads[0]["name"] == "telegram-update-scalp-runner"
     assert threads[0]["kwargs"]["update_main_symbol"] == "XAUUSD"
     assert threads[0]["kwargs"]["trigger_message_id"] == 456
+    assert threads[0]["kwargs"]["slot"] in ("sang", "chieu", "toi")
+    assert threads[0]["kwargs"]["slot_key"].endswith(f"-{threads[0]['kwargs']['slot']}")
 
 
 @pytest.mark.parametrize(

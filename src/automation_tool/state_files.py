@@ -206,6 +206,81 @@ def write_last_scalp_response_id(response_id: str, path: Optional[Path] = None) 
     _atomic_write_text(p, response_id.strip() + "\n")
 
 
+def default_tim_scalp_run_state_path() -> Path:
+    """Đếm lần ``/tim-scalp`` thành công theo slot (Telegram)."""
+    return symbol_data_dir() / "tim_scalp_run_state.json"
+
+
+@dataclass(frozen=True)
+class TimScalpRunState:
+    slot_key: str
+    slot: str
+    success_count: int
+
+    def to_json_dict(self) -> dict[str, Any]:
+        return {
+            "slot_key": self.slot_key,
+            "slot": self.slot,
+            "success_count": int(self.success_count),
+        }
+
+
+def read_tim_scalp_run_state(path: Optional[Path] = None) -> Optional[TimScalpRunState]:
+    p = path or default_tim_scalp_run_state_path()
+    if not p.is_file():
+        return None
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    slot_key = str(data.get("slot_key") or "").strip()
+    slot = str(data.get("slot") or "").strip().lower()
+    try:
+        count = int(data.get("success_count") or 0)
+    except (TypeError, ValueError):
+        count = 0
+    if not slot_key or slot not in ("sang", "chieu", "toi"):
+        return None
+    return TimScalpRunState(slot_key=slot_key, slot=slot, success_count=max(0, count))
+
+
+def write_tim_scalp_run_state(state: TimScalpRunState, path: Optional[Path] = None) -> None:
+    p = path or default_tim_scalp_run_state_path()
+    _atomic_write_json(p, state.to_json_dict())
+
+
+def get_tim_scalp_success_count(*, slot_key: str, path: Optional[Path] = None) -> int:
+    st = read_tim_scalp_run_state(path)
+    if st is None or st.slot_key != slot_key:
+        return 0
+    return int(st.success_count)
+
+
+def increment_tim_scalp_success(
+    *,
+    slot: str,
+    slot_key: str,
+    path: Optional[Path] = None,
+) -> int:
+    """Tăng bộ đếm thành công cho ``slot_key``; trả về số lần mới."""
+    slot_s = (slot or "").strip().lower()
+    key = (slot_key or "").strip()
+    if slot_s not in ("sang", "chieu", "toi") or not key:
+        raise ValueError(f"invalid tim-scalp slot state: slot={slot!r} slot_key={slot_key!r}")
+    prev = read_tim_scalp_run_state(path)
+    if prev is not None and prev.slot_key == key:
+        new_count = int(prev.success_count) + 1
+    else:
+        new_count = 1
+    write_tim_scalp_run_state(
+        TimScalpRunState(slot_key=key, slot=slot_s, success_count=new_count),
+        path=path,
+    )
+    return new_count
+
+
 @dataclass(frozen=True)
 class MorningBaselinePrices:
     prices: tuple[float, float, float]
