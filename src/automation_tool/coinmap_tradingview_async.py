@@ -18,6 +18,7 @@ from automation_tool.coinmap import (
     _tradingview_indicator_loading_markers,
     _tradingview_interval_slug,
     _tradingview_is_delete_indicator_label,
+    _tradingview_symbol_locator,
     _tradingview_texts_have_indicator_loading,
     _tv_apply_indicator_profile,
     _tv_forbidden_indicator_groups,
@@ -286,15 +287,39 @@ async def tradingview_ensure_watchlist_open_async(page: Page, tv: dict[str, Any]
 _log_tv = logging.getLogger("automation_tool.coinmap_tradingview_async")
 
 
+async def _maybe_dismiss_tradingview_blocking_overlay_async(page: Page, tv: dict[str, Any]) -> None:
+    if not tv.get("tradingview_blocking_overlay_dismiss_enabled", True):
+        return
+    if tv.get("tradingview_blocking_overlay_escape", True):
+        try:
+            await page.keyboard.press("Escape")
+            ms = int(tv.get("after_tradingview_overlay_escape_ms", 250))
+            if ms > 0:
+                await page.wait_for_timeout(ms)
+        except Exception:
+            pass
+    overlay_sel = (tv.get("tradingview_blocking_overlay_selector") or "").strip()
+    if not overlay_sel:
+        return
+    hide_ms = int(tv.get("tradingview_blocking_overlay_hide_timeout_ms", 8_000))
+    try:
+        loc = page.locator(overlay_sel).first
+        if await loc.is_visible(timeout=300):
+            await loc.wait_for(state="hidden", timeout=hide_ms)
+    except Exception:
+        pass
+
+
 async def tv_select_symbol_async(page: Page, tv: dict[str, Any], symbol: str) -> None:
-    custom = (tv.get("symbol_list_item_selector") or "").strip()
-    if custom:
-        loc = page.locator(custom.format(symbol=symbol)).first
-    else:
-        prefix = (tv.get("symbol_name_class_prefix") or "symbolNameText-").strip()
-        loc = page.locator(f'[class*="{prefix}"]').get_by_text(symbol, exact=True).first
+    await _maybe_dismiss_tradingview_blocking_overlay_async(page, tv)
+    loc = _tradingview_symbol_locator(page, tv, symbol)
     await loc.wait_for(state="visible", timeout=25_000)
-    await loc.click(timeout=15_000)
+    use_force = bool(tv.get("symbol_list_item_click_force", True))
+    try:
+        await loc.click(timeout=15_000, force=use_force)
+    except Exception:
+        await _maybe_dismiss_tradingview_blocking_overlay_async(page, tv)
+        await loc.click(timeout=15_000, force=True)
     await page.wait_for_timeout(int(tv.get("after_symbol_select_ms", 1_500)))
 
 
@@ -675,9 +700,23 @@ async def tv_ensure_required_indicators_async(page: Page, tv: dict[str, Any]) ->
     )
 
 
-async def tv_wait_for_indicators_loaded_async(page: Page, tv: dict[str, Any]) -> None:
-    if tv.get("indicator_loading_wait_disabled", False):
-        return
+async def tv_recover_stuck_indicators_async(page: Page, tv: dict[str, Any]) -> None:
+    _log_tv.info("tv: recover stuck indicators | reset, clear, re-add from favorites")
+    await tv_reset_chart_position_async(page, tv)
+    await tv_open_context_menu_and_clear_indicators_async(page, tv)
+    await tv_add_required_indicators_from_favorites_async(page, tv)
+    extra_ms = int(tv.get("indicator_loading_recovery_after_add_ms", 2000))
+    if extra_ms > 0:
+        await page.wait_for_timeout(extra_ms)
+
+
+async def tv_wait_indicators_loaded_once_async(
+    page: Page,
+    tv: dict[str, Any],
+    *,
+    attempt: int,
+    max_attempts: int,
+) -> bool:
     timeout_ms = int(tv.get("indicator_loading_timeout_ms", 45_000))
     poll_ms = int(tv.get("indicator_loading_poll_ms", 500))
     settle_ms = int(tv.get("indicator_loading_settle_ms", 300))
@@ -690,18 +729,52 @@ async def tv_wait_for_indicators_loaded_async(page: Page, tv: dict[str, Any]) ->
                 _log_tv.info("tv: indicators loaded | legend ready for screenshot")
             if settle_ms > 0:
                 await page.wait_for_timeout(settle_ms)
-            return
+            return True
         if not saw_loading:
             _log_tv.info(
-                "tv: indicators loading | waiting up to %sms for legend to finish (markers=%s)",
+                "tv: indicators loading | attempt %s/%s | waiting up to %sms (markers=%s)",
+                attempt,
+                max_attempts,
                 timeout_ms,
                 _tradingview_indicator_loading_markers(tv),
             )
             saw_loading = True
         await page.wait_for_timeout(poll_ms)
+    return False
+
+
+async def tv_wait_for_indicators_loaded_async(page: Page, tv: dict[str, Any]) -> None:
+    if tv.get("indicator_loading_wait_disabled", False):
+        return
+    max_attempts = max(1, int(tv.get("indicator_loading_retry_attempts", 2)))
+    fail_on_timeout = bool(tv.get("indicator_loading_fail_on_timeout", True))
+    timeout_ms = int(tv.get("indicator_loading_timeout_ms", 45_000))
+
+    for attempt in range(1, max_attempts + 1):
+        if await tv_wait_indicators_loaded_once_async(
+            page, tv, attempt=attempt, max_attempts=max_attempts
+        ):
+            return
+        if attempt < max_attempts:
+            _log_tv.warning(
+                "tv: indicators still loading after %sms; recovery %s/%s",
+                timeout_ms,
+                attempt,
+                max_attempts - 1,
+            )
+            await tv_recover_stuck_indicators_async(page, tv)
+            continue
+
+    got = await tv_list_legend_item_texts_async(page, tv)
+    if fail_on_timeout:
+        raise RuntimeError(
+            "TradingView indicators still loading after "
+            f"{max_attempts} wait attempt(s) ({timeout_ms}ms each). "
+            f"Legend: {got!r}"
+        )
     _log_tv.warning(
-        "tv: indicators still loading after %sms; proceeding with screenshot anyway",
-        timeout_ms,
+        "tv: indicators still loading after %s attempt(s); proceeding with screenshot anyway",
+        max_attempts,
     )
 
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from automation_tool.coinmap import (
     _tradingview_indicator_loading_markers,
     _tradingview_texts_have_indicator_loading,
@@ -64,3 +66,57 @@ def test_wait_for_indicators_loaded_skipped_when_disabled() -> None:
     tv = {"indicator_loading_wait_disabled": True}
     _wait_tradingview_indicators_loaded(page, tv)
     assert page.timeouts == []
+
+
+def test_wait_for_indicators_loaded_retries_with_recovery(monkeypatch) -> None:
+    calls = {"n": 0, "recover": 0, "ready_after_recover": False}
+
+    def fake_legend(_page, _tv):
+        calls["n"] += 1
+        if calls["ready_after_recover"]:
+            return ["LuxAlgo - Smart Money Concepts"]
+        return ["LuxAlgo đang tải..."]
+
+    def fake_recover(_page, _tv):
+        calls["recover"] += 1
+        calls["ready_after_recover"] = True
+
+    monkeypatch.setattr(
+        "automation_tool.coinmap._tradingview_list_legend_item_texts",
+        fake_legend,
+    )
+    monkeypatch.setattr(
+        "automation_tool.coinmap._tradingview_recover_stuck_indicators",
+        fake_recover,
+    )
+    page = _FakePage([])
+    tv = {
+        "indicator_loading_poll_ms": 10,
+        "indicator_loading_settle_ms": 20,
+        "indicator_loading_timeout_ms": 25,
+        "indicator_loading_retry_attempts": 2,
+    }
+    _wait_tradingview_indicators_loaded(page, tv)
+    assert calls["recover"] == 1
+    assert calls["n"] >= 2
+
+
+def test_wait_for_indicators_loaded_fails_when_still_loading(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "automation_tool.coinmap._tradingview_list_legend_item_texts",
+        lambda _page, _tv: ["LuxAlgo đang tải..."],
+    )
+    monkeypatch.setattr(
+        "automation_tool.coinmap._tradingview_recover_stuck_indicators",
+        lambda _page, _tv: None,
+    )
+    page = _FakePage([])
+    tv = {
+        "indicator_loading_poll_ms": 10,
+        "indicator_loading_settle_ms": 0,
+        "indicator_loading_timeout_ms": 30,
+        "indicator_loading_retry_attempts": 1,
+        "indicator_loading_fail_on_timeout": True,
+    }
+    with pytest.raises(SystemExit, match="still loading"):
+        _wait_tradingview_indicators_loaded(page, tv)

@@ -2802,15 +2802,55 @@ def _tradingview_ensure_watchlist_open(page, tv: dict[str, Any]) -> None:
         page.wait_for_timeout(ms)
 
 
-def _tradingview_select_symbol(page, tv: dict[str, Any], symbol: str) -> None:
+def _tradingview_symbol_locator(page, tv: dict[str, Any], symbol: str):
     custom = (tv.get("symbol_list_item_selector") or "").strip()
     if custom:
-        loc = page.locator(custom.format(symbol=symbol)).first
-    else:
-        prefix = (tv.get("symbol_name_class_prefix") or "symbolNameText-").strip()
-        loc = page.locator(f'[class*="{prefix}"]').get_by_text(symbol, exact=True).first
+        return page.locator(custom.format(symbol=symbol)).first
+    row_tpl = (tv.get("watchlist_row_selector") or "").strip()
+    if row_tpl:
+        return page.locator(row_tpl.format(symbol=symbol)).first
+    prefix = (tv.get("symbol_name_class_prefix") or "symbolNameText-").strip()
+    return page.locator(f'[class*="{prefix}"]').get_by_text(symbol, exact=True).first
+
+
+def _maybe_dismiss_tradingview_blocking_overlay(page, tv: dict[str, Any]) -> None:
+    """
+    Dismiss transient TradingView overlays (e.g. ``container-*`` toast) that intercept
+    watchlist clicks. Press Escape first, then optionally wait for a configured overlay
+    selector to hide.
+    """
+    if not tv.get("tradingview_blocking_overlay_dismiss_enabled", True):
+        return
+    if tv.get("tradingview_blocking_overlay_escape", True):
+        try:
+            page.keyboard.press("Escape")
+            ms = int(tv.get("after_tradingview_overlay_escape_ms", 250))
+            if ms > 0:
+                page.wait_for_timeout(ms)
+        except Exception:
+            pass
+    overlay_sel = (tv.get("tradingview_blocking_overlay_selector") or "").strip()
+    if not overlay_sel:
+        return
+    hide_ms = int(tv.get("tradingview_blocking_overlay_hide_timeout_ms", 8_000))
+    try:
+        loc = page.locator(overlay_sel).first
+        if loc.is_visible(timeout=300):
+            loc.wait_for(state="hidden", timeout=hide_ms)
+    except Exception:
+        pass
+
+
+def _tradingview_select_symbol(page, tv: dict[str, Any], symbol: str) -> None:
+    _maybe_dismiss_tradingview_blocking_overlay(page, tv)
+    loc = _tradingview_symbol_locator(page, tv, symbol)
     loc.wait_for(state="visible", timeout=25_000)
-    loc.click(timeout=15_000)
+    use_force = bool(tv.get("symbol_list_item_click_force", True))
+    try:
+        loc.click(timeout=15_000, force=use_force)
+    except Exception:
+        _maybe_dismiss_tradingview_blocking_overlay(page, tv)
+        loc.click(timeout=15_000, force=True)
     page.wait_for_timeout(int(tv.get("after_symbol_select_ms", 1_500)))
 
 
@@ -3370,10 +3410,26 @@ def _tradingview_texts_have_indicator_loading(texts: list[str], tv: dict[str, An
     return False
 
 
-def _wait_tradingview_indicators_loaded(page, tv: dict[str, Any]) -> None:
-    """Wait until legend items no longer show TradingView indicator loading text (e.g. ``đang tải...``)."""
-    if tv.get("indicator_loading_wait_disabled", False):
-        return
+def _tradingview_recover_stuck_indicators(page, tv: dict[str, Any]) -> None:
+    """Clear and re-add favorites when LuxAlgo SMC (etc.) stays in ``đang tải...`` state."""
+    log = logging.getLogger("automation_tool")
+    log.info("tv: recover stuck indicators | reset, clear, re-add from favorites")
+    _tradingview_reset_chart_position(page, tv)
+    _tradingview_open_context_menu_and_clear_indicators(page, tv)
+    _tradingview_add_required_indicators_from_favorites(page, tv)
+    extra_ms = int(tv.get("indicator_loading_recovery_after_add_ms", 2000))
+    if extra_ms > 0:
+        page.wait_for_timeout(extra_ms)
+
+
+def _tradingview_wait_indicators_loaded_once(
+    page,
+    tv: dict[str, Any],
+    *,
+    attempt: int,
+    max_attempts: int,
+) -> bool:
+    """Poll legend until loading markers disappear. Returns True when ready."""
     timeout_ms = int(tv.get("indicator_loading_timeout_ms", 45_000))
     poll_ms = int(tv.get("indicator_loading_poll_ms", 500))
     settle_ms = int(tv.get("indicator_loading_settle_ms", 300))
@@ -3387,18 +3443,54 @@ def _wait_tradingview_indicators_loaded(page, tv: dict[str, Any]) -> None:
                 log.info("tv: indicators loaded | legend ready for screenshot")
             if settle_ms > 0:
                 page.wait_for_timeout(settle_ms)
-            return
+            return True
         if not saw_loading:
             log.info(
-                "tv: indicators loading | waiting up to %sms for legend to finish (markers=%s)",
+                "tv: indicators loading | attempt %s/%s | waiting up to %sms (markers=%s)",
+                attempt,
+                max_attempts,
                 timeout_ms,
                 _tradingview_indicator_loading_markers(tv),
             )
             saw_loading = True
         page.wait_for_timeout(poll_ms)
+    return False
+
+
+def _wait_tradingview_indicators_loaded(page, tv: dict[str, Any]) -> None:
+    """Wait until legend items no longer show TradingView indicator loading text (e.g. ``đang tải...``)."""
+    if tv.get("indicator_loading_wait_disabled", False):
+        return
+    log = logging.getLogger("automation_tool")
+    max_attempts = max(1, int(tv.get("indicator_loading_retry_attempts", 2)))
+    fail_on_timeout = bool(tv.get("indicator_loading_fail_on_timeout", True))
+    timeout_ms = int(tv.get("indicator_loading_timeout_ms", 45_000))
+
+    for attempt in range(1, max_attempts + 1):
+        if _tradingview_wait_indicators_loaded_once(
+            page, tv, attempt=attempt, max_attempts=max_attempts
+        ):
+            return
+        if attempt < max_attempts:
+            log.warning(
+                "tv: indicators still loading after %sms; recovery %s/%s",
+                timeout_ms,
+                attempt,
+                max_attempts - 1,
+            )
+            _tradingview_recover_stuck_indicators(page, tv)
+            continue
+
+    got = _tradingview_list_legend_item_texts(page, tv)
+    if fail_on_timeout:
+        raise SystemExit(
+            "TradingView indicators still loading after "
+            f"{max_attempts} wait attempt(s) ({timeout_ms}ms each). "
+            f"Legend: {got!r}"
+        )
     log.warning(
-        "tv: indicators still loading after %sms; proceeding with screenshot anyway",
-        timeout_ms,
+        "tv: indicators still loading after %s attempt(s); proceeding with screenshot anyway",
+        max_attempts,
     )
 
 

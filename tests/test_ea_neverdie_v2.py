@@ -187,8 +187,8 @@ def test_v2_trade_zone_removal_and_campaign_retention() -> None:
     assert 'RemoveTouchedTradeZone();' in source
     assert 'touchesLow = tick.ask <= zone.low' in source
     assert 'touchesHigh = tick.bid >= zone.high' in source
-    assert 'touchesBuySl = (zone.sl > 0.0 && tick.bid <= zone.sl - InpZonesSlBuffer)' in source
-    assert 'touchesSellSl = (zone.sl > 0.0 && tick.ask >= zone.sl + InpZonesSlBuffer)' in source
+    assert 'touchesBuySl = (zone.sl > 0.0 && tick.bid <= zone.sl)' in source
+    assert 'touchesSellSl = (zone.sl > 0.0 && tick.ask >= zone.sl)' in source
     assert 'KeepCampaignForZone(zone);' in source
     assert 'KeepPlanFollowCampaignForZone(zone);' in remove_body
     assert 'LatestPlanFollowCampaignIndex();' in follow_body

@@ -1275,8 +1275,8 @@ void RemoveTouchedTradeZone()
       ZoneData zone = g_zones[i];
       bool touchesLow = tick.ask <= zone.low;
       bool touchesHigh = tick.bid >= zone.high;
-      bool touchesBuySl = (zone.sl > 0.0 && tick.bid <= zone.sl - InpZonesSlBuffer);
-      bool touchesSellSl = (zone.sl > 0.0 && tick.ask >= zone.sl + InpZonesSlBuffer);
+      bool touchesBuySl = (zone.sl > 0.0 && tick.bid <= zone.sl);
+      bool touchesSellSl = (zone.sl > 0.0 && tick.ask >= zone.sl);
 
       if(zone.side == POSITION_TYPE_SELL && (touchesLow || touchesSellSl))
         {

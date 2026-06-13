@@ -277,6 +277,16 @@ tradingview_capture:
   watchlist_button_aria_label_fallback: "Watchlist, details, and news"
   watchlist_open_ms: 500
   symbol_name_class_prefix: "symbolNameText-"
+  # Watchlist row click: prefer data-symbol-short row over symbolNameText (overlay-safe).
+  # Chart SVG / toast container-* can block hit-testing — force click like interval buttons.
+  symbol_list_item_click_force: true
+  # Transient TV overlays (e.g. div.container-*) blocking watchlist clicks.
+  tradingview_blocking_overlay_dismiss_enabled: true
+  tradingview_blocking_overlay_escape: true
+  after_tradingview_overlay_escape_ms: 250
+  # Optional: wait for overlay to hide (empty = Escape + force click only).
+  tradingview_blocking_overlay_selector: ""
+  tradingview_blocking_overlay_hide_timeout_ms: 8000
   after_symbol_select_ms: 500
   after_fullscreen_escape_ms: 800
   # Watchlist realtime price monitor (no alerts): để trống để tự dùng symbol active
@@ -332,12 +342,16 @@ tradingview_capture:
     - "VSA Volume"
   after_indicator_add_ms: 500
   # Chờ legend hết "đang tải..." / loading trước khi chụp screenshot (LuxAlgo SMC, v.v.).
-  indicator_loading_timeout_ms: 45000
+  indicator_loading_timeout_ms: 90000
   indicator_loading_poll_ms: 500
-  indicator_loading_settle_ms: 300
+  indicator_loading_settle_ms: 500
+  indicator_loading_retry_attempts: 2
+  indicator_loading_fail_on_timeout: true
+  indicator_loading_recovery_after_add_ms: 2000
   indicator_loading_texts:
     - "đang tải"
     - "loading..."
+    - "calculating"
   # indicator_loading_wait_disabled: false
   # Extensible: add more indicators later by appending to this list.
   # Each entry is one required indicator, matched by any alias in legend item text.
