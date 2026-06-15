@@ -1016,6 +1016,116 @@ def _filter_entry_accounts_for_zone(
     return allowed, slot, blocked_ids
 
 
+def _resolve_zone_entry_accounts(
+    zone: Zone,
+    params: WatchlistDaemonParams,
+) -> tuple[Optional[list[MT5AccountEntry]], Optional[str], list[str], Optional[str]]:
+    """
+    Load và lọc account vào lệnh cho zone.
+
+    Returns:
+        ``(None, None, [], None)`` — single-terminal (không dùng multi-account file).
+        ``([], slot, blocked, missing_subset)`` — thiếu subset (``missing_subset`` set) hoặc bị lọc hết.
+        ``(exec_accs, slot, blocked, None)`` — có ít nhất một account.
+    """
+    accs = load_mt5_accounts_for_zone_entry(
+        zone_source=(zone.source or ""),
+        cli_path=params.mt5_accounts_json,
+    )
+    if accs is None:
+        return None, None, [], None
+    slot = _entry_slot_for_zone(zone, params)
+    if not accs:
+        subset_fn = subset_accounts_json_basename(zone.source or "") or "accounts.json"
+        return [], slot, [], subset_fn
+    exec_accs, slot, blocked = _filter_entry_accounts_for_zone(accs, zone, params)
+    if blocked:
+        _log.debug(
+            "entry accounts filtered (entry_slots / only_plan_chinh) | zone_id=%s label=%r slot=%s blocked=%s",
+            zone.id,
+            zone.label,
+            slot or "unknown",
+            blocked,
+        )
+    return exec_accs, slot, blocked, None
+
+
+def _mark_zone_loai_no_entry_accounts(
+    zone: Zone,
+    *,
+    zone_id: str,
+    settings: Settings,
+    params: WatchlistDaemonParams,
+    slot: Optional[str],
+    log_prefix: str,
+    missing_subset: Optional[str] = None,
+) -> bool:
+    """Loại zone khi không còn account nào được phép vào lệnh. Returns True nếu đã loại."""
+    if zone.status == "loai":
+        return True
+    zone.status = "loai"
+    zone.loai_streak = 0
+    zone.retry_at = ""
+    zone.auto_entry_retry_after = ""
+    zone.auto_entry_mt5_failed = False
+    zone.mt5_ticket = None
+    zone.mt5_tickets_by_account = None
+    if missing_subset:
+        _send_log(
+            settings,
+            f"[{log_prefix}] missing subset {missing_subset!r} -> loai | zone_id={zone_id} label={zone.label!r}",
+        )
+        _send_user_notice(
+            settings,
+            "Loại vùng: thiếu file accounts.",
+            f"Vùng {zone.source!r} cần {missing_subset} cạnh accounts.json "
+            f'(flag trên account hoặc chạy all / all-2 để tạo subset).',
+            zone=zone,
+            params=params,
+        )
+    else:
+        _send_log(
+            settings,
+            f"[{log_prefix}] no entry accounts -> loai | zone_id={zone_id} label={zone.label!r} "
+            f"slot={slot or 'unknown'}",
+        )
+        _send_user_notice(
+            settings,
+            "Loại vùng: không có account vào lệnh.",
+            f"Zone {zone.label!r} (khung {slot or 'unknown'}) — kiểm tra entry_slots / only_plan_chinh.",
+            zone=zone,
+            params=params,
+        )
+    return True
+
+
+def _maybe_loai_zone_if_no_entry_accounts(
+    zone: Zone,
+    *,
+    zone_id: str,
+    settings: Settings,
+    params: WatchlistDaemonParams,
+    exec_accs: Optional[list[MT5AccountEntry]],
+    slot: Optional[str],
+    log_prefix: str,
+    missing_subset: Optional[str] = None,
+) -> bool:
+    """``True`` khi zone đã / vừa chuyển ``loai`` vì không có account vào lệnh."""
+    if exec_accs is None:
+        return False
+    if exec_accs:
+        return zone.status == "loai"
+    return _mark_zone_loai_no_entry_accounts(
+        zone,
+        zone_id=zone_id,
+        settings=settings,
+        params=params,
+        slot=slot,
+        log_prefix=log_prefix,
+        missing_subset=missing_subset,
+    )
+
+
 def _mt5_entry_order_comment(
     zone_id: str,
     *,
@@ -2536,52 +2646,31 @@ def _auto_entry_job(
             zone_source=(z0.source or ""),
             cli_path=params.mt5_accounts_json,
         )
+        exec_accs_ae, slot_ae, _blocked_ae, subset_missing_ae = _resolve_zone_entry_accounts(z0, params)
         if accs_ae is not None and len(accs_ae) == 0:
-            st_z = _state_read(params)
-            if st_z is not None:
-                for z in st_z.zones:
-                    if z.id == zone_id:
-                        z.status = "cham"
-                        z.auto_entry_retry_after = ""
-                        z.auto_entry_mt5_failed = False
-                        break
-                _state_write(params, st_z)
-            subset_fn = subset_accounts_json_basename(z0.source or "") or "accounts.json"
-            _send_log(
-                settings,
-                f"[auto-entry] zone source={z0.source!r} requires {subset_fn} beside accounts file "
-                f"| zone_id={zone_id}",
-            )
-            _send_user_notice(
-                settings,
-                f"Tự động vào lệnh: thiếu {subset_fn}.",
-                f"Vùng {z0.source!r} cần {subset_fn} cạnh accounts.json "
-                f'(flag trên account hoặc chạy all / all-2 để tạo subset).',
-                zone=z0,
+            _maybe_loai_zone_if_no_entry_accounts(
+                z0,
+                zone_id=zone_id,
+                settings=settings,
                 params=params,
+                exec_accs=[],
+                slot=slot_ae,
+                log_prefix="auto-entry",
+                missing_subset=subset_missing_ae or subset_accounts_json_basename(z0.source or "") or "accounts.json",
             )
+            _state_write(params, st0)
             return
         if accs_ae:
-            exec_accs_ae, slot_ae, blocked_ae = _filter_entry_accounts_for_zone(accs_ae, z0, params)
-            if blocked_ae:
-                _send_log(
-                    settings,
-                    "[auto-entry] accounts filtered (entry_slots / only_plan_chinh) | "
-                    f"zone_id={zone_id} label={z0.label!r} slot={slot_ae or 'unknown'} blocked={blocked_ae}",
-                )
-            if not exec_accs_ae:
-                z0.status = "cham"
-                z0.auto_entry_retry_after = ""
-                z0.auto_entry_mt5_failed = False
+            if _maybe_loai_zone_if_no_entry_accounts(
+                z0,
+                zone_id=zone_id,
+                settings=settings,
+                params=params,
+                exec_accs=exec_accs_ae,
+                slot=slot_ae,
+                log_prefix="auto-entry",
+            ):
                 _state_write(params, st0)
-                _send_user_notice(
-                    settings,
-                    "Tự động vào lệnh bị chặn theo cấu hình account.",
-                    f"Không account nào cho phép vào lệnh zone {z0.label!r} "
-                    f"(khung {slot_ae or 'unknown'}; kiểm tra entry_slots / only_plan_chinh).",
-                    zone=z0,
-                    params=params,
-                )
                 return
             summary_ae = execute_trade_all_accounts(
                 parsed,
@@ -3037,59 +3126,31 @@ def _zone_touch_job(
             zone_source=(z1.source or ""),
             cli_path=params.mt5_accounts_json,
         )
+        exec_accs_zt, slot_zt, _blocked_zt, subset_missing_zt = _resolve_zone_entry_accounts(z1, params)
         if accs_zt is not None and len(accs_zt) == 0:
-            st_block_scalp = _state_read(params)
-            if st_block_scalp is not None:
-                for z in st_block_scalp.zones:
-                    if z.id == zone_id:
-                        z.status = "cham"
-                        z.retry_at = ""
-                        z.mt5_ticket = None
-                        z.mt5_tickets_by_account = None
-                        break
-                _state_write(params, st_block_scalp)
-            subset_fn = subset_accounts_json_basename(z1.source or "") or "accounts.json"
-            _send_log(
-                settings,
-                f"[zone-touch] zone source={z1.source!r} requires {subset_fn} beside accounts file "
-                f"| zone_id={zone_id}",
-            )
-            _send_user_notice(
-                settings,
-                f"Vào lệnh: thiếu {subset_fn}.",
-                f"Vùng {z1.source!r} cần {subset_fn} cạnh accounts.json "
-                f'(flag trên account hoặc chạy all / all-2 để tạo subset).',
-                zone=z1,
+            _maybe_loai_zone_if_no_entry_accounts(
+                z1,
+                zone_id=zone_id,
+                settings=settings,
                 params=params,
+                exec_accs=[],
+                slot=slot_zt,
+                log_prefix="zone-touch",
+                missing_subset=subset_missing_zt or subset_accounts_json_basename(z1.source or "") or "accounts.json",
             )
+            _state_write(params, st1)
             return
         if accs_zt:
-            exec_accs_zt, slot_zt, blocked_zt = _filter_entry_accounts_for_zone(accs_zt, z1, params)
-            if blocked_zt:
-                _send_log(
-                    settings,
-                    "[zone-touch] accounts filtered (entry_slots / only_plan_chinh) | "
-                    f"zone_id={zone_id} label={z1.label!r} slot={slot_zt or 'unknown'} blocked={blocked_zt}",
-                )
-            if not exec_accs_zt:
-                st_block = _state_read(params)
-                if st_block is not None:
-                    for z in st_block.zones:
-                        if z.id == zone_id:
-                            z.status = "cham"
-                            z.retry_at = ""
-                            z.mt5_ticket = None
-                            z.mt5_tickets_by_account = None
-                            break
-                    _state_write(params, st_block)
-                _send_user_notice(
-                    settings,
-                    "Vào lệnh bị chặn theo cấu hình account.",
-                    f"Không account nào cho phép vào lệnh zone {z1.label!r} "
-                    f"(khung {slot_zt or 'unknown'}; kiểm tra entry_slots / only_plan_chinh).",
-                    zone=z1,
-                    params=params,
-                )
+            if _maybe_loai_zone_if_no_entry_accounts(
+                z1,
+                zone_id=zone_id,
+                settings=settings,
+                params=params,
+                exec_accs=exec_accs_zt,
+                slot=slot_zt,
+                log_prefix="zone-touch",
+            ):
+                _state_write(params, st1)
                 return
             summary_zt = execute_trade_all_accounts(
                 parsed,
@@ -3674,6 +3735,22 @@ def _daemon_plan_main_loop(
                             continue
                         aer = (getattr(z, "auto_entry_retry_after", "") or "").strip()
                         if aer and not _is_retry_due(aer):
+                            continue
+                        exec_accs_pre, slot_pre, _, subset_missing_pre = _resolve_zone_entry_accounts(
+                            z, params
+                        )
+                        if exec_accs_pre is not None and not exec_accs_pre:
+                            if _maybe_loai_zone_if_no_entry_accounts(
+                                z,
+                                zone_id=z.id,
+                                settings=settings,
+                                params=params,
+                                exec_accs=[],
+                                slot=slot_pre,
+                                log_prefix="auto-entry",
+                                missing_subset=subset_missing_pre,
+                            ):
+                                _state_write(params, st_auto)
                             continue
                         z.status = "dang_vao_lenh"
                         z.auto_entry_retry_after = ""

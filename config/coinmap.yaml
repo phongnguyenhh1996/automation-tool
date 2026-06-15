@@ -112,9 +112,9 @@ chart_download:
   # Per-symbol chart pan overrides (watchlist symbol and/or export_symbol).
   chart_view_by_symbol:
     USDINDEX:
-      chart_price_edge_pan_end_y_ratio: 0.2
+      chart_price_edge_pan_end_y_ratio: 0.25
     DXY:
-      chart_price_edge_pan_end_y_ratio: 0.2
+      chart_price_edge_pan_end_y_ratio: 0.25
   # Main chart area: horizontal pan (middle of SVG).
   chart_pan_start_x_ratio: 0.28
   chart_pan_end_x_ratio: 0.4
