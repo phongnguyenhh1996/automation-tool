@@ -1,4 +1,4 @@
-# Intraday update: Coinmap XAUUSD M15 + M5 JSON + PNG (bearer_request — giống luồng all; không cần browser up / tab warm).
+# Intraday update: Coinmap XAUUSD M15 + M5 JSON + PNG (bearer_request — giống luồng all).
 # Use with: coinmap-automation update | update-scalp --config config/coinmap_update.yaml
 # TradingView alert sync reads tradingview_capture from config/coinmap.yaml by default.
 # api_data_export: bearer_request — bắt Bearer từ gateway, gọi cm-api bằng httpx, đồng thời drive chart UI + fullscreen PNG.
@@ -13,7 +13,6 @@ post_login_wait_selector: "main, [data-testid='chart'], canvas, .chart"
 
 chart_download:
   enabled: true
-  prewarm_enabled: false
   chart_page_url: "https://coinmap.tech/chart"
   dismiss_symbol_search_modal: true
   symbol_search_modal_escape_presses: 2

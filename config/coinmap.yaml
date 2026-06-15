@@ -13,7 +13,6 @@ post_login_wait_selector: "main, [data-testid='chart'], canvas, .chart"
 # After login: open chart page — multi-shot via right sidebar (3 images), or one fullscreen of whatever is already open
 chart_download:
   enabled: true
-  prewarm_enabled: true
   chart_page_url: "https://coinmap.tech/chart"
   # Coinmap often auto-opens symbol search on /chart — close it (automation no longer uses that modal).
   dismiss_symbol_search_modal: true
@@ -132,7 +131,7 @@ chart_download:
   after_layer_toggle_click_ms: 400
 
   # JSON Coinmap: mặc định bearer_request — bắt Bearer từ gateway, gọi cm-api bằng httpx, đồng thời drive chart UI + fullscreen PNG.
-  # mode: bearer_request (mặc định) | network_capture (bắt response gateway trên tab warm) | request (Bearer tĩnh).
+  # mode: bearer_request (mặc định) | network_capture (bắt response gateway trên chart UI) | request (Bearer tĩnh).
   # bearer_skip_chart_ui: true → chỉ httpx API (không sidebar / fullscreen). Mặc định false.
   api_data_export:
     enabled: true

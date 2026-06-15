@@ -101,11 +101,7 @@ def test_tv_prewarm_background_catches_system_exit() -> None:
         async def fail_prewarm() -> None:
             raise SystemExit("boom")
 
-        async def noop_coinmap_prewarm() -> None:
-            return None
-
         service._prewarm_tradingview_tabs_async = fail_prewarm  # type: ignore[method-assign]
-        service._prewarm_coinmap_tab_async = noop_coinmap_prewarm  # type: ignore[method-assign]
         service.schedule_tv_prewarm_background()
         assert service._prewarm_bg_task is not None
         await service._prewarm_bg_task

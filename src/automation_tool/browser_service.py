@@ -31,8 +31,6 @@ from automation_tool.browser_protocol import (
     METHOD_GOTO,
     METHOD_CAPTURE_CHARTS,
     METHOD_CAPTURE_MANY,
-    METHOD_COINMAP_CAPTURE_PLAN,
-    METHOD_COINMAP_PREWARM_RESET,
     METHOD_OPEN_TAB,
     METHOD_PING,
     METHOD_QUERY_TEXT,
@@ -263,13 +261,6 @@ class _TvWarmTab:
     current_interval_label: str
 
 
-@dataclass
-class _CoinmapWarmTab:
-    page: Any
-    current_symbol: str
-    current_interval: str
-
-
 class BrowserServiceState:
     def __init__(self) -> None:
         self._playwright: Any = None
@@ -286,12 +277,6 @@ class BrowserServiceState:
         self._prewarm_bg_task: Optional[asyncio.Task] = None
         self._tv_settle_ms: int = 2000
         self._tv_main_symbol: str = ""
-        self._cm_warm: Optional[_CoinmapWarmTab] = None
-        self._cm_lock = asyncio.Lock()
-        self._cm_prewarm_lock = asyncio.Lock()
-        self._cm_settle_ms: int = 2000
-        self._cm_cfg: dict[str, Any] = {}
-        self._cm_login_cfg: dict[str, Any] = {}
 
     async def start(self, *, headless: bool, cdp_port: int) -> str:
         self._playwright = await async_playwright().start()
@@ -372,10 +357,7 @@ class BrowserServiceState:
 
         async def _runner() -> None:
             try:
-                await asyncio.gather(
-                    _safe_prewarm(self._prewarm_coinmap_tab_async()),
-                    _safe_prewarm(self._prewarm_tradingview_tabs_async()),
-                )
+                await _safe_prewarm(self._prewarm_tradingview_tabs_async())
             except asyncio.CancelledError:
                 raise
 
@@ -405,12 +387,6 @@ class BrowserServiceState:
             except Exception:
                 pass
         self._tv_warm.clear()
-        if self._cm_warm is not None:
-            try:
-                await self._cm_warm.page.close()
-            except Exception:
-                pass
-            self._cm_warm = None
         if self._context is not None:
             try:
                 await self._context.close()
@@ -528,159 +504,6 @@ class BrowserServiceState:
             self._tv_settle_ms = settle_ms
             self._tv_main_symbol = main_sym
             _log.info("TV prewarm ok | main=%s | tabs=ict+default", main_sym)
-
-    async def _dispose_cm_warm_tab_async(self) -> None:
-        if self._cm_warm is not None:
-            try:
-                await self._cm_warm.page.close()
-            except Exception:
-                pass
-            self._cm_warm = None
-
-    async def _prewarm_coinmap_tab_async(self) -> None:
-        from automation_tool.coinmap import _api_export_config, load_coinmap_yaml
-        from automation_tool.coinmap_chart_async import coinmap_warmup_tab_async
-
-        async with self._cm_prewarm_lock:
-            if self._closing:
-                return
-
-            cfg_path = default_coinmap_config_path()
-            try:
-                cfg = load_coinmap_yaml(cfg_path)
-            except Exception as e:
-                _log.warning("Coinmap prewarm skipped: cannot load yaml %s: %s", cfg_path, e)
-                return
-
-            cd = cfg.get("chart_download")
-            if not isinstance(cd, dict) or not cd.get("enabled", False):
-                _log.info("Coinmap prewarm skipped: chart_download disabled or missing")
-                return
-            if cd.get("prewarm_enabled") is False:
-                _log.info("Coinmap prewarm skipped: chart_download.prewarm_enabled is false")
-                return
-            api_cd = _api_export_config(cd)
-            if api_cd is None or not api_cd.get("enabled", True):
-                _log.info("Coinmap prewarm skipped: api_data_export disabled")
-                return
-
-            settle_ms = int(cfg.get("settle_ms", 2000))
-            email = (os.getenv("COINMAP_EMAIL") or "").strip() or None
-            password = (os.getenv("COINMAP_PASSWORD") or "").strip() or None
-
-            await self._dispose_cm_warm_tab_async()
-            ctx = self._require_context()
-            page = await ctx.new_page()
-            try:
-                await coinmap_warmup_tab_async(
-                    page,
-                    cd,
-                    cfg,
-                    email=email,
-                    password=password,
-                    settle_ms=settle_ms,
-                )
-            except (Exception, SystemExit) as e:
-                _log.exception("Coinmap prewarm failed: %s", e)
-                try:
-                    await page.close()
-                except Exception:
-                    pass
-                return
-
-            plan = cd.get("capture_plan")
-            first_sym = ""
-            first_iv = ""
-            if isinstance(plan, list) and plan and isinstance(plan[0], dict):
-                first_sym = str(plan[0].get("symbol") or "")
-                first_iv = str(plan[0].get("interval") or "")
-            self._cm_warm = _CoinmapWarmTab(page, first_sym, first_iv)
-            self._cm_settle_ms = settle_ms
-            self._cm_cfg = dict(cfg)
-            self._cm_login_cfg = dict(cfg)
-            _log.info("Coinmap prewarm ok | chart=%s", cd.get("chart_page_url") or "https://coinmap.tech/chart")
-
-    async def _ensure_cm_warm_tab(self) -> None:
-        wt = self._cm_warm
-        need = wt is None
-        if wt is not None:
-            try:
-                if wt.page.is_closed():
-                    need = True
-            except Exception:
-                need = True
-        if need:
-            await self._prewarm_coinmap_tab_async()
-
-    async def _prepare_cm_warm_tab_for_use(self, wt: _CoinmapWarmTab) -> None:
-        from automation_tool.coinmap_chart_async import _coinmap_maybe_relogin_if_login_form_visible_async
-
-        cd = self._cm_cfg.get("chart_download") or {}
-        if not isinstance(cd, dict):
-            cd = {}
-        email = (os.getenv("COINMAP_EMAIL") or "").strip() or None
-        password = (os.getenv("COINMAP_PASSWORD") or "").strip() or None
-        try:
-            await _coinmap_maybe_relogin_if_login_form_visible_async(
-                wt.page,
-                cd,
-                email=email,
-                password=password,
-                login_cfg=self._cm_login_cfg,
-                settle_ms=self._cm_settle_ms,
-            )
-        except Exception as e:
-            _log.debug("Coinmap warm tab relogin check skipped: %s", e)
-
-    async def coinmap_prewarm_reset(self) -> dict[str, Any]:
-        await self._prewarm_coinmap_tab_async()
-        return {"prewarmed": bool(self._cm_warm is not None)}
-
-    async def coinmap_capture_plan(
-        self,
-        *,
-        cd: dict[str, Any],
-        api_cd: dict[str, Any],
-        plan: list[Any],
-        charts_dir: Path,
-        stamp: str,
-        settle_ms: Optional[int] = None,
-        login_cfg: Optional[dict[str, Any]] = None,
-    ) -> dict[str, Any]:
-        from automation_tool.coinmap_chart_async import coinmap_capture_plan_async
-
-        await self._ensure_cm_warm_tab()
-        wt = self._cm_warm
-        if wt is None:
-            raise RuntimeError("Coinmap warm tab not available after prewarm")
-
-        sm = int(settle_ms if settle_ms is not None else self._cm_settle_ms)
-        email = (os.getenv("COINMAP_EMAIL") or "").strip() or None
-        password = (os.getenv("COINMAP_PASSWORD") or "").strip() or None
-        lc = login_cfg if isinstance(login_cfg, dict) else self._cm_login_cfg
-
-        async with self._cm_lock:
-            await self._ensure_cm_warm_tab()
-            wt = self._cm_warm
-            if wt is None:
-                raise RuntimeError("Coinmap warm tab not available")
-            await self._prepare_cm_warm_tab_for_use(wt)
-            paths = await coinmap_capture_plan_async(
-                wt.page,
-                cd=cd,
-                api_cd=api_cd,
-                plan=[s for s in plan if isinstance(s, dict)],
-                charts_dir=charts_dir,
-                stamp=stamp,
-                settle_ms=sm,
-                login_cfg=lc,
-                coinmap_email=email,
-                coinmap_password=password,
-            )
-            if plan and isinstance(plan[-1], dict):
-                wt.current_symbol = str(plan[-1].get("symbol") or wt.current_symbol)
-                wt.current_interval = str(plan[-1].get("interval") or wt.current_interval)
-        return {"paths": [str(p) for p in paths]}
 
     async def _ensure_tv_warm_tabs(self) -> None:
         need = False
@@ -1216,36 +1039,6 @@ async def _handle_one_request(
     if method == METHOD_TV_PREWARM_RESET:
         ms = str(params.get("main_symbol") or "").strip() or None
         r = await st.tv_prewarm_reset(main_symbol=ms)
-        return {"type": "response", "request_id": rid, "ok": True, "result": r, "error": None}
-
-    if method == METHOD_COINMAP_CAPTURE_PLAN:
-        cd_raw = params.get("cd")
-        api_raw = params.get("api_cd")
-        if not isinstance(cd_raw, dict):
-            raise ValueError("coinmap_capture_plan requires params.cd as object")
-        if not isinstance(api_raw, dict):
-            raise ValueError("coinmap_capture_plan requires params.api_cd as object")
-        plan_raw = params.get("plan")
-        if not isinstance(plan_raw, list):
-            raise ValueError("coinmap_capture_plan requires params.plan as array")
-        charts_dir = Path(str(params.get("charts_dir") or "")).expanduser()
-        stamp = str(params.get("stamp") or "").strip()
-        sm_raw = params.get("settle_ms")
-        settle_ms = int(sm_raw) if sm_raw is not None else None
-        login_cfg = params.get("login_cfg")
-        r = await st.coinmap_capture_plan(
-            cd=cd_raw,
-            api_cd=api_raw,
-            plan=plan_raw,
-            charts_dir=charts_dir,
-            stamp=stamp,
-            settle_ms=settle_ms,
-            login_cfg=login_cfg if isinstance(login_cfg, dict) else None,
-        )
-        return {"type": "response", "request_id": rid, "ok": True, "result": r, "error": None}
-
-    if method == METHOD_COINMAP_PREWARM_RESET:
-        r = await st.coinmap_prewarm_reset()
         return {"type": "response", "request_id": rid, "ok": True, "result": r, "error": None}
 
     if method == METHOD_CAPTURE_CHARTS:
