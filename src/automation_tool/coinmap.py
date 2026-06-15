@@ -1563,6 +1563,29 @@ def _chart_drag_in_box(
     page.mouse.up()
 
 
+def _coinmap_effective_chart_cd(
+    cd: dict[str, Any],
+    *,
+    symbol: Optional[str] = None,
+    export_symbol: Optional[str] = None,
+) -> dict[str, Any]:
+    """Merge ``chart_view_by_symbol`` overrides for the active watchlist/export symbol."""
+    by_sym = cd.get("chart_view_by_symbol")
+    if not isinstance(by_sym, dict):
+        return cd
+    overrides: dict[str, Any] = {}
+    for key in (symbol, export_symbol):
+        if not key or not str(key).strip():
+            continue
+        k = str(key).strip()
+        row = by_sym.get(k) or by_sym.get(k.upper())
+        if isinstance(row, dict):
+            overrides.update(row)
+    if not overrides:
+        return cd
+    return {**cd, **overrides}
+
+
 def _apply_coinmap_chart_view_adjustments(
     page, cd: dict[str, Any], api_cd: Optional[dict[str, Any]] = None
 ) -> None:
@@ -1960,17 +1983,23 @@ def _coinmap_one_capture_fullscreen_esc(
     stamp: str,
     symbol_slug: str,
     interval_slug: str,
+    *,
+    symbol: Optional[str] = None,
+    export_symbol: Optional[str] = None,
 ) -> Path:
     """Pan/zoom chart, optional layer toggle, fullscreen, screenshot, exit fullscreen."""
-    _apply_coinmap_chart_view_adjustments(page, cd, api_cd=None)
-    _maybe_click_layer_toggle_if_tooltip_tall(page, cd)
-    _coinmap_click_fullscreen_button(page, cd)  # enter fullscreen
-    page.wait_for_timeout(int(cd.get("fullscreen_screenshot_settle_ms", 1500)))
-    full_page = bool(cd.get("fullscreen_screenshot_full_page", True))
+    chart_cd = _coinmap_effective_chart_cd(
+        cd, symbol=symbol, export_symbol=export_symbol
+    )
+    _apply_coinmap_chart_view_adjustments(page, chart_cd, api_cd=None)
+    _maybe_click_layer_toggle_if_tooltip_tall(page, chart_cd)
+    _coinmap_click_fullscreen_button(page, chart_cd)  # enter fullscreen
+    page.wait_for_timeout(int(chart_cd.get("fullscreen_screenshot_settle_ms", 1500)))
+    full_page = bool(chart_cd.get("fullscreen_screenshot_full_page", True))
     dest = charts_dir / f"{stamp}_coinmap_{symbol_slug}_{interval_slug}.png"
     page.screenshot(path=str(dest), full_page=full_page)
-    _coinmap_exit_fullscreen_after_capture(page, cd)
-    page.wait_for_timeout(int(cd.get("after_fullscreen_escape_ms", 600)))
+    _coinmap_exit_fullscreen_after_capture(page, chart_cd)
+    page.wait_for_timeout(int(chart_cd.get("after_fullscreen_escape_ms", 600)))
     return dest
 
 
@@ -2041,6 +2070,10 @@ def _run_coinmap_multi_shot_flow(
         if isinstance(ex, str) and ex.strip():
             step_ctx["export_symbol"] = ex.strip()
         label = (ex.strip() if isinstance(ex, str) and ex.strip() else sym)
+        export_sym = ex.strip() if isinstance(ex, str) and ex.strip() else None
+        chart_cd = _coinmap_effective_chart_cd(
+            cd, symbol=sym, export_symbol=export_sym
+        )
         sym_slug = re.sub(r"[^\w.-]+", "_", label).strip("_")[:40] or "sym"
         iv_slug = re.sub(r"[^\w]+", "_", interval).strip("_")[:20] or "iv"
         json_path: Optional[Path] = None
@@ -2083,19 +2116,33 @@ def _run_coinmap_multi_shot_flow(
         if shot_enabled:
             written.append(
                 _coinmap_one_capture_fullscreen_esc(
-                    page, cd, charts_dir, stamp, sym_slug, iv_slug
+                    page,
+                    cd,
+                    charts_dir,
+                    stamp,
+                    sym_slug,
+                    iv_slug,
+                    symbol=sym,
+                    export_symbol=export_sym,
                 )
             )
         else:
-            if _coinmap_should_pan_chart(cd, api_cd):
-                _apply_coinmap_chart_view_adjustments(page, cd, api_cd)
-                page.wait_for_timeout(int(cd.get("chart_after_adjust_ms", 800)))
+            if _coinmap_should_pan_chart(chart_cd, api_cd):
+                _apply_coinmap_chart_view_adjustments(page, chart_cd, api_cd)
+                page.wait_for_timeout(int(chart_cd.get("chart_after_adjust_ms", 800)))
             if json_path is not None:
                 written.append(json_path)
             else:
                 written.append(
                     _coinmap_one_capture_fullscreen_esc(
-                        page, cd, charts_dir, stamp, sym_slug, iv_slug
+                        page,
+                        cd,
+                        charts_dir,
+                        stamp,
+                        sym_slug,
+                        iv_slug,
+                        symbol=sym,
+                        export_symbol=export_sym,
                     )
                 )
         prev_symbol = sym

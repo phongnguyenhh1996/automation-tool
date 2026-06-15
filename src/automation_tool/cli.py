@@ -52,6 +52,7 @@ from automation_tool.images import (
     coinmap_main_pair_interval_json_path,
     effective_chart_image_order,
     latest_chart_stamp,
+    ordered_chart_images,
     ordered_chart_openai_payloads,
     stamp_from_capture_paths,
 )
@@ -108,6 +109,7 @@ from automation_tool.zones_state import (
     zones_from_scalp_payload,
 )
 from automation_tool.telegram_bot import (
+    send_capture_screenshots_to_log_chat,
     send_message,
     send_mt5_execution_log_to_ngan_gon_chat,
     send_openai_output_to_telegram,
@@ -2856,6 +2858,20 @@ def cmd_all(args: argparse.Namespace) -> None:
             raise SystemExit(f"Recapture after validation failed: {e}") from e
 
     require_valid_coinmap_exports_for_stamp(charts_dir, stamp)
+
+    capture_pngs = ordered_chart_images(charts_dir, stamp=stamp)
+    n_sent = send_capture_screenshots_to_log_chat(
+        bot_token=s.telegram_bot_token,
+        telegram_log_chat_id=s.telegram_log_chat_id,
+        png_paths=capture_pngs,
+        header=f"all: capture screenshots | stamp={stamp} | {len(capture_pngs)} PNG",
+    )
+    _log.info(
+        "all: gửi capture PNG → TELEGRAM_LOG_CHAT_ID | stamp=%s | files=%s sent=%s",
+        stamp,
+        len(capture_pngs),
+        n_sent,
+    )
 
     require_openai(s)
     payloads = ordered_chart_openai_payloads(charts_dir)

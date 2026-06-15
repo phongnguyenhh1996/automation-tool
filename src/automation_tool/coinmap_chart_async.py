@@ -17,6 +17,7 @@ from playwright.async_api import Page
 from automation_tool.coinmap import (
     _COINMAP_NETWORK_CAPTURE_WAIT_KEYS,
     _api_export_mode,
+    _coinmap_effective_chart_cd,
     _coinmap_endpoint_key_from_response_url,
     _coinmap_filter_capture_plan_by_intervals,
     _coinmap_maybe_fail_api_shot,
@@ -740,6 +741,10 @@ async def coinmap_capture_plan_async(
             if isinstance(ex, str) and ex.strip():
                 step_ctx["export_symbol"] = ex.strip()
             label = (ex.strip() if isinstance(ex, str) and ex.strip() else sym)
+            export_sym = ex.strip() if isinstance(ex, str) and ex.strip() else None
+            chart_cd = _coinmap_effective_chart_cd(
+                cd, symbol=sym, export_symbol=export_sym
+            )
             sym_slug = re.sub(r"[^\w.-]+", "_", label).strip("_")[:40] or "sym"
             iv_slug = re.sub(r"[^\w]+", "_", interval).strip("_")[:20] or "iv"
 
@@ -755,9 +760,9 @@ async def coinmap_capture_plan_async(
                 raise RuntimeError(
                     "coinmap_screenshot_enabled is not supported on warm-tab RPC capture; set false in YAML"
                 )
-            if _coinmap_should_pan_chart(cd, api_cd):
-                await _apply_coinmap_chart_view_adjustments_async(page, cd, api_cd)
-                await page.wait_for_timeout(int(cd.get("chart_after_adjust_ms", 800)))
+            if _coinmap_should_pan_chart(chart_cd, api_cd):
+                await _apply_coinmap_chart_view_adjustments_async(page, chart_cd, api_cd)
+                await page.wait_for_timeout(int(chart_cd.get("chart_after_adjust_ms", 800)))
             written.append(json_path)
             prev_symbol = sym
     finally:

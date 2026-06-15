@@ -8,6 +8,7 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from collections.abc import Sequence
 from typing import Any, Optional, Union
 
 import httpx
@@ -733,6 +734,70 @@ def send_message(
                     if isinstance(mid, int):
                         first_message_id = mid
     return first_message_id
+
+
+def send_photo(
+    *,
+    bot_token: str,
+    chat_id: str,
+    photo_path: Path,
+    caption: Optional[str] = None,
+    timeout: float = 120.0,
+) -> None:
+    """Send one local PNG/JPEG/WebP to a Telegram chat via ``sendPhoto``."""
+    base = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
+    data: dict[str, Any] = {"chat_id": chat_id}
+    cap = (caption or "").strip()
+    if cap:
+        data["caption"] = cap[:1024]
+    with photo_path.open("rb") as f:
+        files = {"photo": (photo_path.name, f, "image/png")}
+        with httpx.Client(timeout=timeout) as client:
+            r = client.post(base, data=data, files=files)
+    if r.status_code != 200:
+        raise RuntimeError(f"Telegram sendPhoto failed: {r.status_code} {r.text}")
+    j = r.json()
+    if not j.get("ok"):
+        raise RuntimeError(f"Telegram API error: {j}")
+
+
+def send_capture_screenshots_to_log_chat(
+    *,
+    bot_token: Optional[str],
+    telegram_log_chat_id: Optional[str],
+    png_paths: Sequence[Path],
+    header: str,
+) -> int:
+    """
+    Best-effort: gửi PNG capture (Coinmap + TradingView) tới ``TELEGRAM_LOG_CHAT_ID``.
+    Returns số ảnh đã gửi thành công.
+    """
+    cid = (telegram_log_chat_id or "").strip()
+    tok = (bot_token or "").strip()
+    if not cid or not tok:
+        return 0
+    existing = [p for p in png_paths if p.is_file()]
+    if not existing:
+        return 0
+    hdr = (header or "").strip()
+    if hdr:
+        try:
+            send_message(bot_token=tok, chat_id=cid, text=hdr, parse_mode=None)
+        except Exception as e:
+            _log.warning("Không gửi Telegram (TELEGRAM_LOG_CHAT_ID header): %s", e)
+    sent = 0
+    for p in existing:
+        try:
+            send_photo(
+                bot_token=tok,
+                chat_id=cid,
+                photo_path=p,
+                caption=p.name,
+            )
+            sent += 1
+        except Exception as e:
+            _log.warning("Không gửi Telegram (TELEGRAM_LOG_CHAT_ID photo %s): %s", p.name, e)
+    return sent
 
 
 def _send_plain_text_to_chat_id(
