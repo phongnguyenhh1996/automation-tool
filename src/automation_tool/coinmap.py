@@ -1952,6 +1952,22 @@ def _coinmap_maybe_bump_interval_before_target(
     page.wait_for_timeout(int(cd.get("after_interval_change_settle_ms", settle_ms)))
 
 
+def _coinmap_reload_chart_page_before_screenshot(
+    page,
+    cd: dict[str, Any],
+    *,
+    settle_ms: int,
+) -> None:
+    """Reload chart after symbol/interval are set so PNG reflects fresh candles, not SPA cache."""
+    page.reload(wait_until="domcontentloaded", timeout=90_000)
+    reload_wait = int(cd.get("reload_before_screenshot_settle_ms", settle_ms))
+    page.wait_for_timeout(reload_wait)
+    _maybe_dismiss_coinmap_symbol_search_modal(page, cd)
+    _maybe_switch_to_dark_mode(page, cd)
+    _maybe_dismiss_light_theme_modal(page, cd)
+    _maybe_dismiss_coinmap_symbol_search_modal(page, cd)
+
+
 def _coinmap_click_fullscreen_button(
     page,
     cd: dict[str, Any],
@@ -2059,6 +2075,11 @@ def _run_coinmap_multi_shot_flow(
         net_start = len(net_capture._records) if net_capture is not None else 0
         _coinmap_select_interval(page, cd, interval)
         page.wait_for_timeout(int(cd.get("after_interval_change_settle_ms", settle_ms)))
+
+        if cd.get("reload_page_before_screenshot", False) and bool(
+            cd.get("coinmap_screenshot_enabled", True)
+        ):
+            _coinmap_reload_chart_page_before_screenshot(page, cd, settle_ms=settle_ms)
 
         step_ctx: dict[str, Any] = {
             "symbol": sym,

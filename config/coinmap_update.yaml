@@ -93,6 +93,9 @@ chart_download:
   chart_pan_drag_steps: 14
   chart_after_adjust_ms: 800
   coinmap_screenshot_enabled: true
+  # Luồng update-scalp (và update): chọn symbol/interval → reload → chụp PNG.
+  reload_page_before_screenshot: true
+  reload_before_screenshot_settle_ms: 2000
   layer_tooltip_toggle_before_screenshot: true
   layer_tooltip_selector: '[class*="layerTooltip"]'
   layer_list_toggle_button_selector: '[class*="buttonToggleLayerList"]'

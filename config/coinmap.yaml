@@ -123,6 +123,9 @@ chart_download:
   chart_after_adjust_ms: 800
   # false = không chụp PNG Coinmap, chỉ lưu JSON API. network_capture: không kéo chart (lấy response gateway lần load đầu). Pan chỉ khi chụp PNG hoặc chart_view_adjustments_for_network_capture: true.
   coinmap_screenshot_enabled: true
+  # Luồng all: chọn symbol/interval → reload → chụp PNG (tránh SPA cache).
+  reload_page_before_screenshot: true
+  reload_before_screenshot_settle_ms: 2000
   # Before screenshot: if layer tooltip is open (height > threshold), click layer-list toggle.
   layer_tooltip_toggle_before_screenshot: true
   layer_tooltip_selector: '[class*="layerTooltip"]'
