@@ -86,13 +86,24 @@ def _maybe_login_gocharting(page: Page, cfg: dict[str, Any], email: str, passwor
         return
 
     avatar.click()
-    page.wait_for_timeout(400)
-    if page.locator(email_sel).first.is_visible(timeout=5000):
-        page.locator(email_sel).first.fill(email)
-        page.locator(password_sel).first.fill(password)
-        page.locator(submit_sel).first.click()
-        page.wait_for_timeout(1500)
-        _log.info("gocharting: submitted login form")
+    page.wait_for_timeout(3000)
+
+    email_loc = page.locator(email_sel).first
+    password_loc = page.locator(password_sel).first
+    email_visible = email_loc.is_visible(timeout=500)
+    password_visible = password_loc.is_visible(timeout=500)
+
+    if not email_visible and not password_visible:
+        _log.info("gocharting: no login form after 3s — session already active")
+        return
+
+    if email_visible:
+        email_loc.fill(email)
+    if password_visible:
+        password_loc.fill(password)
+    page.locator(submit_sel).first.click()
+    page.wait_for_timeout(1500)
+    _log.info("gocharting: submitted login form")
 
 
 def _symbol_visible(page: Page, entry: dict[str, Any]) -> bool:
