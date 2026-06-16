@@ -130,7 +130,7 @@ def _select_chart_symbol(page: Page, cfg: dict[str, Any], entry: dict[str, Any])
 
 def _select_interval(page: Page, cfg: dict[str, Any], interval: str) -> None:
     panel = cfg.get("interval_panel") or {}
-    settle_ms = int(panel.get("settle_ms", 2000))
+    settle_ms = int(panel.get("settle_ms", 3000))
     tmpl = str(panel.get("button_selector") or 'button:has(div:text-is("{interval}"))')
     sel = tmpl.format(interval=interval)
     page.locator(sel).first.click(timeout=15_000)

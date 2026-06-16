@@ -22,7 +22,7 @@ symbols:
 
 interval_panel:
   button_selector: 'button:has(div:text-is("{interval}"))'
-  settle_ms: 2000
+  settle_ms: 3000
 
 screenshot:
   open_button: "#user-screenshot-btn"
