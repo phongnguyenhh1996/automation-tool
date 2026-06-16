@@ -46,10 +46,12 @@ def _resolve_symbol_entry(
     plan_symbol: str,
     main_chart_symbol: Optional[str],
 ) -> dict[str, Any]:
-    wl = cfg.get("watchlist") or {}
-    symbols = wl.get("symbols") if isinstance(wl, dict) else {}
+    symbols = cfg.get("symbols")
     if not isinstance(symbols, dict):
-        raise ValueError("gocharting.yaml watchlist.symbols must be a mapping")
+        wl = cfg.get("watchlist") or {}
+        symbols = wl.get("symbols") if isinstance(wl, dict) else {}
+    if not isinstance(symbols, dict):
+        raise ValueError("gocharting.yaml symbols must be a mapping")
 
     key = (plan_symbol or "").strip().upper()
     if key in symbols and isinstance(symbols[key], dict):
@@ -65,9 +67,8 @@ def _resolve_symbol_entry(
     else:
         raise ValueError(f"Unknown symbol {plan_symbol!r} in gocharting capture_plan")
 
-    for req in ("watchlist_id", "chart_id", "export_label"):
-        if not str(entry.get(req) or "").strip():
-            raise ValueError(f"gocharting symbol {key!r} missing {req}")
+    if not str(entry.get("export_label") or "").strip():
+        raise ValueError(f"gocharting symbol {key!r} missing export_label")
     return entry
 
 
@@ -106,32 +107,24 @@ def _maybe_login_gocharting(page: Page, cfg: dict[str, Any], email: str, passwor
     _log.info("gocharting: submitted login form")
 
 
-def _symbol_visible(page: Page, entry: dict[str, Any]) -> bool:
-    watchlist_id = str(entry["watchlist_id"])
-    chart_id = str(entry["chart_id"])
-    wl = _id_locator(page, watchlist_id).first
-    if wl.is_visible(timeout=800):
-        return True
-    chart = _id_locator(page, chart_id).first
-    return chart.is_visible(timeout=800)
+def _select_chart_symbol(page: Page, cfg: dict[str, Any], entry: dict[str, Any]) -> None:
+    search = cfg.get("symbol_search") or {}
+    input_id = str(search.get("input_id") or "input-search-ticks-input")
+    results_id = str(search.get("results_id") or "search-results")
+    tmpl = str(search.get("query_template") or "EXNESS:{symbol}")
+    settle_ms = int(search.get("settle_ms", 700))
+    type_delay_ms = int(search.get("type_delay_ms", 400))
 
+    export_label = str(entry["export_label"]).strip().upper()
+    query = str(entry.get("search_query") or "").strip() or tmpl.format(symbol=export_label)
 
-def _select_watchlist_symbol(page: Page, cfg: dict[str, Any], entry: dict[str, Any]) -> None:
-    if _symbol_visible(page, entry):
-        chart_id = str(entry["chart_id"])
-        _id_locator(page, chart_id).first.click(timeout=15_000)
-        page.wait_for_timeout(500)
-        return
+    search_input = _id_locator(page, input_id).first
+    search_input.click(timeout=15_000)
+    search_input.fill(query)
+    page.wait_for_timeout(type_delay_ms)
 
-    wl_cfg = cfg.get("watchlist") or {}
-    toggle = str(wl_cfg.get("toggle_button") or "#watchlist-icontab")
-    use_force = bool(wl_cfg.get("toggle_button_click_force", True))
-    page.locator(toggle).first.click(timeout=15_000, force=use_force)
-    page.wait_for_timeout(600)
-
-    chart_id = str(entry["chart_id"])
-    _id_locator(page, chart_id).first.click(timeout=20_000)
-    page.wait_for_timeout(700)
+    _id_locator(page, results_id).locator("div").first.click(timeout=15_000)
+    page.wait_for_timeout(settle_ms)
 
 
 def _select_interval(page: Page, cfg: dict[str, Any], interval: str) -> None:
@@ -260,7 +253,7 @@ def _capture_gocharting_in_context(
     )
     for entry, _plan_sym, intervals in plan:
         export_label = str(entry["export_label"]).strip().upper()
-        _select_watchlist_symbol(page, cfg, entry)
+        _select_chart_symbol(page, cfg, entry)
         for interval in intervals:
             if slot_filter is not None:
                 if (export_label, interval.lower()) not in slot_filter:

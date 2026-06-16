@@ -1,4 +1,4 @@
-# GoCharting footprint capture — one saved chart URL; switch symbol via Watchlist.
+# GoCharting footprint capture — one saved chart URL; switch symbol via tick search.
 chart_page_url: "https://gocharting.com/terminal/chart/OpJogbwTR"
 
 login:
@@ -7,19 +7,18 @@ login:
   password: "#password_field"
   submit: 'button[type="submit"]'
 
-watchlist:
-  toggle_button: "#watchlist-icontab"
-  # Tab exists in DOM but can be hidden (collapsed sidebar / CSS) — not hit-testable.
-  toggle_button_click_force: true
-  symbols:
-    DXY:
-      watchlist_id: "watchlist-EXNESS:SPOT:DXY"
-      chart_id: "EXNESS:SPOT:DXY"
-      export_label: DXY
-    XAUUSD:
-      watchlist_id: "watchlist-EXNESS:SPOT:XAUUSD"
-      chart_id: "EXNESS:SPOT:XAUUSD"
-      export_label: XAUUSD
+symbol_search:
+  input_id: "input-search-ticks-input"
+  results_id: "search-results"
+  query_template: "EXNESS:{symbol}"
+  type_delay_ms: 400
+  settle_ms: 700
+
+symbols:
+  DXY:
+    export_label: DXY
+  XAUUSD:
+    export_label: XAUUSD
 
 interval_panel:
   button_selector: 'button:has(div:text-is("{interval}"))'
