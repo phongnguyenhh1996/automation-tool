@@ -10,7 +10,7 @@ import yaml
 from playwright.sync_api import BrowserContext, Page, sync_playwright
 
 from automation_tool.browser_client import browser_service_state_path, try_attach_playwright_via_service
-from automation_tool.chart_payload_validate import normalize_gocharting_csv_file
+from automation_tool.chart_payload_validate import prepare_gocharting_csv_file
 from automation_tool.config import default_storage_state_path
 from automation_tool.playwright_browser import close_browser_and_context, launch_chrome_context
 
@@ -176,8 +176,8 @@ def _capture_csv(page: Page, cfg: dict[str, Any], dest: Path) -> None:
         page.locator(btn).first.click(timeout=15_000)
 
     _save_download(page, _click_csv, dest, timeout_ms)
-    if normalize_gocharting_csv_file(dest):
-        _log.debug("gocharting: stripped branding prefix from %s", dest.name)
+    if prepare_gocharting_csv_file(dest):
+        _log.debug("gocharting: normalized CSV on disk (%s)", dest.name)
 
 
 def _filter_capture_plan(

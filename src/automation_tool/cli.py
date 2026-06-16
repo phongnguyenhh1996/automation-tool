@@ -2152,7 +2152,7 @@ def _intraday_tv_then_coinmap_m5_capture(
                 f"{flow_label}: không có stamp sau capture TradingView; kiểm tra tradingview_capture và charts_dir."
             )
         main_s = read_main_chart_symbol(charts_dir)
-        fp_paths = _footprint_capture(stamp_override=stamp, clear_before=False)
+        fp_paths = _footprint_capture(stamp_override=stamp, clear_before=use_gocharting)
         paths.extend(fp_paths)
         tv_slugs = _intraday_tradingview_openai_slugs(include_m15_regular=include_tv_m15_regular)
         for slug in tv_slugs:
@@ -2853,6 +2853,7 @@ def cmd_all(args: argparse.Namespace) -> None:
                 main_chart_symbol=args.main_symbol,
                 enable_coinmap=False,
                 enable_tradingview=True,
+                clear_charts_before_capture=True,
                 tradingview_force_screenshot=True,
                 write_coinmap_merged_after_capture=False,
             )
@@ -2870,7 +2871,7 @@ def cmd_all(args: argparse.Namespace) -> None:
             headless=not args.headed,
             main_chart_symbol=args.main_symbol,
             stamp_override=stamp_pre,
-            clear_charts_before_capture=not paths,
+            clear_charts_before_capture=True,
             capture_symbols=("DXY", main_sym),
         )
         paths.extend(gc_paths)

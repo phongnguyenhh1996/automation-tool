@@ -82,10 +82,10 @@ def _ensure_dir(p: Path) -> None:
 
 
 def _clear_charts_dir(charts_dir: Path) -> None:
-    """Delete existing image files in charts_dir (keeps .gitkeep and non-image files)."""
+    """Delete existing chart artifacts in charts_dir (keeps .gitkeep and other files)."""
     if not charts_dir.is_dir():
         return
-    exts = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".json", ".url"}
+    exts = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".json", ".url", ".csv"}
     for p in charts_dir.iterdir():
         if not p.is_file():
             continue

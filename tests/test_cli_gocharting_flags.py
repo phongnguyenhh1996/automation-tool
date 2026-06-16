@@ -15,10 +15,12 @@ def test_cmd_all_gocharting_calls_capture_gocharting(tmp_path: Path, monkeypatch
     (charts / ".main_chart_symbol").write_text("XAUUSD\n", encoding="utf-8")
 
     gc_called = False
+    gc_clear_before: bool | None = None
 
     def fake_capture_gocharting(**kwargs):
-        nonlocal gc_called
+        nonlocal gc_called, gc_clear_before
         gc_called = True
+        gc_clear_before = kwargs.get("clear_charts_before_capture")
         stamp = "20260616_120000"
         paths = []
         for sym, iv in (("DXY", "15m"), ("XAUUSD", "15m"), ("XAUUSD", "5m")):
@@ -79,3 +81,4 @@ def test_cmd_all_gocharting_calls_capture_gocharting(tmp_path: Path, monkeypatch
                     cmd_all(args)
 
     assert gc_called is True
+    assert gc_clear_before is True

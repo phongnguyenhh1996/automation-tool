@@ -10,6 +10,7 @@ or ``.png`` satisfies the slot (same rules as ``ordered_chart_openai_payloads``)
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -159,18 +160,54 @@ def normalize_gocharting_csv_text(text: str) -> str:
     return "\n".join(lines[hi:]) + "\n"
 
 
-def normalize_gocharting_csv_file(path: Path) -> bool:
-    """Rewrite file when a branding prefix was stripped. Return True if updated."""
+DEFAULT_GOCHARTING_CSV_MAX_CANDLES = 150
+
+
+def trim_gocharting_csv_candles(text: str, *, max_candles: int = DEFAULT_GOCHARTING_CSV_MAX_CANDLES) -> str:
+    """
+    Keep the header and at most ``max_candles`` newest data rows (exports are oldest-first).
+    """
+    normalized = normalize_gocharting_csv_text(text)
+    if max_candles <= 0:
+        return normalized
+    lines = [ln for ln in normalized.splitlines() if ln.strip()]
+    if len(lines) <= 1:
+        return normalized
+    header, data = lines[0], lines[1:]
+    if len(data) <= max_candles:
+        return normalized
+    return "\n".join([header, *data[-max_candles:]]) + "\n"
+
+
+def gocharting_csv_max_candles() -> int:
+    raw = os.getenv("GOCHARTING_CSV_MAX_CANDLES", "").strip()
+    if raw.isdigit():
+        return max(1, int(raw))
+    return DEFAULT_GOCHARTING_CSV_MAX_CANDLES
+
+
+def prepare_gocharting_csv_text(text: str, *, max_candles: int | None = None) -> str:
+    """Strip branding prefix and keep at most ``max_candles`` newest rows."""
+    mc = max_candles if max_candles is not None else gocharting_csv_max_candles()
+    return trim_gocharting_csv_candles(text, max_candles=mc)
+
+
+def prepare_gocharting_csv_file(path: Path, *, max_candles: int | None = None) -> bool:
+    """Normalize + trim on disk; return True when the file was rewritten."""
     try:
         raw = path.read_text(encoding="utf-8")
     except OSError:
         return False
-    lines = _gocharting_csv_nonempty_lines(raw)
-    hi = _gocharting_csv_header_index(lines)
-    if hi is None or hi == 0:
+    prepared = prepare_gocharting_csv_text(raw, max_candles=max_candles)
+    if prepared == raw:
         return False
-    path.write_text("\n".join(lines[hi:]) + "\n", encoding="utf-8")
+    path.write_text(prepared, encoding="utf-8")
     return True
+
+
+def normalize_gocharting_csv_file(path: Path) -> bool:
+    """Backward compat alias for :func:`prepare_gocharting_csv_file`."""
+    return prepare_gocharting_csv_file(path)
 
 
 def validate_gocharting_csv_file(path: Path) -> tuple[bool, str]:
