@@ -30,10 +30,10 @@ if errorlevel 1 (
   exit /b 1
 )
 
-REM Run full pipeline (headless by default to save memory; add --headed manually if needed)
-echo [%date% %time%] INFO: Starting coinmap-automation all
->> "%LOG_FILE%" echo [%date% %time%] INFO: Starting coinmap-automation all
-coinmap-automation all >> "%LOG_FILE%" 2>&1
+REM Run full pipeline with GoCharting footprint (headless by default; add --headed manually if needed)
+echo [%date% %time%] INFO: Starting coinmap-automation all --gocharting
+>> "%LOG_FILE%" echo [%date% %time%] INFO: Starting coinmap-automation all --gocharting
+coinmap-automation all --gocharting %* >> "%LOG_FILE%" 2>&1
 set "EXIT_CODE=%ERRORLEVEL%"
 echo [%date% %time%] INFO: Finished with exit code %EXIT_CODE%
 >> "%LOG_FILE%" echo [%date% %time%] INFO: Finished with exit code %EXIT_CODE%
