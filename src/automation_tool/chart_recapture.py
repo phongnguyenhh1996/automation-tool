@@ -1,5 +1,5 @@
 """
-Re-capture only failed chart JSON files (same stamp) after validation.
+Re-capture only failed chart JSON/CSV files (same stamp) after validation.
 """
 
 from __future__ import annotations
@@ -9,6 +9,47 @@ from typing import Optional
 
 from automation_tool.chart_payload_validate import ChartSlotIssue
 from automation_tool.coinmap import capture_charts, load_coinmap_yaml
+from automation_tool.gocharting_capture import capture_gocharting
+
+
+def recapture_failed_gocharting_slots(
+    *,
+    gocharting_yaml: Path,
+    charts_dir: Path,
+    stamp: str,
+    issues: list[ChartSlotIssue],
+    storage_state_path: Optional[Path],
+    email: Optional[str],
+    password: Optional[str],
+    save_storage_state: bool,
+    headless: bool,
+    main_chart_symbol: Optional[str],
+) -> None:
+    """Re-run GoCharting capture for failed ``gocharting`` slots only."""
+    gc_issues = [i for i in issues if i.source == "gocharting"]
+    if not gc_issues:
+        return
+    slots: list[tuple[str, str]] = []
+    for issue in gc_issues:
+        sym = (issue.symbol or "").strip().upper()
+        iv = (issue.interval or "").strip()
+        if sym and iv:
+            slots.append((sym, iv))
+    if not slots:
+        return
+    capture_gocharting(
+        gocharting_yaml=gocharting_yaml,
+        charts_dir=charts_dir,
+        email=email or "",
+        password=password or "",
+        storage_state_path=storage_state_path,
+        save_storage_state=save_storage_state,
+        headless=headless,
+        main_chart_symbol=main_chart_symbol,
+        stamp_override=stamp,
+        clear_charts_before_capture=False,
+        only_slots=slots,
+    )
 
 
 def recapture_failed_chart_slots(

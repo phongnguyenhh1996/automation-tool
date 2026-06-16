@@ -136,15 +136,75 @@ def _load_json(path: Path) -> tuple[Optional[dict[str, Any]], Optional[str]]:
     return obj, None
 
 
+def validate_gocharting_csv_file(path: Path) -> tuple[bool, str]:
+    """GoCharting export: non-empty CSV with a header row."""
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as e:
+        return False, f"read error: {e}"
+    text = raw.strip()
+    if not text:
+        return False, "empty CSV"
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if len(lines) < 2:
+        return False, "CSV must have header + at least one data row"
+    header = lines[0]
+    if "," not in header:
+        return False, "CSV header missing comma-separated columns"
+    return True, ""
+
+
+def _gocharting_slot_path(charts_dir: Path, stamp: str, sym: str, iv: str) -> Path:
+    iv_slug = re.sub(r"[^\w]+", "_", iv).strip("_")[:20] or "iv"
+    return charts_dir / f"{stamp}_gocharting_{sym}_{iv_slug}.csv"
+
+
+def gocharting_raw_export_paths_for_stamp(charts_dir: Path, stamp: str) -> list[Path]:
+    """Per-shot ``*_gocharting_*_{5m,15m}.csv`` for ``stamp``."""
+    if not stamp or not charts_dir.is_dir():
+        return []
+    out: list[Path] = []
+    for iv in ("15m", "5m"):
+        for cp in sorted(charts_dir.glob(f"{stamp}_gocharting_*_{iv}.csv")):
+            out.append(cp)
+    dxy = charts_dir / f"{stamp}_gocharting_DXY_15m.csv"
+    if dxy.is_file() and dxy not in out:
+        out.insert(0, dxy)
+    return out
+
+
+def require_valid_gocharting_exports_for_stamp(charts_dir: Path, stamp: str) -> None:
+    paths = gocharting_raw_export_paths_for_stamp(charts_dir, stamp)
+    if not paths:
+        raise SystemExit(
+            f"No GoCharting CSV exports for stamp {stamp!r} under {charts_dir}."
+        )
+    require_valid_gocharting_csv_paths(paths)
+
+
+def require_valid_gocharting_csv_paths(paths: Sequence[Path]) -> None:
+    reasons: list[str] = []
+    for cp in paths:
+        ok, r = validate_gocharting_csv_file(cp)
+        if not ok:
+            reasons.append(f"{cp.name}: {r}")
+    if reasons:
+        raise SystemExit(f"GoCharting CSV validation failed: {'; '.join(reasons)}")
+
+
 @dataclass(frozen=True)
 class ChartSlotIssue:
     """One failed slot in fixed chart order."""
 
-    source: str  # "coinmap" | "tradingview"
+    source: str  # "coinmap" | "gocharting" | "tradingview"
     symbol: str
     interval: str
     expected_path: Path
     reason: str
+
+
+def is_gocharting_stale_chart_issue(issue: ChartSlotIssue) -> bool:
+    return "stale" in issue.reason.lower()
 
 
 def _tradingview_slot_validation_issue(
@@ -271,10 +331,35 @@ def list_invalid_chart_slots_for_stamp(
         return []
     main_sym = read_main_chart_symbol(charts_dir)
     dxy_m, main_m = coinmap_merged_openai_files(charts_dir, stamp, main_sym)
-    order = effective_chart_image_order(charts_dir)
+    order = effective_chart_image_order(charts_dir, stamp=stamp)
     issues: list[ChartSlotIssue] = []
     validated_export_paths: set[Path] = set()
     for src, sym, iv in order:
+        if src == "gocharting":
+            cp = _gocharting_slot_path(charts_dir, stamp, sym, iv)
+            if not cp.is_file():
+                issues.append(
+                    ChartSlotIssue(
+                        source=src,
+                        symbol=sym,
+                        interval=iv,
+                        expected_path=cp,
+                        reason="missing .csv (required for OpenAI validation)",
+                    )
+                )
+                continue
+            ok, r = validate_gocharting_csv_file(cp)
+            if not ok:
+                issues.append(
+                    ChartSlotIssue(
+                        source=src,
+                        symbol=sym,
+                        interval=iv,
+                        expected_path=cp,
+                        reason=r,
+                    )
+                )
+            continue
         if src == "coinmap" and dxy_m is not None and sym == "DXY" and iv == "15m":
             jp = dxy_m
         elif src == "coinmap" and main_m is not None and sym == main_sym and iv == "15m":

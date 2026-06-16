@@ -56,7 +56,11 @@ class PromptTwoStepResult(NamedTuple):
         return f"{self.first_text}\n\n---\n\n{self.after_charts}" if self.first_text else self.after_charts
 
 
-def default_analysis_prompt(main_symbol: str | None = None) -> str:
+def default_analysis_prompt(
+    main_symbol: str | None = None,
+    *,
+    footprint_source: str = "coinmap",
+) -> str:
     """
     Default user message for multimodal analysis.
 
@@ -69,19 +73,35 @@ def default_analysis_prompt(main_symbol: str | None = None) -> str:
             sym = normalize_main_chart_symbol(str(main_symbol).strip())
         except ValueError:
             pass
+    fp = (footprint_source or "coinmap").strip().lower()
+    if fp == "gocharting":
+        footprint_desc = (
+            f"({CHART_SLOT_COUNT} slot chart; mỗi slot GoCharting: CSV orderflow rồi ảnh PNG ngay sau):\n"
+            "TradingView DXY (H4, H1, M15) → "
+            f"TradingView {sym} (H4, H1, M15, M15 Session Liquidity Check / ICT Killzones, M5) "
+            "(snapshot URL/PNG hoặc JSON OHLC tvdatafeed) → "
+            "GoCharting DXY M15 (CSV footprint; PNG ngay sau) → "
+            f"GoCharting {sym} M15 và M5 (mỗi khung: CSV + PNG).\n"
+            "Ưu tiên đọc ảnh chart (GoCharting PNG, TradingView snapshot); khi cần con số chính xác "
+            "(order flow, CVD, delta) thì tra CSV GoCharting / JSON tvdatafeed tương ứng.\n"
+        )
+    else:
+        footprint_desc = (
+            f"({CHART_SLOT_COUNT} slot chart; mỗi slot Coinmap có thể kèm JSON cm-api rồi ảnh fullscreen PNG ngay sau):\n"
+            "TradingView DXY (H4, H1, M15) → "
+            f"TradingView {sym} (H4, H1, M15, M15 Session Liquidity Check / ICT Killzones, M5) "
+            "(snapshot URL/PNG hoặc JSON OHLC tvdatafeed) → "
+            "Coinmap DXY M15 (JSON footprint; PNG fullscreen ngay sau nếu có) → "
+            f"Coinmap {sym} M15 và M5 (mỗi khung: JSON; PNG ngay sau nếu có; hoặc merged JSON thay M15+M5, PNG M5 vẫn riêng).\n"
+            "Ưu tiên đọc ảnh chart (Coinmap PNG, TradingView snapshot); khi dữ liệu không rõ, "
+            "không đọc được trên chart, hoặc cần con số chính xác (order flow, CVD, VWAP, delta, OHLC) "
+            "thì tra JSON cm-api / tvdatafeed tương ứng.\n"
+        )
     return (
         "[FULL_ANALYSIS]\n"
         f"Cặp chính: {sym}.\n"
         f"Đính kèm theo thứ tự, tối đa {OPENAI_PAYLOAD_MAX} payload multimodal "
-        f"({CHART_SLOT_COUNT} slot chart; mỗi slot Coinmap có thể kèm JSON cm-api rồi ảnh fullscreen PNG ngay sau):\n"
-        "TradingView DXY (H4, H1, M15) → "
-        f"TradingView {sym} (H4, H1, M15, M15 Session Liquidity Check / ICT Killzones, M5) "
-        "(snapshot URL/PNG hoặc JSON OHLC tvdatafeed) → "
-        "Coinmap DXY M15 (JSON footprint; PNG fullscreen ngay sau nếu có) → "
-        f"Coinmap {sym} M15 và M5 (mỗi khung: JSON; PNG ngay sau nếu có; hoặc merged JSON thay M15+M5, PNG M5 vẫn riêng).\n"
-        "Ưu tiên đọc ảnh chart (Coinmap PNG, TradingView snapshot); khi dữ liệu không rõ, "
-        "không đọc được trên chart, hoặc cần con số chính xác (order flow, CVD, VWAP, delta, OHLC) "
-        "thì tra JSON cm-api / tvdatafeed tương ứng.\n"
+        f"{footprint_desc}"
     )
 
 
@@ -118,6 +138,27 @@ def _coinmap_openai_slim_enabled() -> bool:
     if not raw:
         return False
     return raw not in ("0", "false", "no")
+
+
+def _default_max_gocharting_csv_chars() -> int:
+    raw = os.getenv("GOCHARTING_CSV_MAX_CHARS", "").strip()
+    if raw.isdigit():
+        return max(0, int(raw))
+    return 1_500_000
+
+
+def _max_csv_chars_for_path(path: Path, *, default_max: int) -> int:
+    if "_gocharting_" in path.name:
+        return default_max
+    return default_max
+
+
+def _csv_file_header_and_body(path: Path, *, max_chars: int) -> tuple[str, str]:
+    body = path.read_text(encoding="utf-8")
+    header = f"[GoCharting orderflow CSV — file: {path.name}]\n"
+    if max_chars > 0 and len(body) > max_chars:
+        body = body[:max_chars] + f"\n… [truncated: raise GOCHARTING_CSV_MAX_CHARS]"
+    return header, body
 
 
 def _json_file_header_and_body(path: Path, *, max_chars: int) -> tuple[str, str]:
@@ -225,6 +266,12 @@ def _image_paths_to_data_urls(paths: list[Path]) -> dict[Path, str]:
     return dict(zip(unique, urls))
 
 
+def _gocharting_png_attachment_header(path: Path) -> Optional[str]:
+    if path.suffix.lower() != ".png" or "_gocharting_" not in path.name:
+        return None
+    return f"[GoCharting chart screenshot — file: {path.name}]\n"
+
+
 def _coinmap_png_attachment_header(path: Path) -> Optional[str]:
     if path.suffix.lower() != ".png" or "_coinmap_" not in path.name:
         return None
@@ -238,8 +285,18 @@ def _build_mixed_chart_user_content(
     max_json_chars: int,
 ) -> list[dict[str, Any]]:
     json_paths = [p for k, p in payloads if k == "json" and isinstance(p, Path)]
+    csv_paths = [p for k, p in payloads if k == "csv" and isinstance(p, Path)]
     json_queue = iter(
         _prepare_json_headers_bodies(json_paths, max_json_chars=max_json_chars)
+    )
+    mx_csv = _default_max_gocharting_csv_chars()
+    csv_queue = iter(
+        [
+            _csv_file_header_and_body(
+                p, max_chars=_max_csv_chars_for_path(p, default_max=mx_csv)
+            )
+            for p in csv_paths
+        ]
     )
     parts: list[dict[str, Any]] = [{"type": "input_text", "text": prompt}]
     image_paths = [p for k, p in payloads if k == "image" and isinstance(p, Path)]
@@ -259,6 +316,11 @@ def _build_mixed_chart_user_content(
                 )
             else:
                 parts.append({"type": "input_text", "text": body})
+        elif kind == "csv":
+            assert isinstance(p, Path)
+            h, body = next(csv_queue)
+            parts.append({"type": "input_text", "text": h})
+            parts.append({"type": "input_text", "text": body})
         elif kind == "image_url":
             parts.append(
                 {
@@ -269,7 +331,7 @@ def _build_mixed_chart_user_content(
             )
         else:
             assert isinstance(p, Path)
-            hdr = _coinmap_png_attachment_header(p)
+            hdr = _gocharting_png_attachment_header(p) or _coinmap_png_attachment_header(p)
             if hdr:
                 parts.append({"type": "input_text", "text": hdr})
             parts.append(
@@ -292,11 +354,12 @@ def _merge_model(common: dict[str, Any], model: str | None) -> None:
     common["model"] = m
 
 
-def _payload_counts(payloads: Sequence[ChartOpenAIPayload]) -> tuple[int, int, int]:
+def _payload_counts(payloads: Sequence[ChartOpenAIPayload]) -> tuple[int, int, int, int]:
     json_count = sum(1 for kind, _ in payloads if kind == "json")
+    csv_count = sum(1 for kind, _ in payloads if kind == "csv")
     image_count = sum(1 for kind, _ in payloads if kind == "image")
     image_url_count = sum(1 for kind, _ in payloads if kind == "image_url")
-    return json_count, image_count, image_url_count
+    return json_count, csv_count, image_count, image_url_count
 
 
 def _log_openai_send(
@@ -308,17 +371,18 @@ def _log_openai_send(
     model: str | None,
     chained: bool,
 ) -> None:
-    json_count, image_count, image_url_count = _payload_counts(payloads)
+    json_count, csv_count, image_count, image_url_count = _payload_counts(payloads)
     _log.info(
         (
             "OpenAI: đã gửi data lên OpenAI | flow=%s batch=%d/%d "
-            "payloads=%d json=%d image=%d image_url=%d model=%s chained=%s"
+            "payloads=%d json=%d csv=%d image=%d image_url=%d model=%s chained=%s"
         ),
         flow,
         batch_index,
         total_batches,
         len(payloads),
         json_count,
+        csv_count,
         image_count,
         image_url_count,
         (model or "").strip() or "?",
@@ -354,17 +418,18 @@ def _log_openai_error(
     total_batches: int,
     payloads: Sequence[ChartOpenAIPayload],
 ) -> None:
-    json_count, image_count, image_url_count = _payload_counts(payloads)
+    json_count, csv_count, image_count, image_url_count = _payload_counts(payloads)
     _log.exception(
         (
             "OpenAI: lỗi khi gửi/nhận data từ OpenAI | flow=%s batch=%d/%d "
-            "payloads=%d json=%d image=%d image_url=%d"
+            "payloads=%d json=%d csv=%d image=%d image_url=%d"
         ),
         flow,
         batch_index,
         total_batches,
         len(payloads),
         json_count,
+        csv_count,
         image_count,
         image_url_count,
     )
@@ -746,17 +811,43 @@ def build_scalp_update_user_text(
     *,
     first_after_all: bool = False,
     coinmap_attachment_mode: str = "merged",
+    footprint_source: str = "coinmap",
 ) -> str:
     """
     User message cho ``coinmap-automation update-scalp``: giống ``build_intraday_update_user_text``
     nhưng yêu cầu tìm plan scalp đẹp nhất và dùng label ``scalp_<timeframe>``.
 
+    * ``footprint_source="gocharting"``: CSV + PNG GoCharting M15/M5 (legacy tách file).
     * ``coinmap_attachment_mode="merged"`` (default): file ``coinmap_merged`` đa khung (15m + 5m).
     * ``coinmap_attachment_mode="merged_m5"``: file ``coinmap_merged`` chỉ có khung **5m** trong
       ``frames`` (build từ raw M5 qua ``write_openai_coinmap_merged_from_raw_export``).
     * ``coinmap_attachment_mode="m5_only"``: footprint Coinmap **M5** raw (không merged, không M15).
     * ``coinmap_attachment_mode="legacy"``: file M15 và M5 tách riêng.
     """
+    fp = (footprint_source or "coinmap").strip().lower()
+    if fp == "gocharting":
+        time_line = format_intraday_update_time_line()
+        gc_hint = (
+            " (mỗi khung: CSV orderflow GoCharting; ảnh PNG ngay sau CSV tương ứng nếu có)."
+        )
+        if first_after_all:
+            return (
+                "[INTRADAY_UPDATE]\n"
+                f"{time_line}"
+                "Phân tích buổi sáng (Schema A) nằm trong file **morning_full_analysis.json** đính kèm đầu tiên.\n"
+                "Đính kèm **ba** file theo thứ tự: **(1)** morning_full_analysis.json, **(2)** GoCharting M15 CSV, "
+                f"**(3)** M5 CSV (footprint cặp chính{gc_hint}\n"
+                f"{_MORNING_CONTEXT_HINT}"
+                f"{_SCALP_UPDATE_SUFFIX}"
+            )
+        return (
+            "[INTRADAY_UPDATE]\n"
+            f"{time_line}"
+            "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
+            "Đính kèm **hai** file CSV GoCharting: **M15** và **M5** (footprint cặp chính; PNG ngay sau mỗi CSV nếu có).\n"
+            f"{_SCALP_UPDATE_SUFFIX}"
+        )
+
     time_line = format_intraday_update_time_line()
     mode = str(coinmap_attachment_mode or "merged").strip().lower()
     m5_only = mode == "m5_only"
@@ -925,7 +1016,7 @@ def run_single_followup_responses(
         )
     for p in paths:
         if not p.is_file():
-            raise FileNotFoundError(f"JSON attachment not found: {p}")
+            raise FileNotFoundError(f"Attachment not found: {p}")
 
     client = OpenAI(api_key=api_key)
     tools: list[dict[str, Any]] = []

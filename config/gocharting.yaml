@@ -1,0 +1,44 @@
+# GoCharting footprint capture — one saved chart URL; switch symbol via Watchlist.
+chart_page_url: "https://gocharting.com/terminal/chart/OpJogbwTR"
+
+login:
+  avatar_button: "#login-avatar"
+  email: "#email_field"
+  password: "#password_field"
+  submit: 'button[type="submit"]'
+
+watchlist:
+  toggle_button: "#watchlist-icontab"
+  symbols:
+    DXY:
+      watchlist_id: "watchlist-EXNESS:SPOT:DXY"
+      chart_id: "EXNESS:SPOT:DXY"
+      export_label: DXY
+    XAUUSD:
+      watchlist_id: "watchlist-EXNESS:SPOT:XAUUSD"
+      chart_id: "EXNESS:SPOT:XAUUSD"
+      export_label: XAUUSD
+
+interval_panel:
+  button_selector: 'button:has(div:text-is("{interval}"))'
+  settle_ms: 2000
+
+screenshot:
+  open_button: "#user-screenshot-btn"
+  download_button: 'button:has(span div:text-is("Download"))'
+  popup_escape_presses: 1
+  download_timeout_ms: 30000
+
+csv_export:
+  button_selector: 'button:has(svg path[d*="M439.658,91.21"])'
+  download_timeout_ms: 30000
+
+capture_plan:
+  - symbol: DXY
+    intervals: ["15m"]
+  - symbol: XAUUSD
+    intervals: ["15m", "5m"]
+
+clear_charts_before_capture: false
+viewport_width: 1920
+viewport_height: 1080

@@ -22,6 +22,8 @@ from automation_tool.config import (
     default_coinmap_config_path,
     default_coinmap_update_config_path,
     default_data_dir,
+    default_gocharting_config_path,
+    default_gocharting_storage_state_path,
     default_storage_state_path,
     load_settings,
     require_openai,
@@ -29,6 +31,7 @@ from automation_tool.config import (
     resolved_openai_model,
     symbol_data_dir,
 )
+from automation_tool.gocharting_capture import capture_gocharting
 from automation_tool.openai_analysis_json import (
     extract_json_object,
     format_plan_lines_for_telegram,
@@ -51,17 +54,26 @@ from automation_tool.images import (
     ChartOpenAIPayload,
     coinmap_main_pair_interval_json_path,
     effective_chart_image_order,
+    footprint_source_for_stamp,
+    gocharting_main_interval_csv_path,
+    gocharting_png_path_for_csv,
     latest_chart_stamp,
     ordered_chart_images,
     ordered_chart_openai_payloads,
+    read_main_chart_symbol,
     stamp_from_capture_paths,
 )
 from automation_tool.chart_payload_validate import (
     is_coinmap_stale_chart_issue,
+    is_gocharting_stale_chart_issue,
     list_invalid_chart_slots_for_stamp,
     require_valid_coinmap_exports_for_stamp,
+    require_valid_gocharting_exports_for_stamp,
 )
-from automation_tool.chart_recapture import recapture_failed_chart_slots
+from automation_tool.chart_recapture import (
+    recapture_failed_chart_slots,
+    recapture_failed_gocharting_slots,
+)
 from automation_tool.first_response_trade import apply_first_response_vao_lenh
 from automation_tool.state_files import (
     default_last_alert_prices_path,
@@ -597,6 +609,17 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     al.add_argument(
+        "--gocharting",
+        action="store_true",
+        help="Dùng GoCharting (PNG+CSV) thay Coinmap footprint",
+    )
+    al.add_argument(
+        "--gocharting-config",
+        type=Path,
+        default=None,
+        help="YAML GoCharting (default: config/gocharting.yaml)",
+    )
+    al.add_argument(
         "--mt5-accounts-json",
         type=Path,
         default=None,
@@ -823,6 +846,17 @@ def _parser() -> argparse.ArgumentParser:
             '"update-scalp": true; đặt MT5_ACCOUNTS_JSON cho tiến trình này và reconcile. '
             "Ưu tiên hơn biến môi trường MT5_ACCOUNTS_JSON khi chỉ định."
         ),
+    )
+    ups.add_argument(
+        "--gocharting",
+        action="store_true",
+        help="Dùng GoCharting (PNG+CSV) thay Coinmap M15+M5",
+    )
+    ups.add_argument(
+        "--gocharting-config",
+        type=Path,
+        default=None,
+        help="YAML GoCharting (default: config/gocharting.yaml)",
     )
     ups.add_argument(
         "--no-reconcile-daemon-plans",
@@ -1949,7 +1983,8 @@ def _resolved_analysis_prompt(args: argparse.Namespace, charts_dir: Path) -> str
     from automation_tool.images import read_main_chart_symbol
 
     sym = read_main_chart_symbol(charts_dir)
-    return default_analysis_prompt(sym)
+    fp = footprint_source_for_stamp(charts_dir)
+    return default_analysis_prompt(sym, footprint_source=fp)
 
 
 def _warn_if_incomplete_chart_payloads(
@@ -1964,7 +1999,7 @@ def _warn_if_incomplete_chart_payloads(
     )
 
     main_sym = read_main_chart_symbol(charts_dir)
-    expected = len(effective_chart_image_order(charts_dir))
+    expected = len(effective_chart_image_order(charts_dir, stamp=st))
     _dxy, main_m = coinmap_merged_openai_files(charts_dir, st, main_sym)
     if main_m is not None:
         expected -= 1
@@ -2033,17 +2068,58 @@ def _intraday_tv_then_coinmap_m5_capture(
     flow_label: str,
     coinmap_capture_intervals: tuple[str, ...] = ("15m", "5m"),
     include_tv_m15_regular: bool = False,
+    use_gocharting: bool = False,
+    gocharting_yaml: Optional[Path] = None,
+    gocharting_email: str = "",
+    gocharting_password: str = "",
+    gocharting_storage: Optional[Path] = None,
 ) -> tuple[list[Path], str | None, str, list[ChartOpenAIPayload]]:
     """
     Shared capture for ``update`` / ``update-scalp``: TradingView 15m ICT + 5m, then
-    Coinmap export(s) reusing the same ``stamp`` (default M15+M5).
-    ``update`` may set ``include_tv_m15_regular`` for an extra TV M15 chart URL/PNG.
-    Coinmap-only when ``no_tradingview`` is true.
+    footprint export (Coinmap JSON or GoCharting CSV) reusing the same ``stamp``.
     """
     from automation_tool.images import get_active_main_symbol, read_main_chart_symbol
 
     paths: list[Path] = []
     tv_chart_payloads: list[ChartOpenAIPayload] = []
+    gc_yaml = gocharting_yaml or default_gocharting_config_path()
+    gc_storage = gocharting_storage or default_gocharting_storage_state_path()
+
+    def _footprint_capture(*, stamp_override: str | None, clear_before: bool) -> list[Path]:
+        if use_gocharting:
+            main_for_cap = get_active_main_symbol()
+            return capture_gocharting(
+                gocharting_yaml=gc_yaml,
+                charts_dir=charts_dir,
+                email=gocharting_email,
+                password=gocharting_password,
+                storage_state_path=gc_storage,
+                save_storage_state=save_storage,
+                headless=headless,
+                main_chart_symbol=main_chart_symbol,
+                stamp_override=stamp_override,
+                clear_charts_before_capture=clear_before,
+                capture_symbols=(main_for_cap,),
+                capture_intervals=coinmap_capture_intervals,
+            )
+        return capture_charts(
+            coinmap_yaml=cfg_cap,
+            charts_dir=charts_dir,
+            storage_state_path=storage,
+            email=email,
+            password=password,
+            tradingview_password=tradingview_password,
+            save_storage_state=save_storage,
+            headless=headless,
+            reuse_browser_context=None,
+            main_chart_symbol=main_chart_symbol,
+            enable_coinmap=True,
+            enable_tradingview=False,
+            clear_charts_before_capture=clear_before,
+            stamp_override=stamp_override,
+            coinmap_capture_intervals=coinmap_capture_intervals,
+            write_coinmap_merged_after_capture=False,
+        )
 
     if not no_tradingview:
         main_for_tv = get_active_main_symbol()
@@ -2079,25 +2155,8 @@ def _intraday_tv_then_coinmap_m5_capture(
                 f"{flow_label}: không có stamp sau capture TradingView; kiểm tra tradingview_capture và charts_dir."
             )
         main_s = read_main_chart_symbol(charts_dir)
-        cm_paths = capture_charts(
-            coinmap_yaml=cfg_cap,
-            charts_dir=charts_dir,
-            storage_state_path=storage,
-            email=email,
-            password=password,
-            tradingview_password=tradingview_password,
-            save_storage_state=save_storage,
-            headless=headless,
-            reuse_browser_context=None,
-            main_chart_symbol=main_chart_symbol,
-            enable_coinmap=True,
-            enable_tradingview=False,
-            clear_charts_before_capture=False,
-            stamp_override=stamp,
-            coinmap_capture_intervals=coinmap_capture_intervals,
-            write_coinmap_merged_after_capture=False,
-        )
-        paths.extend(cm_paths)
+        fp_paths = _footprint_capture(stamp_override=stamp, clear_before=False)
+        paths.extend(fp_paths)
         tv_slugs = _intraday_tradingview_openai_slugs(include_m15_regular=include_tv_m15_regular)
         for slug in tv_slugs:
             tv_chart_payloads.extend(
@@ -2105,10 +2164,12 @@ def _intraday_tv_then_coinmap_m5_capture(
                     charts_dir, stamp=stamp, symbol=main_s, interval_slug=slug
                 )
             )
+        fp_label = "GoCharting" if use_gocharting else "Coinmap"
         _log.info(
-            "%s: TradingView %s trước Coinmap | tv_files=%s | stamp=%s | tv_payloads=%s",
+            "%s: TradingView %s trước %s | tv_files=%s | stamp=%s | tv_payloads=%s",
             flow_label,
             "+".join(tv_slugs),
+            fp_label,
             len(tv_paths),
             stamp,
             len(tv_chart_payloads),
@@ -2121,21 +2182,7 @@ def _intraday_tv_then_coinmap_m5_capture(
                 file=sys.stderr,
             )
     else:
-        paths = capture_charts(
-            coinmap_yaml=cfg_cap,
-            charts_dir=charts_dir,
-            storage_state_path=storage,
-            email=email,
-            password=password,
-            tradingview_password=tradingview_password,
-            save_storage_state=save_storage,
-            headless=headless,
-            reuse_browser_context=None,
-            main_chart_symbol=main_chart_symbol,
-            clear_charts_before_capture=True,
-            coinmap_capture_intervals=coinmap_capture_intervals,
-            write_coinmap_merged_after_capture=False,
-        )
+        paths = _footprint_capture(stamp_override=None, clear_before=True)
         stamp = stamp_from_capture_paths(paths)
         main_s = read_main_chart_symbol(charts_dir)
 
@@ -2778,34 +2825,77 @@ def cmd_all(args: argparse.Namespace) -> None:
 
     cfg = args.config or default_coinmap_config_path()
     storage = args.storage_state or default_storage_state_path()
+    use_gc = bool(getattr(args, "gocharting", False))
+    gc_yaml = getattr(args, "gocharting_config", None) or default_gocharting_config_path()
+    gc_storage = default_gocharting_storage_state_path()
     _log.info(
-        "all: bắt đầu | tv_yaml=%s charts=%s no_tradingview=%s no_tv_journal=%s",
+        "all: bắt đầu | tv_yaml=%s charts=%s no_tradingview=%s gocharting=%s",
         cfg,
         args.charts_dir if args.charts_dir is not None else "(default)",
         args.no_tradingview,
-        args.no_tv_journal_monitor,
+        use_gc,
     )
     _send_python_bot_job_started(
         s,
         title=f"Phân tích vào lúc {_now_clock_hcm()} bắt đầu chạy",
         no_telegram=args.no_telegram,
     )
-    capture_kw: dict[str, object] = {
-        "coinmap_yaml": cfg,
-        "charts_dir": args.charts_dir,
-        "storage_state_path": storage,
-        "email": s.coinmap_email,
-        "password": s.coinmap_password,
-        "tradingview_password": s.tradingview_password,
-        "save_storage_state": not args.no_save_storage,
-        "headless": not args.headed,
-        "reuse_browser_context": None,
-        "main_chart_symbol": args.main_symbol,
-        "tradingview_force_screenshot": True,
-        "write_coinmap_merged_after_capture": False,
-    }
-    paths = capture_charts(**capture_kw)
     charts_dir = args.charts_dir or default_charts_dir()
+    paths: list[Path] = []
+    if use_gc:
+        if not args.no_tradingview:
+            paths = capture_charts(
+                coinmap_yaml=cfg,
+                charts_dir=args.charts_dir,
+                storage_state_path=storage,
+                email=s.coinmap_email,
+                password=s.coinmap_password,
+                tradingview_password=s.tradingview_password,
+                save_storage_state=not args.no_save_storage,
+                headless=not args.headed,
+                reuse_browser_context=None,
+                main_chart_symbol=args.main_symbol,
+                enable_coinmap=False,
+                enable_tradingview=True,
+                tradingview_force_screenshot=True,
+                write_coinmap_merged_after_capture=False,
+            )
+        stamp_pre = stamp_from_capture_paths(paths)
+        from automation_tool.images import get_active_main_symbol
+
+        main_sym = get_active_main_symbol()
+        gc_paths = capture_gocharting(
+            gocharting_yaml=gc_yaml,
+            charts_dir=charts_dir,
+            email=s.gocharting_email or "",
+            password=s.gocharting_password or "",
+            storage_state_path=gc_storage,
+            save_storage_state=not args.no_save_storage,
+            headless=not args.headed,
+            main_chart_symbol=args.main_symbol,
+            stamp_override=stamp_pre,
+            clear_charts_before_capture=not paths,
+            capture_symbols=("DXY", main_sym),
+        )
+        paths.extend(gc_paths)
+    else:
+        capture_kw: dict[str, object] = {
+            "coinmap_yaml": cfg,
+            "charts_dir": args.charts_dir,
+            "storage_state_path": storage,
+            "email": s.coinmap_email,
+            "password": s.coinmap_password,
+            "tradingview_password": s.tradingview_password,
+            "save_storage_state": not args.no_save_storage,
+            "headless": not args.headed,
+            "reuse_browser_context": None,
+            "main_chart_symbol": args.main_symbol,
+            "tradingview_force_screenshot": True,
+            "write_coinmap_merged_after_capture": False,
+        }
+        if args.no_tradingview:
+            capture_kw["enable_tradingview"] = False
+        paths = capture_charts(**capture_kw)
     n_art = len(paths)
     print(f"Captured {n_art} file(s) (screenshots and/or API JSON paths returned by capture).")
     _log.info("all: capture xong | %s artifact(s)", n_art)
@@ -2818,10 +2908,12 @@ def cmd_all(args: argparse.Namespace) -> None:
     _CHART_JSON_VALIDATE_MAX_ROUNDS = 3
     for attempt in range(_CHART_JSON_VALIDATE_MAX_ROUNDS + 1):
         bad = list_invalid_chart_slots_for_stamp(charts_dir, stamp)
-        stale = [x for x in bad if is_coinmap_stale_chart_issue(x)]
+        stale_fn = is_gocharting_stale_chart_issue if use_gc else is_coinmap_stale_chart_issue
+        stale = [x for x in bad if stale_fn(x)]
         if stale:
             detail = "; ".join(f"{x.expected_path.name}: {x.reason}" for x in stale)
-            raise SystemExit(f"Coinmap data stale (aborting, no recapture): {detail}")
+            label = "GoCharting" if use_gc else "Coinmap"
+            raise SystemExit(f"{label} data stale (aborting, no recapture): {detail}")
         if not bad:
             break
         if attempt >= _CHART_JSON_VALIDATE_MAX_ROUNDS:
@@ -2839,25 +2931,43 @@ def cmd_all(args: argparse.Namespace) -> None:
             [(x.expected_path.name, x.reason) for x in bad],
         )
         try:
-            recapture_failed_chart_slots(
-                coinmap_yaml=cfg,
-                charts_dir=charts_dir,
-                stamp=stamp,
-                issues=bad,
-                storage_state_path=storage,
-                email=s.coinmap_email,
-                password=s.coinmap_password,
-                tradingview_password=s.tradingview_password,
-                save_storage_state=not args.no_save_storage,
-                headless=not args.headed,
-                main_chart_symbol=getattr(args, "main_symbol", None),
-            )
+            if use_gc:
+                recapture_failed_gocharting_slots(
+                    gocharting_yaml=gc_yaml,
+                    charts_dir=charts_dir,
+                    stamp=stamp,
+                    issues=bad,
+                    storage_state_path=gc_storage,
+                    email=s.gocharting_email,
+                    password=s.gocharting_password,
+                    save_storage_state=not args.no_save_storage,
+                    headless=not args.headed,
+                    main_chart_symbol=getattr(args, "main_symbol", None),
+                )
+            tv_cm_issues = [i for i in bad if i.source in ("coinmap", "tradingview")]
+            if tv_cm_issues:
+                recapture_failed_chart_slots(
+                    coinmap_yaml=cfg,
+                    charts_dir=charts_dir,
+                    stamp=stamp,
+                    issues=tv_cm_issues,
+                    storage_state_path=storage,
+                    email=s.coinmap_email,
+                    password=s.coinmap_password,
+                    tradingview_password=s.tradingview_password,
+                    save_storage_state=not args.no_save_storage,
+                    headless=not args.headed,
+                    main_chart_symbol=getattr(args, "main_symbol", None),
+                )
         except SystemExit:
             raise
         except Exception as e:
             raise SystemExit(f"Recapture after validation failed: {e}") from e
 
-    require_valid_coinmap_exports_for_stamp(charts_dir, stamp)
+    if use_gc:
+        require_valid_gocharting_exports_for_stamp(charts_dir, stamp)
+    else:
+        require_valid_coinmap_exports_for_stamp(charts_dir, stamp)
 
     capture_pngs = ordered_chart_images(charts_dir, stamp=stamp)
     n_sent = send_capture_screenshots_to_log_chat(
@@ -3431,11 +3541,14 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
     cfg_cap = args.config or default_coinmap_update_config_path()
     cfg_tv = args.tv_config or default_coinmap_config_path()
     storage = args.storage_state or default_storage_state_path()
+    use_gc = bool(getattr(args, "gocharting", False))
+    gc_yaml = getattr(args, "gocharting_config", None) or default_gocharting_config_path()
     _log.info(
-        "update-scalp: bắt đầu | capture_yaml=%s tv_yaml=%s no_tradingview=%s",
+        "update-scalp: bắt đầu | capture_yaml=%s tv_yaml=%s no_tradingview=%s gocharting=%s",
         cfg_cap,
         cfg_tv,
         args.no_tradingview,
+        use_gc,
     )
 
     mp = default_morning_full_analysis_path()
@@ -3456,66 +3569,107 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
         cfg_cap=cfg_cap,
         charts_dir=charts_dir,
         storage=storage,
-        email=s.coinmap_email,
-        password=s.coinmap_password,
-        tradingview_password=s.tradingview_password,
+        email=s.coinmap_email or "",
+        password=s.coinmap_password or "",
+        tradingview_password=s.tradingview_password or "",
         save_storage=not args.no_save_storage,
         headless=not args.headed,
         main_chart_symbol=args.main_symbol,
         no_tradingview=args.no_tradingview,
         flow_label="update-scalp",
+        use_gocharting=use_gc,
+        gocharting_yaml=gc_yaml,
+        gocharting_email=s.gocharting_email or "",
+        gocharting_password=s.gocharting_password or "",
+        gocharting_storage=default_gocharting_storage_state_path(),
     )
 
     print(f"Captured {len(paths)} file(s) for update-scalp run.")
-    m15 = coinmap_main_pair_interval_json_path(charts_dir, "15m", stamp=stamp)
-    m5 = coinmap_main_pair_interval_json_path(charts_dir, "5m", stamp=stamp)
-    _log.info(
-        "update-scalp: capture xong | %s file(s) | stamp=%s | M15 raw OpenAI=%s | M5 raw OpenAI=%s",
-        len(paths),
-        stamp,
-        m15,
-        m5,
-    )
-    if m15 is None:
-        raise SystemExit(
-            f"No 15m Coinmap JSON under {charts_dir} after capture (stamp={stamp!r}). "
-            "Check coinmap_update.yaml capture_plan and api_data_export."
+    footprint_paths: list[Path]
+    if use_gc:
+        m15 = gocharting_main_interval_csv_path(charts_dir, "15m", stamp=stamp)
+        m5 = gocharting_main_interval_csv_path(charts_dir, "5m", stamp=stamp)
+        _log.info(
+            "update-scalp: capture xong | %s file(s) | stamp=%s | M15 CSV=%s | M5 CSV=%s",
+            len(paths),
+            stamp,
+            m15,
+            m5,
         )
-    if m5 is None:
-        raise SystemExit(
-            f"No 5m Coinmap JSON under {charts_dir} after capture (stamp={stamp!r}). "
-            "Check coinmap_update.yaml capture_plan and api_data_export."
+        if m15 is None:
+            raise SystemExit(
+                f"No 15m GoCharting CSV under {charts_dir} after capture (stamp={stamp!r}). "
+                "Check config/gocharting.yaml capture_plan."
+            )
+        if m5 is None:
+            raise SystemExit(
+                f"No 5m GoCharting CSV under {charts_dir} after capture (stamp={stamp!r}). "
+                "Check config/gocharting.yaml capture_plan."
+            )
+        require_valid_gocharting_exports_for_stamp(charts_dir, stamp or "")
+        footprint_paths = [m15, m5]
+        m15_png = gocharting_png_path_for_csv(m15)
+        m5_png = gocharting_png_path_for_csv(m5)
+        _log.info("update-scalp: GoCharting PNG | M15=%s | M5=%s", m15_png, m5_png)
+        if m15_png is None or m5_png is None:
+            print(
+                "Warning: thiếu PNG GoCharting sau capture "
+                f"(M15={m15_png is not None}, M5={m5_png is not None}).",
+                file=sys.stderr,
+            )
+    else:
+        m15 = coinmap_main_pair_interval_json_path(charts_dir, "15m", stamp=stamp)
+        m5 = coinmap_main_pair_interval_json_path(charts_dir, "5m", stamp=stamp)
+        _log.info(
+            "update-scalp: capture xong | %s file(s) | stamp=%s | M15 raw OpenAI=%s | M5 raw OpenAI=%s",
+            len(paths),
+            stamp,
+            m15,
+            m5,
         )
-    require_valid_coinmap_exports_for_stamp(charts_dir, stamp)
-    coinmap_paths: list[Path] = [m15, m5]
-    m15_png = coinmap_png_path_for_json(m15)
-    m5_png = coinmap_png_path_for_json(m5)
-    _log.info(
-        "update-scalp: Coinmap PNG | M15=%s | M5=%s",
-        m15_png,
-        m5_png,
-    )
-    if m15_png is None or m5_png is None:
-        print(
-            "Warning: thiếu PNG Coinmap fullscreen sau capture "
-            f"(M15={m15_png is not None}, M5={m5_png is not None}). "
-            "Kiểm tra chart_download.coinmap_screenshot_enabled trong coinmap_update.yaml.",
-            file=sys.stderr,
+        if m15 is None:
+            raise SystemExit(
+                f"No 15m Coinmap JSON under {charts_dir} after capture (stamp={stamp!r}). "
+                "Check coinmap_update.yaml capture_plan and api_data_export."
+            )
+        if m5 is None:
+            raise SystemExit(
+                f"No 5m Coinmap JSON under {charts_dir} after capture (stamp={stamp!r}). "
+                "Check coinmap_update.yaml capture_plan and api_data_export."
+            )
+        require_valid_coinmap_exports_for_stamp(charts_dir, stamp or "")
+        footprint_paths = [m15, m5]
+        from automation_tool.images import coinmap_png_path_for_json
+
+        m15_png = coinmap_png_path_for_json(m15)
+        m5_png = coinmap_png_path_for_json(m5)
+        _log.info(
+            "update-scalp: Coinmap PNG | M15=%s | M5=%s",
+            m15_png,
+            m5_png,
         )
+        if m15_png is None or m5_png is None:
+            print(
+                "Warning: thiếu PNG Coinmap fullscreen sau capture "
+                f"(M15={m15_png is not None}, M5={m5_png is not None}). "
+                "Kiểm tra chart_download.coinmap_screenshot_enabled trong coinmap_update.yaml.",
+                file=sys.stderr,
+            )
 
     require_openai(s)
 
-    # Luôn tạo hội thoại mới: đính kèm morning_full_analysis.json + không dùng previous_response_id.
     morning_snapshot: Path = mp
     prev_for_openai: str | None = None
 
     user_msg = build_scalp_update_user_text(
         first_after_all=True,
         coinmap_attachment_mode="legacy",
+        footprint_source="gocharting" if use_gc else "coinmap",
     )
     if tv_chart_payloads:
+        fp_label = "GoCharting CSV" if use_gc else "JSON Coinmap"
         user_msg += (
-            "\nĐính kèm thêm ảnh TradingView cặp chính sau JSON Coinmap: **15m** Session Liquidity Check "
+            f"\nĐính kèm thêm ảnh TradingView cặp chính sau {fp_label}: **15m** Session Liquidity Check "
             "/ ICT Killzones và **5m** khung thường (không ICT).\n"
         )
 
@@ -3529,7 +3683,7 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
             api_key=s.openai_api_key,
             user_text=user_msg,
             morning_snapshot_path=morning_snapshot,
-            coinmap_json_paths=coinmap_paths,
+            coinmap_json_paths=footprint_paths,
             extra_chart_payloads=tv_chart_payloads,
             previous_response_id=prev_for_openai,
             vector_store_ids=scalp_vector_store_ids,

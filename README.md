@@ -39,10 +39,22 @@ cp .env.example .env
 
 | File | Purpose |
 |------|---------|
-| `.env` | `OPENAI_API_KEY`, **`OPENAI_MODEL`**, optional `OPENAI_SYSTEM_PROMPT_PATH`, optional `OPENAI_VECTOR_STORE_IDS`, `OPENAI_RESPONSES_STORE`, `OPENAI_RESPONSES_INCLUDE`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, optional `TELEGRAM_LOG_CHAT_ID` (channel nhận log bước chạy + **log phản hồi đầu** hop_luu/vùng/lý do bỏ qua MT5 + **log chi tiết kết quả MT5** `execution_ok` + nội dung broker), optional `TELEGRAM_ANALYSIS_DETAIL_CHAT_ID` (kênh nhận `phan_tich_cham_diem` cho luồng `analyze-many` khi set `--telegram-detail-chat-id` hoặc dùng mặc định từ `.env`), optional `TELEGRAM_OUTPUT_NGAN_GON_CHAT_ID` (`output_ngan_gon` từ phân tích; tin MT5 tóm tắt thành công vẫn tới `TELEGRAM_CHAT_ID`), optional `TELEGRAM_PARSE_MODE`, optional `COINMAP_*` |
+| `.env` | `OPENAI_API_KEY`, **`OPENAI_MODEL`**, optional `OPENAI_SYSTEM_PROMPT_PATH`, optional `OPENAI_VECTOR_STORE_IDS`, `OPENAI_RESPONSES_STORE`, `OPENAI_RESPONSES_INCLUDE`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, optional `TELEGRAM_LOG_CHAT_ID` (channel nhận log bước chạy + **log phản hồi đầu** hop_luu/vùng/lý do bỏ qua MT5 + **log chi tiết kết quả MT5** `execution_ok` + nội dung broker), optional `TELEGRAM_ANALYSIS_DETAIL_CHAT_ID` (kênh nhận `phan_tich_cham_diem` cho luồng `analyze-many` khi set `--telegram-detail-chat-id` hoặc dùng mặc định từ `.env`), optional `TELEGRAM_OUTPUT_NGAN_GON_CHAT_ID` (`output_ngan_gon` từ phân tích; tin MT5 tóm tắt thành công vẫn tới `TELEGRAM_CHAT_ID`), optional `TELEGRAM_PARSE_MODE`, optional `COINMAP_*`, optional **`GOCHARTING_EMAIL`** / **`GOCHARTING_PASSWORD`** (required when using `--gocharting`), optional **`GOCHARTING_CSV_MAX_CHARS`** |
 
 **Telegram formatting:** mặc định không có `parse_mode` → plain text. Để **in đậm / tiêu đề** từ output kiểu markdown của model, đặt **`TELEGRAM_PARSE_MODE=HTML`**. Code sẽ chuyển `**bold**`, dòng `## tiêu đề`, và `` `code` `` sang thẻ HTML mà Telegram hỗ trợ (`<b>`, `<code>`), đồng thời escape `& < >` ở phần còn lại. **`MarkdownV2`** vẫn được hỗ trợ nhưng toàn bộ nội dung bị escape nên **trông như chữ thường** (tránh lỗi 400 với `+`, v.v.) — không dùng MDV2 nếu bạn muốn thấy định dạng.
 | `config/coinmap.yaml` | Login URL, **`chart_download`**, optional **`tradingview_capture`**, and optional canvas screenshot selectors |
+| `config/gocharting.yaml` | GoCharting chart URL, login/watchlist/interval/screenshot/CSV selectors, and **`capture_plan`** (used with **`--gocharting`**) |
+
+#### GoCharting footprint (`--gocharting`)
+
+On **`all`** and **`update-scalp`**, pass **`--gocharting`** to replace the three Coinmap footprint slots (DXY M15 + main M15/M5) with GoCharting **PNG + CSV** exports via Playwright (`config/gocharting.yaml`). TradingView capture is unchanged. Artifacts: `{stamp}_gocharting_{SYMBOL}_{interval}.png` and `.csv`. Session cookies are stored separately in **`data/gocharting_storage_state.json`**. First login may require **`--headed`**.
+
+```bash
+coinmap-automation all --gocharting
+coinmap-automation update-scalp --gocharting
+```
+
+Optional: **`--gocharting-config`** path (default `config/gocharting.yaml`).
 
 #### Chart page screenshot (`chart_download`)
 

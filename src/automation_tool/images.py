@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Optional, Tuple, Union
 
-# OpenAI multimodal slot: ``json`` → Path; ``image`` → PNG on disk; ``image_url`` → https string.
+# OpenAI multimodal slot: ``json`` / ``csv`` → Path; ``image`` → PNG; ``image_url`` → https string.
 ChartOpenAIPayload = Tuple[str, Union[Path, str]]
 
 # Per-charts marker; global active pair is ``data/.main_chart_symbol`` (see ``get_active_main_symbol``).
@@ -98,16 +98,22 @@ def set_active_main_symbol_file(main_chart_symbol: Optional[str]) -> None:
             pass
 
 
-def chart_image_order_for_main_symbol(main_sym: str) -> tuple[tuple[str, str, str], ...]:
+def chart_image_order_for_main_symbol(
+    main_sym: str,
+    *,
+    footprint_source: str = "coinmap",
+) -> tuple[tuple[str, str, str], ...]:
     """
-    Filenames: ``{{stamp}}_tradingview_{{SYMBOL}}_{{interval}}.url`` (https, one line) or ``.png`` / ``coinmap_…``.
-    ``main_sym`` replaces the default XAUUSD block (DXY TV block unchanged).
+    Filenames: ``{{stamp}}_tradingview_{{SYMBOL}}_{{interval}}`` or footprint ``coinmap`` / ``gocharting``.
 
     **11 slots (default full-analysis set):** DXY TV H4/H1/M15 → main TV H4/H1/M15
     → main TV M15 Session Liquidity Check / ICT Killzones → main TV M5
-    → Coinmap DXY footprint M15 → Coinmap main M15/M5.
+    → footprint DXY M15 → main M15/M5 (Coinmap JSON or GoCharting CSV).
     """
     m = normalize_main_chart_symbol(main_sym)
+    fp = (footprint_source or "coinmap").strip().lower()
+    if fp not in ("coinmap", "gocharting"):
+        fp = "coinmap"
     return (
         ("tradingview", "DXY", "4h"),
         ("tradingview", "DXY", "1h"),
@@ -117,9 +123,9 @@ def chart_image_order_for_main_symbol(main_sym: str) -> tuple[tuple[str, str, st
         ("tradingview", m, "15m"),
         ("tradingview", m, "15m_ict"),
         ("tradingview", m, "5m"),
-        ("coinmap", "DXY", "15m"),
-        ("coinmap", m, "15m"),
-        ("coinmap", m, "5m"),
+        (fp, "DXY", "15m"),
+        (fp, m, "15m"),
+        (fp, m, "5m"),
     )
 
 
@@ -135,8 +141,10 @@ CHART_SLOT_COUNT = len(CHART_IMAGE_ORDER)
 def openai_payload_max_for_order(
     order: tuple[tuple[str, str, str], ...],
 ) -> int:
-    """Upper bound when each Coinmap slot sends JSON + PNG alongside other slot payloads."""
-    return len(order) + sum(1 for src, _, _ in order if src == "coinmap")
+    """Upper bound when each footprint slot sends data file + PNG alongside other slot payloads."""
+    return len(order) + sum(
+        1 for src, _, _ in order if src in ("coinmap", "gocharting")
+    )
 
 
 # Default ``--max-images-per-call`` for full analysis (11 slots + 3 Coinmap PNG extras).
@@ -184,10 +192,27 @@ def clear_main_chart_symbol_marker(charts_dir: Path) -> None:
         pass
 
 
-def effective_chart_image_order(charts_dir: Path) -> tuple[tuple[str, str, str], ...]:
-    return chart_image_order_for_main_symbol(read_main_chart_symbol(charts_dir))
+def footprint_source_for_stamp(charts_dir: Path, stamp: Optional[str] = None) -> str:
+    """``gocharting`` when stamp has GoCharting CSV exports; else ``coinmap``."""
+    if not charts_dir.is_dir():
+        return "coinmap"
+    st = stamp or latest_chart_stamp(charts_dir)
+    if not st:
+        return "coinmap"
+    if any(charts_dir.glob(f"{st}_gocharting_*.csv")):
+        return "gocharting"
+    return "coinmap"
 
-_STAMP_RE = re.compile(r"^(\d{8}_\d{6})_(?:tradingview|coinmap)_")
+
+def effective_chart_image_order(
+    charts_dir: Path, *, stamp: Optional[str] = None
+) -> tuple[tuple[str, str, str], ...]:
+    main_sym = read_main_chart_symbol(charts_dir)
+    fp = footprint_source_for_stamp(charts_dir, stamp=stamp)
+    return chart_image_order_for_main_symbol(main_sym, footprint_source=fp)
+
+
+_STAMP_RE = re.compile(r"^(\d{8}_\d{6})_(?:tradingview|coinmap|gocharting)_")
 
 
 def latest_chart_stamp(charts_dir: Path) -> Optional[str]:
@@ -207,6 +232,10 @@ def latest_chart_stamp(charts_dir: Path) -> Optional[str]:
         m = _STAMP_RE.match(p.name)
         if m:
             stamps.add(m.group(1))
+    for p in charts_dir.glob("*.csv"):
+        m = _STAMP_RE.match(p.name)
+        if m:
+            stamps.add(m.group(1))
     return max(stamps) if stamps else None
 
 
@@ -218,6 +247,38 @@ def stamp_from_capture_paths(paths: Sequence[Path]) -> Optional[str]:
         if m:
             stamps.add(m.group(1))
     return max(stamps) if stamps else None
+
+
+def gocharting_interval_csv_path(
+    charts_dir: Path, symbol: str, interval: str, *, stamp: Optional[str] = None
+) -> Optional[Path]:
+    """``{{stamp}}_gocharting_{{symbol}}_{interval}.csv`` if on disk."""
+    sym = (symbol or "").strip().upper()
+    iv = (interval or "").strip()
+    if not sym or not iv:
+        return None
+    st = stamp or latest_chart_stamp(charts_dir)
+    if not st:
+        return None
+    iv_slug = re.sub(r"[^\w]+", "_", iv).strip("_")[:20] or "iv"
+    p = charts_dir / f"{st}_gocharting_{sym}_{iv_slug}.csv"
+    return p if p.is_file() else None
+
+
+def gocharting_main_interval_csv_path(
+    charts_dir: Path, interval: str, *, stamp: Optional[str] = None
+) -> Optional[Path]:
+    """Latest GoCharting CSV for main pair and interval (e.g. ``5m``, ``15m``)."""
+    sym = read_main_chart_symbol(charts_dir)
+    return gocharting_interval_csv_path(charts_dir, sym, interval, stamp=stamp)
+
+
+def gocharting_png_path_for_csv(csv_path: Path) -> Optional[Path]:
+    """Sibling PNG for a GoCharting CSV export, if on disk."""
+    if "_gocharting_" not in csv_path.name or csv_path.suffix.lower() != ".csv":
+        return None
+    pp = csv_path.with_suffix(".png")
+    return pp if pp.is_file() else None
 
 
 def coinmap_main_pair_interval_json_path(
@@ -261,6 +322,23 @@ def coinmap_merged_openai_files(
     d_ok = dxy if dxy.is_file() else None
     m_ok = mainp if mainp.is_file() else None
     return d_ok, m_ok
+
+
+def _append_gocharting_openai_payloads(
+    out: list[ChartOpenAIPayload],
+    *,
+    charts_dir: Path,
+    stamp: str,
+    sym: str,
+    iv: str,
+) -> None:
+    iv_slug = re.sub(r"[^\w]+", "_", iv).strip("_")[:20] or "iv"
+    cp = charts_dir / f"{stamp}_gocharting_{sym}_{iv_slug}.csv"
+    pp = charts_dir / f"{stamp}_gocharting_{sym}_{iv_slug}.png"
+    if cp.is_file():
+        out.append(("csv", cp))
+    if pp.is_file():
+        out.append(("image", pp))
 
 
 def _append_coinmap_openai_payloads(
@@ -323,6 +401,12 @@ def openai_payloads_for_attachment_paths(paths: Sequence[Path]) -> list[ChartOpe
     """
     out: list[ChartOpenAIPayload] = []
     for p in paths:
+        if p.suffix.lower() == ".csv":
+            out.append(("csv", p))
+            pp = gocharting_png_path_for_csv(p)
+            if pp is not None:
+                out.append(("image", pp))
+            continue
         out.append(("json", p))
         if "_coinmap_" not in p.name or p.suffix.lower() != ".json":
             continue
@@ -386,6 +470,10 @@ def ordered_chart_openai_payloads(
                 )
                 continue
             _append_coinmap_openai_payloads(
+                out, charts_dir=charts_dir, stamp=st, sym=sym, iv=iv
+            )
+        elif src == "gocharting":
+            _append_gocharting_openai_payloads(
                 out, charts_dir=charts_dir, stamp=st, sym=sym, iv=iv
             )
         else:

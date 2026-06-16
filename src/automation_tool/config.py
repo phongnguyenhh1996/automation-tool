@@ -55,6 +55,8 @@ def _parse_include() -> List[str]:
 class Settings:
     coinmap_email: Optional[str]
     coinmap_password: Optional[str]
+    gocharting_email: Optional[str]
+    gocharting_password: Optional[str]
     tradingview_password: Optional[str]
     openai_api_key: str
     # Model id for Responses API (required; replaces model on deprecated dashboard prompts).
@@ -125,6 +127,15 @@ def default_coinmap_update_config_path() -> Path:
     return _root() / "config" / "coinmap_update.yaml"
 
 
+def default_gocharting_config_path() -> Path:
+    return _root() / "config" / "gocharting.yaml"
+
+
+def default_gocharting_storage_state_path() -> Path:
+    """Playwright session for gocharting.com (separate from Coinmap/TV storage)."""
+    return default_data_dir() / "gocharting_storage_state.json"
+
+
 def default_storage_state_path() -> Path:
     """
     Một file Playwright session dùng chung cho mọi symbol (Coinmap / TradingView),
@@ -179,6 +190,8 @@ def load_settings() -> Settings:
     return Settings(
         coinmap_email=os.getenv("COINMAP_EMAIL") or None,
         coinmap_password=os.getenv("COINMAP_PASSWORD") or None,
+        gocharting_email=os.getenv("GOCHARTING_EMAIL") or None,
+        gocharting_password=os.getenv("GOCHARTING_PASSWORD") or None,
         tradingview_password=os.getenv("TRADINGVIEW_PASSWORD") or None,
         openai_api_key=os.getenv("OPENAI_API_KEY", ""),
         openai_model=((os.getenv("OPENAI_MODEL") or "").strip() or None),
