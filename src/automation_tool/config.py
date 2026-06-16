@@ -132,13 +132,13 @@ def default_gocharting_config_path() -> Path:
 
 
 def default_gocharting_storage_state_path() -> Path:
-    """Playwright session for gocharting.com (separate from Coinmap/TV storage)."""
-    return default_data_dir() / "gocharting_storage_state.json"
+    """Alias for shared Playwright session (Coinmap / TV / GoCharting)."""
+    return default_storage_state_path()
 
 
 def default_storage_state_path() -> Path:
     """
-    Một file Playwright session dùng chung cho mọi symbol (Coinmap / TradingView),
+    Một file Playwright session dùng chung cho mọi symbol (Coinmap / TradingView / GoCharting),
     không theo ``data/{{SYM}}/``. Ghi đè bằng ``--storage-state`` nếu cần.
     """
     return default_data_dir() / "storage_state.json"

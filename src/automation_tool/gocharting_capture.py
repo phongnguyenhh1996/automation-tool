@@ -7,9 +7,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 import yaml
-from playwright.sync_api import Page, sync_playwright
+from playwright.sync_api import BrowserContext, Page, sync_playwright
 
-from automation_tool.config import default_gocharting_storage_state_path
+from automation_tool.browser_client import browser_service_state_path, try_attach_playwright_via_service
+from automation_tool.config import default_storage_state_path
 from automation_tool.playwright_browser import close_browser_and_context, launch_chrome_context
 
 _log = logging.getLogger(__name__)
@@ -269,6 +270,46 @@ def _capture_gocharting_in_context(
     return paths
 
 
+def _capture_gocharting_with_context(
+    context: BrowserContext,
+    *,
+    cfg: dict[str, Any],
+    charts_dir: Path,
+    storage_state_path: Optional[Path],
+    email: str,
+    password: str,
+    save_storage_state: bool,
+    stamp: str,
+    main_chart_symbol: Optional[str],
+    capture_symbols: Optional[tuple[str, ...]],
+    capture_intervals: Optional[tuple[str, ...]],
+    only_slots: Optional[list[tuple[str, str]]] = None,
+) -> list[Path]:
+    page = context.new_page()
+    try:
+        paths = _capture_gocharting_in_context(
+            page,
+            cfg,
+            charts_dir=charts_dir,
+            email=email,
+            password=password,
+            stamp=stamp,
+            main_chart_symbol=main_chart_symbol,
+            capture_symbols=capture_symbols,
+            capture_intervals=capture_intervals,
+            only_slots=only_slots,
+        )
+        if save_storage_state and storage_state_path:
+            _ensure_dir(storage_state_path.parent)
+            context.storage_state(path=str(storage_state_path))
+        return paths
+    finally:
+        try:
+            page.close()
+        except Exception:
+            pass
+
+
 def capture_gocharting(
     *,
     gocharting_yaml: Path,
@@ -284,14 +325,19 @@ def capture_gocharting(
     capture_intervals: Optional[tuple[str, ...]] = None,
     clear_charts_before_capture: Optional[bool] = None,
     only_slots: Optional[list[tuple[str, str]]] = None,
+    reuse_browser_context: Optional[BrowserContext] = None,
+    require_browser_service: bool = False,
 ) -> list[Path]:
     """
     Capture GoCharting footprint charts: PNG screenshot + CSV export per (symbol, interval).
 
+    Attaches to the long-lived browser service when ``data/browser_service_state.json`` is
+    present (same as Coinmap/TV ``capture_charts``). Otherwise launches a standalone Chrome.
+
     ``only_slots`` — optional list of ``(export_label, interval)`` for partial recapture.
     """
+    storage = storage_state_path or default_storage_state_path()
     if not email or not password:
-        storage = storage_state_path or default_gocharting_storage_state_path()
         if not storage.is_file():
             raise SystemExit(
                 "GOCHARTING_EMAIL and GOCHARTING_PASSWORD are required "
@@ -314,36 +360,55 @@ def capture_gocharting(
                     pass
 
     stamp = stamp_override or datetime.now().strftime("%Y%m%d_%H%M%S")
-    storage = storage_state_path or default_gocharting_storage_state_path()
     vw = int(cfg.get("viewport_width", 1920))
     vh = int(cfg.get("viewport_height", 1080))
 
-    paths: list[Path] = []
+    common_kw = dict(
+        cfg=cfg,
+        charts_dir=charts_dir,
+        storage_state_path=storage,
+        email=email,
+        password=password,
+        save_storage_state=save_storage_state,
+        stamp=stamp,
+        main_chart_symbol=main_chart_symbol,
+        capture_symbols=capture_symbols,
+        capture_intervals=capture_intervals,
+        only_slots=only_slots,
+    )
+
+    if reuse_browser_context is not None:
+        return _capture_gocharting_with_context(reuse_browser_context, **common_kw)
+
     with sync_playwright() as p:
-        browser, context = launch_chrome_context(
-            p,
-            headless=headless,
-            storage_state_path=storage if storage.is_file() else None,
-            viewport_width=vw,
-            viewport_height=vh,
-        )
-        try:
-            page = context.new_page()
-            paths = _capture_gocharting_in_context(
-                page,
-                cfg,
-                charts_dir=charts_dir,
-                email=email,
-                password=password,
-                stamp=stamp,
-                main_chart_symbol=main_chart_symbol,
-                capture_symbols=capture_symbols,
-                capture_intervals=capture_intervals,
-                only_slots=only_slots,
+        attached = try_attach_playwright_via_service(p, force=require_browser_service)
+        if attached is not None:
+            browser, context = attached
+            use_browser_service = True
+            _log.info("gocharting: attached to browser service")
+        elif require_browser_service:
+            raise SystemExit(
+                "GoCharting capture requires browser service but could not attach via CDP. "
+                "Run: coinmap-automation browser up "
+                f"(state file: {browser_service_state_path()})."
             )
-            if save_storage_state and storage:
-                _ensure_dir(storage.parent)
-                context.storage_state(path=str(storage))
+        else:
+            browser, context = launch_chrome_context(
+                p,
+                headless=headless,
+                storage_state_path=storage if storage.is_file() else None,
+                viewport_width=vw,
+                viewport_height=vh,
+            )
+            use_browser_service = False
+            _log.info("gocharting: launched standalone Chrome (no browser service)")
+        try:
+            return _capture_gocharting_with_context(context, **common_kw)
         finally:
-            close_browser_and_context(browser, context)
-    return paths
+            if use_browser_service:
+                try:
+                    browser.close()
+                except Exception:
+                    pass
+            else:
+                close_browser_and_context(browser, context)

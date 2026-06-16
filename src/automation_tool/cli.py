@@ -23,7 +23,6 @@ from automation_tool.config import (
     default_coinmap_update_config_path,
     default_data_dir,
     default_gocharting_config_path,
-    default_gocharting_storage_state_path,
     default_storage_state_path,
     load_settings,
     require_openai,
@@ -2072,7 +2071,6 @@ def _intraday_tv_then_coinmap_m5_capture(
     gocharting_yaml: Optional[Path] = None,
     gocharting_email: str = "",
     gocharting_password: str = "",
-    gocharting_storage: Optional[Path] = None,
 ) -> tuple[list[Path], str | None, str, list[ChartOpenAIPayload]]:
     """
     Shared capture for ``update`` / ``update-scalp``: TradingView 15m ICT + 5m, then
@@ -2083,7 +2081,6 @@ def _intraday_tv_then_coinmap_m5_capture(
     paths: list[Path] = []
     tv_chart_payloads: list[ChartOpenAIPayload] = []
     gc_yaml = gocharting_yaml or default_gocharting_config_path()
-    gc_storage = gocharting_storage or default_gocharting_storage_state_path()
 
     def _footprint_capture(*, stamp_override: str | None, clear_before: bool) -> list[Path]:
         if use_gocharting:
@@ -2093,7 +2090,7 @@ def _intraday_tv_then_coinmap_m5_capture(
                 charts_dir=charts_dir,
                 email=gocharting_email,
                 password=gocharting_password,
-                storage_state_path=gc_storage,
+                storage_state_path=storage,
                 save_storage_state=save_storage,
                 headless=headless,
                 main_chart_symbol=main_chart_symbol,
@@ -2827,7 +2824,6 @@ def cmd_all(args: argparse.Namespace) -> None:
     storage = args.storage_state or default_storage_state_path()
     use_gc = bool(getattr(args, "gocharting", False))
     gc_yaml = getattr(args, "gocharting_config", None) or default_gocharting_config_path()
-    gc_storage = default_gocharting_storage_state_path()
     _log.info(
         "all: bắt đầu | tv_yaml=%s charts=%s no_tradingview=%s gocharting=%s",
         cfg,
@@ -2869,7 +2865,7 @@ def cmd_all(args: argparse.Namespace) -> None:
             charts_dir=charts_dir,
             email=s.gocharting_email or "",
             password=s.gocharting_password or "",
-            storage_state_path=gc_storage,
+            storage_state_path=storage,
             save_storage_state=not args.no_save_storage,
             headless=not args.headed,
             main_chart_symbol=args.main_symbol,
@@ -2937,8 +2933,8 @@ def cmd_all(args: argparse.Namespace) -> None:
                     charts_dir=charts_dir,
                     stamp=stamp,
                     issues=bad,
-                    storage_state_path=gc_storage,
-                    email=s.gocharting_email,
+                        storage_state_path=storage,
+                        email=s.gocharting_email,
                     password=s.gocharting_password,
                     save_storage_state=not args.no_save_storage,
                     headless=not args.headed,
@@ -3581,7 +3577,6 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
         gocharting_yaml=gc_yaml,
         gocharting_email=s.gocharting_email or "",
         gocharting_password=s.gocharting_password or "",
-        gocharting_storage=default_gocharting_storage_state_path(),
     )
 
     print(f"Captured {len(paths)} file(s) for update-scalp run.")
