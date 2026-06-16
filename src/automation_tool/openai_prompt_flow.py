@@ -22,6 +22,7 @@ from automation_tool.coinmap_openai_slim import (
     should_slim_coinmap_json_path,
     slim_coinmap_export_for_openai,
 )
+from automation_tool.chart_payload_validate import normalize_gocharting_csv_text
 from automation_tool.prompts import responses_input_messages
 from automation_tool.images import (
     CHART_SLOT_COUNT,
@@ -154,7 +155,7 @@ def _max_csv_chars_for_path(path: Path, *, default_max: int) -> int:
 
 
 def _csv_file_header_and_body(path: Path, *, max_chars: int) -> tuple[str, str]:
-    body = path.read_text(encoding="utf-8")
+    body = normalize_gocharting_csv_text(path.read_text(encoding="utf-8"))
     header = f"[GoCharting orderflow CSV — file: {path.name}]\n"
     if max_chars > 0 and len(body) > max_chars:
         body = body[:max_chars] + f"\n… [truncated: raise GOCHARTING_CSV_MAX_CHARS]"

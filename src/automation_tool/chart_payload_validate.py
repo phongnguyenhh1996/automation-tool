@@ -136,6 +136,43 @@ def _load_json(path: Path) -> tuple[Optional[dict[str, Any]], Optional[str]]:
     return obj, None
 
 
+def _gocharting_csv_nonempty_lines(text: str) -> list[str]:
+    return [ln for ln in text.strip().splitlines() if ln.strip()]
+
+
+def _gocharting_csv_header_index(lines: Sequence[str]) -> Optional[int]:
+    """First line with comma-separated columns (skips GoCharting branding lines)."""
+    for i, ln in enumerate(lines):
+        if "," in ln:
+            return i
+    return None
+
+
+def normalize_gocharting_csv_text(text: str) -> str:
+    """
+    Drop leading non-CSV lines (e.g. ``www.gocharting.com``) from GoCharting exports.
+  """
+    lines = _gocharting_csv_nonempty_lines(text)
+    hi = _gocharting_csv_header_index(lines)
+    if hi is None:
+        return text.strip()
+    return "\n".join(lines[hi:]) + "\n"
+
+
+def normalize_gocharting_csv_file(path: Path) -> bool:
+    """Rewrite file when a branding prefix was stripped. Return True if updated."""
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    lines = _gocharting_csv_nonempty_lines(raw)
+    hi = _gocharting_csv_header_index(lines)
+    if hi is None or hi == 0:
+        return False
+    path.write_text("\n".join(lines[hi:]) + "\n", encoding="utf-8")
+    return True
+
+
 def validate_gocharting_csv_file(path: Path) -> tuple[bool, str]:
     """GoCharting export: non-empty CSV with a header row."""
     try:
@@ -145,12 +182,14 @@ def validate_gocharting_csv_file(path: Path) -> tuple[bool, str]:
     text = raw.strip()
     if not text:
         return False, "empty CSV"
-    lines = [ln for ln in text.splitlines() if ln.strip()]
+    lines = _gocharting_csv_nonempty_lines(text)
     if len(lines) < 2:
         return False, "CSV must have header + at least one data row"
-    header = lines[0]
-    if "," not in header:
+    hi = _gocharting_csv_header_index(lines)
+    if hi is None:
         return False, "CSV header missing comma-separated columns"
+    if hi >= len(lines) - 1:
+        return False, "CSV must have at least one data row"
     return True, ""
 
 
