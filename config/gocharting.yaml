@@ -9,6 +9,8 @@ login:
 
 watchlist:
   toggle_button: "#watchlist-icontab"
+  # Tab exists in DOM but can be hidden (collapsed sidebar / CSS) — not hit-testable.
+  toggle_button_click_force: true
   symbols:
     DXY:
       watchlist_id: "watchlist-EXNESS:SPOT:DXY"

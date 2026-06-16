@@ -125,7 +125,8 @@ def _select_watchlist_symbol(page: Page, cfg: dict[str, Any], entry: dict[str, A
 
     wl_cfg = cfg.get("watchlist") or {}
     toggle = str(wl_cfg.get("toggle_button") or "#watchlist-icontab")
-    page.locator(toggle).first.click(timeout=15_000)
+    use_force = bool(wl_cfg.get("toggle_button_click_force", True))
+    page.locator(toggle).first.click(timeout=15_000, force=use_force)
     page.wait_for_timeout(600)
 
     chart_id = str(entry["chart_id"])
