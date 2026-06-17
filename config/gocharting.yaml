@@ -67,5 +67,5 @@ capture_plan:
     intervals: ["15m", "5m"]
 
 clear_charts_before_capture: false
-viewport_width: 1920
-viewport_height: 1080
+viewport_width: 1440
+viewport_height: 810

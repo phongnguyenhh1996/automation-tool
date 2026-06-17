@@ -282,8 +282,8 @@ class BrowserServiceState:
         self._playwright = await async_playwright().start()
         p = self._playwright
         channel = (os.getenv("PLAYWRIGHT_CHANNEL") or "chrome").strip()
-        viewport_w = int(os.getenv("PLAYWRIGHT_VIEWPORT_WIDTH") or "1920")
-        viewport_h = int(os.getenv("PLAYWRIGHT_VIEWPORT_HEIGHT") or "1080")
+        viewport_w = int(os.getenv("PLAYWRIGHT_VIEWPORT_WIDTH") or "1440")
+        viewport_h = int(os.getenv("PLAYWRIGHT_VIEWPORT_HEIGHT") or "810")
         viewport = {"width": viewport_w, "height": viewport_h}
         user_data = chrome_user_data_dir_from_env()
         args = [f"--remote-debugging-port={cdp_port}"]
