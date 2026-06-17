@@ -150,7 +150,14 @@ CHART_SLOT_COUNT = len(CHART_IMAGE_ORDER)
 
 
 # Default ``--max-images-per-call`` for full analysis (11 slots + footprint extras).
-GOCHARTING_DETAIL_PNG_PER_SLOT = 4  # detail_zoom + 3 detail_back_{N}h
+GOCHARTING_DETAIL_PNG_PER_SLOT = 4  # detail_zoom + 3 detail_back_* PNGs
+
+
+def _detail_back_minutes_from_stem(stem: str) -> Optional[int]:
+    m = re.search(r"_detail_back_(\d+)h(\d{2})?$", stem)
+    if not m:
+        return None
+    return int(m.group(1)) * 60 + int(m.group(2) or 0)
 
 
 def openai_payload_max_for_order(
@@ -343,7 +350,7 @@ def coinmap_merged_openai_files(
 def gocharting_detail_png_paths(
     charts_dir: Path, stamp: str, sym: str, iv: str
 ) -> list[Path]:
-    """``detail_zoom`` then ``detail_back_{N}h`` PNGs for one GoCharting slot, if on disk."""
+    """``detail_zoom`` then ``detail_back_*`` PNGs for one GoCharting slot, if on disk."""
     iv_slug = re.sub(r"[^\w]+", "_", iv).strip("_")[:20] or "iv"
     pattern = f"{stamp}_gocharting_{sym}_{iv_slug}_detail_*.png"
     paths = [p for p in charts_dir.glob(pattern) if p.is_file()]
@@ -352,9 +359,9 @@ def gocharting_detail_png_paths(
         stem = p.stem
         if stem.endswith("_detail_zoom"):
             return (0, 0)
-        m = re.search(r"_detail_back_(\d+)h$", stem)
-        if m:
-            return (1, int(m.group(1)))
+        back_min = _detail_back_minutes_from_stem(stem)
+        if back_min is not None:
+            return (1, back_min)
         return (2, stem)
 
     return sorted(paths, key=_sort_key)

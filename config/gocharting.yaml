@@ -55,8 +55,9 @@ detail_chart:
   go_to_date_button_id: "go-to-date-btn"
   apply_button_selector: 'button:has-text("Áp dụng"), button:has-text("Apply")'
   settle_ms: 2000
+  # Per-interval step size; each history step subtracts (step × value) from first go-to-date time.
   hours_back:
-    "5m": 3
+    "5m": 2.5   # was 3h
     "15m": 7
   history_steps: 3
 

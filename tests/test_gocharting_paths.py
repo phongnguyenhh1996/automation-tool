@@ -66,7 +66,7 @@ def test_ordered_chart_openai_payloads_gocharting(tmp_path: Path) -> None:
         png_p = charts / f"{stamp}_gocharting_{sym}_{iv}.png"
         csv_p.write_text("Time,Open\n1,2\n", encoding="utf-8")
         png_p.write_bytes(b"x")
-        for suffix in ("zoom", "back_3h", "back_6h", "back_9h") if iv == "5m" else (
+        for suffix in ("zoom", "back_2h30", "back_5h", "back_7h30") if iv == "5m" else (
             "zoom",
             "back_7h",
             "back_14h",
@@ -92,16 +92,16 @@ def test_gocharting_detail_png_paths_order(tmp_path: Path) -> None:
     sym = GOCHARTING_GOLD_EXPORT_LABEL
     iv = "5m"
     for name in (
-        f"{stamp}_gocharting_{sym}_{iv}_detail_back_9h.png",
+        f"{stamp}_gocharting_{sym}_{iv}_detail_back_7h30.png",
         f"{stamp}_gocharting_{sym}_{iv}_detail_zoom.png",
-        f"{stamp}_gocharting_{sym}_{iv}_detail_back_3h.png",
-        f"{stamp}_gocharting_{sym}_{iv}_detail_back_6h.png",
+        f"{stamp}_gocharting_{sym}_{iv}_detail_back_2h30.png",
+        f"{stamp}_gocharting_{sym}_{iv}_detail_back_5h.png",
     ):
         (charts / name).write_bytes(b"x")
     paths = gocharting_detail_png_paths(charts, stamp, sym, iv)
     assert [p.name for p in paths] == [
         f"{stamp}_gocharting_{sym}_{iv}_detail_zoom.png",
-        f"{stamp}_gocharting_{sym}_{iv}_detail_back_3h.png",
-        f"{stamp}_gocharting_{sym}_{iv}_detail_back_6h.png",
-        f"{stamp}_gocharting_{sym}_{iv}_detail_back_9h.png",
+        f"{stamp}_gocharting_{sym}_{iv}_detail_back_2h30.png",
+        f"{stamp}_gocharting_{sym}_{iv}_detail_back_5h.png",
+        f"{stamp}_gocharting_{sym}_{iv}_detail_back_7h30.png",
     ]

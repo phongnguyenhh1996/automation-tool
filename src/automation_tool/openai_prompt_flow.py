@@ -31,6 +31,7 @@ from automation_tool.images import (
     GOCHARTING_GOLD_EXPORT_LABEL,
     OPENAI_PAYLOAD_MAX,
     ChartOpenAIPayload,
+    _detail_back_minutes_from_stem,
     chunk_payloads,
     image_to_data_url,
     normalize_main_chart_symbol,
@@ -302,9 +303,14 @@ def _gocharting_detail_png_attachment_header(path: Path) -> Optional[str]:
     if stem.endswith("_detail_zoom"):
         kind = "detail footprint zoomed in (current session)"
     else:
-        m = re.search(r"_detail_back_(\d+)h$", stem)
-        if m:
-            kind = f"detail footprint — chart time ~{m.group(1)}h before displayed time when captured"
+        back_min = _detail_back_minutes_from_stem(stem)
+        if back_min is not None:
+            h, m = divmod(back_min, 60)
+            if m == 0:
+                label = f"{h}h"
+            else:
+                label = f"{h}h{m:02d}"
+            kind = f"detail footprint — chart time ~{label} before displayed time when captured"
         else:
             kind = "detail footprint"
     return f"[GoCharting {kind} — file: {path.name}]\n{note}"

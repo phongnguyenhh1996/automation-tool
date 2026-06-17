@@ -54,31 +54,39 @@ def gocharting_detail_png_path(
     interval: str,
     suffix: str,
 ) -> Path:
-    """``{stem}_detail_{suffix}.png`` e.g. ``detail_zoom``, ``detail_back_3h``."""
+    """``{stem}_detail_{suffix}.png`` e.g. ``detail_zoom``, ``detail_back_7h``, ``detail_back_2h30``."""
     stem = gocharting_export_stem(stamp, export_label, interval)
     return charts_dir / f"{stem}_detail_{suffix}.png"
 
 
-def _hours_back_for_interval(cfg: dict[str, Any], interval: str) -> int:
+def _hours_back_for_interval(cfg: dict[str, Any], interval: str) -> float:
     detail = cfg.get("detail_chart") or {}
     hours_map = detail.get("hours_back") if isinstance(detail, dict) else {}
     if not isinstance(hours_map, dict):
-        return 3
+        return 3.0
     iv = (interval or "").strip().lower()
     raw = hours_map.get(iv) or hours_map.get(interval)
     try:
-        return max(1, int(raw))
+        return max(0.5, float(raw))
     except (TypeError, ValueError):
-        return 3
+        return 3.0
 
 
-def gocharting_detail_back_suffix(interval: str, step_index: int, *, hours_back: int) -> str:
-    """``back_3h`` for M5 step 1; cumulative ``step_index * hours_back``."""
-    total = max(1, int(step_index)) * max(1, int(hours_back))
-    return f"back_{total}h"
+def _duration_back_suffix(*, total_hours: float) -> str:
+    total_min = int(round(float(total_hours) * 60))
+    h, m = divmod(total_min, 60)
+    if m == 0:
+        return f"back_{h}h"
+    return f"back_{h}h{m}"
 
 
-def gocharting_detail_back_suffixes(interval: str, *, hours_back: int, steps: int) -> list[str]:
+def gocharting_detail_back_suffix(interval: str, step_index: int, *, hours_back: float) -> str:
+    """Step N → ``back_{N * hours_back}`` (e.g. M15 step 2 @ 7h → ``back_14h``)."""
+    total = max(1, int(step_index)) * max(0.5, float(hours_back))
+    return _duration_back_suffix(total_hours=total)
+
+
+def gocharting_detail_back_suffixes(interval: str, *, hours_back: float, steps: int) -> list[str]:
     return [
         gocharting_detail_back_suffix(interval, i, hours_back=hours_back)
         for i in range(1, max(1, steps) + 1)
@@ -105,12 +113,24 @@ def _from_24h(h24: int, minute: int) -> tuple[int, int, str]:
     return h24 - 12, m, "pm"
 
 
-def subtract_hours_12h(hour12: int, minute: int, am_pm: str, hours: int) -> tuple[int, int, str]:
-    """12-hour clock + AM/PM → subtract hours (wraps at midnight)."""
+def subtract_duration_12h(
+    hour12: int,
+    minute: int,
+    am_pm: str,
+    *,
+    hours: float,
+) -> tuple[int, int, str]:
+    """12-hour clock + AM/PM → subtract duration (fractional hours ok; wraps at midnight)."""
     h24 = _to_24h(hour12, am_pm)
     base = datetime(2000, 1, 1, h24, int(minute))
-    result = base - timedelta(hours=int(hours))
+    delta_min = int(round(float(hours) * 60))
+    result = base - timedelta(minutes=delta_min)
     return _from_24h(result.hour, result.minute)
+
+
+def subtract_hours_12h(hour12: int, minute: int, am_pm: str, hours: int) -> tuple[int, int, str]:
+    """12-hour clock + AM/PM → subtract whole hours (wraps at midnight)."""
+    return subtract_duration_12h(hour12, minute, am_pm, hours=float(int(hours)))
 
 
 def _detail_chart_enabled(cfg: dict[str, Any]) -> bool:
@@ -333,10 +353,11 @@ def _go_to_date_and_capture_back(
     page: Page,
     cfg: dict[str, Any],
     *,
-    interval: str,
     dest: Path,
-    hours_back: int,
-) -> None:
+    baseline: Optional[tuple[int, int, str]],
+    hours_back: float,
+) -> tuple[int, int, str]:
+    """Go to date; subtract ``hours_back`` from first-read baseline (not previous step)."""
     detail = cfg.get("detail_chart") or {}
     if not isinstance(detail, dict):
         detail = {}
@@ -344,10 +365,12 @@ def _go_to_date_and_capture_back(
 
     _id_locator(page, go_btn_id).first.click(timeout=15_000)
     page.wait_for_timeout(400)
-    h, m, ap = _read_go_to_date_fields(page)
-    new_h, new_m, new_ap = subtract_hours_12h(h, m, ap, hours_back)
+    if baseline is None:
+        baseline = _read_go_to_date_fields(page)
+    new_h, new_m, new_ap = subtract_duration_12h(*baseline, hours=hours_back)
     _fill_go_to_date_and_apply(page, cfg, hour12=new_h, minute=new_m, am_pm=new_ap)
     _capture_png(page, cfg, dest)
+    return baseline
 
 
 def _capture_detail_footprint(
@@ -383,7 +406,7 @@ def _capture_detail_footprint(
         detail_page.goto(detail_url, wait_until="domcontentloaded", timeout=90_000)
         detail_page.wait_for_timeout(1200)
         _maybe_login_gocharting(detail_page, cfg, email, password)
-        # Detail chart URL is symbol-specific; only switch interval.
+        _select_chart_symbol(detail_page, cfg, entry)
         _select_interval(detail_page, cfg, interval)
 
         _force_click_id(detail_page, refresh_id)
@@ -395,15 +418,18 @@ def _capture_detail_footprint(
         _capture_png(detail_page, cfg, zoom_path)
         paths.append(zoom_path)
 
+        # Each step: subtract (step × per-interval hours_back) from first go-to-date baseline.
+        go_to_baseline: Optional[tuple[int, int, str]] = None
         for step in range(1, max(1, history_steps) + 1):
+            total_back = step * per_step_hours
             suffix = gocharting_detail_back_suffix(interval, step, hours_back=per_step_hours)
             back_path = gocharting_detail_png_path(charts_dir, stamp, export_label, interval, suffix)
-            _go_to_date_and_capture_back(
+            go_to_baseline = _go_to_date_and_capture_back(
                 detail_page,
                 cfg,
-                interval=interval,
                 dest=back_path,
-                hours_back=per_step_hours,
+                baseline=go_to_baseline,
+                hours_back=total_back,
             )
             paths.append(back_path)
 

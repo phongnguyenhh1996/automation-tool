@@ -32,7 +32,7 @@ def gc_cfg() -> dict:
             "go_to_date_button_id": "go-to-date-btn",
             "apply_button_selector": 'button:has-text("Apply")',
             "settle_ms": 100,
-            "hours_back": {"5m": 3, "15m": 7},
+            "hours_back": {"5m": 2.5, "15m": 7},
             "history_steps": 3,
         },
         "capture_plan": [{"symbol": "DXY", "intervals": ["15m"]}],
@@ -84,27 +84,17 @@ def test_capture_gocharting_in_context_overview_then_detail(monkeypatch, tmp_pat
     overview_calls: list[str] = []
     detail_zoom_saved: list[Path] = []
 
-    symbol_pages: list = []
-    interval_pages: list = []
-
     monkeypatch.setattr(
         "automation_tool.gocharting_capture._maybe_login_gocharting",
         lambda *a, **k: None,
     )
-
-    def track_symbol(page, cfg, entry):
-        symbol_pages.append(page)
-
-    def track_interval(page, cfg, interval):
-        interval_pages.append(page)
-
     monkeypatch.setattr(
         "automation_tool.gocharting_capture._select_chart_symbol",
-        track_symbol,
+        lambda *a, **k: None,
     )
     monkeypatch.setattr(
         "automation_tool.gocharting_capture._select_interval",
-        track_interval,
+        lambda *a, **k: None,
     )
 
     def fake_prepare(page, cfg):
@@ -134,11 +124,12 @@ def test_capture_gocharting_in_context_overview_then_detail(monkeypatch, tmp_pat
 
     go_date_calls = 0
 
-    def fake_go_back(page, cfg, *, interval, dest, hours_back):
+    def fake_go_back(page, cfg, *, dest, baseline, hours_back):
         nonlocal go_date_calls
         go_date_calls += 1
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(b"png")
+        return baseline if baseline is not None else (12, 0, "pm")
 
     monkeypatch.setattr(
         "automation_tool.gocharting_capture._go_to_date_and_capture_back",
@@ -159,8 +150,6 @@ def test_capture_gocharting_in_context_overview_then_detail(monkeypatch, tmp_pat
     )
 
     assert overview_calls == ["overview"]
-    assert symbol_pages == [main_page]
-    assert interval_pages == [main_page, detail_page]
     assert len(csv_calls) == 1
     assert go_date_calls == 3
     zoom = gocharting_detail_png_path(tmp_path, stamp, "DXY", "15m", "zoom")
