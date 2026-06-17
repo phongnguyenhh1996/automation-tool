@@ -2,7 +2,7 @@
 chart_page_url: "https://gocharting.com/terminal/chart/OpJogbwTR"
 
 # Wait after zoom / go-to-date / refresh — applied immediately before PNG and CSV export.
-chart_load_ms: 2000
+chart_load_ms: 4000
 
 login:
   avatar_button: "#login-avatar"
