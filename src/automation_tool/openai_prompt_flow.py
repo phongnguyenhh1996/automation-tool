@@ -11,6 +11,7 @@ import base64
 import json
 import logging
 import os
+import re
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -97,16 +98,17 @@ def default_analysis_prompt(
     fp = (footprint_source or "coinmap").strip().lower()
     if fp == "gocharting":
         footprint_desc = (
-            f"({CHART_SLOT_COUNT} slot chart; mỗi slot GoCharting: CSV orderflow rồi ảnh PNG ngay sau):\n"
+            f"({CHART_SLOT_COUNT} slot chart; mỗi slot GoCharting: CSV orderflow, PNG overview, "
+            "rồi 4 ảnh detail footprint — zoom + 3 bước lùi giờ):\n"
             "TradingView DXY (H4, H1, M15) → "
             f"TradingView {sym} (H4, H1, M15, M15 Session Liquidity Check / ICT Killzones, M5) "
             "(snapshot URL/PNG hoặc JSON OHLC tvdatafeed) → "
-            "GoCharting DXY M15 (CSV footprint; PNG ngay sau) → "
+            "GoCharting DXY M15 (CSV; PNG overview; detail zoom + back_7h/14h/21h) → "
             f"GoCharting {_gocharting_main_footprint_label(sym)} M15 và M5 "
             "(footprint hợp đồng tương lai vàng GC1! trên GoCharting; không phải spot XAUUSD; "
-            "mỗi khung: CSV + PNG).\n"
-            "Ưu tiên đọc ảnh chart (GoCharting PNG, TradingView snapshot); khi cần con số chính xác "
-            "(order flow, CVD, delta) thì tra CSV GoCharting / JSON tvdatafeed tương ứng.\n"
+            "mỗi khung: CSV + PNG overview + 4 PNG detail).\n"
+            "Ưu tiên đọc ảnh chart (GoCharting PNG detail/overview, TradingView snapshot); "
+            "khi cần con số chính xác (order flow, CVD, delta) thì tra CSV GoCharting / JSON tvdatafeed tương ứng.\n"
         )
     else:
         footprint_desc = (
@@ -290,9 +292,29 @@ def _image_paths_to_data_urls(paths: list[Path]) -> dict[Path, str]:
     return dict(zip(unique, urls))
 
 
+def _gocharting_detail_png_attachment_header(path: Path) -> Optional[str]:
+    if path.suffix.lower() != ".png" or "_gocharting_" not in path.name:
+        return None
+    if "_detail_" not in path.name:
+        return None
+    note = _gocharting_gold_future_slot_note(path)
+    stem = path.stem
+    if stem.endswith("_detail_zoom"):
+        kind = "detail footprint zoomed in (current session)"
+    else:
+        m = re.search(r"_detail_back_(\d+)h$", stem)
+        if m:
+            kind = f"detail footprint — chart time ~{m.group(1)}h before displayed time when captured"
+        else:
+            kind = "detail footprint"
+    return f"[GoCharting {kind} — file: {path.name}]\n{note}"
+
+
 def _gocharting_png_attachment_header(path: Path) -> Optional[str]:
     if path.suffix.lower() != ".png" or "_gocharting_" not in path.name:
         return None
+    if "_detail_" in path.name:
+        return _gocharting_detail_png_attachment_header(path)
     note = _gocharting_gold_future_slot_note(path)
     return f"[GoCharting chart screenshot — file: {path.name}]\n{note}"
 
@@ -842,7 +864,7 @@ def build_scalp_update_user_text(
     User message cho ``coinmap-automation update-scalp``: giống ``build_intraday_update_user_text``
     nhưng yêu cầu tìm plan scalp đẹp nhất và dùng label ``scalp_<timeframe>``.
 
-    * ``footprint_source="gocharting"``: CSV + PNG GoCharting M15/M5 (legacy tách file).
+    * ``footprint_source="gocharting"``: CSV + PNG overview + detail footprint PNGs GoCharting M15/M5.
     * ``coinmap_attachment_mode="merged"`` (default): file ``coinmap_merged`` đa khung (15m + 5m).
     * ``coinmap_attachment_mode="merged_m5"``: file ``coinmap_merged`` chỉ có khung **5m** trong
       ``frames`` (build từ raw M5 qua ``write_openai_coinmap_merged_from_raw_export``).
@@ -854,7 +876,8 @@ def build_scalp_update_user_text(
         time_line = format_intraday_update_time_line()
         gc_hint = (
             f" (footprint {GOCHARTING_GOLD_FUTURE_LABEL} trên GoCharting — hợp đồng tương lai vàng GC1!, "
-            "không phải spot XAUUSD; mỗi khung: CSV orderflow; ảnh PNG ngay sau CSV tương ứng nếu có)."
+            "không phải spot XAUUSD; mỗi khung: CSV orderflow; PNG overview; "
+            "4 ảnh detail footprint zoom + lùi giờ nếu có)."
         )
         if first_after_all:
             return (

@@ -149,16 +149,21 @@ CHART_IMAGE_ORDER: tuple[tuple[str, str, str], ...] = chart_image_order_for_main
 CHART_SLOT_COUNT = len(CHART_IMAGE_ORDER)
 
 
+# Default ``--max-images-per-call`` for full analysis (11 slots + footprint extras).
+GOCHARTING_DETAIL_PNG_PER_SLOT = 4  # detail_zoom + 3 detail_back_{N}h
+
+
 def openai_payload_max_for_order(
     order: tuple[tuple[str, str, str], ...],
 ) -> int:
     """Upper bound when each footprint slot sends data file + PNG alongside other slot payloads."""
     return len(order) + sum(
-        1 for src, _, _ in order if src in ("coinmap", "gocharting")
+        (1 + GOCHARTING_DETAIL_PNG_PER_SLOT if src == "gocharting" else 1 if src == "coinmap" else 0)
+        for src, _, _ in order
     )
 
 
-# Default ``--max-images-per-call`` for full analysis (11 slots + 3 Coinmap PNG extras).
+# Default ``--max-images-per-call`` for full analysis (11 slots + footprint PNG extras).
 OPENAI_PAYLOAD_MAX = openai_payload_max_for_order(CHART_IMAGE_ORDER)
 
 
@@ -335,6 +340,26 @@ def coinmap_merged_openai_files(
     return d_ok, m_ok
 
 
+def gocharting_detail_png_paths(
+    charts_dir: Path, stamp: str, sym: str, iv: str
+) -> list[Path]:
+    """``detail_zoom`` then ``detail_back_{N}h`` PNGs for one GoCharting slot, if on disk."""
+    iv_slug = re.sub(r"[^\w]+", "_", iv).strip("_")[:20] or "iv"
+    pattern = f"{stamp}_gocharting_{sym}_{iv_slug}_detail_*.png"
+    paths = [p for p in charts_dir.glob(pattern) if p.is_file()]
+
+    def _sort_key(p: Path) -> tuple[int, int | str]:
+        stem = p.stem
+        if stem.endswith("_detail_zoom"):
+            return (0, 0)
+        m = re.search(r"_detail_back_(\d+)h$", stem)
+        if m:
+            return (1, int(m.group(1)))
+        return (2, stem)
+
+    return sorted(paths, key=_sort_key)
+
+
 def _append_gocharting_openai_payloads(
     out: list[ChartOpenAIPayload],
     *,
@@ -350,6 +375,8 @@ def _append_gocharting_openai_payloads(
         out.append(("csv", cp))
     if pp.is_file():
         out.append(("image", pp))
+    for dp in gocharting_detail_png_paths(charts_dir, stamp, sym, iv):
+        out.append(("image", dp))
 
 
 def _append_coinmap_openai_payloads(

@@ -5,12 +5,16 @@ from pathlib import Path
 from automation_tool.gocharting_capture import gocharting_export_stem
 from automation_tool.images import (
     GOCHARTING_GOLD_EXPORT_LABEL,
+    GOCHARTING_DETAIL_PNG_PER_SLOT,
+    chart_image_order_for_main_symbol,
     footprint_source_for_stamp,
+    gocharting_detail_png_paths,
     gocharting_footprint_export_label,
     gocharting_interval_csv_path,
     gocharting_main_interval_csv_path,
     gocharting_png_path_for_csv,
     latest_chart_stamp,
+    openai_payload_max_for_order,
     ordered_chart_openai_payloads,
 )
 
@@ -62,7 +66,42 @@ def test_ordered_chart_openai_payloads_gocharting(tmp_path: Path) -> None:
         png_p = charts / f"{stamp}_gocharting_{sym}_{iv}.png"
         csv_p.write_text("Time,Open\n1,2\n", encoding="utf-8")
         png_p.write_bytes(b"x")
+        for suffix in ("zoom", "back_3h", "back_6h", "back_9h") if iv == "5m" else (
+            "zoom",
+            "back_7h",
+            "back_14h",
+            "back_21h",
+        ):
+            dp = charts / f"{stamp}_gocharting_{sym}_{iv}_detail_{suffix}.png"
+            dp.write_bytes(b"d")
     payloads = ordered_chart_openai_payloads(charts, stamp=stamp)
     kinds = [k for k, _ in payloads]
     assert kinds.count("csv") == 3
-    assert kinds.count("image") >= 3
+    assert kinds.count("image") == 3 + 3 * GOCHARTING_DETAIL_PNG_PER_SLOT
+
+
+def test_openai_payload_max_gocharting_order() -> None:
+    order = chart_image_order_for_main_symbol("XAUUSD", footprint_source="gocharting")
+    assert openai_payload_max_for_order(order) == 26
+
+
+def test_gocharting_detail_png_paths_order(tmp_path: Path) -> None:
+    charts = tmp_path / "charts"
+    charts.mkdir()
+    stamp = "20260616_120000"
+    sym = GOCHARTING_GOLD_EXPORT_LABEL
+    iv = "5m"
+    for name in (
+        f"{stamp}_gocharting_{sym}_{iv}_detail_back_9h.png",
+        f"{stamp}_gocharting_{sym}_{iv}_detail_zoom.png",
+        f"{stamp}_gocharting_{sym}_{iv}_detail_back_3h.png",
+        f"{stamp}_gocharting_{sym}_{iv}_detail_back_6h.png",
+    ):
+        (charts / name).write_bytes(b"x")
+    paths = gocharting_detail_png_paths(charts, stamp, sym, iv)
+    assert [p.name for p in paths] == [
+        f"{stamp}_gocharting_{sym}_{iv}_detail_zoom.png",
+        f"{stamp}_gocharting_{sym}_{iv}_detail_back_3h.png",
+        f"{stamp}_gocharting_{sym}_{iv}_detail_back_6h.png",
+        f"{stamp}_gocharting_{sym}_{iv}_detail_back_9h.png",
+    ]
