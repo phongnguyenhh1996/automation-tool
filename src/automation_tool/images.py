@@ -14,6 +14,16 @@ ChartOpenAIPayload = Tuple[str, Union[Path, str]]
 MAIN_CHART_SYMBOL_FILENAME = ".main_chart_symbol"
 GLOBAL_MAIN_CHART_SYMBOL_FILENAME = ".main_chart_symbol"
 DEFAULT_MAIN_CHART_SYMBOL = "XAUUSD"
+# GoCharting footprint filename slug for main gold pair (GC1! future, not spot XAUUSD).
+GOCHARTING_GOLD_EXPORT_LABEL = "GC"
+
+
+def gocharting_footprint_export_label(main_sym: str) -> str:
+    """Filename symbol for main-pair GoCharting exports (``XAUUSD`` → ``GC``)."""
+    m = (main_sym or "").strip().upper() or DEFAULT_MAIN_CHART_SYMBOL
+    if m == DEFAULT_MAIN_CHART_SYMBOL:
+        return GOCHARTING_GOLD_EXPORT_LABEL
+    return m
 
 def normalize_main_chart_symbol(s: str) -> str:
     """Uppercase forex/crypto pair id for filenames (watchlist id on Coinmap / TV label)."""
@@ -114,6 +124,7 @@ def chart_image_order_for_main_symbol(
     fp = (footprint_source or "coinmap").strip().lower()
     if fp not in ("coinmap", "gocharting"):
         fp = "coinmap"
+    footprint_sym = gocharting_footprint_export_label(m) if fp == "gocharting" else m
     return (
         ("tradingview", "DXY", "4h"),
         ("tradingview", "DXY", "1h"),
@@ -124,8 +135,8 @@ def chart_image_order_for_main_symbol(
         ("tradingview", m, "15m_ict"),
         ("tradingview", m, "5m"),
         (fp, "DXY", "15m"),
-        (fp, m, "15m"),
-        (fp, m, "5m"),
+        (fp, footprint_sym, "15m"),
+        (fp, footprint_sym, "5m"),
     )
 
 
@@ -269,7 +280,7 @@ def gocharting_main_interval_csv_path(
     charts_dir: Path, interval: str, *, stamp: Optional[str] = None
 ) -> Optional[Path]:
     """Latest GoCharting CSV for main pair and interval (e.g. ``5m``, ``15m``)."""
-    sym = read_main_chart_symbol(charts_dir)
+    sym = gocharting_footprint_export_label(read_main_chart_symbol(charts_dir))
     return gocharting_interval_csv_path(charts_dir, sym, interval, stamp=stamp)
 
 

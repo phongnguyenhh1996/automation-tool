@@ -27,6 +27,7 @@ from automation_tool.prompts import responses_input_messages
 from automation_tool.images import (
     CHART_SLOT_COUNT,
     DEFAULT_MAIN_CHART_SYMBOL,
+    GOCHARTING_GOLD_EXPORT_LABEL,
     OPENAI_PAYLOAD_MAX,
     ChartOpenAIPayload,
     chunk_payloads,
@@ -42,6 +43,25 @@ from automation_tool.zones_state import format_intraday_update_time_line
 _log = logging.getLogger(__name__)
 
 DEFAULT_REASONING_EFFORT = "medium"
+
+# GoCharting footprint for main gold pair: COMEX GC1! future, not spot XAUUSD.
+GOCHARTING_GOLD_FUTURE_LABEL = "Gold Future (GC1!)"
+
+
+def _gocharting_main_footprint_label(main_symbol: str) -> str:
+    sym = (main_symbol or "").strip().upper()
+    if sym == "XAUUSD":
+        return GOCHARTING_GOLD_FUTURE_LABEL
+    return sym or DEFAULT_MAIN_CHART_SYMBOL
+
+
+def _gocharting_gold_future_slot_note(path: Path) -> str:
+    if f"_gocharting_{GOCHARTING_GOLD_EXPORT_LABEL}_" in path.name:
+        return (
+            "Instrument: Gold Future (GC1!) — COMEX gold futures footprint; "
+            "not spot XAUUSD.\n"
+        )
+    return ""
 
 
 class PromptTwoStepResult(NamedTuple):
@@ -82,7 +102,9 @@ def default_analysis_prompt(
             f"TradingView {sym} (H4, H1, M15, M15 Session Liquidity Check / ICT Killzones, M5) "
             "(snapshot URL/PNG hoặc JSON OHLC tvdatafeed) → "
             "GoCharting DXY M15 (CSV footprint; PNG ngay sau) → "
-            f"GoCharting {sym} M15 và M5 (mỗi khung: CSV + PNG).\n"
+            f"GoCharting {_gocharting_main_footprint_label(sym)} M15 và M5 "
+            "(footprint hợp đồng tương lai vàng GC1! trên GoCharting; không phải spot XAUUSD; "
+            "mỗi khung: CSV + PNG).\n"
             "Ưu tiên đọc ảnh chart (GoCharting PNG, TradingView snapshot); khi cần con số chính xác "
             "(order flow, CVD, delta) thì tra CSV GoCharting / JSON tvdatafeed tương ứng.\n"
         )
@@ -156,7 +178,8 @@ def _max_csv_chars_for_path(path: Path, *, default_max: int) -> int:
 
 def _csv_file_header_and_body(path: Path, *, max_chars: int) -> tuple[str, str]:
     body = prepare_gocharting_csv_text(path.read_text(encoding="utf-8"))
-    header = f"[GoCharting orderflow CSV — file: {path.name}]\n"
+    note = _gocharting_gold_future_slot_note(path)
+    header = f"[GoCharting orderflow CSV — file: {path.name}]\n{note}"
     if max_chars > 0 and len(body) > max_chars:
         body = body[:max_chars] + f"\n… [truncated: raise GOCHARTING_CSV_MAX_CHARS]"
     return header, body
@@ -270,7 +293,8 @@ def _image_paths_to_data_urls(paths: list[Path]) -> dict[Path, str]:
 def _gocharting_png_attachment_header(path: Path) -> Optional[str]:
     if path.suffix.lower() != ".png" or "_gocharting_" not in path.name:
         return None
-    return f"[GoCharting chart screenshot — file: {path.name}]\n"
+    note = _gocharting_gold_future_slot_note(path)
+    return f"[GoCharting chart screenshot — file: {path.name}]\n{note}"
 
 
 def _coinmap_png_attachment_header(path: Path) -> Optional[str]:
@@ -829,7 +853,8 @@ def build_scalp_update_user_text(
     if fp == "gocharting":
         time_line = format_intraday_update_time_line()
         gc_hint = (
-            " (mỗi khung: CSV orderflow GoCharting; ảnh PNG ngay sau CSV tương ứng nếu có)."
+            f" (footprint {GOCHARTING_GOLD_FUTURE_LABEL} trên GoCharting — hợp đồng tương lai vàng GC1!, "
+            "không phải spot XAUUSD; mỗi khung: CSV orderflow; ảnh PNG ngay sau CSV tương ứng nếu có)."
         )
         if first_after_all:
             return (
@@ -845,7 +870,8 @@ def build_scalp_update_user_text(
             "[INTRADAY_UPDATE]\n"
             f"{time_line}"
             "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
-            "Đính kèm **hai** file CSV GoCharting: **M15** và **M5** (footprint cặp chính; PNG ngay sau mỗi CSV nếu có).\n"
+            f"Đính kèm **hai** file CSV GoCharting: **M15** và **M5** (footprint {GOCHARTING_GOLD_FUTURE_LABEL}; "
+            "PNG ngay sau mỗi CSV nếu có).\n"
             f"{_SCALP_UPDATE_SUFFIX}"
         )
 

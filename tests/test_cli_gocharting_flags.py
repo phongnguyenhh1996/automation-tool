@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from automation_tool.cli import cmd_all
+from automation_tool.images import GOCHARTING_GOLD_EXPORT_LABEL
 
 
 def test_cmd_all_gocharting_calls_capture_gocharting(tmp_path: Path, monkeypatch) -> None:
@@ -23,7 +24,11 @@ def test_cmd_all_gocharting_calls_capture_gocharting(tmp_path: Path, monkeypatch
         gc_clear_before = kwargs.get("clear_charts_before_capture")
         stamp = "20260616_120000"
         paths = []
-        for sym, iv in (("DXY", "15m"), ("XAUUSD", "15m"), ("XAUUSD", "5m")):
+        for sym, iv in (
+            ("DXY", "15m"),
+            (GOCHARTING_GOLD_EXPORT_LABEL, "15m"),
+            (GOCHARTING_GOLD_EXPORT_LABEL, "5m"),
+        ):
             csv_p = charts / f"{stamp}_gocharting_{sym}_{iv}.csv"
             png_p = charts / f"{stamp}_gocharting_{sym}_{iv}.png"
             csv_p.write_text("Time,Open\n1,2\n", encoding="utf-8")

@@ -118,6 +118,7 @@ def _select_chart_symbol(page: Page, cfg: dict[str, Any], entry: dict[str, Any])
 
     export_label = str(entry["export_label"]).strip().upper()
     query = str(entry.get("search_query") or "").strip() or tmpl.format(symbol=export_label)
+    openai_label = str(entry.get("openai_label") or "").strip()
 
     search_input = _id_locator(page, input_id).first
     search_input.click(timeout=15_000)
@@ -126,6 +127,12 @@ def _select_chart_symbol(page: Page, cfg: dict[str, Any], entry: dict[str, Any])
 
     _id_locator(page, results_id).locator("div").first.click(timeout=15_000)
     page.wait_for_timeout(settle_ms)
+    _log.info(
+        "gocharting: selected symbol export_label=%s search_query=%r%s",
+        export_label,
+        query,
+        f" ({openai_label})" if openai_label else "",
+    )
 
 
 def _select_interval(page: Page, cfg: dict[str, Any], interval: str) -> None:
