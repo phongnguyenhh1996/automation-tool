@@ -131,6 +131,13 @@ def _select_chart_symbol(page: Page, cfg: dict[str, Any], entry: dict[str, Any])
 
     _id_locator(page, results_id).locator("div").first.click(timeout=15_000)
     page.wait_for_timeout(settle_ms)
+
+    confirm_sel = str(entry.get("result_confirm_selector") or "").strip()
+    if confirm_sel:
+        page.locator(confirm_sel).first.click(timeout=15_000)
+        page.wait_for_timeout(settle_ms)
+        _log.debug("gocharting: confirmed symbol via %s", confirm_sel)
+
     _log.info(
         "gocharting: selected symbol export_label=%s search_query=%r%s",
         export_label,
