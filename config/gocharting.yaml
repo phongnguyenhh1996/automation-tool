@@ -60,7 +60,7 @@ detail_chart:
   hours_back:
     "5m": 2.5   # was 3h
     "15m": 7
-  history_steps: 3
+  history_steps: 2
 
 capture_plan:
   - symbol: DXY
