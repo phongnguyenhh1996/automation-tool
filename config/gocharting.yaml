@@ -29,7 +29,7 @@ interval_panel:
 
 screenshot:
   open_button: "#user-screenshot-btn"
-  download_button: 'button:has(span div:text-is("Download"))'
+  download_button: 'button:has(span div:text-is("Download")), button:has(span div:text-is("Tải xuống"))'
   popup_escape_presses: 1
   download_timeout_ms: 30000
 

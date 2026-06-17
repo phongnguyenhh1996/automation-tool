@@ -17,6 +17,10 @@ from automation_tool.playwright_browser import close_browser_and_context, launch
 _log = logging.getLogger(__name__)
 
 _INTERVAL_SLUG_RE = re.compile(r"[^\w]+")
+_DEFAULT_DOWNLOAD_BUTTON = (
+    'button:has(span div:text-is("Download")), '
+    'button:has(span div:text-is("Tải xuống"))'
+)
 
 
 def load_gocharting_yaml(path: Path) -> dict[str, Any]:
@@ -155,7 +159,7 @@ def _save_download(page: Page, click_fn, dest: Path, timeout_ms: int) -> None:
 def _capture_png(page: Page, cfg: dict[str, Any], dest: Path) -> None:
     shot = cfg.get("screenshot") or {}
     open_btn = str(shot.get("open_button") or "#user-screenshot-btn")
-    dl_btn = str(shot.get("download_button") or 'button:has(span div:text-is("Download"))')
+    dl_btn = str(shot.get("download_button") or _DEFAULT_DOWNLOAD_BUTTON)
     timeout_ms = int(shot.get("download_timeout_ms", 30_000))
     escapes = int(shot.get("popup_escape_presses", 1))
 
