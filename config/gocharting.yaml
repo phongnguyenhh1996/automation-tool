@@ -1,6 +1,9 @@
 # GoCharting footprint capture — one saved chart URL; switch symbol via tick search.
 chart_page_url: "https://gocharting.com/terminal/chart/OpJogbwTR"
 
+# Wait after zoom / go-to-date / refresh — applied immediately before PNG and CSV export.
+chart_load_ms: 2000
+
 login:
   avatar_button: "#login-avatar"
   email: "#email_field"
@@ -44,7 +47,6 @@ overview:
   zoom_out_button_id: "zoomOut-button"
   zoom_out_clicks: 2
   zoom_click_delay_ms: 500
-  settle_ms: 2000
 
 detail_chart:
   page_url: "https://gocharting.com/terminal/chart/orlk0N-Da"
@@ -54,7 +56,6 @@ detail_chart:
   zoom_click_delay_ms: 500
   go_to_date_button_id: "go-to-date-btn"
   apply_button_selector: 'button:has-text("Áp dụng"), button:has-text("Apply")'
-  settle_ms: 2000
   # Per-interval step size; each history step subtracts (step × value) from first go-to-date time.
   hours_back:
     "5m": 2.5   # was 3h

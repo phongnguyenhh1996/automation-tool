@@ -22,6 +22,32 @@ _DEFAULT_DOWNLOAD_BUTTON = (
     'button:has(span div:text-is("Tải xuống"))'
 )
 _DEFAULT_DETAIL_HISTORY_STEPS = 3
+_DEFAULT_CHART_LOAD_MS = 2000
+
+
+def _chart_load_ms(cfg: dict[str, Any], *, section: Optional[str] = None) -> int:
+    if section:
+        block = cfg.get(section) or {}
+        if isinstance(block, dict) and block.get("chart_load_ms") is not None:
+            try:
+                return max(0, int(block["chart_load_ms"]))
+            except (TypeError, ValueError):
+                pass
+    try:
+        return max(0, int(cfg.get("chart_load_ms", _DEFAULT_CHART_LOAD_MS)))
+    except (TypeError, ValueError):
+        return _DEFAULT_CHART_LOAD_MS
+
+
+def _wait_for_chart_before_export(
+    page: Page,
+    cfg: dict[str, Any],
+    *,
+    section: Optional[str] = None,
+) -> None:
+    ms = _chart_load_ms(cfg, section=section)
+    if ms > 0:
+        page.wait_for_timeout(ms)
 
 
 def load_gocharting_yaml(path: Path) -> dict[str, Any]:
@@ -206,6 +232,30 @@ def _maybe_login_gocharting(page: Page, cfg: dict[str, Any], email: str, passwor
     _log.info("gocharting: submitted login form")
 
 
+def _gocharting_tick_search_already_set(
+    current: str,
+    *,
+    query: str,
+    export_label: str,
+) -> bool:
+    """True when tick search input already shows the symbol we would search for."""
+    cur = (current or "").strip()
+    if not cur:
+        return False
+    cur_u = cur.upper()
+    q = (query or "").strip()
+    label = (export_label or "").strip().upper()
+    if cur_u == q.upper():
+        return True
+    if label and cur_u == label:
+        return True
+    if ":" in q:
+        suffix = q.rsplit(":", 1)[-1].strip().upper()
+        if suffix and cur_u == suffix:
+            return True
+    return False
+
+
 def _select_chart_symbol(page: Page, cfg: dict[str, Any], entry: dict[str, Any]) -> None:
     search = cfg.get("symbol_search") or {}
     input_id = str(search.get("input_id") or "input-search-ticks-input")
@@ -219,6 +269,16 @@ def _select_chart_symbol(page: Page, cfg: dict[str, Any], entry: dict[str, Any])
     openai_label = str(entry.get("openai_label") or "").strip()
 
     search_input = _id_locator(page, input_id).first
+    current = str(search_input.input_value(timeout=5_000)).strip()
+    if _gocharting_tick_search_already_set(current, query=query, export_label=export_label):
+        _log.info(
+            "gocharting: symbol search skipped — input already %r (export_label=%s, query=%r)",
+            current,
+            export_label,
+            query,
+        )
+        return
+
     search_input.click(timeout=15_000)
     search_input.fill(query)
     page.wait_for_timeout(type_delay_ms)
@@ -263,10 +323,8 @@ def _prepare_overview_chart(page: Page, cfg: dict[str, Any]) -> None:
     zoom_out_id = str(overview.get("zoom_out_button_id") or "zoomOut-button")
     zoom_clicks = int(overview.get("zoom_out_clicks", 2))
     delay_ms = int(overview.get("zoom_click_delay_ms", 500))
-    settle_ms = int(overview.get("settle_ms", 2000))
 
     _force_click_id(page, refresh_id)
-    page.wait_for_timeout(settle_ms)
     for _ in range(max(0, zoom_clicks)):
         _force_click_id(page, zoom_out_id, delay_ms=delay_ms)
     _log.debug("gocharting: overview prepared (refresh + zoomOut x%s)", zoom_clicks)
@@ -280,7 +338,14 @@ def _save_download(page: Page, click_fn, dest: Path, timeout_ms: int) -> None:
     download.save_as(dest)
 
 
-def _capture_png(page: Page, cfg: dict[str, Any], dest: Path) -> None:
+def _capture_png(
+    page: Page,
+    cfg: dict[str, Any],
+    dest: Path,
+    *,
+    chart_section: Optional[str] = None,
+) -> None:
+    _wait_for_chart_before_export(page, cfg, section=chart_section)
     shot = cfg.get("screenshot") or {}
     open_btn = str(shot.get("open_button") or "#user-screenshot-btn")
     dl_btn = str(shot.get("download_button") or _DEFAULT_DOWNLOAD_BUTTON)
@@ -299,7 +364,14 @@ def _capture_png(page: Page, cfg: dict[str, Any], dest: Path) -> None:
         page.wait_for_timeout(200)
 
 
-def _capture_csv(page: Page, cfg: dict[str, Any], dest: Path) -> None:
+def _capture_csv(
+    page: Page,
+    cfg: dict[str, Any],
+    dest: Path,
+    *,
+    chart_section: Optional[str] = None,
+) -> None:
+    _wait_for_chart_before_export(page, cfg, section=chart_section)
     csv_cfg = cfg.get("csv_export") or {}
     btn = str(
         csv_cfg.get("button_selector")
@@ -340,13 +412,11 @@ def _fill_go_to_date_and_apply(
         detail.get("apply_button_selector")
         or 'button:has-text("Áp dụng"), button:has-text("Apply")'
     )
-    settle_ms = int(detail.get("settle_ms", 2000))
 
     page.locator('input[name="hour12"]').first.fill(str(int(hour12)))
     page.locator('input[name="minute"]').first.fill(str(int(minute)))
     page.locator('select[name="amPm"]').first.select_option(am_pm.lower())
     page.locator(apply_sel).first.click(timeout=15_000)
-    page.wait_for_timeout(settle_ms)
 
 
 def _go_to_date_and_capture_back(
@@ -369,7 +439,7 @@ def _go_to_date_and_capture_back(
         baseline = _read_go_to_date_fields(page)
     new_h, new_m, new_ap = subtract_duration_12h(*baseline, hours=hours_back)
     _fill_go_to_date_and_apply(page, cfg, hour12=new_h, minute=new_m, am_pm=new_ap)
-    _capture_png(page, cfg, dest)
+    _capture_png(page, cfg, dest, chart_section="detail_chart")
     return baseline
 
 
@@ -396,7 +466,6 @@ def _capture_detail_footprint(
     zoom_in_id = str(detail.get("zoom_in_button_id") or "zoomIn-button")
     zoom_clicks = int(detail.get("zoom_clicks", 4))
     delay_ms = int(detail.get("zoom_click_delay_ms", 500))
-    settle_ms = int(detail.get("settle_ms", 2000))
     history_steps = int(detail.get("history_steps", _DEFAULT_DETAIL_HISTORY_STEPS))
     per_step_hours = _hours_back_for_interval(cfg, interval)
 
@@ -410,12 +479,11 @@ def _capture_detail_footprint(
         _select_interval(detail_page, cfg, interval)
 
         _force_click_id(detail_page, refresh_id)
-        detail_page.wait_for_timeout(settle_ms)
         for _ in range(max(0, zoom_clicks)):
             _force_click_id(detail_page, zoom_in_id, delay_ms=delay_ms)
 
         zoom_path = gocharting_detail_png_path(charts_dir, stamp, export_label, interval, "zoom")
-        _capture_png(detail_page, cfg, zoom_path)
+        _capture_png(detail_page, cfg, zoom_path, chart_section="detail_chart")
         paths.append(zoom_path)
 
         # Each step: subtract (step × per-interval hours_back) from first go-to-date baseline.
@@ -536,8 +604,8 @@ def _capture_gocharting_in_context(
                 stem = gocharting_export_stem(stamp, export_label, interval)
                 png_path = charts_dir / f"{stem}.png"
                 csv_path = charts_dir / f"{stem}.csv"
-                _capture_png(main_page, cfg, png_path)
-                _capture_csv(main_page, cfg, csv_path)
+                _capture_png(main_page, cfg, png_path, chart_section="overview")
+                _capture_csv(main_page, cfg, csv_path, chart_section="overview")
                 paths.extend([png_path, csv_path])
                 _log.info(
                     "gocharting: captured %s %s → %s + %s",

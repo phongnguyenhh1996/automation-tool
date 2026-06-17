@@ -7,7 +7,10 @@ import pytest
 
 from automation_tool.gocharting_capture import (
     _capture_gocharting_in_context,
+    _chart_load_ms,
+    _gocharting_tick_search_already_set,
     _prepare_overview_chart,
+    _select_chart_symbol,
     gocharting_detail_png_path,
 )
 
@@ -21,8 +24,8 @@ def gc_cfg() -> dict:
             "zoom_out_button_id": "zoomOut-button",
             "zoom_out_clicks": 2,
             "zoom_click_delay_ms": 500,
-            "settle_ms": 100,
         },
+        "chart_load_ms": 0,
         "detail_chart": {
             "page_url": "https://gocharting.com/terminal/chart/orlk0N-Da",
             "refresh_button_id": "refresh-button",
@@ -31,7 +34,6 @@ def gc_cfg() -> dict:
             "zoom_click_delay_ms": 500,
             "go_to_date_button_id": "go-to-date-btn",
             "apply_button_selector": 'button:has-text("Apply")',
-            "settle_ms": 100,
             "hours_back": {"5m": 2.5, "15m": 7},
             "history_steps": 3,
         },
@@ -67,12 +69,109 @@ def test_prepare_overview_chart_clicks_refresh_and_zoom_out(monkeypatch) -> None
                 "zoom_out_button_id": "zoomOut-button",
                 "zoom_out_clicks": 2,
                 "zoom_click_delay_ms": 10,
-                "settle_ms": 50,
             }
         },
     )
     assert clicks == ["refresh-button", "zoomOut-button", "zoomOut-button"]
-    page.wait_for_timeout.assert_called()
+
+
+def test_chart_load_ms_global_and_section_override() -> None:
+    cfg = {"chart_load_ms": 2000, "overview": {"chart_load_ms": 1500}}
+    assert _chart_load_ms(cfg) == 2000
+    assert _chart_load_ms(cfg, section="overview") == 1500
+    assert _chart_load_ms({}) == 2000
+
+
+@pytest.mark.parametrize(
+    ("current", "query", "export_label", "expected"),
+    [
+        ("DXY", "EXNESS:DXY", "DXY", True),
+        ("EXNESS:DXY", "EXNESS:DXY", "DXY", True),
+        ("GC1!", "GC1!", "GC", True),
+        ("EURUSD", "EXNESS:DXY", "DXY", False),
+        ("", "GC1!", "GC", False),
+        ("  dxy  ", "EXNESS:DXY", "DXY", True),
+    ],
+)
+def test_gocharting_tick_search_already_set(
+    current: str,
+    query: str,
+    export_label: str,
+    expected: bool,
+) -> None:
+    assert (
+        _gocharting_tick_search_already_set(
+            current, query=query, export_label=export_label
+        )
+        is expected
+    )
+
+
+def test_select_chart_symbol_skips_when_input_already_matches(monkeypatch) -> None:
+    page = MagicMock()
+    search_input = MagicMock()
+    search_input.input_value.return_value = "DXY"
+
+    def fake_id_locator(p, element_id):
+        assert element_id == "input-search-ticks-input"
+        loc = MagicMock()
+        loc.first = search_input
+        return loc
+
+    monkeypatch.setattr(
+        "automation_tool.gocharting_capture._id_locator",
+        fake_id_locator,
+    )
+    _select_chart_symbol(
+        page,
+        {
+            "symbol_search": {
+                "input_id": "input-search-ticks-input",
+                "query_template": "EXNESS:{symbol}",
+            }
+        },
+        {"export_label": "DXY"},
+    )
+    search_input.click.assert_not_called()
+
+
+def test_select_chart_symbol_searches_when_input_differs(monkeypatch) -> None:
+    page = MagicMock()
+    search_input = MagicMock()
+    search_input.input_value.return_value = "EURUSD"
+    results_first = MagicMock()
+
+    def fake_id_locator(p, element_id):
+        if element_id == "input-search-ticks-input":
+            loc = MagicMock()
+            loc.first = search_input
+            return loc
+        if element_id == "search-results":
+            loc = MagicMock()
+            loc.locator.return_value.first = results_first
+            return loc
+        raise AssertionError(element_id)
+
+    monkeypatch.setattr(
+        "automation_tool.gocharting_capture._id_locator",
+        fake_id_locator,
+    )
+    _select_chart_symbol(
+        page,
+        {
+            "symbol_search": {
+                "input_id": "input-search-ticks-input",
+                "results_id": "search-results",
+                "query_template": "EXNESS:{symbol}",
+                "type_delay_ms": 0,
+                "settle_ms": 0,
+            }
+        },
+        {"export_label": "DXY"},
+    )
+    search_input.click.assert_called_once()
+    search_input.fill.assert_called_once_with("EXNESS:DXY")
+    results_first.click.assert_called_once()
 
 
 def test_capture_gocharting_in_context_overview_then_detail(monkeypatch, tmp_path: Path, gc_cfg: dict) -> None:
@@ -105,7 +204,7 @@ def test_capture_gocharting_in_context_overview_then_detail(monkeypatch, tmp_pat
         fake_prepare,
     )
 
-    def fake_png(page, cfg, dest):
+    def fake_png(page, cfg, dest, **kwargs):
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(b"png")
         if "detail_zoom" in dest.name:
@@ -115,7 +214,7 @@ def test_capture_gocharting_in_context_overview_then_detail(monkeypatch, tmp_pat
 
     csv_calls: list[Path] = []
 
-    def fake_csv(page, cfg, dest):
+    def fake_csv(page, cfg, dest, **kwargs):
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text("h\n1", encoding="utf-8")
         csv_calls.append(dest)
