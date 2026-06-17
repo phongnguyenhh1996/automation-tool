@@ -383,7 +383,7 @@ def _capture_detail_footprint(
         detail_page.goto(detail_url, wait_until="domcontentloaded", timeout=90_000)
         detail_page.wait_for_timeout(1200)
         _maybe_login_gocharting(detail_page, cfg, email, password)
-        _select_chart_symbol(detail_page, cfg, entry)
+        # Detail chart URL is symbol-specific; only switch interval.
         _select_interval(detail_page, cfg, interval)
 
         _force_click_id(detail_page, refresh_id)

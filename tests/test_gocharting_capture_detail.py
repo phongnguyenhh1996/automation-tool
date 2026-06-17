@@ -84,17 +84,27 @@ def test_capture_gocharting_in_context_overview_then_detail(monkeypatch, tmp_pat
     overview_calls: list[str] = []
     detail_zoom_saved: list[Path] = []
 
+    symbol_pages: list = []
+    interval_pages: list = []
+
     monkeypatch.setattr(
         "automation_tool.gocharting_capture._maybe_login_gocharting",
         lambda *a, **k: None,
     )
+
+    def track_symbol(page, cfg, entry):
+        symbol_pages.append(page)
+
+    def track_interval(page, cfg, interval):
+        interval_pages.append(page)
+
     monkeypatch.setattr(
         "automation_tool.gocharting_capture._select_chart_symbol",
-        lambda *a, **k: None,
+        track_symbol,
     )
     monkeypatch.setattr(
         "automation_tool.gocharting_capture._select_interval",
-        lambda *a, **k: None,
+        track_interval,
     )
 
     def fake_prepare(page, cfg):
@@ -149,6 +159,8 @@ def test_capture_gocharting_in_context_overview_then_detail(monkeypatch, tmp_pat
     )
 
     assert overview_calls == ["overview"]
+    assert symbol_pages == [main_page]
+    assert interval_pages == [main_page, detail_page]
     assert len(csv_calls) == 1
     assert go_date_calls == 3
     zoom = gocharting_detail_png_path(tmp_path, stamp, "DXY", "15m", "zoom")

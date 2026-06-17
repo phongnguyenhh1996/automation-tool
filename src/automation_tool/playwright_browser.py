@@ -67,8 +67,8 @@ def launch_chrome_context(
     it can feel like “another browser”.
     """
     viewport = {"width": viewport_width, "height": viewport_height}
-    launch_args = ["--start-maximized"] if not headless else None
-    context_viewport = None if not headless else viewport
+    # Headed mode: honor configured viewport instead of maximizing the window.
+    launch_args = None
 
     channel = (os.getenv("PLAYWRIGHT_CHANNEL") or _CHROME_CHANNEL).strip()
     user_data = chrome_user_data_dir_from_env()
@@ -82,7 +82,7 @@ def launch_chrome_context(
                 channel=channel,
                 headless=headless,
                 args=launch_args,
-                viewport=context_viewport,
+                viewport=viewport,
             )
         except PlaywrightError as exc:
             print(
@@ -95,7 +95,7 @@ def launch_chrome_context(
                 str(user_data),
                 headless=headless,
                 args=launch_args,
-                viewport=context_viewport,
+                viewport=viewport,
             )
         return None, ctx
 
@@ -110,7 +110,7 @@ def launch_chrome_context(
             flush=True,
         )
         browser = p.chromium.launch(headless=headless, args=launch_args)
-    ctx = browser.new_context(viewport=context_viewport, storage_state=ss)
+    ctx = browser.new_context(viewport=viewport, storage_state=ss)
     return browser, ctx
 
 
