@@ -193,6 +193,15 @@ def test_build_scalp_update_user_text_first_after_all_legacy_m15_m5() -> None:
     assert "scalp" in t.lower()
 
 
+def test_build_scalp_update_user_text_gocharting_mentions_pan_back() -> None:
+    t = build_scalp_update_user_text(
+        first_after_all=True,
+        footprint_source="gocharting",
+    )
+    assert "pan-back" in t
+    assert "detail footprint zoom" in t
+
+
 def test_format_intraday_update_time_line() -> None:
     from automation_tool.zones_state import format_intraday_update_time_line
 

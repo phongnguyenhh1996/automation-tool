@@ -865,7 +865,7 @@ def build_scalp_update_user_text(
     User message cho ``coinmap-automation update-scalp``: giống ``build_intraday_update_user_text``
     nhưng yêu cầu tìm plan scalp đẹp nhất và dùng label ``scalp_<timeframe>``.
 
-    * ``footprint_source="gocharting"``: CSV + PNG overview + một PNG detail zoom GoCharting M15/M5.
+    * ``footprint_source="gocharting"``: CSV + PNG overview + detail zoom và 2 PNG pan-back GoCharting M15/M5.
     * ``coinmap_attachment_mode="merged"`` (default): file ``coinmap_merged`` đa khung (15m + 5m).
     * ``coinmap_attachment_mode="merged_m5"``: file ``coinmap_merged`` chỉ có khung **5m** trong
       ``frames`` (build từ raw M5 qua ``write_openai_coinmap_merged_from_raw_export``).
@@ -878,7 +878,7 @@ def build_scalp_update_user_text(
         gc_hint = (
             f" (footprint {GOCHARTING_GOLD_FUTURE_LABEL} trên GoCharting — hợp đồng tương lai vàng GC1!, "
             "không phải spot XAUUSD; mỗi khung: CSV orderflow; PNG overview; "
-            "một PNG detail footprint zoom)."
+            "một PNG detail footprint zoom và hai PNG pan-back lịch sử)."
         )
         if first_after_all:
             return (
@@ -895,7 +895,7 @@ def build_scalp_update_user_text(
             f"{time_line}"
             "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
             f"Đính kèm **hai** file CSV GoCharting: **M15** và **M5** (footprint {GOCHARTING_GOLD_FUTURE_LABEL}; "
-            "PNG overview và detail zoom ngay sau mỗi CSV nếu có).\n"
+            "PNG overview, detail zoom và hai PNG pan-back ngay sau mỗi CSV nếu có).\n"
             f"{_SCALP_UPDATE_SUFFIX}"
         )
 

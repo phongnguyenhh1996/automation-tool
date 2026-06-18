@@ -325,6 +325,25 @@ def gocharting_detail_zoom_png_path_for_csv(csv_path: Path) -> Optional[Path]:
     return zoom if zoom.is_file() else None
 
 
+def _gocharting_slot_parts_from_csv(csv_path: Path) -> Optional[tuple[Path, str, str, str]]:
+    """Parse ``{stamp}_gocharting_{sym}_{iv}.csv`` → charts dir, stamp, sym, interval slug."""
+    if "_gocharting_" not in csv_path.name or csv_path.suffix.lower() != ".csv":
+        return None
+    m = re.match(r"^(.+)_gocharting_(.+?)_(.+)\.csv$", csv_path.name, re.I)
+    if not m:
+        return None
+    return csv_path.parent, m.group(1), m.group(2), m.group(3)
+
+
+def gocharting_detail_png_paths_for_csv(csv_path: Path) -> list[Path]:
+    """``detail_zoom`` then ``detail_back_*`` siblings for a GoCharting CSV export, if on disk."""
+    slot = _gocharting_slot_parts_from_csv(csv_path)
+    if slot is None:
+        return []
+    charts_dir, stamp, sym, iv = slot
+    return gocharting_detail_png_paths(charts_dir, stamp, sym, iv)
+
+
 def coinmap_main_pair_interval_json_path(
     charts_dir: Path, interval: str, *, stamp: Optional[str] = None
 ) -> Optional[Path]:
@@ -464,7 +483,7 @@ def openai_payloads_for_attachment_paths(paths: Sequence[Path]) -> list[ChartOpe
     """
     Build OpenAI payloads from JSON/CSV attachment paths; for each Coinmap JSON, append
     sibling PNG immediately after (per-interval or M15+M5 for merged). For GoCharting CSV,
-    append overview PNG then detail-zoom PNG when on disk.
+    append overview PNG then detail-zoom and detail-back PNGs when on disk.
     """
     out: list[ChartOpenAIPayload] = []
     for p in paths:
@@ -473,9 +492,8 @@ def openai_payloads_for_attachment_paths(paths: Sequence[Path]) -> list[ChartOpe
             pp = gocharting_png_path_for_csv(p)
             if pp is not None:
                 out.append(("image", pp))
-            zoom = gocharting_detail_zoom_png_path_for_csv(p)
-            if zoom is not None:
-                out.append(("image", zoom))
+            for dp in gocharting_detail_png_paths_for_csv(p):
+                out.append(("image", dp))
             continue
         out.append(("json", p))
         if "_coinmap_" not in p.name or p.suffix.lower() != ".json":

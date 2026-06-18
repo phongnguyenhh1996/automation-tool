@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from automation_tool.gocharting_capture import gocharting_export_stem
+from automation_tool.gocharting_capture import (
+    GOCHARTING_UPDATE_SCALP_DETAIL_HISTORY_STEPS,
+    gocharting_export_stem,
+)
 from automation_tool.images import (
     GOCHARTING_GOLD_EXPORT_LABEL,
     GOCHARTING_DETAIL_PNG_PER_SLOT,
@@ -25,6 +28,10 @@ def test_gocharting_export_stem() -> None:
     assert gocharting_export_stem("20260616_120000", "GC", "15m") == (
         "20260616_120000_gocharting_GC_15m"
     )
+
+
+def test_update_scalp_gocharting_detail_history_steps() -> None:
+    assert GOCHARTING_UPDATE_SCALP_DETAIL_HISTORY_STEPS == 2
 
 
 def test_gocharting_footprint_export_label() -> None:

@@ -16,6 +16,10 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from automation_tool.coinmap import capture_charts, load_coinmap_yaml
+from automation_tool.gocharting_capture import (
+    GOCHARTING_UPDATE_SCALP_DETAIL_HISTORY_STEPS,
+    capture_gocharting,
+)
 from automation_tool.config import (
     resolve_update_scalp_vector_store_ids,
     default_charts_dir,
@@ -30,7 +34,6 @@ from automation_tool.config import (
     resolved_openai_model,
     symbol_data_dir,
 )
-from automation_tool.gocharting_capture import capture_gocharting
 from automation_tool.openai_analysis_json import (
     extract_json_object,
     format_plan_lines_for_telegram,
@@ -3581,7 +3584,7 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
         gocharting_yaml=gc_yaml,
         gocharting_email=s.gocharting_email or "",
         gocharting_password=s.gocharting_password or "",
-        gocharting_detail_history_steps=0,
+        gocharting_detail_history_steps=GOCHARTING_UPDATE_SCALP_DETAIL_HISTORY_STEPS,
     )
 
     print(f"Captured {len(paths)} file(s) for update-scalp run.")
