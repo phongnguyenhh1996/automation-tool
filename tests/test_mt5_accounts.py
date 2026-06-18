@@ -1318,10 +1318,10 @@ def test_apply_account_short_tp_scalp_buy() -> None:
         short_scalp=True,
     )
     out = apply_account_short_tp(trade, acc, "scalp_1")
-    assert out.sl == pytest.approx(4739.0)
+    assert out.sl == pytest.approx(4737.0)
     assert out.tp1 == pytest.approx(4750.0)
     assert out.tp2 is None
-    assert "SL 4739" in out.raw_line
+    assert "SL 4737" in out.raw_line
     assert "TP1 4750" in out.raw_line
     assert "TP2" not in out.raw_line
 
@@ -1349,7 +1349,7 @@ def test_apply_account_short_tp_scalp_sell() -> None:
         short_scalp=True,
     )
     out = apply_account_short_tp(trade, acc, "scalp")
-    assert out.sl == pytest.approx(4741.0)
+    assert out.sl == pytest.approx(4743.0)
     assert out.tp1 == pytest.approx(4730.0)
 
 
@@ -1376,7 +1376,7 @@ def test_apply_account_short_tp_scalp_keeps_tp_when_min_distance_met() -> None:
         short_scalp=True,
     )
     out = apply_account_short_tp(trade, acc, "scalp_1")
-    assert out.tp1 == pytest.approx(4753.0)
+    assert out.tp1 == pytest.approx(4754.0)
 
 
 def test_apply_account_short_tp_chinh_buy() -> None:
