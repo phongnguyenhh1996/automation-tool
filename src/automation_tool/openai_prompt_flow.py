@@ -107,7 +107,8 @@ def default_analysis_prompt(
             "GoCharting DXY M15 (CSV; PNG overview) → "
             f"GoCharting {_gocharting_main_footprint_label(sym)} M15 và M5 "
             "(footprint hợp đồng tương lai vàng GC1! trên GoCharting; không phải spot XAUUSD; "
-            "mỗi khung: CSV + PNG overview + 4 PNG detail).\n"
+            "mỗi khung: CSV + PNG overview + 4 PNG detail) → "
+            f"MT5 spot {sym} M5 (50 nến OHLC broker mới nhất; giá vàng spot thực thi, bổ sung cho GC1!).\n"
             "Ưu tiên đọc ảnh chart (GoCharting PNG detail/overview, TradingView snapshot); "
             "khi cần con số chính xác (order flow, CVD, delta) thì tra CSV GoCharting / JSON tvdatafeed tương ứng.\n"
         )
@@ -215,6 +216,11 @@ def _json_file_header_and_body(path: Path, *, max_chars: int) -> tuple[str, str]
             )
         else:
             header = f"[TradingView OHLC (tvdatafeed) — file: {path.name}]\n"
+    elif "_mt5_" in path.name:
+        header = (
+            f"[MT5 spot OHLC (broker execution price) — file: {path.name}]\n"
+            "Instrument: spot XAUUSD on broker MT5 (not GC1! futures footprint).\n"
+        )
     elif "_openai_coinmap_merged" in path.name or path.name.endswith("_merged.json"):
         header = f"[Coinmap merged analysis — file: {path.name}]\n"
     else:
@@ -878,15 +884,16 @@ def build_scalp_update_user_text(
         gc_hint = (
             f" (footprint {GOCHARTING_GOLD_FUTURE_LABEL} trên GoCharting — hợp đồng tương lai vàng GC1!, "
             "không phải spot XAUUSD; mỗi khung: CSV orderflow; PNG overview; "
-            "một PNG detail footprint zoom và hai PNG pan-back lịch sử)."
+            "một PNG detail footprint zoom và hai PNG pan-back lịch sử; "
+            "kèm thêm JSON MT5 spot XAUUSD M5 — 50 nến OHLC broker mới nhất)."
         )
         if first_after_all:
             return (
                 "[INTRADAY_UPDATE]\n"
                 f"{time_line}"
                 "Phân tích buổi sáng (Schema A) nằm trong file **morning_full_analysis.json** đính kèm đầu tiên.\n"
-                "Đính kèm **ba** file theo thứ tự: **(1)** morning_full_analysis.json, **(2)** GoCharting M15 CSV, "
-                f"**(3)** M5 CSV (footprint cặp chính{gc_hint}\n"
+                "Đính kèm **bốn** file theo thứ tự: **(1)** morning_full_analysis.json, **(2)** GoCharting M15 CSV, "
+                f"**(3)** M5 CSV, **(4)** MT5 spot XAUUSD M5 JSON (50 nến broker mới nhất){gc_hint}\n"
                 f"{_MORNING_CONTEXT_HINT}"
                 f"{_SCALP_UPDATE_SUFFIX}"
             )
@@ -894,7 +901,8 @@ def build_scalp_update_user_text(
             "[INTRADAY_UPDATE]\n"
             f"{time_line}"
             "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
-            f"Đính kèm **hai** file CSV GoCharting: **M15** và **M5** (footprint {GOCHARTING_GOLD_FUTURE_LABEL}; "
+            f"Đính kèm **ba** file: **(1)** GoCharting M15 CSV, **(2)** M5 CSV, **(3)** MT5 spot XAUUSD M5 JSON "
+            f"(50 nến broker; footprint {GOCHARTING_GOLD_FUTURE_LABEL}; "
             "PNG overview, detail zoom và hai PNG pan-back ngay sau mỗi CSV nếu có).\n"
             f"{_SCALP_UPDATE_SUFFIX}"
         )

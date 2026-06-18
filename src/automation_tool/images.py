@@ -248,7 +248,7 @@ def effective_chart_image_order(
     return chart_image_order_for_main_symbol(main_sym, footprint_source=fp)
 
 
-_STAMP_RE = re.compile(r"^(\d{8}_\d{6})_(?:tradingview|coinmap|gocharting)_")
+_STAMP_RE = re.compile(r"^(\d{8}_\d{6})_(?:tradingview|coinmap|gocharting|mt5)_")
 
 
 def latest_chart_stamp(charts_dir: Path) -> Optional[str]:
@@ -579,7 +579,45 @@ def ordered_chart_openai_payloads(
                     out.append(("image", pp))
             elif pp.is_file():
                 out.append(("image", pp))
+    _append_gocharting_mt5_spot_payload(out, charts_dir=charts_dir, stamp=st)
     return out
+
+
+def mt5_spot_candles_json_path_for_stamp(
+    charts_dir: Path,
+    *,
+    stamp: Optional[str] = None,
+    logic_symbol: Optional[str] = None,
+    interval: Optional[str] = None,
+) -> Optional[Path]:
+    """``{stamp}_mt5_{SYMBOL}_{interval}.json`` when on disk (GoCharting supplement)."""
+    from automation_tool.mt5_candles import mt5_spot_candles_json_path
+
+    st = stamp or latest_chart_stamp(charts_dir)
+    if not st:
+        return None
+    sym = (logic_symbol or read_main_chart_symbol(charts_dir)).strip().upper()
+    p = mt5_spot_candles_json_path(
+        charts_dir,
+        logic_symbol=sym,
+        interval=interval,
+        stamp=st,
+    )
+    return p if p.is_file() else None
+
+
+def _append_gocharting_mt5_spot_payload(
+    out: list[ChartOpenAIPayload],
+    *,
+    charts_dir: Path,
+    stamp: str,
+) -> None:
+    """After GoCharting footprint slots, attach MT5 spot OHLC JSON when present."""
+    if footprint_source_for_stamp(charts_dir, stamp=stamp) != "gocharting":
+        return
+    p = mt5_spot_candles_json_path_for_stamp(charts_dir, stamp=stamp)
+    if p is not None:
+        out.append(("json", p))
 
 
 def ordered_chart_images(charts_dir: Path, *, stamp: Optional[str] = None) -> list[Path]:

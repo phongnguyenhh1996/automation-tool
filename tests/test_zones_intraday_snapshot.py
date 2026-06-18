@@ -200,6 +200,8 @@ def test_build_scalp_update_user_text_gocharting_mentions_pan_back() -> None:
     )
     assert "pan-back" in t
     assert "detail footprint zoom" in t
+    assert "MT5 spot XAUUSD M5" in t
+    assert "50 nến" in t
 
 
 def test_format_intraday_update_time_line() -> None:

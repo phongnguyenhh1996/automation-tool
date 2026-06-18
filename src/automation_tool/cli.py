@@ -214,6 +214,26 @@ def _resolved_mt5_accounts_json(args: argparse.Namespace) -> Optional[Path]:
     return Path(p).expanduser()
 
 
+def _maybe_export_gocharting_mt5_spot_candles(
+    *,
+    charts_dir: Path,
+    stamp: str,
+    mt5_accounts_json: Optional[Path],
+    main_symbol: Optional[str] = None,
+) -> Optional[Path]:
+    """GoCharting flows: bổ sung JSON 50 nến spot XAUUSD MT5 mới nhất (non-fatal nếu MT5 không sẵn)."""
+    from automation_tool.images import read_main_chart_symbol
+    from automation_tool.mt5_candles import export_mt5_spot_candles_json
+
+    sym = (main_symbol or read_main_chart_symbol(charts_dir)).strip().upper()
+    return export_mt5_spot_candles_json(
+        charts_dir=charts_dir,
+        stamp=stamp,
+        logic_symbol=sym,
+        accounts_json=mt5_accounts_json,
+    )
+
+
 def _configure_stdio_utf8() -> None:
     """Windows consoles often use cp1252; OpenAI/Vietnamese output triggers UnicodeEncodeError."""
     if sys.platform != "win32":
@@ -2969,6 +2989,12 @@ def cmd_all(args: argparse.Namespace) -> None:
 
     if use_gc:
         require_valid_gocharting_exports_for_stamp(charts_dir, stamp)
+        _maybe_export_gocharting_mt5_spot_candles(
+            charts_dir=charts_dir,
+            stamp=stamp,
+            mt5_accounts_json=_resolved_mt5_accounts_json(args),
+            main_symbol=getattr(args, "main_symbol", None),
+        )
     else:
         require_valid_coinmap_exports_for_stamp(charts_dir, stamp)
 
@@ -3610,7 +3636,15 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
                 "Check config/gocharting.yaml capture_plan."
             )
         require_valid_gocharting_exports_for_stamp(charts_dir, stamp or "")
+        mt5_spot = _maybe_export_gocharting_mt5_spot_candles(
+            charts_dir=charts_dir,
+            stamp=stamp or "",
+            mt5_accounts_json=resolve_mt5_accounts_path(getattr(args, "mt5_accounts_json", None)),
+            main_symbol=getattr(args, "main_symbol", None),
+        )
         footprint_paths = [m15, m5]
+        if mt5_spot is not None:
+            footprint_paths.append(mt5_spot)
         m15_png = gocharting_png_path_for_csv(m15)
         m5_png = gocharting_png_path_for_csv(m5)
         m15_detail = gocharting_detail_zoom_png_path_for_csv(m15)
