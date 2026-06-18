@@ -7,7 +7,6 @@ import pytest
 
 from automation_tool.gocharting_capture import (
     _capture_gocharting_in_context,
-    _capture_snapshot,
     _chart_load_ms,
     _gocharting_tick_search_already_set,
     _pan_detail_chart,
@@ -55,49 +54,6 @@ def gc_cfg() -> dict:
         "screenshot": {"open_button": "#user-screenshot-btn"},
         "csv_export": {"button_selector": "button.csv"},
     }
-
-
-def test_capture_snapshot_writes_url_from_sh_img_src(monkeypatch, tmp_path: Path) -> None:
-    page = MagicMock()
-    page.url = "https://gocharting.com/terminal/chart/x"
-    snap_page = MagicMock()
-    img_loc = MagicMock()
-    img_loc.get_attribute.return_value = "https://cdn.example.com/chart.png"
-    snap_page.locator.return_value.first = img_loc
-    page.context.new_page.return_value = snap_page
-    page.evaluate.return_value = "https://gocharting.com/share/abc123"
-
-    escapes: list[str] = []
-
-    def fake_press(key):
-        escapes.append(key)
-
-    page.keyboard.press.side_effect = fake_press
-
-    dest = tmp_path / "20260617_120000_gocharting_GC_15m.url"
-    out = _capture_snapshot(
-        page,
-        {
-            "screenshot": {
-                "open_button": "#shot",
-                "copy_link_button": 'button:has(span:text-is("Copy Link"))',
-                "snapshot_image_selector": "img.sh-img",
-                "popup_escape_presses": 2,
-            }
-        },
-        dest,
-    )
-
-    assert out == dest
-    assert dest.read_text(encoding="utf-8") == "https://cdn.example.com/chart.png\n"
-    page.context.new_page.assert_called_once()
-    snap_page.goto.assert_called_once_with(
-        "https://gocharting.com/share/abc123",
-        wait_until="domcontentloaded",
-        timeout=30_000,
-    )
-    snap_page.close.assert_called_once()
-    assert escapes == ["Escape", "Escape"]
 
 
 def test_prepare_overview_chart_clicks_refresh_and_zoom_out(monkeypatch) -> None:
@@ -292,15 +248,13 @@ def test_capture_gocharting_in_context_overview_then_detail(monkeypatch, tmp_pat
         fake_prepare,
     )
 
-    def fake_snapshot(page, cfg, dest, **kwargs):
+    def fake_png(page, cfg, dest, **kwargs):
         dest.parent.mkdir(parents=True, exist_ok=True)
-        out = dest if dest.suffix == ".url" else dest.with_suffix(".url")
-        out.write_text("https://example.com/snap.png\n", encoding="utf-8")
-        if "detail_zoom" in out.name:
-            detail_zoom_saved.append(out)
-        return out
+        dest.write_bytes(b"png")
+        if "detail_zoom" in dest.name:
+            detail_zoom_saved.append(dest)
 
-    monkeypatch.setattr("automation_tool.gocharting_capture._capture_snapshot", fake_snapshot)
+    monkeypatch.setattr("automation_tool.gocharting_capture._capture_png", fake_png)
 
     csv_calls: list[Path] = []
 
@@ -317,8 +271,7 @@ def test_capture_gocharting_in_context_overview_then_detail(monkeypatch, tmp_pat
         nonlocal pan_calls
         pan_calls += 1
         dest.parent.mkdir(parents=True, exist_ok=True)
-        out = dest if dest.suffix == ".url" else dest.with_suffix(".url")
-        out.write_text("https://example.com/snap.png\n", encoding="utf-8")
+        dest.write_bytes(b"png")
 
     monkeypatch.setattr(
         "automation_tool.gocharting_capture._pan_detail_and_capture_back",
@@ -376,13 +329,11 @@ def test_capture_gocharting_in_context_skips_detail_when_symbol_disabled(
         lambda *a, **k: None,
     )
 
-    def fake_snapshot(page, cfg, dest, **kwargs):
+    def fake_png(page, cfg, dest, **kwargs):
         dest.parent.mkdir(parents=True, exist_ok=True)
-        out = dest if dest.suffix == ".url" else dest.with_suffix(".url")
-        out.write_text("https://example.com/snap.png\n", encoding="utf-8")
-        return out
+        dest.write_bytes(b"png")
 
-    monkeypatch.setattr("automation_tool.gocharting_capture._capture_snapshot", fake_snapshot)
+    monkeypatch.setattr("automation_tool.gocharting_capture._capture_png", fake_png)
 
     def fake_csv(page, cfg, dest, **kwargs):
         dest.parent.mkdir(parents=True, exist_ok=True)

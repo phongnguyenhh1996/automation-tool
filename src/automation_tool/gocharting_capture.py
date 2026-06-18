@@ -17,9 +17,9 @@ from automation_tool.playwright_browser import close_browser_and_context, launch
 _log = logging.getLogger(__name__)
 
 _INTERVAL_SLUG_RE = re.compile(r"[^\w]+")
-_DEFAULT_COPY_LINK_BUTTON = (
-    'button:has(span:text-is("Copy Link")), '
-    'button:has(span:text-is("Sao chép liên kết"))'
+_DEFAULT_DOWNLOAD_BUTTON = (
+    'button:has(span div:text-is("Download")), '
+    'button:has(span div:text-is("Tải xuống"))'
 )
 _DEFAULT_DETAIL_HISTORY_STEPS = 3
 _DEFAULT_CHART_LOAD_MS = 2000
@@ -80,9 +80,9 @@ def gocharting_detail_png_path(
     interval: str,
     suffix: str,
 ) -> Path:
-    """``{stem}_detail_{suffix}.url`` e.g. ``detail_zoom``, ``detail_back_1``, ``detail_back_2``."""
+    """``{stem}_detail_{suffix}.png`` e.g. ``detail_zoom``, ``detail_back_1``, ``detail_back_2``."""
     stem = gocharting_export_stem(stamp, export_label, interval)
-    return charts_dir / f"{stem}_detail_{suffix}.url"
+    return charts_dir / f"{stem}_detail_{suffix}.png"
 
 
 def gocharting_detail_back_suffix(step_index: int) -> str:
@@ -281,96 +281,30 @@ def _save_download(page: Page, click_fn, dest: Path, timeout_ms: int) -> None:
     download.save_as(dest)
 
 
-def _ensure_clipboard_permissions(page: Page) -> None:
-    origin_match = re.match(r"^(https?://[^/]+)", page.url or "")
-    if not origin_match:
-        return
-    try:
-        page.context.grant_permissions(
-            ["clipboard-read", "clipboard-write"],
-            origin=origin_match.group(1),
-        )
-    except Exception:
-        _log.debug("gocharting: clipboard permissions grant failed", exc_info=True)
-
-
-def _read_clipboard_text(page: Page) -> str:
-    _ensure_clipboard_permissions(page)
-    return str(
-        page.evaluate(
-            """async () => {
-                try {
-                    return await navigator.clipboard.readText();
-                } catch (e) {
-                    return "";
-                }
-            }"""
-        )
-        or ""
-    ).strip()
-
-
-def _capture_snapshot(
+def _capture_png(
     page: Page,
     cfg: dict[str, Any],
     dest: Path,
     *,
     chart_section: Optional[str] = None,
-) -> Path:
-    """
-    Screenshot toolbar → Copy Link → open URL in new tab → read ``img.sh-img`` src.
-    Writes ``.url`` (https first line) for OpenAI; falls back to PNG on blob/missing src.
-    """
+) -> None:
     _wait_for_chart_before_export(page, cfg, section=chart_section)
     shot = cfg.get("screenshot") or {}
     open_btn = str(shot.get("open_button") or "#user-screenshot-btn")
-    copy_link_sel = str(shot.get("copy_link_button") or _DEFAULT_COPY_LINK_BUTTON)
-    img_sel = str(shot.get("snapshot_image_selector") or "img.sh-img")
-    tab_settle_ms = int(shot.get("snapshot_tab_settle_ms", 1000))
-    after_open_ms = int(shot.get("after_screenshot_button_ms", 400))
-    after_copy_ms = int(shot.get("after_copy_link_ms", 300))
+    dl_btn = str(shot.get("download_button") or _DEFAULT_DOWNLOAD_BUTTON)
+    timeout_ms = int(shot.get("download_timeout_ms", 30_000))
     escapes = int(shot.get("popup_escape_presses", 1))
 
     page.locator(open_btn).first.click(timeout=15_000)
-    page.wait_for_timeout(after_open_ms)
+    page.wait_for_timeout(400)
 
-    copy_btn = page.locator(copy_link_sel).first
-    copy_btn.wait_for(state="visible", timeout=5_000)
-    copy_btn.click(timeout=15_000)
-    page.wait_for_timeout(after_copy_ms)
+    def _click_download() -> None:
+        page.locator(dl_btn).first.click(timeout=15_000)
 
-    link = _read_clipboard_text(page)
-    if not link.startswith("http://") and not link.startswith("https://"):
-        raise RuntimeError(
-            f"gocharting: clipboard after Copy Link is not http(s): {link!r}"
-        )
-
-    context = page.context
-    snap_page = context.new_page()
-    dest_base = dest.with_suffix("")
-    out_url_path = dest_base.with_suffix(".url")
-    out_png_path = dest_base.with_suffix(".png")
-    try:
-        snap_page.goto(link, wait_until="domcontentloaded", timeout=30_000)
-        snap_page.wait_for_timeout(tab_settle_ms)
-        loc = snap_page.locator(img_sel).first
-        loc.wait_for(state="visible", timeout=5_000)
-        src = (loc.get_attribute("src") or "").strip()
-        if src.startswith("https://") or src.startswith("http://"):
-            _ensure_dir(out_url_path.parent)
-            out_url_path.write_text(src + "\n", encoding="utf-8")
-            return out_url_path
-        _ensure_dir(out_png_path.parent)
-        loc.screenshot(path=str(out_png_path), timeout=5_000)
-        return out_png_path
-    finally:
-        try:
-            snap_page.close()
-        except Exception:
-            pass
-        for _ in range(max(0, escapes)):
-            page.keyboard.press("Escape")
-            page.wait_for_timeout(200)
+    _save_download(page, _click_download, dest, timeout_ms)
+    for _ in range(max(0, escapes)):
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(200)
 
 
 def _capture_csv(
@@ -449,7 +383,7 @@ def _pan_detail_and_capture_back(
 ) -> None:
     """Pan detail chart horizontally, then export PNG."""
     _pan_detail_chart(page, cfg)
-    _capture_snapshot(page, cfg, dest, chart_section="detail_chart")
+    _capture_png(page, cfg, dest, chart_section="detail_chart")
 
 
 def _capture_detail_footprint(
@@ -491,7 +425,7 @@ def _capture_detail_footprint(
             _force_click_id(detail_page, zoom_in_id, delay_ms=delay_ms)
 
         zoom_path = gocharting_detail_png_path(charts_dir, stamp, export_label, interval, "zoom")
-        _capture_snapshot(detail_page, cfg, zoom_path, chart_section="detail_chart")
+        _capture_png(detail_page, cfg, zoom_path, chart_section="detail_chart")
         paths.append(zoom_path)
 
         # Each step: pan chart left (history) then capture PNG.
@@ -601,18 +535,16 @@ def _capture_gocharting_in_context(
                 _select_interval(main_page, cfg, interval)
                 _prepare_overview_chart(main_page, cfg)
                 stem = gocharting_export_stem(stamp, export_label, interval)
-                url_path = charts_dir / f"{stem}.url"
+                png_path = charts_dir / f"{stem}.png"
                 csv_path = charts_dir / f"{stem}.csv"
-                snapshot_path = _capture_snapshot(
-                    main_page, cfg, url_path, chart_section="overview"
-                )
+                _capture_png(main_page, cfg, png_path, chart_section="overview")
                 _capture_csv(main_page, cfg, csv_path, chart_section="overview")
-                paths.extend([snapshot_path, csv_path])
+                paths.extend([png_path, csv_path])
                 _log.info(
                     "gocharting: captured %s %s → %s + %s",
                     export_label,
                     interval,
-                    snapshot_path.name,
+                    png_path.name,
                     csv_path.name,
                 )
                 if _symbol_detail_chart_enabled(cfg, entry):
@@ -687,9 +619,9 @@ def capture_gocharting(
     require_browser_service: bool = False,
 ) -> list[Path]:
     """
-    Capture GoCharting footprint charts: snapshot URL (Copy Link) + CSV export per (symbol, interval).
+    Capture GoCharting footprint charts: PNG screenshot + CSV export per (symbol, interval).
 
-    When ``detail_chart.page_url`` is set, also captures detail footprint snapshots on a separate tab
+    When ``detail_chart.page_url`` is set, also captures detail footprint PNGs on a separate tab
     (zoom + pan history steps).
 
     Attaches to the long-lived browser service when ``data/browser_service_state.json`` is
@@ -713,7 +645,7 @@ def capture_gocharting(
     else:
         clear = clear_charts_before_capture
     if clear:
-        for pat in ("*_gocharting_*.url", "*_gocharting_*.png", "*_gocharting_*.csv"):
+        for pat in ("*_gocharting_*.png", "*_gocharting_*.csv"):
             for p in charts_dir.glob(pat):
                 try:
                     p.unlink()

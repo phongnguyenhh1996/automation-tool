@@ -310,30 +310,11 @@ def gocharting_main_interval_csv_path(
 
 
 def gocharting_png_path_for_csv(csv_path: Path) -> Optional[Path]:
-    """Sibling snapshot (``.url`` or ``.png``) for a GoCharting CSV export, if on disk."""
+    """Sibling PNG for a GoCharting CSV export, if on disk."""
     if "_gocharting_" not in csv_path.name or csv_path.suffix.lower() != ".csv":
         return None
-    up = csv_path.with_suffix(".url")
-    if up.is_file():
-        return up
     pp = csv_path.with_suffix(".png")
     return pp if pp.is_file() else None
-
-
-def _gocharting_snapshot_openai_payload(base_path: Path) -> Optional[ChartOpenAIPayload]:
-    """Resolve ``.url`` (https) or fallback ``.png`` for a GoCharting snapshot stem."""
-    up = base_path.with_suffix(".url")
-    pp = base_path.with_suffix(".png")
-    if up.is_file():
-        raw = up.read_text(encoding="utf-8").strip().splitlines()
-        line = (raw[0] if raw else "").strip()
-        if line.startswith("http://") or line.startswith("https://"):
-            return ("image_url", line)
-        if pp.is_file():
-            return ("image", pp)
-    elif pp.is_file():
-        return ("image", pp)
-    return None
 
 
 def coinmap_main_pair_interval_json_path(
@@ -382,22 +363,10 @@ def coinmap_merged_openai_files(
 def gocharting_detail_png_paths(
     charts_dir: Path, stamp: str, sym: str, iv: str
 ) -> list[Path]:
-    """``detail_zoom`` then ``detail_back_*`` snapshots (``.url`` or ``.png``) for one slot."""
+    """``detail_zoom`` then ``detail_back_*`` PNGs for one GoCharting slot, if on disk."""
     iv_slug = re.sub(r"[^\w]+", "_", iv).strip("_")[:20] or "iv"
-    pattern_url = f"{stamp}_gocharting_{sym}_{iv_slug}_detail_*.url"
-    pattern_png = f"{stamp}_gocharting_{sym}_{iv_slug}_detail_*.png"
-    seen: set[str] = set()
-    paths: list[Path] = []
-    for pattern in (pattern_url, pattern_png):
-        for p in charts_dir.glob(pattern):
-            if not p.is_file():
-                continue
-            stem = p.with_suffix("").name
-            if stem in seen:
-                continue
-            seen.add(stem)
-            up = p.with_suffix(".url")
-            paths.append(up if up.is_file() else p)
+    pattern = f"{stamp}_gocharting_{sym}_{iv_slug}_detail_*.png"
+    paths = [p for p in charts_dir.glob(pattern) if p.is_file()]
 
     def _sort_key(p: Path) -> tuple[int, int | str]:
         stem = p.stem
@@ -421,16 +390,13 @@ def _append_gocharting_openai_payloads(
 ) -> None:
     iv_slug = re.sub(r"[^\w]+", "_", iv).strip("_")[:20] or "iv"
     cp = charts_dir / f"{stamp}_gocharting_{sym}_{iv_slug}.csv"
-    base = charts_dir / f"{stamp}_gocharting_{sym}_{iv_slug}"
+    pp = charts_dir / f"{stamp}_gocharting_{sym}_{iv_slug}.png"
     if cp.is_file():
         out.append(("csv", cp))
-    snap = _gocharting_snapshot_openai_payload(base)
-    if snap is not None:
-        out.append(snap)
+    if pp.is_file():
+        out.append(("image", pp))
     for dp in gocharting_detail_png_paths(charts_dir, stamp, sym, iv):
-        detail = _gocharting_snapshot_openai_payload(dp.with_suffix(""))
-        if detail is not None:
-            out.append(detail)
+        out.append(("image", dp))
 
 
 def _append_coinmap_openai_payloads(
@@ -495,9 +461,9 @@ def openai_payloads_for_attachment_paths(paths: Sequence[Path]) -> list[ChartOpe
     for p in paths:
         if p.suffix.lower() == ".csv":
             out.append(("csv", p))
-            snap = _gocharting_snapshot_openai_payload(p.with_suffix(""))
-            if snap is not None:
-                out.append(snap)
+            pp = gocharting_png_path_for_csv(p)
+            if pp is not None:
+                out.append(("image", pp))
             continue
         out.append(("json", p))
         if "_coinmap_" not in p.name or p.suffix.lower() != ".json":

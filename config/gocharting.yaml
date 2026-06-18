@@ -35,12 +35,9 @@ interval_panel:
 
 screenshot:
   open_button: "#user-screenshot-btn"
-  copy_link_button: 'button:has(span:text-is("Copy Link")), button:has(span:text-is("Sao chép liên kết"))'
-  snapshot_image_selector: "img.sh-img"
+  download_button: 'button:has(span div:text-is("Download")), button:has(span div:text-is("Tải xuống"))'
   popup_escape_presses: 1
-  after_screenshot_button_ms: 400
-  after_copy_link_ms: 300
-  snapshot_tab_settle_ms: 1000
+  download_timeout_ms: 30000
 
 csv_export:
   button_selector: 'button:has(svg path[d*="M439.658,91.21"])'
