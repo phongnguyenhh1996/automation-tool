@@ -3604,13 +3604,13 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
             )
         require_valid_gocharting_exports_for_stamp(charts_dir, stamp or "")
         footprint_paths = [m15, m5]
-        m15_png = gocharting_png_path_for_csv(m15)
-        m5_png = gocharting_png_path_for_csv(m5)
-        _log.info("update-scalp: GoCharting PNG | M15=%s | M5=%s", m15_png, m5_png)
-        if m15_png is None or m5_png is None:
+        m15_snap = gocharting_png_path_for_csv(m15)
+        m5_snap = gocharting_png_path_for_csv(m5)
+        _log.info("update-scalp: GoCharting snapshot | M15=%s | M5=%s", m15_snap, m5_snap)
+        if m15_snap is None or m5_snap is None:
             print(
-                "Warning: thiếu PNG GoCharting sau capture "
-                f"(M15={m15_png is not None}, M5={m5_png is not None}).",
+                "Warning: thiếu snapshot GoCharting sau capture "
+                f"(M15={m15_snap is not None}, M5={m5_snap is not None}).",
                 file=sys.stderr,
             )
     else:

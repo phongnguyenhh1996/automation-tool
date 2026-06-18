@@ -35,9 +35,12 @@ interval_panel:
 
 screenshot:
   open_button: "#user-screenshot-btn"
-  download_button: 'button:has(span div:text-is("Download")), button:has(span div:text-is("Tải xuống"))'
+  copy_link_button: 'button:has(span:text-is("Copy Link")), button:has(span:text-is("Sao chép liên kết"))'
+  snapshot_image_selector: "img.sh-img"
   popup_escape_presses: 1
-  download_timeout_ms: 30000
+  after_screenshot_button_ms: 400
+  after_copy_link_ms: 300
+  snapshot_tab_settle_ms: 1000
 
 csv_export:
   button_selector: 'button:has(svg path[d*="M439.658,91.21"])'
@@ -60,10 +63,6 @@ detail_chart:
   pan_end_x_ratio: 0.8
   pan_y_ratio: 0.5
   pan_drag_steps: 12
-  # Per-interval nominal step size for back_* PNG suffixes (one pan per history step).
-  hours_back:
-    "5m": 2.5   # was 3h
-    "15m": 7
   history_steps: 2
 
 capture_plan:

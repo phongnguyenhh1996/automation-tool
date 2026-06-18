@@ -30,10 +30,10 @@ def test_cmd_all_gocharting_calls_capture_gocharting(tmp_path: Path, monkeypatch
             (GOCHARTING_GOLD_EXPORT_LABEL, "5m"),
         ):
             csv_p = charts / f"{stamp}_gocharting_{sym}_{iv}.csv"
-            png_p = charts / f"{stamp}_gocharting_{sym}_{iv}.png"
+            url_p = charts / f"{stamp}_gocharting_{sym}_{iv}.url"
             csv_p.write_text("Time,Open\n1,2\n", encoding="utf-8")
-            png_p.write_bytes(b"x")
-            paths.extend([csv_p, png_p])
+            url_p.write_text("https://example.com/snap.png\n", encoding="utf-8")
+            paths.extend([csv_p, url_p])
         return paths
 
     monkeypatch.setattr("automation_tool.cli.capture_gocharting", fake_capture_gocharting)

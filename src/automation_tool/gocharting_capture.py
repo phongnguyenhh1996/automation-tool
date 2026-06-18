@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -17,9 +17,9 @@ from automation_tool.playwright_browser import close_browser_and_context, launch
 _log = logging.getLogger(__name__)
 
 _INTERVAL_SLUG_RE = re.compile(r"[^\w]+")
-_DEFAULT_DOWNLOAD_BUTTON = (
-    'button:has(span div:text-is("Download")), '
-    'button:has(span div:text-is("Tải xuống"))'
+_DEFAULT_COPY_LINK_BUTTON = (
+    'button:has(span:text-is("Copy Link")), '
+    'button:has(span:text-is("Sao chép liên kết"))'
 )
 _DEFAULT_DETAIL_HISTORY_STEPS = 3
 _DEFAULT_CHART_LOAD_MS = 2000
@@ -80,83 +80,18 @@ def gocharting_detail_png_path(
     interval: str,
     suffix: str,
 ) -> Path:
-    """``{stem}_detail_{suffix}.png`` e.g. ``detail_zoom``, ``detail_back_7h``, ``detail_back_2h30``."""
+    """``{stem}_detail_{suffix}.url`` e.g. ``detail_zoom``, ``detail_back_1``, ``detail_back_2``."""
     stem = gocharting_export_stem(stamp, export_label, interval)
-    return charts_dir / f"{stem}_detail_{suffix}.png"
+    return charts_dir / f"{stem}_detail_{suffix}.url"
 
 
-def _hours_back_for_interval(cfg: dict[str, Any], interval: str) -> float:
-    detail = cfg.get("detail_chart") or {}
-    hours_map = detail.get("hours_back") if isinstance(detail, dict) else {}
-    if not isinstance(hours_map, dict):
-        return 3.0
-    iv = (interval or "").strip().lower()
-    raw = hours_map.get(iv) or hours_map.get(interval)
-    try:
-        return max(0.5, float(raw))
-    except (TypeError, ValueError):
-        return 3.0
+def gocharting_detail_back_suffix(step_index: int) -> str:
+    """History pan step N → ``back_N`` (e.g. step 2 → ``back_2``)."""
+    return f"back_{max(1, int(step_index))}"
 
 
-def _duration_back_suffix(*, total_hours: float) -> str:
-    total_min = int(round(float(total_hours) * 60))
-    h, m = divmod(total_min, 60)
-    if m == 0:
-        return f"back_{h}h"
-    return f"back_{h}h{m}"
-
-
-def gocharting_detail_back_suffix(interval: str, step_index: int, *, hours_back: float) -> str:
-    """Step N → ``back_{N * hours_back}`` (e.g. M15 step 2 @ 7h → ``back_14h``)."""
-    total = max(1, int(step_index)) * max(0.5, float(hours_back))
-    return _duration_back_suffix(total_hours=total)
-
-
-def gocharting_detail_back_suffixes(interval: str, *, hours_back: float, steps: int) -> list[str]:
-    return [
-        gocharting_detail_back_suffix(interval, i, hours_back=hours_back)
-        for i in range(1, max(1, steps) + 1)
-    ]
-
-
-def _to_24h(hour12: int, am_pm: str) -> int:
-    ap = (am_pm or "").strip().lower()
-    h = int(hour12)
-    if h == 12:
-        return 0 if ap == "am" else 12
-    return h if ap == "am" else h + 12
-
-
-def _from_24h(h24: int, minute: int) -> tuple[int, int, str]:
-    h24 = int(h24) % 24
-    m = int(minute)
-    if h24 == 0:
-        return 12, m, "am"
-    if h24 < 12:
-        return h24, m, "am"
-    if h24 == 12:
-        return 12, m, "pm"
-    return h24 - 12, m, "pm"
-
-
-def subtract_duration_12h(
-    hour12: int,
-    minute: int,
-    am_pm: str,
-    *,
-    hours: float,
-) -> tuple[int, int, str]:
-    """12-hour clock + AM/PM → subtract duration (fractional hours ok; wraps at midnight)."""
-    h24 = _to_24h(hour12, am_pm)
-    base = datetime(2000, 1, 1, h24, int(minute))
-    delta_min = int(round(float(hours) * 60))
-    result = base - timedelta(minutes=delta_min)
-    return _from_24h(result.hour, result.minute)
-
-
-def subtract_hours_12h(hour12: int, minute: int, am_pm: str, hours: int) -> tuple[int, int, str]:
-    """12-hour clock + AM/PM → subtract whole hours (wraps at midnight)."""
-    return subtract_duration_12h(hour12, minute, am_pm, hours=float(int(hours)))
+def gocharting_detail_back_suffixes(*, steps: int) -> list[str]:
+    return [gocharting_detail_back_suffix(i) for i in range(1, max(1, steps) + 1)]
 
 
 def _detail_chart_enabled(cfg: dict[str, Any]) -> bool:
@@ -346,30 +281,96 @@ def _save_download(page: Page, click_fn, dest: Path, timeout_ms: int) -> None:
     download.save_as(dest)
 
 
-def _capture_png(
+def _ensure_clipboard_permissions(page: Page) -> None:
+    origin_match = re.match(r"^(https?://[^/]+)", page.url or "")
+    if not origin_match:
+        return
+    try:
+        page.context.grant_permissions(
+            ["clipboard-read", "clipboard-write"],
+            origin=origin_match.group(1),
+        )
+    except Exception:
+        _log.debug("gocharting: clipboard permissions grant failed", exc_info=True)
+
+
+def _read_clipboard_text(page: Page) -> str:
+    _ensure_clipboard_permissions(page)
+    return str(
+        page.evaluate(
+            """async () => {
+                try {
+                    return await navigator.clipboard.readText();
+                } catch (e) {
+                    return "";
+                }
+            }"""
+        )
+        or ""
+    ).strip()
+
+
+def _capture_snapshot(
     page: Page,
     cfg: dict[str, Any],
     dest: Path,
     *,
     chart_section: Optional[str] = None,
-) -> None:
+) -> Path:
+    """
+    Screenshot toolbar → Copy Link → open URL in new tab → read ``img.sh-img`` src.
+    Writes ``.url`` (https first line) for OpenAI; falls back to PNG on blob/missing src.
+    """
     _wait_for_chart_before_export(page, cfg, section=chart_section)
     shot = cfg.get("screenshot") or {}
     open_btn = str(shot.get("open_button") or "#user-screenshot-btn")
-    dl_btn = str(shot.get("download_button") or _DEFAULT_DOWNLOAD_BUTTON)
-    timeout_ms = int(shot.get("download_timeout_ms", 30_000))
+    copy_link_sel = str(shot.get("copy_link_button") or _DEFAULT_COPY_LINK_BUTTON)
+    img_sel = str(shot.get("snapshot_image_selector") or "img.sh-img")
+    tab_settle_ms = int(shot.get("snapshot_tab_settle_ms", 1000))
+    after_open_ms = int(shot.get("after_screenshot_button_ms", 400))
+    after_copy_ms = int(shot.get("after_copy_link_ms", 300))
     escapes = int(shot.get("popup_escape_presses", 1))
 
     page.locator(open_btn).first.click(timeout=15_000)
-    page.wait_for_timeout(400)
+    page.wait_for_timeout(after_open_ms)
 
-    def _click_download() -> None:
-        page.locator(dl_btn).first.click(timeout=15_000)
+    copy_btn = page.locator(copy_link_sel).first
+    copy_btn.wait_for(state="visible", timeout=5_000)
+    copy_btn.click(timeout=15_000)
+    page.wait_for_timeout(after_copy_ms)
 
-    _save_download(page, _click_download, dest, timeout_ms)
-    for _ in range(max(0, escapes)):
-        page.keyboard.press("Escape")
-        page.wait_for_timeout(200)
+    link = _read_clipboard_text(page)
+    if not link.startswith("http://") and not link.startswith("https://"):
+        raise RuntimeError(
+            f"gocharting: clipboard after Copy Link is not http(s): {link!r}"
+        )
+
+    context = page.context
+    snap_page = context.new_page()
+    dest_base = dest.with_suffix("")
+    out_url_path = dest_base.with_suffix(".url")
+    out_png_path = dest_base.with_suffix(".png")
+    try:
+        snap_page.goto(link, wait_until="domcontentloaded", timeout=30_000)
+        snap_page.wait_for_timeout(tab_settle_ms)
+        loc = snap_page.locator(img_sel).first
+        loc.wait_for(state="visible", timeout=5_000)
+        src = (loc.get_attribute("src") or "").strip()
+        if src.startswith("https://") or src.startswith("http://"):
+            _ensure_dir(out_url_path.parent)
+            out_url_path.write_text(src + "\n", encoding="utf-8")
+            return out_url_path
+        _ensure_dir(out_png_path.parent)
+        loc.screenshot(path=str(out_png_path), timeout=5_000)
+        return out_png_path
+    finally:
+        try:
+            snap_page.close()
+        except Exception:
+            pass
+        for _ in range(max(0, escapes)):
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(200)
 
 
 def _capture_csv(
@@ -448,7 +449,7 @@ def _pan_detail_and_capture_back(
 ) -> None:
     """Pan detail chart horizontally, then export PNG."""
     _pan_detail_chart(page, cfg)
-    _capture_png(page, cfg, dest, chart_section="detail_chart")
+    _capture_snapshot(page, cfg, dest, chart_section="detail_chart")
 
 
 def _capture_detail_footprint(
@@ -475,7 +476,6 @@ def _capture_detail_footprint(
     zoom_clicks = int(detail.get("zoom_clicks", 4))
     delay_ms = int(detail.get("zoom_click_delay_ms", 500))
     history_steps = int(detail.get("history_steps", _DEFAULT_DETAIL_HISTORY_STEPS))
-    per_step_hours = _hours_back_for_interval(cfg, interval)
 
     detail_page = context.new_page()
     paths: list[Path] = []
@@ -491,12 +491,12 @@ def _capture_detail_footprint(
             _force_click_id(detail_page, zoom_in_id, delay_ms=delay_ms)
 
         zoom_path = gocharting_detail_png_path(charts_dir, stamp, export_label, interval, "zoom")
-        _capture_png(detail_page, cfg, zoom_path, chart_section="detail_chart")
+        _capture_snapshot(detail_page, cfg, zoom_path, chart_section="detail_chart")
         paths.append(zoom_path)
 
-        # Each step: pan chart left (history) then capture PNG; suffix still reflects nominal hours_back.
+        # Each step: pan chart left (history) then capture PNG.
         for step in range(1, max(1, history_steps) + 1):
-            suffix = gocharting_detail_back_suffix(interval, step, hours_back=per_step_hours)
+            suffix = gocharting_detail_back_suffix(step)
             back_path = gocharting_detail_png_path(charts_dir, stamp, export_label, interval, suffix)
             _pan_detail_and_capture_back(detail_page, cfg, dest=back_path)
             paths.append(back_path)
@@ -601,16 +601,18 @@ def _capture_gocharting_in_context(
                 _select_interval(main_page, cfg, interval)
                 _prepare_overview_chart(main_page, cfg)
                 stem = gocharting_export_stem(stamp, export_label, interval)
-                png_path = charts_dir / f"{stem}.png"
+                url_path = charts_dir / f"{stem}.url"
                 csv_path = charts_dir / f"{stem}.csv"
-                _capture_png(main_page, cfg, png_path, chart_section="overview")
+                snapshot_path = _capture_snapshot(
+                    main_page, cfg, url_path, chart_section="overview"
+                )
                 _capture_csv(main_page, cfg, csv_path, chart_section="overview")
-                paths.extend([png_path, csv_path])
+                paths.extend([snapshot_path, csv_path])
                 _log.info(
                     "gocharting: captured %s %s → %s + %s",
                     export_label,
                     interval,
-                    png_path.name,
+                    snapshot_path.name,
                     csv_path.name,
                 )
                 if _symbol_detail_chart_enabled(cfg, entry):
@@ -685,9 +687,9 @@ def capture_gocharting(
     require_browser_service: bool = False,
 ) -> list[Path]:
     """
-    Capture GoCharting footprint charts: PNG screenshot + CSV export per (symbol, interval).
+    Capture GoCharting footprint charts: snapshot URL (Copy Link) + CSV export per (symbol, interval).
 
-    When ``detail_chart.page_url`` is set, also captures detail footprint PNGs on a separate tab
+    When ``detail_chart.page_url`` is set, also captures detail footprint snapshots on a separate tab
     (zoom + pan history steps).
 
     Attaches to the long-lived browser service when ``data/browser_service_state.json`` is
@@ -711,7 +713,7 @@ def capture_gocharting(
     else:
         clear = clear_charts_before_capture
     if clear:
-        for pat in ("*_gocharting_*.png", "*_gocharting_*.csv"):
+        for pat in ("*_gocharting_*.url", "*_gocharting_*.png", "*_gocharting_*.csv"):
             for p in charts_dir.glob(pat):
                 try:
                     p.unlink()

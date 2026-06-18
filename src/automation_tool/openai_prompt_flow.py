@@ -31,7 +31,7 @@ from automation_tool.images import (
     GOCHARTING_GOLD_EXPORT_LABEL,
     OPENAI_PAYLOAD_MAX,
     ChartOpenAIPayload,
-    _detail_back_minutes_from_stem,
+    _detail_back_step_from_stem,
     chunk_payloads,
     image_to_data_url,
     normalize_main_chart_symbol,
@@ -100,7 +100,7 @@ def default_analysis_prompt(
     if fp == "gocharting":
         footprint_desc = (
             f"({CHART_SLOT_COUNT} slot chart; mỗi slot GoCharting: CSV orderflow, PNG overview, "
-            "rồi 4 ảnh detail footprint — zoom + 3 bước lùi giờ):\n"
+            "rồi 4 ảnh detail footprint — zoom + 3 bước pan lịch sử):\n"
             "TradingView DXY (H4, H1, M15) → "
             f"TradingView {sym} (H4, H1, M15, M15 Session Liquidity Check / ICT Killzones, M5) "
             "(snapshot URL/PNG hoặc JSON OHLC tvdatafeed) → "
@@ -303,14 +303,9 @@ def _gocharting_detail_png_attachment_header(path: Path) -> Optional[str]:
     if stem.endswith("_detail_zoom"):
         kind = "detail footprint zoomed in (current session)"
     else:
-        back_min = _detail_back_minutes_from_stem(stem)
-        if back_min is not None:
-            h, m = divmod(back_min, 60)
-            if m == 0:
-                label = f"{h}h"
-            else:
-                label = f"{h}h{m:02d}"
-            kind = f"detail footprint — chart time ~{label} before displayed time when captured"
+        back_step = _detail_back_step_from_stem(stem)
+        if back_step is not None:
+            kind = f"detail footprint — history pan step {back_step}"
         else:
             kind = "detail footprint"
     return f"[GoCharting {kind} — file: {path.name}]\n{note}"
@@ -883,7 +878,7 @@ def build_scalp_update_user_text(
         gc_hint = (
             f" (footprint {GOCHARTING_GOLD_FUTURE_LABEL} trên GoCharting — hợp đồng tương lai vàng GC1!, "
             "không phải spot XAUUSD; mỗi khung: CSV orderflow; PNG overview; "
-            "4 ảnh detail footprint zoom + lùi giờ nếu có)."
+            "4 ảnh detail footprint zoom + pan lịch sử nếu có)."
         )
         if first_after_all:
             return (
