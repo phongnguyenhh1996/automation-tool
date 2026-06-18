@@ -9,6 +9,7 @@ from automation_tool.gocharting_capture import (
     _capture_gocharting_in_context,
     _chart_load_ms,
     _gocharting_tick_search_already_set,
+    _pan_detail_chart,
     _prepare_overview_chart,
     _select_chart_symbol,
     gocharting_detail_png_path,
@@ -32,13 +33,20 @@ def gc_cfg() -> dict:
             "zoom_in_button_id": "zoomIn-button",
             "zoom_clicks": 4,
             "zoom_click_delay_ms": 500,
-            "go_to_date_button_id": "go-to-date-btn",
-            "apply_button_selector": 'button:has-text("Apply")',
+            "chart_root_id": "chart-root-0",
+            "pan_start_x_ratio": 0.1,
+            "pan_end_x_ratio": 0.9,
+            "pan_y_ratio": 0.5,
             "hours_back": {"5m": 2.5, "15m": 7},
             "history_steps": 3,
         },
-        "capture_plan": [{"symbol": "DXY", "intervals": ["15m"]}],
-        "symbols": {"DXY": {"export_label": "DXY"}},
+        "capture_plan": [{"symbol": "XAUUSD", "intervals": ["15m"]}],
+        "symbols": {
+            "XAUUSD": {
+                "export_label": "GC",
+                "search_query": "GC1!",
+            }
+        },
         "symbol_search": {
             "input_id": "input-search-ticks-input",
             "results_id": "search-results",
@@ -174,6 +182,43 @@ def test_select_chart_symbol_searches_when_input_differs(monkeypatch) -> None:
     results_first.click.assert_called_once()
 
 
+def test_pan_detail_chart_drags_within_chart_root(monkeypatch) -> None:
+    page = MagicMock()
+    chart = MagicMock()
+    chart.bounding_box.return_value = {"x": 100.0, "y": 50.0, "width": 1000.0, "height": 400.0}
+    moves: list[tuple[float, float]] = []
+
+    def fake_id_locator(p, element_id):
+        assert element_id == "chart-root-0"
+        loc = MagicMock()
+        loc.first = chart
+        return loc
+
+    monkeypatch.setattr(
+        "automation_tool.gocharting_capture._id_locator",
+        fake_id_locator,
+    )
+    page.mouse.move.side_effect = lambda x, y, **kwargs: moves.append((x, y))
+
+    _pan_detail_chart(
+        page,
+        {
+            "detail_chart": {
+                "chart_root_id": "chart-root-0",
+                "pan_start_x_ratio": 0.1,
+                "pan_end_x_ratio": 0.9,
+                "pan_y_ratio": 0.5,
+                "pan_drag_steps": 8,
+            }
+        },
+    )
+
+    assert moves[0] == (200.0, 250.0)
+    page.mouse.down.assert_called_once()
+    page.mouse.move.assert_called_with(1000.0, 250.0, steps=8)
+    page.mouse.up.assert_called_once()
+
+
 def test_capture_gocharting_in_context_overview_then_detail(monkeypatch, tmp_path: Path, gc_cfg: dict) -> None:
     context = MagicMock()
     main_page = MagicMock()
@@ -221,18 +266,17 @@ def test_capture_gocharting_in_context_overview_then_detail(monkeypatch, tmp_pat
 
     monkeypatch.setattr("automation_tool.gocharting_capture._capture_csv", fake_csv)
 
-    go_date_calls = 0
+    pan_calls = 0
 
-    def fake_go_back(page, cfg, *, dest, baseline, hours_back):
-        nonlocal go_date_calls
-        go_date_calls += 1
+    def fake_pan_back(page, cfg, *, dest):
+        nonlocal pan_calls
+        pan_calls += 1
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(b"png")
-        return baseline if baseline is not None else (12, 0, "pm")
 
     monkeypatch.setattr(
-        "automation_tool.gocharting_capture._go_to_date_and_capture_back",
-        fake_go_back,
+        "automation_tool.gocharting_capture._pan_detail_and_capture_back",
+        fake_pan_back,
     )
 
     stamp = "20260617_120000"
@@ -250,10 +294,78 @@ def test_capture_gocharting_in_context_overview_then_detail(monkeypatch, tmp_pat
 
     assert overview_calls == ["overview"]
     assert len(csv_calls) == 1
-    assert go_date_calls == 3
-    zoom = gocharting_detail_png_path(tmp_path, stamp, "DXY", "15m", "zoom")
+    assert pan_calls == 3
+    zoom = gocharting_detail_png_path(tmp_path, stamp, "GC", "15m", "zoom")
     assert zoom in paths
     assert detail_zoom_saved == [zoom]
     main_page.close.assert_called_once()
     detail_page.close.assert_called_once()
     assert context.new_page.call_count == 2
+
+
+def test_capture_gocharting_in_context_skips_detail_when_symbol_disabled(
+    monkeypatch, tmp_path: Path, gc_cfg: dict
+) -> None:
+    gc_cfg["capture_plan"] = [{"symbol": "DXY", "intervals": ["15m"]}]
+    gc_cfg["symbols"] = {"DXY": {"export_label": "DXY", "detail_chart": False}}
+
+    context = MagicMock()
+    main_page = MagicMock()
+    context.new_page.return_value = main_page
+
+    monkeypatch.setattr(
+        "automation_tool.gocharting_capture._maybe_login_gocharting",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        "automation_tool.gocharting_capture._select_chart_symbol",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        "automation_tool.gocharting_capture._select_interval",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        "automation_tool.gocharting_capture._prepare_overview_chart",
+        lambda *a, **k: None,
+    )
+
+    def fake_png(page, cfg, dest, **kwargs):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"png")
+
+    monkeypatch.setattr("automation_tool.gocharting_capture._capture_png", fake_png)
+
+    def fake_csv(page, cfg, dest, **kwargs):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text("h\n1", encoding="utf-8")
+
+    monkeypatch.setattr("automation_tool.gocharting_capture._capture_csv", fake_csv)
+
+    detail_called = False
+
+    def fake_detail(*a, **k):
+        nonlocal detail_called
+        detail_called = True
+        return []
+
+    monkeypatch.setattr(
+        "automation_tool.gocharting_capture._capture_detail_footprint",
+        fake_detail,
+    )
+
+    paths = _capture_gocharting_in_context(
+        context,
+        gc_cfg,
+        charts_dir=tmp_path,
+        email="a@b.com",
+        password="pw",
+        stamp="20260617_120000",
+        main_chart_symbol=None,
+        capture_symbols=None,
+        capture_intervals=None,
+    )
+
+    assert not detail_called
+    assert len(paths) == 2
+    assert context.new_page.call_count == 1

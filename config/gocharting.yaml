@@ -1,7 +1,7 @@
 # GoCharting footprint capture — one saved chart URL; switch symbol via tick search.
 chart_page_url: "https://gocharting.com/terminal/chart/OpJogbwTR"
 
-# Wait after zoom / go-to-date / refresh — applied immediately before PNG and CSV export.
+# Wait after zoom / pan / refresh — applied immediately before PNG and CSV export.
 chart_load_ms: 4000
 
 login:
@@ -20,6 +20,7 @@ symbol_search:
 symbols:
   DXY:
     export_label: DXY
+    detail_chart: false
   XAUUSD:
     export_label: GC
     # COMEX Gold Future on GoCharting (not spot EXNESS:XAUUSD).
@@ -54,9 +55,12 @@ detail_chart:
   zoom_in_button_id: "zoomIn-button"
   zoom_clicks: 4
   zoom_click_delay_ms: 500
-  go_to_date_button_id: "go-to-date-btn"
-  apply_button_selector: 'button:has-text("Áp dụng"), button:has-text("Apply")'
-  # Per-interval step size; each history step subtracts (step × value) from first go-to-date time.
+  chart_root_id: "chart-root-0"
+  pan_start_x_ratio: 0.2
+  pan_end_x_ratio: 0.8
+  pan_y_ratio: 0.5
+  pan_drag_steps: 12
+  # Per-interval nominal step size for back_* PNG suffixes (one pan per history step).
   hours_back:
     "5m": 2.5   # was 3h
     "15m": 7

@@ -160,13 +160,26 @@ def _detail_back_minutes_from_stem(stem: str) -> Optional[int]:
     return int(m.group(1)) * 60 + int(m.group(2) or 0)
 
 
+def _gocharting_detail_png_per_slot(sym: str) -> int:
+    """DXY GoCharting uses overview only (no detail footprint tab)."""
+    if sym.strip().upper() == "DXY":
+        return 0
+    return GOCHARTING_DETAIL_PNG_PER_SLOT
+
+
 def openai_payload_max_for_order(
     order: tuple[tuple[str, str, str], ...],
 ) -> int:
     """Upper bound when each footprint slot sends data file + PNG alongside other slot payloads."""
     return len(order) + sum(
-        (1 + GOCHARTING_DETAIL_PNG_PER_SLOT if src == "gocharting" else 1 if src == "coinmap" else 0)
-        for src, _, _ in order
+        (
+            1 + _gocharting_detail_png_per_slot(sym)
+            if src == "gocharting"
+            else 1
+            if src == "coinmap"
+            else 0
+        )
+        for src, sym, _ in order
     )
 
 

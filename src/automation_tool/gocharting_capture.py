@@ -166,6 +166,14 @@ def _detail_chart_enabled(cfg: dict[str, Any]) -> bool:
     return bool(str(detail.get("page_url") or "").strip())
 
 
+def _symbol_detail_chart_enabled(cfg: dict[str, Any], entry: dict[str, Any]) -> bool:
+    if not _detail_chart_enabled(cfg):
+        return False
+    if entry.get("detail_chart") is False:
+        return False
+    return True
+
+
 def _resolve_symbol_entry(
     cfg: dict[str, Any],
     plan_symbol: str,
@@ -387,60 +395,60 @@ def _capture_csv(
         _log.debug("gocharting: normalized CSV on disk (%s)", dest.name)
 
 
-def _read_go_to_date_fields(page: Page) -> tuple[int, int, str]:
-    hour_loc = page.locator('input[name="hour12"]').first
-    minute_loc = page.locator('input[name="minute"]').first
-    am_pm_loc = page.locator('select[name="amPm"]').first
-    hour12 = int(str(hour_loc.input_value(timeout=5_000)).strip() or "12")
-    minute = int(str(minute_loc.input_value(timeout=5_000)).strip() or "0")
-    am_pm = str(am_pm_loc.input_value(timeout=5_000)).strip().lower() or "am"
-    return hour12, minute, am_pm
-
-
-def _fill_go_to_date_and_apply(
+def _drag_in_box(
     page: Page,
-    cfg: dict[str, Any],
+    box: dict[str, float],
     *,
-    hour12: int,
-    minute: int,
-    am_pm: str,
+    x0r: float,
+    y0r: float,
+    x1r: float,
+    y1r: float,
+    drag_steps: int,
 ) -> None:
+    x0 = box["x"] + box["width"] * x0r
+    y0 = box["y"] + box["height"] * y0r
+    x1 = box["x"] + box["width"] * x1r
+    y1 = box["y"] + box["height"] * y1r
+    page.mouse.move(x0, y0)
+    page.mouse.down()
+    page.mouse.move(x1, y1, steps=max(1, drag_steps))
+    page.mouse.up()
+
+
+def _pan_detail_chart(page: Page, cfg: dict[str, Any]) -> None:
     detail = cfg.get("detail_chart") or {}
     if not isinstance(detail, dict):
         detail = {}
-    apply_sel = str(
-        detail.get("apply_button_selector")
-        or 'button:has-text("Áp dụng"), button:has-text("Apply")'
+    chart_id = str(detail.get("chart_root_id") or "chart-root-0")
+    start_x = float(detail.get("pan_start_x_ratio", 0.1))
+    end_x = float(detail.get("pan_end_x_ratio", 0.9))
+    y_ratio = float(detail.get("pan_y_ratio", 0.5))
+    drag_steps = int(detail.get("pan_drag_steps", 12))
+
+    chart = _id_locator(page, chart_id).first
+    box = chart.bounding_box()
+    if not box:
+        raise RuntimeError(f"gocharting: chart #{chart_id} has no bounding box")
+    _drag_in_box(
+        page,
+        box,
+        x0r=start_x,
+        y0r=y_ratio,
+        x1r=end_x,
+        y1r=y_ratio,
+        drag_steps=drag_steps,
     )
 
-    page.locator('input[name="hour12"]').first.fill(str(int(hour12)))
-    page.locator('input[name="minute"]').first.fill(str(int(minute)))
-    page.locator('select[name="amPm"]').first.select_option(am_pm.lower())
-    page.locator(apply_sel).first.click(timeout=15_000)
 
-
-def _go_to_date_and_capture_back(
+def _pan_detail_and_capture_back(
     page: Page,
     cfg: dict[str, Any],
     *,
     dest: Path,
-    baseline: Optional[tuple[int, int, str]],
-    hours_back: float,
-) -> tuple[int, int, str]:
-    """Go to date; subtract ``hours_back`` from first-read baseline (not previous step)."""
-    detail = cfg.get("detail_chart") or {}
-    if not isinstance(detail, dict):
-        detail = {}
-    go_btn_id = str(detail.get("go_to_date_button_id") or "go-to-date-btn")
-
-    _id_locator(page, go_btn_id).first.click(timeout=15_000)
-    page.wait_for_timeout(400)
-    if baseline is None:
-        baseline = _read_go_to_date_fields(page)
-    new_h, new_m, new_ap = subtract_duration_12h(*baseline, hours=hours_back)
-    _fill_go_to_date_and_apply(page, cfg, hour12=new_h, minute=new_m, am_pm=new_ap)
+) -> None:
+    """Pan detail chart horizontally, then export PNG."""
+    _pan_detail_chart(page, cfg)
     _capture_png(page, cfg, dest, chart_section="detail_chart")
-    return baseline
 
 
 def _capture_detail_footprint(
@@ -486,19 +494,11 @@ def _capture_detail_footprint(
         _capture_png(detail_page, cfg, zoom_path, chart_section="detail_chart")
         paths.append(zoom_path)
 
-        # Each step: subtract (step × per-interval hours_back) from first go-to-date baseline.
-        go_to_baseline: Optional[tuple[int, int, str]] = None
+        # Each step: pan chart left (history) then capture PNG; suffix still reflects nominal hours_back.
         for step in range(1, max(1, history_steps) + 1):
-            total_back = step * per_step_hours
             suffix = gocharting_detail_back_suffix(interval, step, hours_back=per_step_hours)
             back_path = gocharting_detail_png_path(charts_dir, stamp, export_label, interval, suffix)
-            go_to_baseline = _go_to_date_and_capture_back(
-                detail_page,
-                cfg,
-                dest=back_path,
-                baseline=go_to_baseline,
-                hours_back=total_back,
-            )
+            _pan_detail_and_capture_back(detail_page, cfg, dest=back_path)
             paths.append(back_path)
 
         _log.info(
@@ -585,7 +585,6 @@ def _capture_gocharting_in_context(
             slot_filter = {(lbl.upper(), iv.lower()) for lbl, iv in only_slots}
 
         paths: list[Path] = []
-        detail_enabled = _detail_chart_enabled(cfg)
         plan = _filter_capture_plan(
             cfg,
             capture_symbols=capture_symbols,
@@ -614,7 +613,7 @@ def _capture_gocharting_in_context(
                     png_path.name,
                     csv_path.name,
                 )
-                if detail_enabled:
+                if _symbol_detail_chart_enabled(cfg, entry):
                     detail_paths = _capture_detail_footprint(
                         context,
                         cfg,
@@ -689,7 +688,7 @@ def capture_gocharting(
     Capture GoCharting footprint charts: PNG screenshot + CSV export per (symbol, interval).
 
     When ``detail_chart.page_url`` is set, also captures detail footprint PNGs on a separate tab
-    (zoom + go-to-date history steps).
+    (zoom + pan history steps).
 
     Attaches to the long-lived browser service when ``data/browser_service_state.json`` is
     present (same as Coinmap/TV ``capture_charts``). Otherwise launches a standalone Chrome.

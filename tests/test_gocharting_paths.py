@@ -66,23 +66,24 @@ def test_ordered_chart_openai_payloads_gocharting(tmp_path: Path) -> None:
         png_p = charts / f"{stamp}_gocharting_{sym}_{iv}.png"
         csv_p.write_text("Time,Open\n1,2\n", encoding="utf-8")
         png_p.write_bytes(b"x")
-        for suffix in ("zoom", "back_2h30", "back_5h", "back_7h30") if iv == "5m" else (
-            "zoom",
-            "back_7h",
-            "back_14h",
-            "back_21h",
-        ):
-            dp = charts / f"{stamp}_gocharting_{sym}_{iv}_detail_{suffix}.png"
-            dp.write_bytes(b"d")
+        if sym != "DXY":
+            for suffix in ("zoom", "back_2h30", "back_5h", "back_7h30") if iv == "5m" else (
+                "zoom",
+                "back_7h",
+                "back_14h",
+                "back_21h",
+            ):
+                dp = charts / f"{stamp}_gocharting_{sym}_{iv}_detail_{suffix}.png"
+                dp.write_bytes(b"d")
     payloads = ordered_chart_openai_payloads(charts, stamp=stamp)
     kinds = [k for k, _ in payloads]
     assert kinds.count("csv") == 3
-    assert kinds.count("image") == 3 + 3 * GOCHARTING_DETAIL_PNG_PER_SLOT
+    assert kinds.count("image") == 3 + 2 * GOCHARTING_DETAIL_PNG_PER_SLOT
 
 
 def test_openai_payload_max_gocharting_order() -> None:
     order = chart_image_order_for_main_symbol("XAUUSD", footprint_source="gocharting")
-    assert openai_payload_max_for_order(order) == 26
+    assert openai_payload_max_for_order(order) == 22
 
 
 def test_gocharting_detail_png_paths_order(tmp_path: Path) -> None:

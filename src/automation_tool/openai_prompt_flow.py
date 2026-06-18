@@ -104,7 +104,7 @@ def default_analysis_prompt(
             "TradingView DXY (H4, H1, M15) → "
             f"TradingView {sym} (H4, H1, M15, M15 Session Liquidity Check / ICT Killzones, M5) "
             "(snapshot URL/PNG hoặc JSON OHLC tvdatafeed) → "
-            "GoCharting DXY M15 (CSV; PNG overview; detail zoom + back_7h/14h/21h) → "
+            "GoCharting DXY M15 (CSV; PNG overview) → "
             f"GoCharting {_gocharting_main_footprint_label(sym)} M15 và M5 "
             "(footprint hợp đồng tương lai vàng GC1! trên GoCharting; không phải spot XAUUSD; "
             "mỗi khung: CSV + PNG overview + 4 PNG detail).\n"
