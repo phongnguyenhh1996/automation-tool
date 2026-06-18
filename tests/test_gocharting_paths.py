@@ -16,6 +16,7 @@ from automation_tool.images import (
     gocharting_png_path_for_csv,
     latest_chart_stamp,
     openai_payload_max_for_order,
+    ordered_chart_images,
     ordered_chart_openai_payloads,
 )
 
@@ -83,6 +84,35 @@ def test_ordered_chart_openai_payloads_gocharting(tmp_path: Path) -> None:
 def test_openai_payload_max_gocharting_order() -> None:
     order = chart_image_order_for_main_symbol("XAUUSD", footprint_source="gocharting")
     assert openai_payload_max_for_order(order) == 22
+
+
+def test_ordered_chart_images_gocharting_includes_detail_pngs(tmp_path: Path) -> None:
+    charts = tmp_path / "charts"
+    charts.mkdir()
+    (charts / ".main_chart_symbol").write_text("XAUUSD\n", encoding="utf-8")
+    stamp = "20260616_120000"
+    sym = GOCHARTING_GOLD_EXPORT_LABEL
+    for slot_sym, iv in (("DXY", "15m"), (sym, "15m"), (sym, "5m")):
+        csv_p = charts / f"{stamp}_gocharting_{slot_sym}_{iv}.csv"
+        csv_p.write_text("Time,Open\n1,2\n", encoding="utf-8")
+    for iv in ("15m", "5m"):
+        ov = charts / f"{stamp}_gocharting_{sym}_{iv}.png"
+        ov.write_bytes(b"ov")
+        for suffix in ("zoom", "back_1", "back_2", "back_3"):
+            dp = charts / f"{stamp}_gocharting_{sym}_{iv}_detail_{suffix}.png"
+            dp.write_bytes(b"d")
+    (charts / f"{stamp}_gocharting_DXY_15m.png").write_bytes(b"dxy")
+    paths = ordered_chart_images(charts, stamp=stamp)
+    names = [p.name for p in paths]
+    assert f"{stamp}_gocharting_DXY_15m.png" in names
+    for iv in ("15m", "5m"):
+        assert f"{stamp}_gocharting_{sym}_{iv}.png" in names
+        for suffix in ("zoom", "back_1", "back_2", "back_3"):
+            assert f"{stamp}_gocharting_{sym}_{iv}_detail_{suffix}.png" in names
+    dxy_idx = names.index(f"{stamp}_gocharting_DXY_15m.png")
+    m15_ov_idx = names.index(f"{stamp}_gocharting_{sym}_15m.png")
+    m15_zoom_idx = names.index(f"{stamp}_gocharting_{sym}_15m_detail_zoom.png")
+    assert dxy_idx < m15_ov_idx < m15_zoom_idx
 
 
 def test_gocharting_detail_png_paths_order(tmp_path: Path) -> None:

@@ -566,9 +566,10 @@ def ordered_chart_openai_payloads(
 
 def ordered_chart_images(charts_dir: Path, *, stamp: Optional[str] = None) -> list[Path]:
     """
-    Return chart paths in analysis order (DXY TV H4/H1/M15 → main TV H4/H1/M15/M5 → DXY Coinmap M15
-    → main Coinmap M15/M5).
-    Only includes files that exist. Uses latest stamp in directory when ``stamp`` is omitted.
+    Return chart PNG paths in analysis order (same slot order as OpenAI payloads).
+
+    For GoCharting footprint slots, append ``detail_zoom`` and ``detail_back_*`` PNGs after each
+    overview PNG when present. Only includes files that exist. Uses latest stamp when omitted.
     """
     if not charts_dir.is_dir():
         return []
@@ -581,6 +582,8 @@ def ordered_chart_images(charts_dir: Path, *, stamp: Optional[str] = None) -> li
         p = charts_dir / f"{st}_{src}_{sym}_{iv}.png"
         if p.is_file():
             out.append(p)
+        if src == "gocharting":
+            out.extend(gocharting_detail_png_paths(charts_dir, st, sym, iv))
     return out
 
 

@@ -3670,6 +3670,20 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
                 file=sys.stderr,
             )
 
+    capture_pngs = ordered_chart_images(charts_dir, stamp=stamp)
+    n_sent = send_capture_screenshots_to_log_chat(
+        bot_token=s.telegram_bot_token,
+        telegram_log_chat_id=s.telegram_log_chat_id,
+        png_paths=capture_pngs,
+        header=f"update-scalp: capture screenshots | stamp={stamp} | {len(capture_pngs)} PNG",
+    )
+    _log.info(
+        "update-scalp: gửi capture PNG → TELEGRAM_LOG_CHAT_ID | stamp=%s | files=%s sent=%s",
+        stamp,
+        len(capture_pngs),
+        n_sent,
+    )
+
     require_openai(s)
 
     morning_snapshot: Path = mp
