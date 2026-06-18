@@ -9,6 +9,7 @@ from automation_tool.images import (
     chart_image_order_for_main_symbol,
     footprint_source_for_stamp,
     gocharting_detail_png_paths,
+    gocharting_detail_zoom_png_path_for_csv,
     gocharting_footprint_export_label,
     gocharting_interval_csv_path,
     gocharting_main_interval_csv_path,
@@ -50,9 +51,12 @@ def test_gocharting_path_helpers(tmp_path: Path) -> None:
     png_p = charts / f"{stamp}_gocharting_{GOCHARTING_GOLD_EXPORT_LABEL}_15m.png"
     csv_p.write_text("Time,Open\n1,2\n", encoding="utf-8")
     png_p.write_bytes(b"png")
+    detail_p = charts / f"{stamp}_gocharting_{GOCHARTING_GOLD_EXPORT_LABEL}_15m_detail_zoom.png"
+    detail_p.write_bytes(b"detail")
     assert gocharting_main_interval_csv_path(charts, "15m", stamp=stamp) == csv_p
     assert gocharting_interval_csv_path(charts, GOCHARTING_GOLD_EXPORT_LABEL, "15m", stamp=stamp) == csv_p
     assert gocharting_png_path_for_csv(csv_p) == png_p
+    assert gocharting_detail_zoom_png_path_for_csv(csv_p) == detail_p
     assert latest_chart_stamp(charts) == stamp
 
 

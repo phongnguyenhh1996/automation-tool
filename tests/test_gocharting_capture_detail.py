@@ -302,6 +302,74 @@ def test_capture_gocharting_in_context_overview_then_detail(monkeypatch, tmp_pat
     assert context.new_page.call_count == 2
 
 
+def test_capture_gocharting_in_context_detail_zoom_only_when_history_zero(
+    monkeypatch, tmp_path: Path, gc_cfg: dict
+) -> None:
+    context = MagicMock()
+    main_page = MagicMock()
+    detail_page = MagicMock()
+    context.new_page.side_effect = [main_page, detail_page]
+
+    monkeypatch.setattr(
+        "automation_tool.gocharting_capture._maybe_login_gocharting",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        "automation_tool.gocharting_capture._select_chart_symbol",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        "automation_tool.gocharting_capture._select_interval",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        "automation_tool.gocharting_capture._prepare_overview_chart",
+        lambda *a, **k: None,
+    )
+
+    def fake_png(page, cfg, dest, **kwargs):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"png")
+
+    monkeypatch.setattr("automation_tool.gocharting_capture._capture_png", fake_png)
+
+    def fake_csv(page, cfg, dest, **kwargs):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text("h\n1", encoding="utf-8")
+
+    monkeypatch.setattr("automation_tool.gocharting_capture._capture_csv", fake_csv)
+
+    pan_calls = 0
+
+    def fake_pan_back(page, cfg, *, dest):
+        nonlocal pan_calls
+        pan_calls += 1
+
+    monkeypatch.setattr(
+        "automation_tool.gocharting_capture._pan_detail_and_capture_back",
+        fake_pan_back,
+    )
+
+    stamp = "20260617_120000"
+    paths = _capture_gocharting_in_context(
+        context,
+        gc_cfg,
+        charts_dir=tmp_path,
+        email="a@b.com",
+        password="pw",
+        stamp=stamp,
+        main_chart_symbol=None,
+        capture_symbols=None,
+        capture_intervals=None,
+        detail_history_steps=0,
+    )
+
+    assert pan_calls == 0
+    zoom = gocharting_detail_png_path(tmp_path, stamp, "GC", "15m", "zoom")
+    assert zoom in paths
+    assert not any("_detail_back_" in p.name for p in paths)
+
+
 def test_capture_gocharting_in_context_skips_detail_when_symbol_disabled(
     monkeypatch, tmp_path: Path, gc_cfg: dict
 ) -> None:

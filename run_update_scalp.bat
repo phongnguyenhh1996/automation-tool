@@ -33,11 +33,12 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo [%date% %time%] INFO: Starting coinmap-automation update-scalp
->> "%LOG_FILE%" echo [%date% %time%] INFO: Starting coinmap-automation update-scalp
+REM GoCharting footprint (headless by default; add --headed manually if needed)
+echo [%date% %time%] INFO: Starting coinmap-automation update-scalp --gocharting
+>> "%LOG_FILE%" echo [%date% %time%] INFO: Starting coinmap-automation update-scalp --gocharting
 REM update-scalp: ghi accounts-scalp.json cạnh accounts.json, set MT5_ACCOUNTS_JSON, reconcile daemon-plan.
 REM Thêm --mt5-accounts-json đường dẫn nếu không dùng biến môi trường MT5_ACCOUNTS_JSON.
-coinmap-automation update-scalp %* >> "%LOG_FILE%" 2>&1
+coinmap-automation update-scalp --gocharting %* >> "%LOG_FILE%" 2>&1
 set "EXIT_CODE=%ERRORLEVEL%"
 echo [%date% %time%] INFO: update-scalp finished with exit code %EXIT_CODE%
 >> "%LOG_FILE%" echo [%date% %time%] INFO: update-scalp finished with exit code %EXIT_CODE%

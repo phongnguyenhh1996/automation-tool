@@ -55,6 +55,7 @@ from automation_tool.images import (
     effective_chart_image_order,
     footprint_source_for_stamp,
     gocharting_main_interval_csv_path,
+    gocharting_detail_zoom_png_path_for_csv,
     gocharting_png_path_for_csv,
     latest_chart_stamp,
     ordered_chart_images,
@@ -2071,6 +2072,7 @@ def _intraday_tv_then_coinmap_m5_capture(
     gocharting_yaml: Optional[Path] = None,
     gocharting_email: str = "",
     gocharting_password: str = "",
+    gocharting_detail_history_steps: Optional[int] = None,
 ) -> tuple[list[Path], str | None, str, list[ChartOpenAIPayload]]:
     """
     Shared capture for ``update`` / ``update-scalp``: TradingView 15m ICT + 5m, then
@@ -2098,6 +2100,7 @@ def _intraday_tv_then_coinmap_m5_capture(
                 clear_charts_before_capture=clear_before,
                 capture_symbols=(main_for_cap,),
                 capture_intervals=coinmap_capture_intervals,
+                detail_history_steps=gocharting_detail_history_steps,
             )
         return capture_charts(
             coinmap_yaml=cfg_cap,
@@ -3578,6 +3581,7 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
         gocharting_yaml=gc_yaml,
         gocharting_email=s.gocharting_email or "",
         gocharting_password=s.gocharting_password or "",
+        gocharting_detail_history_steps=0,
     )
 
     print(f"Captured {len(paths)} file(s) for update-scalp run.")
@@ -3606,11 +3610,25 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
         footprint_paths = [m15, m5]
         m15_png = gocharting_png_path_for_csv(m15)
         m5_png = gocharting_png_path_for_csv(m5)
-        _log.info("update-scalp: GoCharting PNG | M15=%s | M5=%s", m15_png, m5_png)
+        m15_detail = gocharting_detail_zoom_png_path_for_csv(m15)
+        m5_detail = gocharting_detail_zoom_png_path_for_csv(m5)
+        _log.info(
+            "update-scalp: GoCharting PNG | M15=%s | M5=%s | detail M15=%s | detail M5=%s",
+            m15_png,
+            m5_png,
+            m15_detail,
+            m5_detail,
+        )
         if m15_png is None or m5_png is None:
             print(
-                "Warning: thiếu PNG GoCharting sau capture "
+                "Warning: thiếu PNG GoCharting overview sau capture "
                 f"(M15={m15_png is not None}, M5={m5_png is not None}).",
+                file=sys.stderr,
+            )
+        if m15_detail is None or m5_detail is None:
+            print(
+                "Warning: thiếu PNG GoCharting detail zoom sau capture "
+                f"(M15={m15_detail is not None}, M5={m5_detail is not None}).",
                 file=sys.stderr,
             )
     else:

@@ -317,6 +317,14 @@ def gocharting_png_path_for_csv(csv_path: Path) -> Optional[Path]:
     return pp if pp.is_file() else None
 
 
+def gocharting_detail_zoom_png_path_for_csv(csv_path: Path) -> Optional[Path]:
+    """``{stem}_detail_zoom.png`` sibling for a GoCharting CSV export, if on disk."""
+    if "_gocharting_" not in csv_path.name or csv_path.suffix.lower() != ".csv":
+        return None
+    zoom = csv_path.parent / f"{csv_path.stem}_detail_zoom.png"
+    return zoom if zoom.is_file() else None
+
+
 def coinmap_main_pair_interval_json_path(
     charts_dir: Path, interval: str, *, stamp: Optional[str] = None
 ) -> Optional[Path]:
@@ -454,8 +462,9 @@ def _coinmap_merged_interval_png_paths(json_path: Path) -> list[Path]:
 
 def openai_payloads_for_attachment_paths(paths: Sequence[Path]) -> list[ChartOpenAIPayload]:
     """
-    Build OpenAI payloads from JSON attachment paths; for each Coinmap JSON, append
-    sibling PNG immediately after (per-interval or M15+M5 for merged), matching ``all``.
+    Build OpenAI payloads from JSON/CSV attachment paths; for each Coinmap JSON, append
+    sibling PNG immediately after (per-interval or M15+M5 for merged). For GoCharting CSV,
+    append overview PNG then detail-zoom PNG when on disk.
     """
     out: list[ChartOpenAIPayload] = []
     for p in paths:
@@ -464,6 +473,9 @@ def openai_payloads_for_attachment_paths(paths: Sequence[Path]) -> list[ChartOpe
             pp = gocharting_png_path_for_csv(p)
             if pp is not None:
                 out.append(("image", pp))
+            zoom = gocharting_detail_zoom_png_path_for_csv(p)
+            if zoom is not None:
+                out.append(("image", zoom))
             continue
         out.append(("json", p))
         if "_coinmap_" not in p.name or p.suffix.lower() != ".json":

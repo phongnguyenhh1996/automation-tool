@@ -396,6 +396,7 @@ def _capture_detail_footprint(
     stamp: str,
     entry: dict[str, Any],
     interval: str,
+    detail_history_steps: Optional[int] = None,
 ) -> list[Path]:
     detail = cfg.get("detail_chart") or {}
     if not isinstance(detail, dict):
@@ -409,7 +410,10 @@ def _capture_detail_footprint(
     zoom_in_id = str(detail.get("zoom_in_button_id") or "zoomIn-button")
     zoom_clicks = int(detail.get("zoom_clicks", 4))
     delay_ms = int(detail.get("zoom_click_delay_ms", 500))
-    history_steps = int(detail.get("history_steps", _DEFAULT_DETAIL_HISTORY_STEPS))
+    if detail_history_steps is not None:
+        history_steps = max(0, int(detail_history_steps))
+    else:
+        history_steps = int(detail.get("history_steps", _DEFAULT_DETAIL_HISTORY_STEPS))
 
     detail_page = context.new_page()
     paths: list[Path] = []
@@ -429,7 +433,7 @@ def _capture_detail_footprint(
         paths.append(zoom_path)
 
         # Each step: pan chart left (history) then capture PNG.
-        for step in range(1, max(1, history_steps) + 1):
+        for step in range(1, history_steps + 1):
             suffix = gocharting_detail_back_suffix(step)
             back_path = gocharting_detail_png_path(charts_dir, stamp, export_label, interval, suffix)
             _pan_detail_and_capture_back(detail_page, cfg, dest=back_path)
@@ -503,6 +507,7 @@ def _capture_gocharting_in_context(
     capture_symbols: Optional[tuple[str, ...]],
     capture_intervals: Optional[tuple[str, ...]],
     only_slots: Optional[list[tuple[str, str]]] = None,
+    detail_history_steps: Optional[int] = None,
 ) -> list[Path]:
     chart_url = str(cfg.get("chart_page_url") or "").strip()
     if not chart_url:
@@ -557,6 +562,7 @@ def _capture_gocharting_in_context(
                         stamp=stamp,
                         entry=entry,
                         interval=interval,
+                        detail_history_steps=detail_history_steps,
                     )
                     paths.extend(detail_paths)
         return paths
@@ -581,6 +587,7 @@ def _capture_gocharting_with_context(
     capture_symbols: Optional[tuple[str, ...]],
     capture_intervals: Optional[tuple[str, ...]],
     only_slots: Optional[list[tuple[str, str]]] = None,
+    detail_history_steps: Optional[int] = None,
 ) -> list[Path]:
     paths = _capture_gocharting_in_context(
         context,
@@ -593,6 +600,7 @@ def _capture_gocharting_with_context(
         capture_symbols=capture_symbols,
         capture_intervals=capture_intervals,
         only_slots=only_slots,
+        detail_history_steps=detail_history_steps,
     )
     if save_storage_state and storage_state_path:
         _ensure_dir(storage_state_path.parent)
@@ -617,12 +625,13 @@ def capture_gocharting(
     only_slots: Optional[list[tuple[str, str]]] = None,
     reuse_browser_context: Optional[BrowserContext] = None,
     require_browser_service: bool = False,
+    detail_history_steps: Optional[int] = None,
 ) -> list[Path]:
     """
     Capture GoCharting footprint charts: PNG screenshot + CSV export per (symbol, interval).
 
     When ``detail_chart.page_url`` is set, also captures detail footprint PNGs on a separate tab
-    (zoom + pan history steps).
+    (zoom + optional pan history steps). ``detail_history_steps=0`` captures zoom only.
 
     Attaches to the long-lived browser service when ``data/browser_service_state.json`` is
     present (same as Coinmap/TV ``capture_charts``). Otherwise launches a standalone Chrome.
@@ -668,6 +677,7 @@ def capture_gocharting(
         capture_symbols=capture_symbols,
         capture_intervals=capture_intervals,
         only_slots=only_slots,
+        detail_history_steps=detail_history_steps,
     )
 
     if reuse_browser_context is not None:

@@ -81,3 +81,29 @@ def test_openai_payloads_for_attachment_paths_interleaves_coinmap_png(tmp_path: 
         ("image", m5_p),
     ]
     assert coinmap_png_path_for_json(m15_j) == m15_p
+
+
+def test_openai_payloads_for_attachment_paths_interleaves_gocharting_png(tmp_path: Path) -> None:
+    m15_csv = tmp_path / "20260101_120000_gocharting_GC_15m.csv"
+    m15_ov = tmp_path / "20260101_120000_gocharting_GC_15m.png"
+    m15_detail = tmp_path / "20260101_120000_gocharting_GC_15m_detail_zoom.png"
+    m5_csv = tmp_path / "20260101_120000_gocharting_GC_5m.csv"
+    m5_ov = tmp_path / "20260101_120000_gocharting_GC_5m.png"
+    m5_detail = tmp_path / "20260101_120000_gocharting_GC_5m_detail_zoom.png"
+    morning = tmp_path / "morning_full_analysis.json"
+    morning.write_text("{}", encoding="utf-8")
+    for p in (m15_csv, m5_csv):
+        p.write_text("h\n1", encoding="utf-8")
+    for p in (m15_ov, m15_detail, m5_ov, m5_detail):
+        p.write_bytes(b"png")
+
+    payloads = openai_payloads_for_attachment_paths([morning, m15_csv, m5_csv])
+    assert payloads == [
+        ("json", morning),
+        ("csv", m15_csv),
+        ("image", m15_ov),
+        ("image", m15_detail),
+        ("csv", m5_csv),
+        ("image", m5_ov),
+        ("image", m5_detail),
+    ]
