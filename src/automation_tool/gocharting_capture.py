@@ -444,7 +444,7 @@ def _capture_detail_footprint(
     export_label = str(entry["export_label"]).strip().upper()
     refresh_id = str(detail.get("refresh_button_id") or "refresh-button")
     zoom_in_id = str(detail.get("zoom_in_button_id") or "zoomIn-button")
-    zoom_clicks = int(detail.get("zoom_clicks", 1))
+    zoom_clicks = int(detail.get("zoom_clicks", 2))
     delay_ms = int(detail.get("zoom_click_delay_ms", 500))
     if detail_history_steps is not None:
         history_steps = max(0, int(detail_history_steps))

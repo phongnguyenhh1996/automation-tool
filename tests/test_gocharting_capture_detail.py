@@ -32,7 +32,7 @@ def gc_cfg() -> dict:
             "page_url": "https://gocharting.com/terminal/chart/orlk0N-Da",
             "refresh_button_id": "refresh-button",
             "zoom_in_button_id": "zoomIn-button",
-            "zoom_clicks": 1,
+            "zoom_clicks": 2,
             "zoom_click_delay_ms": 500,
             "chart_root_id": "chart-root-0",
             "pan_start_x_ratio": 0.1,
