@@ -8,6 +8,7 @@ import pytest
 from automation_tool.gocharting_capture import (
     _capture_gocharting_in_context,
     _chart_load_ms,
+    _detail_chart_viewport,
     _gocharting_tick_search_already_set,
     _pan_detail_chart,
     _prepare_overview_chart,
@@ -53,6 +54,8 @@ def gc_cfg() -> dict:
         "interval_panel": {"button_selector": 'button:has(div:text-is("{interval}"))'},
         "screenshot": {"open_button": "#user-screenshot-btn"},
         "csv_export": {"button_selector": "button.csv"},
+        "viewport_width": 1440,
+        "viewport_height": 810,
     }
 
 
@@ -218,6 +221,19 @@ def test_pan_detail_chart_drags_within_chart_root(monkeypatch) -> None:
     page.mouse.up.assert_called_once()
 
 
+def test_detail_chart_viewport_defaults_to_double_session_width() -> None:
+    assert _detail_chart_viewport({"viewport_width": 1440, "viewport_height": 810}) == (2880, 810)
+
+
+def test_detail_chart_viewport_honors_detail_overrides() -> None:
+    cfg = {
+        "viewport_width": 1440,
+        "viewport_height": 810,
+        "detail_chart": {"viewport_width": 3200, "viewport_height": 900},
+    }
+    assert _detail_chart_viewport(cfg) == (3200, 900)
+
+
 def test_capture_gocharting_in_context_overview_then_detail(monkeypatch, tmp_path: Path, gc_cfg: dict) -> None:
     context = MagicMock()
     main_page = MagicMock()
@@ -297,6 +313,7 @@ def test_capture_gocharting_in_context_overview_then_detail(monkeypatch, tmp_pat
     zoom = gocharting_detail_png_path(tmp_path, stamp, "GC", "15m", "zoom")
     assert zoom in paths
     assert detail_zoom_saved == [zoom]
+    detail_page.set_viewport_size.assert_called_once_with({"width": 2880, "height": 810})
     main_page.close.assert_called_once()
     detail_page.close.assert_called_once()
     assert context.new_page.call_count == 2

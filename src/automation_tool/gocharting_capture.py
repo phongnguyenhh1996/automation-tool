@@ -96,6 +96,40 @@ def gocharting_detail_back_suffixes(*, steps: int) -> list[str]:
     return [gocharting_detail_back_suffix(i) for i in range(1, max(1, steps) + 1)]
 
 
+def _session_viewport(cfg: dict[str, Any]) -> tuple[int, int]:
+    vw = int(cfg.get("viewport_width", 1920))
+    vh = int(cfg.get("viewport_height", 1080))
+    return vw, vh
+
+
+def _detail_chart_viewport(cfg: dict[str, Any]) -> tuple[int, int]:
+    """Detail tab viewport; width defaults to 2× session width unless overridden."""
+    session_w, session_h = _session_viewport(cfg)
+    detail = cfg.get("detail_chart") or {}
+    if not isinstance(detail, dict):
+        detail = {}
+
+    raw_w = detail.get("viewport_width")
+    if raw_w is not None:
+        width = int(raw_w)
+    else:
+        width = session_w * 2
+
+    raw_h = detail.get("viewport_height")
+    if raw_h is not None:
+        height = int(raw_h)
+    else:
+        height = session_h
+
+    return max(1, width), max(1, height)
+
+
+def _apply_detail_chart_viewport(page: Page, cfg: dict[str, Any]) -> None:
+    w, h = _detail_chart_viewport(cfg)
+    page.set_viewport_size({"width": w, "height": h})
+    _log.debug("gocharting: detail tab viewport %sx%s", w, h)
+
+
 def _detail_chart_enabled(cfg: dict[str, Any]) -> bool:
     detail = cfg.get("detail_chart") or {}
     if not isinstance(detail, dict):
@@ -420,6 +454,7 @@ def _capture_detail_footprint(
     detail_page = context.new_page()
     paths: list[Path] = []
     try:
+        _apply_detail_chart_viewport(detail_page, cfg)
         detail_page.goto(detail_url, wait_until="domcontentloaded", timeout=90_000)
         detail_page.wait_for_timeout(1200)
         _maybe_login_gocharting(detail_page, cfg, email, password)
