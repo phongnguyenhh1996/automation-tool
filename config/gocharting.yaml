@@ -67,10 +67,10 @@ detail_chart:
   # Per-interval overrides (merged on top of keys above).
   by_interval:
     15m:
-      zoom_clicks: 2
+      zoom_clicks: 3
       history_steps: 1
     5m:
-      zoom_clicks: 3
+      zoom_clicks: 4
       history_steps: 1
 
 capture_plan:
