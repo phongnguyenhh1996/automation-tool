@@ -52,7 +52,7 @@ overview:
 detail_chart:
   page_url: "https://gocharting.com/terminal/chart/orlk0N-Da"
   # Detail tab only — omit viewport_width to use 2× session viewport_width (1440 → 2880).
-  viewport_width: 2000
+  viewport_width: 3000
   viewport_height: 3000
   refresh_button_id: "refresh-button"
   zoom_in_button_id: "zoomIn-button"
@@ -71,7 +71,7 @@ detail_chart:
       history_steps: 1
     5m:
       zoom_clicks: 3
-      history_steps: 0
+      history_steps: 1
 
 capture_plan:
   - symbol: DXY
