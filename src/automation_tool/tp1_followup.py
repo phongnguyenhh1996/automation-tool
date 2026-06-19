@@ -180,6 +180,28 @@ def parse_tp1_followup_decision(text: str) -> Optional[TP1FollowupDecision]:
     )
 
 
+def extract_trade_management_reason(text: str) -> Optional[str]:
+    """Trích ``reason`` từ output Schema D — không bắt buộc ``hanh_dong_quan_ly_lenh``."""
+    t = (text or "").strip()
+    if not t:
+        return None
+    segments = [s.strip() for s in t.split("\n\n---\n\n") if s.strip()]
+    if not segments:
+        segments = [t]
+    for seg in segments:
+        for m in re.finditer(r"\{[\s\S]*\}", seg):
+            try:
+                d = json.loads(m.group(0))
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(d, dict):
+                continue
+            reason = str(d.get("reason") or "").strip()
+            if reason:
+                return reason
+    return None
+
+
 def _fmt_level_for_prompt(v: Optional[float]) -> str:
     if v is None:
         return "(không có)"

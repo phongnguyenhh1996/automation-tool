@@ -23,9 +23,10 @@ from automation_tool.coinmap import (
     load_coinmap_yaml,
 )
 from automation_tool.coinmap_merged import write_openai_coinmap_merged_from_raw_export
-from automation_tool.config import Settings
+from automation_tool.config import Settings, default_gocharting_config_path
 from automation_tool.images import (
     DEFAULT_MAIN_CHART_SYMBOL,
+    GOCHARTING_GOLD_EXPORT_LABEL,
     coinmap_main_pair_interval_json_path,
     coinmap_xauusd_5m_json_path,
     get_active_main_symbol,
@@ -35,6 +36,8 @@ from automation_tool.mt5_accounts import (
     MT5AccountEntry,
     SOURCE_UPDATE_SCALP,
     filter_mt5_accounts_for_zone_entry,
+    is_plan_chinh_family,
+    is_plan_phu_family,
     load_mt5_accounts_for_cli,
     load_mt5_accounts_for_zone_entry,
     primary_account,
@@ -74,11 +77,13 @@ from automation_tool.mt5_manage import (
 )
 from automation_tool.openai_errors import re_raise_unless_openai
 from automation_tool.openai_prompt_flow import (
+    POST_FILL_MANAGEMENT_USER_TEMPLATE,
     TP1_POST_TOUCH_USER_TEMPLATE,
     run_single_followup_responses,
 )
 
-from automation_tool.state_files import read_last_response_id, write_last_response_id
+from automation_tool.state_files import read_last_all_response_id, read_last_response_id, write_last_response_id
+from automation_tool.tp1_followup import extract_trade_management_reason
 from automation_tool.telegram_bot import (
     mt5_zone_label_display_vn,
     send_message,
@@ -168,6 +173,7 @@ DAEMON_PLAN_AUTO_CUTOFF_HOUR = 0
 DAEMON_PLAN_AUTO_CUTOFF_MINUTE = 0
 DAEMON_PLAN_AUTO_CUTOFF_FRIDAY_HOUR = 0
 DAEMON_PLAN_AUTO_CUTOFF_FRIDAY_MINUTE = 0
+POST_FILL_MANAGE_DELAY_MINUTES = 5
 
 
 def _is_scalp_zone(zone: Zone) -> bool:
@@ -870,6 +876,47 @@ def _openai_followup_persist_new_id(params: WatchlistDaemonParams, new_id: str) 
     write_last_response_id(s, path=_daemon_plan_response_id_path(params.shard_path))
 
 
+def _post_fill_prev_response_id(params: WatchlistDaemonParams) -> str:
+    """
+    ``previous_response_id`` cho post-fill [TRADE_MANAGEMENT]: tiếp nối FULL_ANALYSIS.
+
+    1. Shard sidecar nếu có (chuỗi intraday cùng shard).
+    2. ``last_all_response_id.txt`` từ lệnh ``all`` ([FULL_ANALYSIS]).
+    Không fallback ``last_response_id.txt`` chung.
+    """
+    if params.shard_path is not None:
+        p = _daemon_plan_response_id_path(params.shard_path)
+        s = (read_last_response_id(p) or "").strip()
+        if s:
+            return s
+    return (read_last_all_response_id() or "").strip()
+
+
+def _is_plan_chinh_or_phu_zone(zone: Zone) -> bool:
+    return is_plan_chinh_family(zone.label, zone.id) or is_plan_phu_family(zone.label, zone.id)
+
+
+def _parse_iso_utc_optional(raw: str) -> Optional[datetime]:
+    s = (raw or "").strip()
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _post_fill_manage_retry_due(zone: Zone, *, now: Optional[datetime] = None) -> bool:
+    due_at = _parse_iso_utc_optional(getattr(zone, "openai_manage_retry_at", "") or "")
+    if due_at is None:
+        return False
+    current = now or _now_utc()
+    return current >= due_at
+
+
 def _should_write_intraday_alert_anchor(params: WatchlistDaemonParams) -> bool:
     """
     ``True`` khi cần ghi ``response_id`` mới từ [INTRADAY_ALERT] (zone-touch) vào sidecar shard.
@@ -1197,8 +1244,6 @@ def _zone_label_slot_display_vn(zone: Zone, params: Optional[WatchlistDaemonPara
 
 def _send_entry_management_notice(settings: Settings, zone: Zone, text: str) -> None:
     """Notice ngắn cho luồng quản lý lệnh sau khi đã has_position."""
-    if _settings_skip_trade_management(settings):
-        return
     title = (text or "").strip()
     if not title:
         return
@@ -1674,6 +1719,172 @@ def _cancel_tp1_pending_orders_for_zone(
         )
     _send_log(settings, f"[tp1] huỷ pending trước khi loại | ok={r.ok} | {r.message}".strip())
     return bool(r.ok), r.message
+
+
+def _post_fill_manage_job(
+    *,
+    settings: Settings,
+    params: WatchlistDaemonParams,
+    zone_id: str,
+) -> None:
+    """
+    Post-fill [TRADE_MANAGEMENT] cho plan chính / plan phụ: GoCharting M5 detail + OpenAI;
+    gửi ``reason`` lên Telegram — không thao tác MT5.
+    """
+    from automation_tool.gocharting_capture import capture_gocharting, gocharting_detail_png_path
+
+    try:
+        st0 = _state_read(params)
+        if st0 is None:
+            return
+        z0 = next((z for z in st0.zones if z.id == zone_id), None)
+        if z0 is None:
+            return
+        if z0.status in ("done", "loai"):
+            return
+
+        prev = _post_fill_prev_response_id(params)
+        if not prev:
+            _send_log(
+                settings,
+                f"[post-fill] thiếu FULL_ANALYSIS anchor | zone_id={zone_id}",
+            )
+            _send_user_notice(
+                settings,
+                "Chưa có phân tích FULL_ANALYSIS.",
+                "Chạy coinmap-automation all trước khi quản lý lệnh sau khớp.",
+                zone=z0,
+                params=params,
+            )
+            return
+
+        if not z0.trade_line:
+            return
+        parsed, err = _parse_trade_from_zone_trade_line(
+            z0.trade_line, symbol_override=params.mt5_symbol
+        )
+        if err or parsed is None:
+            _send_log(settings, f"[post-fill] parse trade_line failed | zone_id={zone_id} | {err}")
+            return
+
+        _send_user_notice(
+            settings,
+            "Lệnh đã khớp — đang lấy chart GoCharting M5 và hỏi AI.",
+            f"Sẽ gửi khuyến nghị quản lý lệnh (không tự động sửa MT5) cho {_zone_label_slot_display_vn(z0, params)}.",
+            zone=z0,
+            params=params,
+        )
+
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        gc_label = GOCHARTING_GOLD_EXPORT_LABEL
+        capture_gocharting(
+            gocharting_yaml=default_gocharting_config_path(),
+            charts_dir=params.charts_dir,
+            email=settings.gocharting_email or "",
+            password=settings.gocharting_password or "",
+            storage_state_path=params.storage_state_path,
+            save_storage_state=not params.no_save_storage,
+            headless=params.headless,
+            main_chart_symbol=read_main_chart_symbol(params.charts_dir),
+            stamp_override=stamp,
+            capture_symbols=(DEFAULT_MAIN_CHART_SYMBOL,),
+            capture_intervals=("5m",),
+            only_slots=[(gc_label, "5m")],
+            overview_capture=False,
+            detail_history_steps=0,
+        )
+        detail_png = gocharting_detail_png_path(
+            params.charts_dir, stamp, gc_label, "5m", "zoom"
+        )
+        if not detail_png.is_file():
+            raise FileNotFoundError(
+                f"post-fill: GoCharting M5 detail PNG not found: {detail_png}"
+            )
+
+        tk_check = int(z0.mt5_ticket or 0)
+        dry = bool(params.mt5_dry_run)
+        current_sl: Optional[float] = None
+        current_tp: Optional[float] = None
+        if tk_check > 0:
+            accs_for_prompt = load_mt5_accounts_for_cli(params.mt5_accounts_json)
+            prim_for_prompt = primary_account(accs_for_prompt) if accs_for_prompt else None
+            if prim_for_prompt is not None:
+                current_sl, current_tp, sltp_msg = mt5_ticket_current_sltp(
+                    tk_check,
+                    dry_run=dry,
+                    terminal_path=prim_for_prompt.terminal_path,
+                    login=prim_for_prompt.login,
+                    password=prim_for_prompt.password,
+                    server=prim_for_prompt.server,
+                )
+                _send_log(settings, f"[post-fill] đọc SL/TP hiện tại | {sltp_msg}")
+
+        user_text = POST_FILL_MANAGEMENT_USER_TEMPLATE.format(
+            minutes_after_fill=POST_FILL_MANAGE_DELAY_MINUTES,
+            plan_label=z0.label,
+            entry_side=str(getattr(parsed, "side", "") or "").upper(),
+            entry_price=_fmt_level_for_prompt(getattr(parsed, "price", None)),
+            current_sl=_fmt_level_for_prompt(current_sl),
+            current_tp=_fmt_level_for_prompt(current_tp),
+        )
+        out_text, new_id = run_single_followup_responses(
+            api_key=settings.openai_api_key,
+            user_text=user_text,
+            coinmap_json_paths=[],
+            extra_chart_payloads=[("image", detail_png)],
+            previous_response_id=prev,
+            vector_store_ids=settings.openai_vector_store_ids,
+            store=settings.openai_responses_store,
+            include=settings.openai_responses_include,
+            model="gpt-5.4-mini",
+            reasoning_summary="auto",
+            reasoning_effort="medium",
+        )
+        _openai_followup_persist_new_id(params, new_id)
+        _send_log(settings, "[post-fill] OpenAI TRADE_MANAGEMENT xong (ẩn raw JSON).")
+
+        reason = extract_trade_management_reason(out_text)
+        st1 = _state_read(params)
+        z1 = z0
+        if st1 is not None:
+            z1 = next((z for z in st1.zones if z.id == zone_id), z0)
+
+        if not reason:
+            _send_user_notice(
+                settings,
+                "Sau khớp lệnh: không đọc được khuyến nghị từ AI.",
+                "Xem log kỹ thuật nếu cần chi tiết.",
+                zone=z1,
+                params=params,
+            )
+            return
+
+        slot_raw = resolve_session_slot_raw(
+            zone_session_slot=getattr(z1, "session_slot", None),
+            shard_path=params.shard_path,
+        )
+        if not params.no_telegram:
+            send_trade_management_reason_notice(
+                bot_token=settings.telegram_bot_token,
+                telegram_python_bot_chat_id=settings.telegram_python_bot_chat_id,
+                zone_label=z1.label,
+                session_slot=slot_raw,
+                action="khuyen_nghi",
+                reason=reason,
+                trade_line=None,
+                zone_id=z1.id,
+                zone_source=z1.source,
+                shard_path=params.shard_path,
+            )
+    except Exception as e:
+        _send_log(settings, f"[post-fill] ERROR | zone_id={zone_id} | {e!s}")
+        _send_user_notice(
+            settings,
+            "Lỗi khi quản lý lệnh sau khớp.",
+            str(e),
+            params=params,
+        )
+        re_raise_unless_openai(e, exit_on_openai=False, settings=settings)
 
 
 def _tp1_followup_job(
@@ -3885,6 +4096,8 @@ def _daemon_plan_main_loop(
                             z.status = "cho_tp1"
                             z.tp1_followup_done = False
                             z.has_position = False
+                            z.openai_manage_done = False
+                            z.openai_manage_retry_at = ""
                             changed = True
                             _send_log(settings, f"[tp1] arm | zone_id={z.id} vao_lenh->cho_tp1 last={p_last}")
                             _thr_tp1 = arm_threshold_tp1_for_label(z.label or "")
@@ -3932,6 +4145,12 @@ def _daemon_plan_main_loop(
                                 if is_pos:
                                     z.has_position = True
                                     changed_has_position = True
+                                    if _is_plan_chinh_or_phu_zone(z):
+                                        z.openai_manage_retry_at = (
+                                            _now_utc()
+                                            + timedelta(minutes=POST_FILL_MANAGE_DELAY_MINUTES)
+                                        ).isoformat()
+                                        z.openai_manage_done = False
                                     _send_log(
                                         settings,
                                         f"[tp1] has_position=true | zone_id={z.id} | {msg_pos}",
@@ -3984,6 +4203,49 @@ def _daemon_plan_main_loop(
                                 zone_id=z.id,
                                 p_last=float(p_last),
                             )
+                        for z_pf in st_tp1b.zones:
+                            if z_pf.status != "cho_tp1":
+                                continue
+                            if not bool(getattr(z_pf, "has_position", False)):
+                                continue
+                            if bool(getattr(z_pf, "openai_manage_done", False)):
+                                continue
+                            if not _is_plan_chinh_or_phu_zone(z_pf):
+                                continue
+                            if not z_pf.trade_line or not z_pf.mt5_ticket or int(z_pf.mt5_ticket) <= 0:
+                                continue
+                            if not _post_fill_manage_retry_due(z_pf):
+                                continue
+                            z_pf.openai_manage_done = True
+                            _state_write(params, st_tp1b)
+                            tk_pf = int(z_pf.mt5_ticket or 0)
+                            skip_openai = False
+                            if params.mt5_execute and tk_pf > 0 and prim_pos is not None:
+                                is_pos_pf, msg_pf = mt5_ticket_is_open_position(
+                                    tk_pf,
+                                    dry_run=bool(params.mt5_dry_run),
+                                    terminal_path=prim_pos.terminal_path,
+                                    login=prim_pos.login,
+                                    password=prim_pos.password,
+                                    server=prim_pos.server,
+                                )
+                                if not is_pos_pf:
+                                    _send_log(
+                                        settings,
+                                        f"[post-fill] bỏ qua OpenAI (không còn position) | "
+                                        f"zone_id={z_pf.id} | {msg_pf}",
+                                    )
+                                    skip_openai = True
+                            if not skip_openai:
+                                _send_log(
+                                    settings,
+                                    f"[post-fill] dispatch | zone_id={z_pf.id}",
+                                )
+                                _post_fill_manage_job(
+                                    settings=settings,
+                                    params=params,
+                                    zone_id=z_pf.id,
+                                )
                         if changed_has_position:
                             _state_write(params, st_tp1b)
 

@@ -162,6 +162,8 @@ class Zone:
     has_position: bool = False
     # ISO UTC: thời điểm tới hạn gửi OpenAI quản lý lệnh định kỳ sau khi đã ``has_position=true``.
     openai_manage_retry_at: str = ""
+    # True sau khi đã dispatch post-fill [TRADE_MANAGEMENT] một lần (plan chính / plan phụ).
+    openai_manage_done: bool = False
     # Đã gửi follow-up khi giá hồi 50% quãng entry → SL (adverse) trong trạng thái ``cho_tp1``.
     half_sl_followup_done: bool = False
     # Giá SL/TP mới từ [TRADE_MANAGEMENT] (nếu đã chỉnh thành công trên MT5).
@@ -197,6 +199,7 @@ class Zone:
             "r1_followup_done": self.r1_followup_done,
             "has_position": self.has_position,
             "openai_manage_retry_at": self.openai_manage_retry_at,
+            "openai_manage_done": self.openai_manage_done,
             "half_sl_followup_done": self.half_sl_followup_done,
             "managed_sl": self.managed_sl,
             "managed_tp": self.managed_tp,
@@ -314,6 +317,8 @@ def _parse_zone(d: dict[str, Any]) -> Optional[Zone]:
     has_position = bool(hp_raw) if isinstance(hp_raw, bool) else False
     omra_raw = d.get("openai_manage_retry_at")
     openai_manage_retry_at = omra_raw.strip() if isinstance(omra_raw, str) else ""
+    omd_raw = d.get("openai_manage_done")
+    openai_manage_done = bool(omd_raw) if isinstance(omd_raw, bool) else False
     hs_raw = d.get("half_sl_followup_done")
     half_sl_done = bool(hs_raw) if isinstance(hs_raw, bool) else False
     ms_raw = _as_float(d.get("managed_sl"))
@@ -370,6 +375,7 @@ def _parse_zone(d: dict[str, Any]) -> Optional[Zone]:
         r1_followup_done=r1_done,
         has_position=has_position,
         openai_manage_retry_at=openai_manage_retry_at,
+        openai_manage_done=openai_manage_done,
         half_sl_followup_done=half_sl_done,
         managed_sl=ms_raw,
         managed_tp=mt_raw,
@@ -451,6 +457,8 @@ def write_zones_for_slot(
                 tp1_followup_done=z.tp1_followup_done,
                 r1_followup_done=z.r1_followup_done,
                 has_position=z.has_position,
+                openai_manage_retry_at=z.openai_manage_retry_at,
+                openai_manage_done=z.openai_manage_done,
                 half_sl_followup_done=z.half_sl_followup_done,
                 managed_sl=z.managed_sl,
                 managed_tp=z.managed_tp,

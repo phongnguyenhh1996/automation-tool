@@ -387,6 +387,60 @@ def test_capture_gocharting_in_context_detail_zoom_only_when_history_zero(
     assert not any("_detail_back_" in p.name for p in paths)
 
 
+def test_capture_gocharting_in_context_overview_capture_false_detail_only(
+    monkeypatch, tmp_path: Path, gc_cfg: dict
+) -> None:
+    context = MagicMock()
+    overview_png = MagicMock()
+    overview_csv = MagicMock()
+    monkeypatch.setattr(
+        "automation_tool.gocharting_capture._capture_png",
+        overview_png,
+    )
+    monkeypatch.setattr(
+        "automation_tool.gocharting_capture._capture_csv",
+        overview_csv,
+    )
+
+    detail_paths: list[Path] = []
+
+    def fake_detail(*args, **kwargs):
+        stamp = str(kwargs["stamp"])
+        p = gocharting_detail_png_path(tmp_path, stamp, "GC", "5m", "zoom")
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"png")
+        detail_paths.append(p)
+        return [p]
+
+    monkeypatch.setattr(
+        "automation_tool.gocharting_capture._capture_detail_footprint",
+        fake_detail,
+    )
+
+    stamp = "20260617_130000"
+    cfg = dict(gc_cfg)
+    cfg["capture_plan"] = [{"symbol": "XAUUSD", "intervals": ["15m", "5m"]}]
+    paths = _capture_gocharting_in_context(
+        context,
+        cfg,
+        charts_dir=tmp_path,
+        email="a@b.com",
+        password="pw",
+        stamp=stamp,
+        main_chart_symbol=None,
+        capture_symbols=("XAUUSD",),
+        capture_intervals=("5m",),
+        only_slots=[("GC", "5m")],
+        detail_history_steps=0,
+        overview_capture=False,
+    )
+
+    overview_png.assert_not_called()
+    overview_csv.assert_not_called()
+    assert len(paths) == 1
+    assert paths[0].name.endswith("_gocharting_GC_5m_detail_zoom.png")
+
+
 def test_capture_gocharting_in_context_skips_detail_when_symbol_disabled(
     monkeypatch, tmp_path: Path, gc_cfg: dict
 ) -> None:

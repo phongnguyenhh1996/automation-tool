@@ -239,6 +239,7 @@ def test_parse_zone_reads_has_position_flag() -> None:
             "status": "cho_tp1",
             "has_position": True,
             "openai_manage_retry_at": "2026-05-01T03:15:00+00:00",
+            "openai_manage_done": True,
             "managed_sl": 99.5,
             "managed_tp": 103.0,
             "last_r_followup_level": 2,
@@ -247,6 +248,7 @@ def test_parse_zone_reads_has_position_flag() -> None:
     assert z is not None
     assert z.has_position is True
     assert z.openai_manage_retry_at == "2026-05-01T03:15:00+00:00"
+    assert z.openai_manage_done is True
     assert z.managed_sl == 99.5
     assert z.managed_tp == 103.0
     assert z.last_r_followup_level == 2

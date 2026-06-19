@@ -1031,6 +1031,18 @@ R1_POST_TOUCH_USER_TEMPLATE = (
     "TP hiện tại: {current_tp}\n\n"
 )
 
+# Plan chính / plan phụ: ~5 phút sau khớp lệnh — GoCharting M5 detail, chỉ khuyến nghị (không MT5).
+POST_FILL_MANAGEMENT_USER_TEMPLATE = (
+    "[TRADE_MANAGEMENT]\n"
+    "Lệnh đã khớp khoảng {minutes_after_fill} phút trước. "
+    "Đánh giá Footprint GoCharting M5 detail đính kèm (giữ hay thoát / chỉnh SL/TP).\n"
+    "Đây là khuyến nghị tham khảo — người dùng tự quyết trên MT5.\n"
+    "Vùng (label): {plan_label}\n"
+    "{entry_side} entry: {entry_price}\n"
+    "SL hiện tại: {current_sl}\n"
+    "TP hiện tại: {current_tp}\n\n"
+)
+
 
 def run_single_followup_responses(
     *,

@@ -29,9 +29,10 @@ from automation_tool.tv_watchlist_daemon import (
     _daemon_plan_response_id_path,
     _openai_followup_persist_new_id,
     _openai_followup_prev_response_id,
+    _post_fill_prev_response_id,
+    _post_fill_manage_retry_due,
+    _is_plan_chinh_or_phu_zone,
     _entry_touched_for_position_check,
-    _entry_management_target_touched,
-    _half_sl_retrace_touched,
     _m5_analysis_capture_slot_wait_seconds,
     _max_r_multiple_reached,
     _should_check_managed_tp_done,
@@ -232,6 +233,77 @@ def test_daemon_plan_prev_seeds_from_main_when_sidecar_empty(monkeypatch, tmp_pa
     assert _openai_followup_prev_response_id(params) == "seed-from-main"
     assert calls[0] == _daemon_plan_response_id_path(shard)
     assert calls[1] is None
+
+
+def test_post_fill_prev_prefers_sidecar_over_last_all(monkeypatch, tmp_path) -> None:
+    shard = tmp_path / "vung_sang.json"
+    sidecar = _daemon_plan_response_id_path(shard)
+    write_last_response_id("sidecar-thread", path=sidecar)
+    monkeypatch.setattr(
+        "automation_tool.tv_watchlist_daemon.read_last_all_response_id",
+        lambda: "full-analysis-id",
+    )
+    params = WatchlistDaemonParams(
+        coinmap_tv_yaml=tmp_path / "coinmap_tv.yaml",
+        capture_coinmap_yaml=tmp_path / "cap.yaml",
+        charts_dir=tmp_path / "charts",
+        storage_state_path=None,
+        headless=True,
+        no_save_storage=True,
+        shard_path=shard,
+    )
+    assert _post_fill_prev_response_id(params) == "sidecar-thread"
+
+
+def test_post_fill_prev_seeds_from_last_all_when_sidecar_empty(monkeypatch, tmp_path) -> None:
+    shard = tmp_path / "vung_sang.json"
+    monkeypatch.setattr(
+        "automation_tool.tv_watchlist_daemon.read_last_all_response_id",
+        lambda: "seed-from-full-analysis",
+    )
+    params = WatchlistDaemonParams(
+        coinmap_tv_yaml=tmp_path / "coinmap_tv.yaml",
+        capture_coinmap_yaml=tmp_path / "cap.yaml",
+        charts_dir=tmp_path / "charts",
+        storage_state_path=None,
+        headless=True,
+        no_save_storage=True,
+        shard_path=shard,
+    )
+    assert _post_fill_prev_response_id(params) == "seed-from-full-analysis"
+
+
+def test_post_fill_manage_retry_due() -> None:
+    past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    future = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+    z_due = Zone(
+        id="z1",
+        label="plan_chinh",
+        vung_cho="100–101",
+        side="BUY",
+        openai_manage_retry_at=past,
+    )
+    z_wait = Zone(
+        id="z2",
+        label="plan_phu",
+        vung_cho="100–101",
+        side="BUY",
+        openai_manage_retry_at=future,
+    )
+    assert _post_fill_manage_retry_due(z_due) is True
+    assert _post_fill_manage_retry_due(z_wait) is False
+
+
+def test_is_plan_chinh_or_phu_zone() -> None:
+    assert _is_plan_chinh_or_phu_zone(
+        Zone(id="plan_chinh__sang", label="plan_chinh", vung_cho="1–2", side="BUY")
+    )
+    assert _is_plan_chinh_or_phu_zone(
+        Zone(id="plan_phu__chieu", label="plan_phu", vung_cho="1–2", side="SELL")
+    )
+    assert not _is_plan_chinh_or_phu_zone(
+        Zone(id="scalp__sang", label="scalp", vung_cho="1–2", side="BUY")
+    )
 
 
 def test_daemon_plan_cutoff_marks_zone_loai_before_exit(monkeypatch, tmp_path) -> None:
@@ -802,45 +874,6 @@ def test_should_check_managed_tp_done_requires_has_position() -> None:
     assert _should_check_managed_tp_done(z, parsed_buy, 101.0) is True
 
 
-def test_half_sl_retrace_touched_uses_entry_to_sl_halfway() -> None:
-    parsed_buy = MagicMock(side="BUY", price=100.0, sl=99.0)
-    z_buy = Zone(
-        id="z-buy",
-        label="plan_chinh",
-        vung_cho="99–101",
-        side="BUY",
-        status="cho_tp1",
-    )
-    assert _half_sl_retrace_touched(z_buy, parsed_buy, 99.5) is True
-    assert _half_sl_retrace_touched(z_buy, parsed_buy, 99.7) is False
-
-    parsed_sell = MagicMock(side="SELL", price=100.0, sl=101.0)
-    z_sell = Zone(
-        id="z-sell",
-        label="plan_chinh",
-        vung_cho="99–101",
-        side="SELL",
-        status="cho_tp1",
-    )
-    assert _half_sl_retrace_touched(z_sell, parsed_sell, 100.5) is True
-    assert _half_sl_retrace_touched(z_sell, parsed_sell, 100.3) is False
-
-
-def test_half_sl_retrace_touched_uses_original_trade_sl_even_if_managed_sl_exists() -> None:
-    parsed_sell = MagicMock(side="SELL", price=100.0, sl=101.0)
-    z_sell = Zone(
-        id="z-sell-managed",
-        label="plan_chinh",
-        vung_cho="99–101",
-        side="SELL",
-        status="cho_tp1",
-        managed_sl=100.2,
-    )
-    # -0.5R theo SL gốc: 100 + 0.5*(101-100) = 100.5
-    assert _half_sl_retrace_touched(z_sell, parsed_sell, 100.5) is True
-    assert _half_sl_retrace_touched(z_sell, parsed_sell, 100.4) is False
-
-
 def test_max_r_multiple_reached_uses_original_trade_sl_even_if_managed_sl_exists() -> None:
     parsed_sell = MagicMock(side="SELL", price=4630.5, sl=4637.5)
     z = Zone(
@@ -853,20 +886,6 @@ def test_max_r_multiple_reached_uses_original_trade_sl_even_if_managed_sl_exists
     )
     # Risk theo SL gốc: 7.0; favorable = 4630.5 - 4625.167 = 5.333 => floor(0.7618) = 0R
     assert _max_r_multiple_reached(z, parsed_sell, 4625.167) == 0
-
-
-def test_entry_management_target_touched_for_half_sl_or_one_r() -> None:
-    parsed_buy = MagicMock(side="BUY", price=100.0, sl=99.0)
-    z = Zone(
-        id="z-manage",
-        label="plan_chinh",
-        vung_cho="99–101",
-        side="BUY",
-        status="cho_tp1",
-    )
-    assert _entry_management_target_touched(z, parsed_buy, 99.5) is True
-    assert _entry_management_target_touched(z, parsed_buy, 101.0) is True
-    assert _entry_management_target_touched(z, parsed_buy, 100.2) is False
 
 
 def test_daemon_plan_sl_loai_includes_post_entry_statuses() -> None:

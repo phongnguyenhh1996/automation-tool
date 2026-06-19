@@ -545,7 +545,42 @@ def _capture_gocharting_in_context(
     capture_intervals: Optional[tuple[str, ...]],
     only_slots: Optional[list[tuple[str, str]]] = None,
     detail_history_steps: Optional[int] = None,
+    overview_capture: bool = True,
 ) -> list[Path]:
+    slot_filter: set[tuple[str, str]] | None = None
+    if only_slots:
+        slot_filter = {(lbl.upper(), iv.lower()) for lbl, iv in only_slots}
+
+    plan = _filter_capture_plan(
+        cfg,
+        capture_symbols=capture_symbols,
+        capture_intervals=capture_intervals,
+        main_chart_symbol=main_chart_symbol,
+    )
+
+    if not overview_capture:
+        paths: list[Path] = []
+        for entry, _plan_sym, intervals in plan:
+            export_label = str(entry["export_label"]).strip().upper()
+            for interval in intervals:
+                if slot_filter is not None:
+                    if (export_label, interval.lower()) not in slot_filter:
+                        continue
+                if _symbol_detail_chart_enabled(cfg, entry):
+                    detail_paths = _capture_detail_footprint(
+                        context,
+                        cfg,
+                        charts_dir=charts_dir,
+                        email=email,
+                        password=password,
+                        stamp=stamp,
+                        entry=entry,
+                        interval=interval,
+                        detail_history_steps=detail_history_steps,
+                    )
+                    paths.extend(detail_paths)
+        return paths
+
     chart_url = str(cfg.get("chart_page_url") or "").strip()
     if not chart_url:
         raise ValueError("gocharting.yaml chart_page_url is required")
@@ -556,17 +591,7 @@ def _capture_gocharting_in_context(
         main_page.wait_for_timeout(1200)
         _maybe_login_gocharting(main_page, cfg, email, password)
 
-        slot_filter: set[tuple[str, str]] | None = None
-        if only_slots:
-            slot_filter = {(lbl.upper(), iv.lower()) for lbl, iv in only_slots}
-
-        paths: list[Path] = []
-        plan = _filter_capture_plan(
-            cfg,
-            capture_symbols=capture_symbols,
-            capture_intervals=capture_intervals,
-            main_chart_symbol=main_chart_symbol,
-        )
+        paths = []
         for entry, _plan_sym, intervals in plan:
             export_label = str(entry["export_label"]).strip().upper()
             _select_chart_symbol(main_page, cfg, entry)
@@ -625,6 +650,7 @@ def _capture_gocharting_with_context(
     capture_intervals: Optional[tuple[str, ...]],
     only_slots: Optional[list[tuple[str, str]]] = None,
     detail_history_steps: Optional[int] = None,
+    overview_capture: bool = True,
 ) -> list[Path]:
     paths = _capture_gocharting_in_context(
         context,
@@ -638,6 +664,7 @@ def _capture_gocharting_with_context(
         capture_intervals=capture_intervals,
         only_slots=only_slots,
         detail_history_steps=detail_history_steps,
+        overview_capture=overview_capture,
     )
     if save_storage_state and storage_state_path:
         _ensure_dir(storage_state_path.parent)
@@ -663,12 +690,15 @@ def capture_gocharting(
     reuse_browser_context: Optional[BrowserContext] = None,
     require_browser_service: bool = False,
     detail_history_steps: Optional[int] = None,
+    overview_capture: bool = True,
 ) -> list[Path]:
     """
     Capture GoCharting footprint charts: PNG screenshot + CSV export per (symbol, interval).
 
     When ``detail_chart.page_url`` is set, also captures detail footprint PNGs on a separate tab
     (zoom + optional pan history steps). ``detail_history_steps=0`` captures zoom only.
+
+    ``overview_capture=False`` — chỉ capture detail footprint (không PNG/CSV overview).
 
     Attaches to the long-lived browser service when ``data/browser_service_state.json`` is
     present (same as Coinmap/TV ``capture_charts``). Otherwise launches a standalone Chrome.
@@ -715,6 +745,7 @@ def capture_gocharting(
         capture_intervals=capture_intervals,
         only_slots=only_slots,
         detail_history_steps=detail_history_steps,
+        overview_capture=overview_capture,
     )
 
     if reuse_browser_context is not None:

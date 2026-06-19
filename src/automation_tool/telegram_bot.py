@@ -236,6 +236,8 @@ def _trade_management_action_display_vn(action: Optional[str]) -> str:
         return "Chỉnh trade line"
     if key in ("giu_nguyen", "giữ_nguyên", "giu nguyen"):
         return "Giữ nguyên"
+    if key in ("khuyen_nghi", "khuyến_nghị", "tham_khao", "tham khảo"):
+        return "Khuyến nghị tham khảo"
     return "Đã có quyết định"
 
 
