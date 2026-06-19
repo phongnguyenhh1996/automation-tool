@@ -13,7 +13,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from collections.abc import Callable
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Optional, Sequence, TypeVar
 
 from automation_tool.coinmap import capture_charts, load_coinmap_yaml
 from automation_tool.gocharting_capture import (
@@ -1693,6 +1693,34 @@ def cmd_browser_tail(args: argparse.Namespace) -> None:
         print("\nStopped.", flush=True)
 
 
+_T = TypeVar("_T")
+
+
+def _run_capture_telegram_log_parallel_with(
+    *,
+    bot_token: Optional[str],
+    telegram_log_chat_id: Optional[str],
+    png_paths: Sequence[Path],
+    header: str,
+    work_fn: Callable[[], _T],
+) -> tuple[int, _T]:
+    """
+    Gửi capture PNG tới TELEGRAM_LOG_CHAT_ID song song với ``work_fn`` (thường là OpenAI).
+    Chờ cả hai xong rồi trả (số ảnh Telegram đã gửi, kết quả work_fn).
+    """
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+        tg_fut = ex.submit(
+            send_capture_screenshots_to_log_chat,
+            bot_token=bot_token,
+            telegram_log_chat_id=telegram_log_chat_id,
+            png_paths=png_paths,
+            header=header,
+        )
+        work_fut = ex.submit(work_fn)
+        concurrent.futures.wait([tg_fut, work_fut])
+        return tg_fut.result(), work_fut.result()
+
+
 def _run_openai_flow(
     s,
     charts_dir: Path,
@@ -2999,19 +3027,6 @@ def cmd_all(args: argparse.Namespace) -> None:
         require_valid_coinmap_exports_for_stamp(charts_dir, stamp)
 
     capture_pngs = ordered_chart_images(charts_dir, stamp=stamp)
-    n_sent = send_capture_screenshots_to_log_chat(
-        bot_token=s.telegram_bot_token,
-        telegram_log_chat_id=s.telegram_log_chat_id,
-        png_paths=capture_pngs,
-        header=f"all: capture screenshots | stamp={stamp} | {len(capture_pngs)} PNG",
-    )
-    _log.info(
-        "all: gửi capture PNG → TELEGRAM_LOG_CHAT_ID | stamp=%s | files=%s sent=%s",
-        stamp,
-        len(capture_pngs),
-        n_sent,
-    )
-
     require_openai(s)
     payloads = ordered_chart_openai_payloads(charts_dir)
     _warn_if_incomplete_chart_payloads(charts_dir, payloads)
@@ -3023,18 +3038,35 @@ def cmd_all(args: argparse.Namespace) -> None:
 
     prompt_all = _resolved_analysis_prompt(args, charts_dir)
     max_images = args.max_images_per_call
-    try:
-        out = _run_openai_flow(
+    openai_model = resolved_openai_model(s, getattr(args, "model", None))
+
+    def _openai_all_work() -> PromptTwoStepResult:
+        return _run_openai_flow(
             s,
             charts_dir,
             prompt_all,
             max_images,
             chart_payloads=payloads,
             on_first_model_text=None,
-            model=resolved_openai_model(s, getattr(args, "model", None)),
+            model=openai_model,
+        )
+
+    try:
+        n_sent, out = _run_capture_telegram_log_parallel_with(
+            bot_token=s.telegram_bot_token,
+            telegram_log_chat_id=s.telegram_log_chat_id,
+            png_paths=capture_pngs,
+            header=f"all: capture screenshots | stamp={stamp} | {len(capture_pngs)} PNG",
+            work_fn=_openai_all_work,
         )
     except Exception as e:
         re_raise_unless_openai(e)
+    _log.info(
+        "all: capture PNG (Telegram log) + OpenAI song song | stamp=%s | png_files=%s sent=%s",
+        stamp,
+        len(capture_pngs),
+        n_sent,
+    )
     print(out.full_text())
     _log.info("all: OpenAI xong | response_id=%s", out.final_response_id)
 
@@ -3708,19 +3740,6 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
             )
 
     capture_pngs = ordered_chart_images(charts_dir, stamp=stamp)
-    n_sent = send_capture_screenshots_to_log_chat(
-        bot_token=s.telegram_bot_token,
-        telegram_log_chat_id=s.telegram_log_chat_id,
-        png_paths=capture_pngs,
-        header=f"update-scalp: capture screenshots | stamp={stamp} | {len(capture_pngs)} PNG",
-    )
-    _log.info(
-        "update-scalp: gửi capture PNG → TELEGRAM_LOG_CHAT_ID | stamp=%s | files=%s sent=%s",
-        stamp,
-        len(capture_pngs),
-        n_sent,
-    )
-
     require_openai(s)
 
     morning_snapshot: Path = mp
@@ -3742,9 +3761,10 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
         s,
         fallback=[_ALL_SECOND_FLOW_VECTOR_STORE_ID],
     )
+    scalp_openai_model = resolved_openai_model(s, getattr(args, "model", None))
 
-    try:
-        out_text, new_id = run_single_followup_responses(
+    def _openai_scalp_work() -> tuple[str, str]:
+        return run_single_followup_responses(
             api_key=s.openai_api_key,
             user_text=user_msg,
             morning_snapshot_path=morning_snapshot,
@@ -3754,10 +3774,25 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
             vector_store_ids=scalp_vector_store_ids,
             store=s.openai_responses_store,
             include=s.openai_responses_include,
-            model=resolved_openai_model(s, getattr(args, "model", None)),
+            model=scalp_openai_model,
+        )
+
+    try:
+        n_sent, (out_text, new_id) = _run_capture_telegram_log_parallel_with(
+            bot_token=s.telegram_bot_token,
+            telegram_log_chat_id=s.telegram_log_chat_id,
+            png_paths=capture_pngs,
+            header=f"update-scalp: capture screenshots | stamp={stamp} | {len(capture_pngs)} PNG",
+            work_fn=_openai_scalp_work,
         )
     except Exception as e:
         re_raise_unless_openai(e)
+    _log.info(
+        "update-scalp: capture PNG (Telegram log) + OpenAI song song | stamp=%s | png_files=%s sent=%s",
+        stamp,
+        len(capture_pngs),
+        n_sent,
+    )
 
     print(out_text)
     write_last_scalp_response_id(new_id)
