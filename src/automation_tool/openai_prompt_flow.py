@@ -220,6 +220,7 @@ def _json_file_header_and_body(path: Path, *, max_chars: int) -> tuple[str, str]
         header = (
             f"[MT5 spot OHLC (broker execution price) — file: {path.name}]\n"
             "Instrument: spot XAUUSD on broker MT5 (not GC1! futures footprint).\n"
+            "Bar times (`t`) and generated_at are Asia/Ho_Chi_Minh (UTC+7).\n"
         )
     elif "_openai_coinmap_merged" in path.name or path.name.endswith("_merged.json"):
         header = f"[Coinmap merged analysis — file: {path.name}]\n"

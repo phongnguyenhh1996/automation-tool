@@ -6,6 +6,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 from automation_tool.mt5_accounts import (
     MT5AccountEntry,
@@ -20,6 +21,8 @@ _log = logging.getLogger(__name__)
 
 DEFAULT_MT5_SPOT_CANDLES_COUNT = 50
 DEFAULT_MT5_SPOT_CANDLES_INTERVAL = "5m"
+MT5_CANDLES_TIMEZONE = "Asia/Ho_Chi_Minh"
+_VN_TZ = ZoneInfo(MT5_CANDLES_TIMEZONE)
 
 
 def mt5_spot_candles_count() -> int:
@@ -88,6 +91,11 @@ def resolve_mt5_broker_symbol(
     return normalize_broker_xau_symbol(logic_symbol)
 
 
+def _bar_open_vn_iso(t_unix: int) -> str:
+    """Bar open time from MT5 Unix seconds → ISO string in Vietnam timezone."""
+    return datetime.fromtimestamp(t_unix, tz=timezone.utc).astimezone(_VN_TZ).isoformat()
+
+
 def _bar_records(rates: Any) -> list[dict[str, Any]]:
     if rates is None:
         return []
@@ -97,7 +105,7 @@ def _bar_records(rates: Any) -> list[dict[str, Any]]:
         t = int(t_raw.item()) if hasattr(t_raw, "item") else int(t_raw)
         out.append(
             {
-                "t": t,
+                "t": _bar_open_vn_iso(t),
                 "open": float(bar["open"]),
                 "high": float(bar["high"]),
                 "low": float(bar["low"]),
@@ -198,9 +206,10 @@ def fetch_mt5_spot_candles_payload(
             "symbol": (logic_symbol or "XAUUSD").strip().upper(),
             "broker_symbol": broker_symbol,
             "interval": iv,
+            "timezone": MT5_CANDLES_TIMEZONE,
             "n_bars": len(bars),
             "n_bars_requested": n,
-            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "generated_at": datetime.now(_VN_TZ).isoformat(),
             "bars": bars,
         }
     finally:

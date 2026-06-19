@@ -9,6 +9,7 @@ import pytest
 
 from automation_tool.images import ordered_chart_openai_payloads
 from automation_tool.mt5_candles import (
+    MT5_CANDLES_TIMEZONE,
     export_mt5_spot_candles_json,
     fetch_mt5_spot_candles_payload,
     mt5_spot_candles_json_stem,
@@ -62,8 +63,12 @@ def test_fetch_mt5_spot_candles_payload_mock(monkeypatch: pytest.MonkeyPatch) ->
     assert payload["symbol"] == "XAUUSD"
     assert payload["broker_symbol"] == "XAUUSDm"
     assert payload["interval"] == "5m"
+    assert payload["timezone"] == MT5_CANDLES_TIMEZONE
     assert payload["n_bars"] == 2
     assert payload["bars"][0]["close"] == 2650.5
+    assert payload["bars"][0]["t"] == "2023-11-15T05:13:20+07:00"
+    assert payload["bars"][1]["t"] == "2023-11-15T05:18:20+07:00"
+    assert payload["generated_at"].endswith("+07:00")
 
 
 def test_export_mt5_spot_candles_json_writes_file(
