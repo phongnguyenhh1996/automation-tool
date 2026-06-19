@@ -6,6 +6,7 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -17,7 +18,12 @@ import httpx
 from automation_tool.config import Settings, resolved_openai_model
 from automation_tool.openai_prompt_flow import run_text_followup_responses
 from automation_tool.state_files import get_tim_scalp_success_count, increment_tim_scalp_success
-from automation_tool.telegram_bot import send_message, send_openai_output_to_telegram
+from automation_tool.telegram_bot import (
+    download_telegram_images,
+    image_file_ids_from_message,
+    send_message,
+    send_openai_output_to_telegram,
+)
 from automation_tool.zones_paths import session_slot_display_vn, session_slot_now_hcm
 from automation_tool.zones_state import mark_zone_status_loai_by_id
 
@@ -58,18 +64,40 @@ def _normalize_chat_id(v: Optional[str]) -> str:
     return (v or "").strip()
 
 
+def _command_text_from_envelope(env: dict[str, Any]) -> str:
+    """Command text from ``text`` or photo/document ``caption``."""
+    txt = env.get("text")
+    if isinstance(txt, str) and txt.strip():
+        return txt.strip()
+    cap = env.get("caption")
+    if isinstance(cap, str) and cap.strip():
+        return cap.strip()
+    return ""
+
+
 def _extract_text(update: dict[str, Any]) -> tuple[Optional[dict[str, Any]], Optional[str]]:
     """
     Return (envelope, text) where envelope is the Telegram object containing chat/from/message_id.
-    Supports: message, channel_post.
+    Supports: message, channel_post (``text`` or image ``caption``).
     """
     for k in ("message", "channel_post"):
         env = update.get(k)
         if isinstance(env, dict):
-            txt = env.get("text")
-            if isinstance(txt, str):
-                return env, txt.strip()
+            txt = _command_text_from_envelope(env)
+            if txt:
+                return env, txt
     return None, None
+
+
+def _collect_ask_image_file_ids(env: dict[str, Any]) -> list[str]:
+    """Images from the command message, or from ``reply_to_message`` when text-only."""
+    ids = image_file_ids_from_message(env)
+    if ids:
+        return ids
+    reply = env.get("reply_to_message")
+    if isinstance(reply, dict):
+        return image_file_ids_from_message(reply)
+    return []
 
 
 def _chat_id_from_envelope(env: dict[str, Any]) -> Optional[str]:
@@ -206,6 +234,7 @@ def _handle_telegram_ask_followup(
     listen_chat_id: str,
     reply_to_message_id: Optional[int],
     message_thread_id: Optional[int],
+    message_env: dict[str, Any],
     args_text: str,
     model: str,
     cmd_label: str,
@@ -216,22 +245,33 @@ def _handle_telegram_ask_followup(
             settings,
             listen_chat_id,
             f"Cú pháp: {cmd_label} <openai_response_id> <noi_dung>\n"
-            f"Ví dụ: {cmd_label} resp_abc123 Hãy tóm tắt 3 vùng giá và gợi ý trade_line.",
+            f"Ví dụ: {cmd_label} resp_abc123 Hãy tóm tắt 3 vùng giá và gợi ý trade_line.\n"
+            f"Có thể đính kèm ảnh (photo/document) hoặc reply vào tin có ảnh.",
         )
         return
     ask_body = (noi_dung or "").strip()
     if not ask_body.upper().startswith("[RETROSPECTIVE"):
         ask_body = f"[RETROSPECTIVE_ANALYSIS]\n{ask_body}"
     try:
-        out_text, new_id = run_text_followup_responses(
-            api_key=settings.openai_api_key,
-            user_text=ask_body,
-            previous_response_id=openai_response_id,
-            vector_store_ids=settings.openai_vector_store_ids,
-            store=settings.openai_responses_store,
-            include=settings.openai_responses_include,
-            model=model,
-        )
+        image_file_ids = _collect_ask_image_file_ids(message_env)
+        with tempfile.TemporaryDirectory(prefix="tg-ask-") as tmp:
+            image_paths: list[Path] = []
+            if image_file_ids:
+                image_paths = download_telegram_images(
+                    bot_token=settings.telegram_bot_token,
+                    file_ids=image_file_ids,
+                    dest_dir=Path(tmp),
+                )
+            out_text, new_id = run_text_followup_responses(
+                api_key=settings.openai_api_key,
+                user_text=ask_body,
+                previous_response_id=openai_response_id,
+                vector_store_ids=settings.openai_vector_store_ids,
+                store=settings.openai_responses_store,
+                include=settings.openai_responses_include,
+                model=model,
+                image_paths=image_paths,
+            )
         if new_id:
             out_text = f"(openai_response_id={new_id})\n\n{out_text}".strip()
         send_openai_output_to_telegram(
@@ -689,6 +729,7 @@ def run_telegram_listener(
                             listen_chat_id=listen_chat_id,
                             reply_to_message_id=_message_id_from_envelope(env),
                             message_thread_id=_message_thread_id_from_envelope(env),
+                            message_env=env,
                             args_text=args_text,
                             model=_explain_followup_model(
                                 resolved_openai_model(settings, params.openai_model)
@@ -701,6 +742,7 @@ def run_telegram_listener(
                             listen_chat_id=listen_chat_id,
                             reply_to_message_id=_message_id_from_envelope(env),
                             message_thread_id=_message_thread_id_from_envelope(env),
+                            message_env=env,
                             args_text=args_text,
                             model=_ASK_HIGH_FOLLOWUP_MODEL,
                             cmd_label="/ask-high",

@@ -1147,9 +1147,10 @@ def run_text_followup_responses(
     include: list[str],
     reasoning_summary: str = "auto",
     model: str | None = None,
+    image_paths: Sequence[Path] | None = None,
 ) -> tuple[str, str]:
     """
-    One text-only user turn chained to ``previous_response_id``.
+    One user turn chained to ``previous_response_id`` (text-only, or text + optional images).
 
     Returns ``(output_text, new_response_id)``.
     """
@@ -1177,10 +1178,22 @@ def run_text_followup_responses(
         common["tools"] = tools
     _merge_model(common, model)
 
+    imgs = [p for p in (image_paths or []) if isinstance(p, Path) and p.is_file()]
+    text = (user_text or "").strip()
+    if imgs:
+        payloads: list[ChartOpenAIPayload] = [("image", p) for p in imgs]
+        user_content: str | list[dict[str, Any]] = _build_mixed_chart_user_content(
+            text,
+            payloads,
+            max_json_chars=_default_max_coinmap_json_chars(),
+        )
+    else:
+        user_content = text
+
     r = client.responses.create(
         **common,
         previous_response_id=previous_response_id,
-        input=responses_input_messages(user_content=(user_text or "").strip()),
+        input=responses_input_messages(user_content=user_content),
     )
     out = (r.output_text or "").strip()
     return out, r.id

@@ -738,6 +738,94 @@ def send_message(
     return first_message_id
 
 
+def image_file_ids_from_message(env: dict[str, Any]) -> list[str]:
+    """
+    Collect Telegram ``file_id`` values for images in a message envelope.
+
+    Supports compressed ``photo`` (largest size) and ``document`` with ``image/*`` mime.
+    """
+    out: list[str] = []
+    photo = env.get("photo")
+    if isinstance(photo, list) and photo:
+        sizes = [p for p in photo if isinstance(p, dict)]
+        if sizes:
+            fid = sizes[-1].get("file_id")
+            if isinstance(fid, str) and fid.strip():
+                out.append(fid.strip())
+    doc = env.get("document")
+    if isinstance(doc, dict):
+        mime = doc.get("mime_type")
+        fid = doc.get("file_id")
+        if isinstance(fid, str) and fid.strip():
+            if isinstance(mime, str) and mime.lower().startswith("image/"):
+                out.append(fid.strip())
+    return out
+
+
+def telegram_get_file_path(
+    *,
+    bot_token: str,
+    file_id: str,
+    timeout: float = 60.0,
+) -> str:
+    """Resolve a Telegram ``file_id`` to the ``file_path`` used by the file download URL."""
+    base = f"https://api.telegram.org/bot{bot_token}/getFile"
+    with httpx.Client(timeout=timeout) as client:
+        r = client.get(base, params={"file_id": file_id})
+    if r.status_code != 200:
+        raise RuntimeError(f"Telegram getFile failed: {r.status_code} {r.text}")
+    j = r.json()
+    if not j.get("ok"):
+        raise RuntimeError(f"Telegram API error: {j}")
+    result = j.get("result")
+    if not isinstance(result, dict):
+        raise RuntimeError(f"Telegram getFile missing result: {j}")
+    file_path = result.get("file_path")
+    if not isinstance(file_path, str) or not file_path.strip():
+        raise RuntimeError(f"Telegram getFile missing file_path: {j}")
+    return file_path.strip()
+
+
+def download_telegram_file(
+    *,
+    bot_token: str,
+    file_id: str,
+    dest: Path,
+    timeout: float = 120.0,
+) -> Path:
+    """Download one Telegram file to ``dest`` (parent dir must exist)."""
+    file_path = telegram_get_file_path(bot_token=bot_token, file_id=file_id, timeout=timeout)
+    url = f"https://api.telegram.org/file/bot{bot_token}/{file_path}"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with httpx.Client(timeout=timeout) as client:
+        r = client.get(url)
+    if r.status_code != 200:
+        raise RuntimeError(f"Telegram file download failed: {r.status_code} {r.text}")
+    dest.write_bytes(r.content)
+    return dest
+
+
+def download_telegram_images(
+    *,
+    bot_token: str,
+    file_ids: Sequence[str],
+    dest_dir: Path,
+    timeout: float = 120.0,
+) -> list[Path]:
+    """Download one or more Telegram image files into ``dest_dir``."""
+    out: list[Path] = []
+    for i, fid in enumerate(file_ids):
+        rid = (fid or "").strip()
+        if not rid:
+            continue
+        file_path = telegram_get_file_path(bot_token=bot_token, file_id=rid, timeout=timeout)
+        suffix = Path(file_path).suffix or ".jpg"
+        dest = dest_dir / f"telegram_{i + 1}{suffix}"
+        download_telegram_file(bot_token=bot_token, file_id=rid, dest=dest, timeout=timeout)
+        out.append(dest)
+    return out
+
+
 def send_photo(
     *,
     bot_token: str,
