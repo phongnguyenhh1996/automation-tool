@@ -59,8 +59,8 @@ detail_chart:
   zoom_clicks: 2
   zoom_click_delay_ms: 500
   chart_root_id: "chart-root-0"
-  pan_start_x_ratio: 0.3
-  pan_end_x_ratio: 0.7
+  pan_start_x_ratio: 0.2
+  pan_end_x_ratio: 0.8
   pan_y_ratio: 0.5
   pan_drag_steps: 12
   history_steps: 2
