@@ -8,6 +8,7 @@ import pytest
 from automation_tool.gocharting_capture import (
     _capture_gocharting_in_context,
     _chart_load_ms,
+    _detail_chart_cfg_for_interval,
     _detail_chart_viewport,
     _gocharting_tick_search_already_set,
     _pan_detail_chart,
@@ -232,6 +233,57 @@ def test_detail_chart_viewport_honors_detail_overrides() -> None:
         "detail_chart": {"viewport_width": 3200, "viewport_height": 900},
     }
     assert _detail_chart_viewport(cfg) == (3200, 900)
+
+
+def test_detail_chart_cfg_for_interval_merges_by_interval() -> None:
+    cfg = {
+        "detail_chart": {
+            "page_url": "https://example.com/detail",
+            "zoom_clicks": 2,
+            "history_steps": 2,
+            "viewport_width": 4000,
+            "viewport_height": 6000,
+            "pan_start_x_ratio": 0.2,
+            "by_interval": {
+                "5m": {
+                    "zoom_clicks": 3,
+                    "viewport_height": 5500,
+                    "pan_start_x_ratio": 0.15,
+                },
+                "15m": {
+                    "zoom_clicks": 2,
+                    "history_steps": 3,
+                },
+            },
+        }
+    }
+    m5 = _detail_chart_cfg_for_interval(cfg, "5m")
+    assert m5["zoom_clicks"] == 3
+    assert m5["viewport_height"] == 5500
+    assert m5["pan_start_x_ratio"] == 0.15
+    assert m5["viewport_width"] == 4000
+    assert "by_interval" not in m5
+
+    m15 = _detail_chart_cfg_for_interval(cfg, "15m")
+    assert m15["zoom_clicks"] == 2
+    assert m15["history_steps"] == 3
+    assert m15["viewport_height"] == 6000
+
+
+def test_detail_chart_viewport_uses_interval_overrides() -> None:
+    cfg = {
+        "viewport_width": 1440,
+        "viewport_height": 810,
+        "detail_chart": {
+            "viewport_width": 4000,
+            "viewport_height": 6000,
+            "by_interval": {
+                "5m": {"viewport_height": 5500},
+            },
+        },
+    }
+    assert _detail_chart_viewport(cfg, "15m") == (4000, 6000)
+    assert _detail_chart_viewport(cfg, "5m") == (4000, 5500)
 
 
 def test_capture_gocharting_in_context_overview_then_detail(monkeypatch, tmp_path: Path, gc_cfg: dict) -> None:

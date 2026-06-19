@@ -102,12 +102,45 @@ def _session_viewport(cfg: dict[str, Any]) -> tuple[int, int]:
     return vw, vh
 
 
-def _detail_chart_viewport(cfg: dict[str, Any]) -> tuple[int, int]:
-    """Detail tab viewport; width defaults to 2× session width unless overridden."""
-    session_w, session_h = _session_viewport(cfg)
+def _normalize_interval_key(interval: str) -> str:
+    return (interval or "").strip().lower()
+
+
+def _detail_chart_cfg_for_interval(cfg: dict[str, Any], interval: str) -> dict[str, Any]:
+    """Merge ``detail_chart`` with optional ``detail_chart.by_interval.{interval}`` overrides."""
     detail = cfg.get("detail_chart") or {}
     if not isinstance(detail, dict):
-        detail = {}
+        return {}
+
+    base = {k: v for k, v in detail.items() if k != "by_interval"}
+    by_iv = detail.get("by_interval")
+    if not isinstance(by_iv, dict):
+        return base
+
+    iv_key = _normalize_interval_key(interval)
+    overrides: dict[str, Any] | None = None
+    for key, value in by_iv.items():
+        if _normalize_interval_key(str(key)) == iv_key:
+            overrides = value if isinstance(value, dict) else None
+            break
+
+    if not overrides:
+        return base
+
+    merged = dict(base)
+    merged.update(overrides)
+    return merged
+
+
+def _detail_chart_viewport(cfg: dict[str, Any], interval: Optional[str] = None) -> tuple[int, int]:
+    """Detail tab viewport; width defaults to 2× session width unless overridden."""
+    session_w, session_h = _session_viewport(cfg)
+    if interval:
+        detail = _detail_chart_cfg_for_interval(cfg, interval)
+    else:
+        raw = cfg.get("detail_chart") or {}
+        detail = raw if isinstance(raw, dict) else {}
+        detail = {k: v for k, v in detail.items() if k != "by_interval"}
 
     raw_w = detail.get("viewport_width")
     if raw_w is not None:
@@ -124,8 +157,13 @@ def _detail_chart_viewport(cfg: dict[str, Any]) -> tuple[int, int]:
     return max(1, width), max(1, height)
 
 
-def _apply_detail_chart_viewport(page: Page, cfg: dict[str, Any]) -> None:
-    w, h = _detail_chart_viewport(cfg)
+def _apply_detail_chart_viewport(
+    page: Page,
+    cfg: dict[str, Any],
+    *,
+    interval: Optional[str] = None,
+) -> None:
+    w, h = _detail_chart_viewport(cfg, interval)
     page.set_viewport_size({"width": w, "height": h})
     _log.debug("gocharting: detail tab viewport %sx%s", w, h)
 
@@ -434,9 +472,7 @@ def _capture_detail_footprint(
     interval: str,
     detail_history_steps: Optional[int] = None,
 ) -> list[Path]:
-    detail = cfg.get("detail_chart") or {}
-    if not isinstance(detail, dict):
-        return []
+    detail = _detail_chart_cfg_for_interval(cfg, interval)
     detail_url = str(detail.get("page_url") or "").strip()
     if not detail_url:
         return []
@@ -451,29 +487,30 @@ def _capture_detail_footprint(
     else:
         history_steps = int(detail.get("history_steps", _DEFAULT_DETAIL_HISTORY_STEPS))
 
+    detail_cfg = {**cfg, "detail_chart": detail}
     detail_page = context.new_page()
     paths: list[Path] = []
     try:
-        _apply_detail_chart_viewport(detail_page, cfg)
+        _apply_detail_chart_viewport(detail_page, detail_cfg)
         detail_page.goto(detail_url, wait_until="domcontentloaded", timeout=90_000)
         detail_page.wait_for_timeout(1200)
-        _maybe_login_gocharting(detail_page, cfg, email, password)
-        _select_chart_symbol(detail_page, cfg, entry)
-        _select_interval(detail_page, cfg, interval)
+        _maybe_login_gocharting(detail_page, detail_cfg, email, password)
+        _select_chart_symbol(detail_page, detail_cfg, entry)
+        _select_interval(detail_page, detail_cfg, interval)
 
         _force_click_id(detail_page, refresh_id)
         for _ in range(max(0, zoom_clicks)):
             _force_click_id(detail_page, zoom_in_id, delay_ms=delay_ms)
 
         zoom_path = gocharting_detail_png_path(charts_dir, stamp, export_label, interval, "zoom")
-        _capture_png(detail_page, cfg, zoom_path, chart_section="detail_chart")
+        _capture_png(detail_page, detail_cfg, zoom_path, chart_section="detail_chart")
         paths.append(zoom_path)
 
         # Each step: pan chart left (history) then capture PNG.
         for step in range(1, history_steps + 1):
             suffix = gocharting_detail_back_suffix(step)
             back_path = gocharting_detail_png_path(charts_dir, stamp, export_label, interval, suffix)
-            _pan_detail_and_capture_back(detail_page, cfg, dest=back_path)
+            _pan_detail_and_capture_back(detail_page, detail_cfg, dest=back_path)
             paths.append(back_path)
 
         _log.info(
