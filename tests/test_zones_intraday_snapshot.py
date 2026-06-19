@@ -202,6 +202,8 @@ def test_build_scalp_update_user_text_gocharting_mentions_pan_back() -> None:
     assert "detail footprint zoom" in t
     assert "MT5 spot XAUUSD M5" in t
     assert "50 nến" in t
+    assert "stacked BID/ASK" in t
+    assert "không có BID/ASK theo price level" in t
 
 
 def test_format_intraday_update_time_line() -> None:

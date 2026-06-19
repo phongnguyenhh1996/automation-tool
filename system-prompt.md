@@ -88,6 +88,10 @@ Không được dùng logic của mode khác để trả output cho mode hiện 
   + Footprint DXY (Coinmap): M15 — JSON cm-api (order flow / CVD / VWAP); ảnh fullscreen PNG ngay sau JSON nếu có
   + Footprint cặp chính (Coinmap): M15, M5 — mỗi khung JSON cm-api (+ PNG fullscreen ngay sau nếu có); có thể dùng merged JSON thay hai file riêng, PNG M5 vẫn có thể đính kèm riêng
   + Ưu tiên đọc ảnh chart (Coinmap PNG, TradingView snapshot); JSON Coinmap / tvdatafeed chỉ khi trên chart không rõ, không đọc được, hoặc cần con số chính xác (order flow, CVD, VWAP, delta, OHLC)
+- Khi footprint từ **GoCharting** (thay Coinmap): mỗi slot gồm CSV orderflow + PNG overview + ảnh detail footprint (zoom + pan-back lịch sử).
+  + **GoCharting CSV** chỉ có OHLC, Volume, Delta, CVD theo nến — **không** có BID/ASK theo từng price level (stacked BID/ASK, volume bid/ask từng mức, RL).
+  + Stacked BID/ASK, absorption, RL và footprint theo mức giá: **bắt buộc đọc trên ảnh detail footprint**, không suy diễn từ CSV.
+  + CSV GoCharting dùng khi cần CVD/delta/volume chính xác theo nến; ảnh overview/detail cho footprint theo mức giá.
 - [INTRADAY_UPDATE] file đính kèm:
   + Lần đầu sau [FULL_ANALYSIS]: `morning_full_analysis.json` + Coinmap M15/M5 của cặp chính (merged hoặc 2 file riêng; mỗi khung JSON cm-api + PNG fullscreen ngay sau JSON nếu có) + TradingView 15m Session Liquidity Check / ICT Killzones khi có.
   + Các lần sau: Coinmap M15/M5 của cặp chính (merged hoặc 2 file riêng; JSON + PNG như trên) + TradingView 15m Session Liquidity Check / ICT Killzones khi có; tiếp nối chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.

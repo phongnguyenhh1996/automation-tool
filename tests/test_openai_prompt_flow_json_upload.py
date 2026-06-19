@@ -14,6 +14,7 @@ from automation_tool.state_files import MORNING_FULL_ANALYSIS_FILENAME
 
 from automation_tool.openai_prompt_flow import (
     _build_mixed_chart_user_content,
+    _csv_file_header_and_body,
     _prepare_json_headers_bodies,
     default_analysis_prompt,
     run_analysis_responses_flow,
@@ -214,6 +215,20 @@ def test_default_analysis_prompt_describes_json_and_png() -> None:
     assert "PNG" in p
     assert "Ưu tiên đọc ảnh chart" in p
     assert "Coinmap DXY M15" in p
+
+
+def test_default_analysis_prompt_gocharting_bid_ask_on_detail() -> None:
+    p = default_analysis_prompt("XAUUSD", footprint_source="gocharting")
+    assert "GoCharting CSV không có BID/ASK" in p
+    assert "detail footprint" in p
+
+
+def test_gocharting_csv_header_notes_bid_ask(tmp_path: Path) -> None:
+    csv_p = tmp_path / "stamp_gocharting_GC_5m.csv"
+    csv_p.write_text("Time,Open,High,Low,Close,Volume,Delta,CVD\n2026-01-01,1,2,3,4,5,6,7\n")
+    header, _ = _csv_file_header_and_body(csv_p, max_chars=10_000)
+    assert "KHÔNG có BID/ASK theo từng price level" in header
+    assert "detail footprint" in header
 
 
 def test_build_mixed_coinmap_json_then_png_header(tmp_path: Path) -> None:

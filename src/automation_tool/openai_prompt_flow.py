@@ -49,6 +49,18 @@ DEFAULT_REASONING_EFFORT = "medium"
 # GoCharting footprint for main gold pair: COMEX GC1! future, not spot XAUUSD.
 GOCHARTING_GOLD_FUTURE_LABEL = "Gold Future (GC1!)"
 
+_GOCHARTING_BID_ASK_HINT = (
+    "GoCharting CSV export chỉ có OHLC, Volume, Delta, CVD theo nến — "
+    "KHÔNG có BID/ASK theo từng price level (stacked BID/ASK, volume bid/ask từng mức, RL). "
+    "Khi playbook yêu cầu stacked BID/ASK, absorption hoặc footprint theo mức giá: "
+    "đọc trực tiếp trên ảnh GoCharting detail footprint (zoom + pan-back), không suy từ CSV.\n"
+)
+
+_GOCHARTING_DETAIL_BID_ASK_HINT = (
+    "Ảnh detail footprint hiển thị BID/ASK theo price level — nguồn chính cho stacked BID/ASK, "
+    "absorption và RL khi dùng GoCharting.\n"
+)
+
 
 def _gocharting_main_footprint_label(main_symbol: str) -> str:
     sym = (main_symbol or "").strip().upper()
@@ -64,6 +76,17 @@ def _gocharting_gold_future_slot_note(path: Path) -> str:
             "not spot XAUUSD.\n"
         )
     return ""
+
+
+def _gocharting_attachment_note(path: Path, *, detail_png: bool = False) -> str:
+    parts: list[str] = []
+    gold = _gocharting_gold_future_slot_note(path)
+    if gold:
+        parts.append(gold.rstrip())
+    parts.append(_GOCHARTING_BID_ASK_HINT.rstrip())
+    if detail_png:
+        parts.append(_GOCHARTING_DETAIL_BID_ASK_HINT.rstrip())
+    return "\n".join(parts) + "\n" if parts else ""
 
 
 class PromptTwoStepResult(NamedTuple):
@@ -109,8 +132,11 @@ def default_analysis_prompt(
             "(footprint hợp đồng tương lai vàng GC1! trên GoCharting; không phải spot XAUUSD; "
             "mỗi khung: CSV + PNG overview + 4 PNG detail) → "
             f"MT5 spot {sym} M5 (50 nến OHLC broker mới nhất; giá vàng spot thực thi, bổ sung cho GC1!).\n"
-            "Ưu tiên đọc ảnh chart (GoCharting PNG detail/overview, TradingView snapshot); "
-            "khi cần con số chính xác (order flow, CVD, delta) thì tra CSV GoCharting / JSON tvdatafeed tương ứng.\n"
+            "Ưu tiên đọc ảnh chart (GoCharting PNG detail/overview, TradingView snapshot). "
+            "GoCharting CSV không có BID/ASK theo price level — stacked BID/ASK, absorption, RL "
+            "phải đọc trên ảnh detail footprint, không suy từ CSV. "
+            "Khi cần con số chính xác theo nến (CVD, delta, volume) thì tra CSV GoCharting; "
+            "OHLC thì tra JSON tvdatafeed tương ứng.\n"
         )
     else:
         footprint_desc = (
@@ -182,7 +208,7 @@ def _max_csv_chars_for_path(path: Path, *, default_max: int) -> int:
 
 def _csv_file_header_and_body(path: Path, *, max_chars: int) -> tuple[str, str]:
     body = prepare_gocharting_csv_text(path.read_text(encoding="utf-8"))
-    note = _gocharting_gold_future_slot_note(path)
+    note = _gocharting_attachment_note(path)
     header = f"[GoCharting orderflow CSV — file: {path.name}]\n{note}"
     if max_chars > 0 and len(body) > max_chars:
         body = body[:max_chars] + f"\n… [truncated: raise GOCHARTING_CSV_MAX_CHARS]"
@@ -305,7 +331,7 @@ def _gocharting_detail_png_attachment_header(path: Path) -> Optional[str]:
         return None
     if "_detail_" not in path.name:
         return None
-    note = _gocharting_gold_future_slot_note(path)
+    note = _gocharting_attachment_note(path, detail_png=True)
     stem = path.stem
     if stem.endswith("_detail_zoom"):
         kind = "detail footprint zoomed in (current session)"
@@ -323,7 +349,7 @@ def _gocharting_png_attachment_header(path: Path) -> Optional[str]:
         return None
     if "_detail_" in path.name:
         return _gocharting_detail_png_attachment_header(path)
-    note = _gocharting_gold_future_slot_note(path)
+    note = _gocharting_attachment_note(path)
     return f"[GoCharting chart screenshot — file: {path.name}]\n{note}"
 
 
@@ -740,8 +766,17 @@ _INTRADAY_CHART_READ_PRIORITY_HINT = (
     "trên chart không rõ, không đọc được, hoặc cần con số chính xác (order flow, CVD, VWAP, delta, OHLC).\n"
 )
 
+_GOCHARTING_INTRADAY_CHART_READ_PRIORITY_HINT = (
+    "Ưu tiên đọc ảnh GoCharting detail footprint (zoom + pan-back) cho stacked BID/ASK, absorption, RL; "
+    "CSV GoCharting chỉ có CVD/delta/volume theo nến — không có BID/ASK theo price level. "
+    "TradingView snapshot khi cần cấu trúc giá / liquidity.\n"
+)
+
 _INTRADAY_UPDATE_SUFFIX = _INTRADAY_CHART_READ_PRIORITY_HINT + _INTRADAY_UPDATE_PLAN_HINT
 _SCALP_UPDATE_SUFFIX = _INTRADAY_CHART_READ_PRIORITY_HINT + _SCALP_UPDATE_PLAN_HINT
+_GOCHARTING_SCALP_UPDATE_SUFFIX = (
+    _GOCHARTING_INTRADAY_CHART_READ_PRIORITY_HINT + _SCALP_UPDATE_PLAN_HINT
+)
 
 
 def is_first_intraday_update_after_all(
@@ -896,7 +931,7 @@ def build_scalp_update_user_text(
                 "Đính kèm **bốn** file theo thứ tự: **(1)** morning_full_analysis.json, **(2)** GoCharting M15 CSV, "
                 f"**(3)** M5 CSV, **(4)** MT5 spot XAUUSD M5 JSON (50 nến broker mới nhất){gc_hint}\n"
                 f"{_MORNING_CONTEXT_HINT}"
-                f"{_SCALP_UPDATE_SUFFIX}"
+                f"{_GOCHARTING_SCALP_UPDATE_SUFFIX}"
             )
         return (
             "[INTRADAY_UPDATE]\n"
@@ -905,7 +940,7 @@ def build_scalp_update_user_text(
             f"Đính kèm **ba** file: **(1)** GoCharting M15 CSV, **(2)** M5 CSV, **(3)** MT5 spot XAUUSD M5 JSON "
             f"(50 nến broker; footprint {GOCHARTING_GOLD_FUTURE_LABEL}; "
             "PNG overview, detail zoom và hai PNG pan-back ngay sau mỗi CSV nếu có).\n"
-            f"{_SCALP_UPDATE_SUFFIX}"
+            f"{_GOCHARTING_SCALP_UPDATE_SUFFIX}"
         )
 
     time_line = format_intraday_update_time_line()
@@ -1035,7 +1070,8 @@ R1_POST_TOUCH_USER_TEMPLATE = (
 POST_FILL_MANAGEMENT_USER_TEMPLATE = (
     "[TRADE_MANAGEMENT]\n"
     "Lệnh đã khớp khoảng {minutes_after_fill} phút trước. "
-    "Đánh giá Footprint GoCharting M5 detail đính kèm (giữ hay thoát / chỉnh SL/TP).\n"
+    "Đánh giá Footprint GoCharting M5 detail đính kèm (giữ hay thoát / chỉnh SL/TP). "
+    "Stacked BID/ASK và absorption theo mức giá: đọc trên ảnh detail, không từ CSV.\n"
     "Đây là khuyến nghị tham khảo — người dùng tự quyết trên MT5.\n"
     "Vùng (label): {plan_label}\n"
     "{entry_side} entry: {entry_price}\n"
