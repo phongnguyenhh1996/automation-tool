@@ -69,6 +69,7 @@ detail_chart:
     15m:
       zoom_clicks: 3
       history_steps: 1
+      viewport_height: 4000
     5m:
       zoom_clicks: 4
       history_steps: 1
