@@ -22,7 +22,7 @@ _DEFAULT_DOWNLOAD_BUTTON = (
     'button:has(span div:text-is("Tải xuống"))'
 )
 _DEFAULT_DETAIL_HISTORY_STEPS = 3
-# ``update-scalp --gocharting``: detail zoom + this many pan-back PNGs per M15/M5 slot.
+# ``update-scalp --gocharting``: detail zoom + this many navigate-back PNGs per M15/M5 slot.
 GOCHARTING_UPDATE_SCALP_DETAIL_HISTORY_STEPS = 2
 _DEFAULT_CHART_LOAD_MS = 2000
 
@@ -88,7 +88,7 @@ def gocharting_detail_png_path(
 
 
 def gocharting_detail_back_suffix(step_index: int) -> str:
-    """History pan step N → ``back_N`` (e.g. step 2 → ``back_2``)."""
+    """History navigate step N → ``back_N`` (e.g. step 2 → ``back_2``)."""
     return f"back_{max(1, int(step_index))}"
 
 
@@ -404,7 +404,7 @@ def _capture_csv(
         _log.debug("gocharting: normalized CSV on disk (%s)", dest.name)
 
 
-def _drag_in_box(
+def _hover_in_box(
     page: Page,
     box: dict[str, float],
     *,
@@ -412,51 +412,62 @@ def _drag_in_box(
     y0r: float,
     x1r: float,
     y1r: float,
-    drag_steps: int,
+    move_steps: int,
 ) -> None:
     x0 = box["x"] + box["width"] * x0r
     y0 = box["y"] + box["height"] * y0r
     x1 = box["x"] + box["width"] * x1r
     y1 = box["y"] + box["height"] * y1r
     page.mouse.move(x0, y0)
-    page.mouse.down()
-    page.mouse.move(x1, y1, steps=max(1, drag_steps))
-    page.mouse.up()
+    page.mouse.move(x1, y1, steps=max(1, move_steps))
 
 
-def _pan_detail_chart(page: Page, cfg: dict[str, Any]) -> None:
+def _hover_detail_chart_to_render(page: Page, cfg: dict[str, Any]) -> None:
     detail = cfg.get("detail_chart") or {}
     if not isinstance(detail, dict):
         detail = {}
     chart_id = str(detail.get("chart_root_id") or "chart-root-0")
-    start_x = float(detail.get("pan_start_x_ratio", 0.1))
-    end_x = float(detail.get("pan_end_x_ratio", 0.9))
-    y_ratio = float(detail.get("pan_y_ratio", 0.5))
-    drag_steps = int(detail.get("pan_drag_steps", 12))
+    start_x = float(detail.get("hover_start_x_ratio", 0.1))
+    start_y = float(detail.get("hover_start_y_ratio", 0.9))
+    end_x = float(detail.get("hover_end_x_ratio", 0.9))
+    end_y = float(detail.get("hover_end_y_ratio", 0.1))
+    move_steps = int(detail.get("hover_move_steps", 12))
 
     chart = _id_locator(page, chart_id).first
     box = chart.bounding_box()
     if not box:
         raise RuntimeError(f"gocharting: chart #{chart_id} has no bounding box")
-    _drag_in_box(
+    _hover_in_box(
         page,
         box,
         x0r=start_x,
-        y0r=y_ratio,
+        y0r=start_y,
         x1r=end_x,
-        y1r=y_ratio,
-        drag_steps=drag_steps,
+        y1r=end_y,
+        move_steps=move_steps,
     )
 
 
-def _pan_detail_and_capture_back(
+def _navigate_detail_chart_back(page: Page, cfg: dict[str, Any]) -> None:
+    detail = cfg.get("detail_chart") or {}
+    if not isinstance(detail, dict):
+        detail = {}
+    button_id = str(detail.get("left_navigate_button_id") or "left-navigate-chart-button")
+    clicks = int(detail.get("left_navigate_clicks", 6))
+    delay_ms = int(detail.get("zoom_click_delay_ms", 500))
+    for _ in range(max(0, clicks)):
+        _force_click_id(page, button_id, delay_ms=delay_ms)
+    _hover_detail_chart_to_render(page, cfg)
+
+
+def _navigate_detail_and_capture_back(
     page: Page,
     cfg: dict[str, Any],
     *,
     dest: Path,
 ) -> None:
-    """Pan detail chart horizontally, then export PNG."""
-    _pan_detail_chart(page, cfg)
+    """Click left-navigate on detail chart, then export PNG."""
+    _navigate_detail_chart_back(page, cfg)
     _capture_png(page, cfg, dest, chart_section="detail_chart")
 
 
@@ -506,11 +517,11 @@ def _capture_detail_footprint(
         _capture_png(detail_page, detail_cfg, zoom_path, chart_section="detail_chart")
         paths.append(zoom_path)
 
-        # Each step: pan chart left (history) then capture PNG.
+        # Each step: navigate chart left (history) then capture PNG.
         for step in range(1, history_steps + 1):
             suffix = gocharting_detail_back_suffix(step)
             back_path = gocharting_detail_png_path(charts_dir, stamp, export_label, interval, suffix)
-            _pan_detail_and_capture_back(detail_page, detail_cfg, dest=back_path)
+            _navigate_detail_and_capture_back(detail_page, detail_cfg, dest=back_path)
             paths.append(back_path)
 
         _log.info(
@@ -733,7 +744,7 @@ def capture_gocharting(
     Capture GoCharting footprint charts: PNG screenshot + CSV export per (symbol, interval).
 
     When ``detail_chart.page_url`` is set, also captures detail footprint PNGs on a separate tab
-    (zoom + optional pan history steps). ``detail_history_steps=0`` captures zoom only.
+    (zoom + optional navigate history steps). ``detail_history_steps=0`` captures zoom only.
 
     ``overview_capture=False`` — chỉ capture detail footprint (không PNG/CSV overview).
 
