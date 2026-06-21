@@ -323,16 +323,22 @@ def _settings_skip_intraday_alert_openai(settings: Any) -> bool:
     return getattr(settings, "skip_intraday_alert_openai", False) is True
 
 
+_SKIP_INTRADAY_ALERT_COOLDOWN_SECONDS_DEFAULT = 900  # 15 phút
+
 def _settings_skip_intraday_alert_cooldown_seconds(settings: Any) -> int:
-    raw = getattr(settings, "skip_intraday_alert_cooldown_seconds", 120)
+    raw = getattr(
+        settings,
+        "skip_intraday_alert_cooldown_seconds",
+        _SKIP_INTRADAY_ALERT_COOLDOWN_SECONDS_DEFAULT,
+    )
     if isinstance(raw, bool):
-        return 120
+        return _SKIP_INTRADAY_ALERT_COOLDOWN_SECONDS_DEFAULT
     if type(raw) is int:
         return max(0, raw)
     try:
         return max(0, int(raw))
     except (TypeError, ValueError):
-        return 120
+        return _SKIP_INTRADAY_ALERT_COOLDOWN_SECONDS_DEFAULT
 
 
 def _settings_skip_trade_management(settings: Any) -> bool:
