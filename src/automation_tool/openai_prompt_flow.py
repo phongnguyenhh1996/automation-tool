@@ -66,6 +66,10 @@ _GOCHARTING_CHART_READ_GUIDE = (
     "- Line ngang màu #FA6578 = POC.\n"
     "- Line ngang màu #17CE1B = VAH.\n"
     "- Line ngang màu #5B2D1B = VAL.\n"
+    "- Volume histogram (độ dài thanh xanh/đỏ trong profile nến): không cần đọc số Bid/Ask từng mức; "
+    "thanh càng dài → volume tại mức giá đó càng lớn (High Volume Node).\n"
+    "- Absorption / trapped traders: histogram phình to (thường kèm box volume POC) sát râu đỉnh/đáy nến, "
+    "nến sau đảo chiều → lực đẩy giá bị chặn bởi lệnh Limit lớn.\n"
 )
 
 
