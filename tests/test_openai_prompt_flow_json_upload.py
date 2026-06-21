@@ -15,6 +15,8 @@ from automation_tool.state_files import MORNING_FULL_ANALYSIS_FILENAME
 from automation_tool.openai_prompt_flow import (
     _build_mixed_chart_user_content,
     _csv_file_header_and_body,
+    _gocharting_detail_png_attachment_header,
+    _gocharting_png_attachment_header,
     _prepare_json_headers_bodies,
     default_analysis_prompt,
     run_analysis_responses_flow,
@@ -221,6 +223,17 @@ def test_default_analysis_prompt_gocharting_bid_ask_on_detail() -> None:
     p = default_analysis_prompt("XAUUSD", footprint_source="gocharting")
     assert "GoCharting CSV không có BID/ASK" in p
     assert "detail footprint" in p
+    assert "#8FAF8E" in p
+    assert "stacked BID (3 level, ratio 300%)" in p
+    assert "#D37C85" in p
+    assert "stacked ASK (3 level, ratio 300%)" in p
+    assert "#FF6600" in p
+    assert "volume POC" in p
+    assert "#FA6578" in p
+    assert "#17CE1B" in p
+    assert "VAH" in p
+    assert "#5B2D1B" in p
+    assert "VAL" in p
 
 
 def test_gocharting_csv_header_notes_bid_ask(tmp_path: Path) -> None:
@@ -229,6 +242,45 @@ def test_gocharting_csv_header_notes_bid_ask(tmp_path: Path) -> None:
     header, _ = _csv_file_header_and_body(csv_p, max_chars=10_000)
     assert "KHÔNG có BID/ASK theo từng price level" in header
     assert "detail footprint" in header
+
+
+def test_gocharting_detail_png_headers_are_brief(tmp_path: Path) -> None:
+    zoom = tmp_path / "stamp_gocharting_GC_15m_detail_zoom.png"
+    back = tmp_path / "stamp_gocharting_GC_15m_detail_back_1.png"
+    overview = tmp_path / "stamp_gocharting_GC_15m.png"
+    for p in (zoom, back, overview):
+        p.write_bytes(b"png")
+
+    zoom_hdr = _gocharting_detail_png_attachment_header(zoom)
+    back_hdr = _gocharting_detail_png_attachment_header(back)
+    ov_hdr = _gocharting_png_attachment_header(overview)
+
+    assert zoom_hdr is not None and "detail footprint zoomed in" in zoom_hdr
+    assert back_hdr is not None and "history pan step 1" in back_hdr
+    assert ov_hdr is not None and "chart screenshot" in ov_hdr
+    for hdr in (zoom_hdr, back_hdr, ov_hdr):
+        assert "KHÔNG có BID/ASK" not in hdr
+        assert "Instrument: Gold Future" not in hdr
+
+
+def test_build_mixed_gocharting_detail_png_header_not_repeated(tmp_path: Path) -> None:
+    csv_p = tmp_path / "stamp_gocharting_GC_15m.csv"
+    zoom = tmp_path / "stamp_gocharting_GC_15m_detail_zoom.png"
+    back = tmp_path / "stamp_gocharting_GC_15m_detail_back_1.png"
+    csv_p.write_text("h\n1", encoding="utf-8")
+    zoom.write_bytes(b"z")
+    back.write_bytes(b"b")
+
+    parts = _build_mixed_chart_user_content(
+        "p",
+        [("csv", csv_p), ("image", zoom), ("image", back)],
+        max_json_chars=100_000,
+    )
+    texts = [p["text"] for p in parts if p.get("type") == "input_text"]
+    bid_ask_mentions = [t for t in texts if "KHÔNG có BID/ASK" in t]
+    assert len(bid_ask_mentions) == 1
+    assert any("detail footprint zoomed in" in t for t in texts)
+    assert any("history pan step 1" in t for t in texts)
 
 
 def test_build_mixed_coinmap_json_then_png_header(tmp_path: Path) -> None:

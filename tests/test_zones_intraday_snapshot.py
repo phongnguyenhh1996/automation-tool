@@ -204,6 +204,15 @@ def test_build_scalp_update_user_text_gocharting_mentions_pan_back() -> None:
     assert "50 nến" in t
     assert "stacked BID/ASK" in t
     assert "không có BID/ASK theo price level" in t
+    assert "#8FAF8E" in t
+    assert "stacked ASK (3 level, ratio 300%)" in t
+    assert "#FF6600" in t
+    assert "volume POC" in t
+    assert "#FA6578" in t
+    assert "#17CE1B" in t
+    assert "VAH" in t
+    assert "#5B2D1B" in t
+    assert "VAL" in t
 
 
 def test_format_intraday_update_time_line() -> None:

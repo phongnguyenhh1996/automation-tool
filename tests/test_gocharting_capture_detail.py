@@ -11,8 +11,7 @@ from automation_tool.gocharting_capture import (
     _detail_chart_cfg_for_interval,
     _detail_chart_viewport,
     _gocharting_tick_search_already_set,
-    _hover_detail_chart_to_render,
-    _navigate_detail_chart_back,
+    _pan_detail_chart,
     _prepare_overview_chart,
     _select_chart_symbol,
     gocharting_detail_png_path,
@@ -36,8 +35,10 @@ def gc_cfg() -> dict:
             "zoom_in_button_id": "zoomIn-button",
             "zoom_clicks": 2,
             "zoom_click_delay_ms": 500,
-            "left_navigate_button_id": "left-navigate-chart-button",
-            "left_navigate_clicks": 6,
+            "chart_root_id": "chart-root-0",
+            "pan_start_x_ratio": 0.1,
+            "pan_end_x_ratio": 0.9,
+            "pan_y_ratio": 0.5,
             "history_steps": 3,
         },
         "capture_plan": [{"symbol": "XAUUSD", "intervals": ["15m"]}],
@@ -184,43 +185,7 @@ def test_select_chart_symbol_searches_when_input_differs(monkeypatch) -> None:
     results_first.click.assert_called_once()
 
 
-def test_navigate_detail_chart_back_clicks_left_button(monkeypatch) -> None:
-    page = MagicMock()
-    clicks: list[str] = []
-    hover_calls = 0
-
-    def fake_force_click(p, element_id, *, delay_ms=0):
-        clicks.append(element_id)
-
-    def fake_hover(p, cfg):
-        nonlocal hover_calls
-        hover_calls += 1
-
-    monkeypatch.setattr(
-        "automation_tool.gocharting_capture._force_click_id",
-        fake_force_click,
-    )
-    monkeypatch.setattr(
-        "automation_tool.gocharting_capture._hover_detail_chart_to_render",
-        fake_hover,
-    )
-
-    _navigate_detail_chart_back(
-        page,
-        {
-            "detail_chart": {
-                "left_navigate_button_id": "left-navigate-chart-button",
-                "left_navigate_clicks": 6,
-                "zoom_click_delay_ms": 500,
-            }
-        },
-    )
-
-    assert clicks == ["left-navigate-chart-button"] * 6
-    assert hover_calls == 1
-
-
-def test_hover_detail_chart_to_render_moves_from_bottom_left_to_top_right(monkeypatch) -> None:
+def test_pan_detail_chart_drags_within_chart_root(monkeypatch) -> None:
     page = MagicMock()
     chart = MagicMock()
     chart.bounding_box.return_value = {"x": 100.0, "y": 50.0, "width": 1000.0, "height": 400.0}
@@ -238,22 +203,23 @@ def test_hover_detail_chart_to_render_moves_from_bottom_left_to_top_right(monkey
     )
     page.mouse.move.side_effect = lambda x, y, **kwargs: moves.append((x, y))
 
-    _hover_detail_chart_to_render(
+    _pan_detail_chart(
         page,
         {
             "detail_chart": {
                 "chart_root_id": "chart-root-0",
-                "hover_start_x_ratio": 0.1,
-                "hover_start_y_ratio": 0.9,
-                "hover_end_x_ratio": 0.9,
-                "hover_end_y_ratio": 0.1,
-                "hover_move_steps": 8,
+                "pan_start_x_ratio": 0.1,
+                "pan_end_x_ratio": 0.9,
+                "pan_y_ratio": 0.5,
+                "pan_drag_steps": 8,
             }
         },
     )
 
-    assert moves[0] == (200.0, 410.0)
-    page.mouse.move.assert_called_with(1000.0, 90.0, steps=8)
+    assert moves[0] == (200.0, 250.0)
+    page.mouse.down.assert_called_once()
+    page.mouse.move.assert_called_with(1000.0, 250.0, steps=8)
+    page.mouse.up.assert_called_once()
 
 
 def test_detail_chart_viewport_defaults_to_double_session_width() -> None:
@@ -277,12 +243,12 @@ def test_detail_chart_cfg_for_interval_merges_by_interval() -> None:
             "history_steps": 2,
             "viewport_width": 4000,
             "viewport_height": 6000,
-            "left_navigate_clicks": 6,
+            "pan_start_x_ratio": 0.2,
             "by_interval": {
                 "5m": {
                     "zoom_clicks": 3,
                     "viewport_height": 5500,
-                    "left_navigate_clicks": 4,
+                    "pan_start_x_ratio": 0.15,
                 },
                 "15m": {
                     "zoom_clicks": 2,
@@ -294,7 +260,7 @@ def test_detail_chart_cfg_for_interval_merges_by_interval() -> None:
     m5 = _detail_chart_cfg_for_interval(cfg, "5m")
     assert m5["zoom_clicks"] == 3
     assert m5["viewport_height"] == 5500
-    assert m5["left_navigate_clicks"] == 4
+    assert m5["pan_start_x_ratio"] == 0.15
     assert m5["viewport_width"] == 4000
     assert "by_interval" not in m5
 
@@ -367,17 +333,17 @@ def test_capture_gocharting_in_context_overview_then_detail(monkeypatch, tmp_pat
 
     monkeypatch.setattr("automation_tool.gocharting_capture._capture_csv", fake_csv)
 
-    navigate_calls = 0
+    pan_calls = 0
 
-    def fake_navigate_back(page, cfg, *, dest):
-        nonlocal navigate_calls
-        navigate_calls += 1
+    def fake_pan_back(page, cfg, *, dest):
+        nonlocal pan_calls
+        pan_calls += 1
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(b"png")
 
     monkeypatch.setattr(
-        "automation_tool.gocharting_capture._navigate_detail_and_capture_back",
-        fake_navigate_back,
+        "automation_tool.gocharting_capture._pan_detail_and_capture_back",
+        fake_pan_back,
     )
 
     stamp = "20260617_120000"
@@ -395,7 +361,7 @@ def test_capture_gocharting_in_context_overview_then_detail(monkeypatch, tmp_pat
 
     assert overview_calls == ["overview"]
     assert len(csv_calls) == 1
-    assert navigate_calls == 3
+    assert pan_calls == 3
     zoom = gocharting_detail_png_path(tmp_path, stamp, "GC", "15m", "zoom")
     assert zoom in paths
     assert detail_zoom_saved == [zoom]
@@ -442,15 +408,15 @@ def test_capture_gocharting_in_context_detail_zoom_only_when_history_zero(
 
     monkeypatch.setattr("automation_tool.gocharting_capture._capture_csv", fake_csv)
 
-    navigate_calls = 0
+    pan_calls = 0
 
-    def fake_navigate_back(page, cfg, *, dest):
-        nonlocal navigate_calls
-        navigate_calls += 1
+    def fake_pan_back(page, cfg, *, dest):
+        nonlocal pan_calls
+        pan_calls += 1
 
     monkeypatch.setattr(
-        "automation_tool.gocharting_capture._navigate_detail_and_capture_back",
-        fake_navigate_back,
+        "automation_tool.gocharting_capture._pan_detail_and_capture_back",
+        fake_pan_back,
     )
 
     stamp = "20260617_120000"
@@ -467,7 +433,7 @@ def test_capture_gocharting_in_context_detail_zoom_only_when_history_zero(
         detail_history_steps=0,
     )
 
-    assert navigate_calls == 0
+    assert pan_calls == 0
     zoom = gocharting_detail_png_path(tmp_path, stamp, "GC", "15m", "zoom")
     assert zoom in paths
     assert not any("_detail_back_" in p.name for p in paths)

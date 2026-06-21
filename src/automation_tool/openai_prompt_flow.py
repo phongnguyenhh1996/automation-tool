@@ -53,12 +53,19 @@ _GOCHARTING_BID_ASK_HINT = (
     "GoCharting CSV export chỉ có OHLC, Volume, Delta, CVD theo nến — "
     "KHÔNG có BID/ASK theo từng price level (stacked BID/ASK, volume bid/ask từng mức, RL). "
     "Khi playbook yêu cầu stacked BID/ASK, absorption hoặc footprint theo mức giá: "
-    "đọc trực tiếp trên ảnh GoCharting detail footprint (zoom + pan-back), không suy từ CSV.\n"
-)
-
-_GOCHARTING_DETAIL_BID_ASK_HINT = (
+    "đọc trực tiếp trên ảnh GoCharting detail footprint (zoom + pan-back), không suy từ CSV. "
     "Ảnh detail footprint hiển thị BID/ASK theo price level — nguồn chính cho stacked BID/ASK, "
     "absorption và RL khi dùng GoCharting.\n"
+)
+
+_GOCHARTING_CHART_READ_GUIDE = (
+    "Hướng dẫn đọc chart GoCharting (footprint overview/detail):\n"
+    "- Box màu #8FAF8E opacity 0.5 = stacked BID (3 level, ratio 300%).\n"
+    "- Box màu #D37C85 opacity 0.5 = stacked ASK (3 level, ratio 300%).\n"
+    "- Box có border #FF6600 ở detail view = volume POC.\n"
+    "- Line ngang màu #FA6578 = POC.\n"
+    "- Line ngang màu #17CE1B = VAH.\n"
+    "- Line ngang màu #5B2D1B = VAL.\n"
 )
 
 
@@ -78,14 +85,13 @@ def _gocharting_gold_future_slot_note(path: Path) -> str:
     return ""
 
 
-def _gocharting_attachment_note(path: Path, *, detail_png: bool = False) -> str:
+def _gocharting_attachment_note(path: Path) -> str:
+    """Slot-level note for GoCharting CSV only; PNG headers stay brief to avoid repetition."""
     parts: list[str] = []
     gold = _gocharting_gold_future_slot_note(path)
     if gold:
         parts.append(gold.rstrip())
     parts.append(_GOCHARTING_BID_ASK_HINT.rstrip())
-    if detail_png:
-        parts.append(_GOCHARTING_DETAIL_BID_ASK_HINT.rstrip())
     return "\n".join(parts) + "\n" if parts else ""
 
 
@@ -137,6 +143,7 @@ def default_analysis_prompt(
             "phải đọc trên ảnh detail footprint, không suy từ CSV. "
             "Khi cần con số chính xác theo nến (CVD, delta, volume) thì tra CSV GoCharting; "
             "OHLC thì tra JSON tvdatafeed tương ứng.\n"
+            f"{_GOCHARTING_CHART_READ_GUIDE}"
         )
     else:
         footprint_desc = (
@@ -331,7 +338,6 @@ def _gocharting_detail_png_attachment_header(path: Path) -> Optional[str]:
         return None
     if "_detail_" not in path.name:
         return None
-    note = _gocharting_attachment_note(path, detail_png=True)
     stem = path.stem
     if stem.endswith("_detail_zoom"):
         kind = "detail footprint zoomed in (current session)"
@@ -341,7 +347,7 @@ def _gocharting_detail_png_attachment_header(path: Path) -> Optional[str]:
             kind = f"detail footprint — history pan step {back_step}"
         else:
             kind = "detail footprint"
-    return f"[GoCharting {kind} — file: {path.name}]\n{note}"
+    return f"[GoCharting {kind} — file: {path.name}]\n"
 
 
 def _gocharting_png_attachment_header(path: Path) -> Optional[str]:
@@ -349,8 +355,7 @@ def _gocharting_png_attachment_header(path: Path) -> Optional[str]:
         return None
     if "_detail_" in path.name:
         return _gocharting_detail_png_attachment_header(path)
-    note = _gocharting_attachment_note(path)
-    return f"[GoCharting chart screenshot — file: {path.name}]\n{note}"
+    return f"[GoCharting chart screenshot — file: {path.name}]\n"
 
 
 def _coinmap_png_attachment_header(path: Path) -> Optional[str]:
@@ -770,6 +775,7 @@ _GOCHARTING_INTRADAY_CHART_READ_PRIORITY_HINT = (
     "Ưu tiên đọc ảnh GoCharting detail footprint (zoom + pan-back) cho stacked BID/ASK, absorption, RL; "
     "CSV GoCharting chỉ có CVD/delta/volume theo nến — không có BID/ASK theo price level. "
     "TradingView snapshot khi cần cấu trúc giá / liquidity.\n"
+    f"{_GOCHARTING_CHART_READ_GUIDE}"
 )
 
 _INTRADAY_UPDATE_SUFFIX = _INTRADAY_CHART_READ_PRIORITY_HINT + _INTRADAY_UPDATE_PLAN_HINT
