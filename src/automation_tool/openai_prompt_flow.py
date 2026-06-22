@@ -24,7 +24,7 @@ from automation_tool.coinmap_openai_slim import (
     slim_coinmap_export_for_openai,
 )
 from automation_tool.chart_payload_validate import prepare_gocharting_csv_text
-from automation_tool.prompts import responses_input_messages
+from automation_tool.prompts import load_last_filter, responses_input_messages
 from automation_tool.images import (
     CHART_SLOT_COUNT,
     DEFAULT_MAIN_CHART_SYMBOL,
@@ -374,6 +374,41 @@ def _coinmap_png_attachment_header(path: Path) -> Optional[str]:
     return f"[Coinmap fullscreen chart — file: {path.name}]\n"
 
 
+def _should_attach_last_filter(prompt: str) -> bool:
+    """Attach ``last_filter.md`` for modes that publish zone plans."""
+    p = (prompt or "").strip().upper()
+    return p.startswith("[FULL_ANALYSIS]") or "[INTRADAY_UPDATE]" in p
+
+
+def _last_filter_input_parts() -> list[dict[str, Any]]:
+    try:
+        body = load_last_filter()
+    except FileNotFoundError:
+        return []
+    text = (body or "").strip()
+    if not text:
+        return []
+    return [
+        {
+            "type": "input_text",
+            "text": f"[Zone filter rules — last_filter.md]\n{text}\n",
+        }
+    ]
+
+
+def _user_content_with_last_filter(prompt: str) -> str | list[dict[str, Any]]:
+    """Plain-text user turn, optionally expanded to multimodal parts with last_filter."""
+    text = (prompt or "").strip()
+    if not text:
+        return text
+    if not _should_attach_last_filter(text):
+        return text
+    parts = _last_filter_input_parts()
+    if not parts:
+        return text
+    return [{"type": "input_text", "text": text}, *parts]
+
+
 def _build_mixed_chart_user_content(
     prompt: str,
     payloads: list[ChartOpenAIPayload],
@@ -395,6 +430,8 @@ def _build_mixed_chart_user_content(
         ]
     )
     parts: list[dict[str, Any]] = [{"type": "input_text", "text": prompt}]
+    if _should_attach_last_filter(prompt):
+        parts.extend(_last_filter_input_parts())
     image_paths = [p for k, p in payloads if k == "image" and isinstance(p, Path)]
     data_urls = _image_paths_to_data_urls(image_paths)
     for kind, p in payloads:
@@ -615,7 +652,9 @@ def run_analysis_responses_flow(
         try:
             r = client.responses.create(
                 **common,
-                input=responses_input_messages(user_content=analysis_prompt.strip()),
+                input=responses_input_messages(
+                    user_content=_user_content_with_last_filter(analysis_prompt.strip()),
+                ),
             )
         except Exception:
             _log_openai_error(

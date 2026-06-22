@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from automation_tool.prompts import (
+    default_last_filter_path,
     default_system_prompt_path,
+    load_last_filter,
     load_system_prompt,
     responses_input_messages,
 )
@@ -31,4 +33,17 @@ def test_responses_input_multimodal_user() -> None:
 def test_default_system_prompt_path_is_repo_file() -> None:
     p = default_system_prompt_path()
     assert p.name == "system-prompt.md"
+    assert p.is_file()
+
+
+def test_load_last_filter_from_repo_root() -> None:
+    text = load_last_filter()
+    assert "# last_filter" in text
+    assert "fresh" in text.lower()
+    assert "mitigated" in text.lower()
+
+
+def test_default_last_filter_path_is_repo_file() -> None:
+    p = default_last_filter_path()
+    assert p.name == "last_filter.md"
     assert p.is_file()

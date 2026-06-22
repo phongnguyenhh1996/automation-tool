@@ -18,6 +18,7 @@ from automation_tool.openai_prompt_flow import (
     _gocharting_detail_png_attachment_header,
     _gocharting_png_attachment_header,
     _prepare_json_headers_bodies,
+    _should_attach_last_filter,
     default_analysis_prompt,
     run_analysis_responses_flow,
 )
@@ -304,3 +305,27 @@ def test_build_mixed_coinmap_json_then_png_header(tmp_path: Path) -> None:
     assert "Coinmap fullscreen chart" in parts[3]["text"]
     assert png.name in parts[3]["text"]
     assert parts[4]["type"] == "input_image"
+
+
+def test_should_attach_last_filter_modes() -> None:
+    assert _should_attach_last_filter("[FULL_ANALYSIS]\nhi")
+    assert _should_attach_last_filter("[INTRADAY_UPDATE]\nupdate")
+    assert not _should_attach_last_filter("[TRADE_MANAGEMENT]\nmanage")
+    assert not _should_attach_last_filter("plain prompt")
+
+
+def test_build_mixed_full_analysis_includes_last_filter(tmp_path: Path) -> None:
+    j = tmp_path / "stamp_tradingview_XAUUSD_1h.json"
+    j.write_text('{"ohlc":[]}', encoding="utf-8")
+    prompt = default_analysis_prompt("XAUUSD")
+
+    parts = _build_mixed_chart_user_content(
+        prompt,
+        [("json", j)],
+        max_json_chars=100_000,
+    )
+    assert parts[0]["text"] == prompt
+    assert "last_filter.md" in parts[1]["text"]
+    assert "fresh" in parts[1]["text"].lower()
+    assert parts[2]["type"] == "input_text"
+    assert "TradingView" in parts[2]["text"]
