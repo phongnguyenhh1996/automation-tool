@@ -45,6 +45,7 @@ from automation_tool.zones_state import format_intraday_update_time_line
 _log = logging.getLogger(__name__)
 
 DEFAULT_REASONING_EFFORT = "medium"
+ALL_FLOW_REASONING_EFFORT = "high"
 
 # GoCharting footprint for main gold pair: COMEX GC1! future, not spot XAUUSD.
 GOCHARTING_GOLD_FUTURE_LABEL = "Gold Future (GC1!)"
@@ -535,6 +536,7 @@ def run_analysis_responses_flow(
     store: bool,
     include: list[str],
     reasoning_summary: str = "auto",
+    reasoning_effort: str | None = DEFAULT_REASONING_EFFORT,
     chart_paths: list[Path] | None = None,
     chart_payloads: list[ChartOpenAIPayload] | None = None,
     max_coinmap_json_chars: int | None = None,
@@ -568,10 +570,10 @@ def run_analysis_responses_flow(
             }
         )
 
-    reasoning: dict[str, Any] = {
-        "summary": reasoning_summary,
-        "effort": DEFAULT_REASONING_EFFORT,
-    }
+    reasoning: dict[str, Any] = {"summary": reasoning_summary}
+    _eff = (reasoning_effort or "").strip()
+    if _eff:
+        reasoning["effort"] = _eff
 
     common: dict[str, Any] = {
         "store": store,

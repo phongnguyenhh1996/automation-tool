@@ -43,6 +43,8 @@ from automation_tool.openai_analysis_json import (
 )
 from automation_tool.openai_errors import re_raise_unless_openai
 from automation_tool.openai_prompt_flow import (
+    ALL_FLOW_REASONING_EFFORT,
+    DEFAULT_REASONING_EFFORT,
     PromptTwoStepResult,
     build_intraday_update_user_text,
     build_scalp_update_user_text,
@@ -1734,6 +1736,7 @@ def _run_openai_flow(
     purge_openai_user_data_files: bool | None = None,
     model: str | None = None,
     vector_store_ids: list[str] | None = None,
+    reasoning_effort: str | None = DEFAULT_REASONING_EFFORT,
 ) -> PromptTwoStepResult:
     return run_analysis_responses_flow(
         api_key=s.openai_api_key,
@@ -1749,6 +1752,7 @@ def _run_openai_flow(
         purge_json_attachment_storage=purge_json_attachment_storage,
         purge_openai_user_data_files=purge_openai_user_data_files,
         model=model,
+        reasoning_effort=reasoning_effort,
     )
 
 
@@ -2787,6 +2791,7 @@ def _run_all_second_flow(
             on_first_model_text=None,
             model=resolved_openai_model(s, model),
             vector_store_ids=[_ALL_SECOND_FLOW_VECTOR_STORE_ID],
+            reasoning_effort=ALL_FLOW_REASONING_EFFORT,
         )
     except Exception as e:
         re_raise_unless_openai(e)
@@ -3049,6 +3054,7 @@ def cmd_all(args: argparse.Namespace) -> None:
             chart_payloads=payloads,
             on_first_model_text=None,
             model=openai_model,
+            reasoning_effort=ALL_FLOW_REASONING_EFFORT,
         )
 
     try:
