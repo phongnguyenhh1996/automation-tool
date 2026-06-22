@@ -73,6 +73,11 @@ _GOCHARTING_CHART_READ_GUIDE = (
     "nến sau đảo chiều → lực đẩy giá bị chặn bởi lệnh Limit lớn.\n"
 )
 
+_GOCHARTING_TRADE_MANAGEMENT_SUFFIX = (
+    "Stacked BID/ASK, absorption, RL: đọc trên ảnh detail footprint, không từ CSV.\n"
+    f"{_GOCHARTING_CHART_READ_GUIDE}"
+)
+
 
 def _gocharting_main_footprint_label(main_symbol: str) -> str:
     sym = (main_symbol or "").strip().upper()
@@ -1082,8 +1087,10 @@ R1_POST_TOUCH_USER_TEMPLATE = (
 POST_FILL_MANAGEMENT_USER_TEMPLATE = (
     "[TRADE_MANAGEMENT]\n"
     "Lệnh đã khớp khoảng {minutes_after_fill} phút trước. "
-    "Đánh giá Footprint GoCharting M5 detail đính kèm (giữ hay thoát / chỉnh SL/TP). "
-    "Stacked BID/ASK và absorption theo mức giá: đọc trên ảnh detail, không từ CSV.\n"
+    f"Đánh giá Footprint GoCharting M5 detail đính kèm — {GOCHARTING_GOLD_FUTURE_LABEL} "
+    "(hợp đồng tương lai vàng COMEX GC1! trên GoCharting; không phải spot XAUUSD MT5) "
+    "(giữ hay thoát / chỉnh SL/TP).\n"
+    f"{_GOCHARTING_TRADE_MANAGEMENT_SUFFIX}"
     "Đây là khuyến nghị tham khảo — người dùng tự quyết trên MT5.\n"
     "Vùng (label): {plan_label}\n"
     "{entry_side} entry: {entry_price}\n"

@@ -138,6 +138,12 @@ def test_post_fill_manage_job_sends_telegram_no_mt5(monkeypatch, tmp_path: Path)
 
     assert openai_kwargs.get("previous_response_id") == "resp-full-analysis"
     assert openai_kwargs.get("coinmap_json_paths") == []
+    user_text = openai_kwargs.get("user_text", "")
+    assert "GC1!" in user_text
+    assert "không phải spot XAUUSD" in user_text
+    assert "#8FAF8E" in user_text
+    assert "Volume histogram" in user_text
+    assert "Absorption" in user_text
     assert mt5_calls == []
     assert len(tg_calls) == 1
     assert tg_calls[0]["reason"] == "Khuyến nghị giữ lệnh."
