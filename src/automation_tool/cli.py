@@ -19,10 +19,17 @@ from automation_tool.coinmap import capture_charts, load_coinmap_yaml
 from automation_tool.gocharting_capture import (
     GOCHARTING_UPDATE_SCALP_DETAIL_HISTORY_STEPS,
     capture_gocharting,
+    load_gocharting_yaml,
 )
 from automation_tool.gocharting_footprint_extract import (
     DEFAULT_FOOTPRINT_EXTRACT_MODEL,
     extract_all_footprint_jsons,
+    footprint_json_output_path,
+    resolve_instrument_slug,
+)
+from automation_tool.gocharting_footprint_indexeddb import (
+    GoChartingIndexedDBFootprintError,
+    require_footprint_json_path,
 )
 from automation_tool.config import (
     resolve_update_scalp_vector_store_ids,
@@ -359,6 +366,14 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="Thư mục ghi JSON footprint (mặc định: charts_dir).",
+    )
+    agd.add_argument(
+        "--indexeddb",
+        action="store_true",
+        help=(
+            "Chỉ trích footprint JSON từ GoCharting IndexedDB (FOOTPRINT/V2). "
+            "Bắt buộc thành công — không fallback OpenAI. Dùng với --capture."
+        ),
     )
     agd.add_argument(
         "--model",
@@ -1946,11 +1961,13 @@ def cmd_capture_m5_footprint(args: argparse.Namespace) -> None:
 
 
 def cmd_analyze_gocharting_detail(args: argparse.Namespace) -> None:
-    """Extract Bid/Ask footprint JSON from GoCharting detail PNGs (M5 + M15, parallel OpenAI)."""
+    """Extract Bid/Ask footprint JSON from GoCharting detail PNGs or IndexedDB."""
     from automation_tool.images import normalize_main_chart_symbol, set_active_main_symbol_file
 
+    use_indexeddb = bool(getattr(args, "indexeddb", False))
     s = load_settings()
-    require_openai(s)
+    if not use_indexeddb:
+        require_openai(s)
     if getattr(args, "main_symbol", None):
         set_active_main_symbol_file(args.main_symbol)
 
@@ -1964,31 +1981,68 @@ def cmd_analyze_gocharting_detail(args: argparse.Namespace) -> None:
     output_dir = args.output_dir or charts_dir
 
     _log.info(
-        "analyze-gocharting-detail: bắt đầu | charts_dir=%s main=%s capture=%s model=%s",
+        "analyze-gocharting-detail: bắt đầu | charts_dir=%s main=%s capture=%s indexeddb=%s model=%s",
         charts_dir,
         main_sym,
         bool(getattr(args, "capture", False)),
+        use_indexeddb,
         model,
     )
 
     stamp: Optional[str] = (args.stamp or "").strip() or None
+    if use_indexeddb and not getattr(args, "capture", False):
+        cfg = load_gocharting_yaml(gc_yaml)
+        instrument_slug = resolve_instrument_slug(cfg, main_sym)
+        try:
+            for interval in ("5m", "15m"):
+                out_path = footprint_json_output_path(output_dir, interval, instrument_slug)
+                require_footprint_json_path(out_path, interval=interval)
+                print(f"{interval} footprint JSON (indexeddb): {out_path}")
+        except GoChartingIndexedDBFootprintError as exc:
+            raise SystemExit(
+                f"analyze-gocharting-detail: {exc}. "
+                "Run with --capture --indexeddb --headed --use-service."
+            ) from exc
+        _log.info("analyze-gocharting-detail: indexeddb xong (existing JSON)")
+        return
+
     if getattr(args, "capture", False):
         use_service = bool(getattr(args, "use_service", False))
-        paths = capture_gocharting(
-            gocharting_yaml=gc_yaml,
-            charts_dir=charts_dir,
-            email=s.gocharting_email or "",
-            password=s.gocharting_password or "",
-            storage_state_path=storage,
-            save_storage_state=not args.no_save_storage,
-            headless=not args.headed,
-            main_chart_symbol=main_sym,
-            capture_symbols=(main_sym,),
-            capture_intervals=("5m", "15m"),
-            require_browser_service=use_service,
-        )
+        try:
+            paths = capture_gocharting(
+                gocharting_yaml=gc_yaml,
+                charts_dir=charts_dir,
+                email=s.gocharting_email or "",
+                password=s.gocharting_password or "",
+                storage_state_path=storage,
+                save_storage_state=not args.no_save_storage,
+                headless=not args.headed,
+                main_chart_symbol=main_sym,
+                capture_symbols=(main_sym,),
+                capture_intervals=("5m", "15m"),
+                require_browser_service=use_service,
+                require_footprint_indexeddb=use_indexeddb,
+            )
+        except GoChartingIndexedDBFootprintError as exc:
+            raise SystemExit(f"analyze-gocharting-detail: {exc}") from exc
         stamp = stamp_from_capture_paths(paths) or stamp
         _log.info("analyze-gocharting-detail: capture xong | files=%d stamp=%s", len(paths), stamp)
+
+    if use_indexeddb:
+        cfg = load_gocharting_yaml(gc_yaml)
+        instrument_slug = resolve_instrument_slug(cfg, main_sym)
+        results: dict[str, Path] = {}
+        try:
+            for interval in ("5m", "15m"):
+                out_path = footprint_json_output_path(output_dir, interval, instrument_slug)
+                require_footprint_json_path(out_path, interval=interval)
+                results[interval] = out_path
+        except GoChartingIndexedDBFootprintError as exc:
+            raise SystemExit(f"analyze-gocharting-detail: {exc}") from exc
+        for interval in ("5m", "15m"):
+            print(f"{interval} footprint JSON (indexeddb): {results[interval]}")
+        _log.info("analyze-gocharting-detail: indexeddb xong | outputs=%s", results)
+        return
 
     if not stamp:
         stamp = latest_chart_stamp(charts_dir)

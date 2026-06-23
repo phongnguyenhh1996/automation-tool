@@ -81,5 +81,7 @@ capture_plan:
     intervals: ["15m", "5m"]
 
 clear_charts_before_capture: false
+footprint_indexeddb: false
+footprint_indexeddb_wait_ms: 45000
 viewport_width: 1920
 viewport_height: 1080
