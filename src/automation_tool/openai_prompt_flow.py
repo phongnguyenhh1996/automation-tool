@@ -61,8 +61,8 @@ _GOCHARTING_BID_ASK_HINT = (
 
 _GOCHARTING_CHART_READ_GUIDE = (
     "Hướng dẫn đọc chart GoCharting (footprint overview/detail):\n"
-    "- Box màu #8FAF8E opacity 0.5 = stacked BID (3 level, ratio 300%).\n"
-    "- Box màu #D37C85 opacity 0.5 = stacked ASK (3 level, ratio 300%).\n"
+    "- Box màu #8FAF8E = stacked BID (3 level, ratio 300%).\n"
+    "- Box màu #D37C85 = stacked ASK (3 level, ratio 300%).\n"
     "- Box có border #FF6600 ở detail view = volume POC.\n"
     "- Line ngang màu #FA6578 = POC.\n"
     "- Line ngang màu #17CE1B = VAH.\n"
