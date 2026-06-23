@@ -61,16 +61,12 @@ _GOCHARTING_BID_ASK_HINT = (
 
 _GOCHARTING_CHART_READ_GUIDE = (
     "Hướng dẫn đọc chart GoCharting (footprint overview/detail):\n"
-    "- Box màu #8FAF8E = stacked BID (3 level, ratio 300%).\n"
-    "- Box màu #D37C85 = stacked ASK (3 level, ratio 300%).\n"
+    "- Box màu #8FAF8E = stacked BID (3 level imbalance, ratio 3.0x).\n"
+    "- Box màu #D37C85 = stacked ASK (3 level imbalance, ratio 3.0x).\n"
     "- Box có border #FF6600 ở detail view = volume POC.\n"
     "- Line ngang màu #FA6578 = POC.\n"
     "- Line ngang màu #17CE1B = VAH.\n"
     "- Line ngang màu #5B2D1B = VAL.\n"
-    "- Volume histogram (độ dài thanh xanh/đỏ trong profile nến): không cần đọc số Bid/Ask từng mức; "
-    "thanh càng dài → volume tại mức giá đó càng lớn (High Volume Node).\n"
-    "- Absorption / trapped traders: histogram phình to (thường kèm box volume POC) sát râu đỉnh/đáy nến, "
-    "nến sau đảo chiều → lực đẩy giá bị chặn bởi lệnh Limit lớn.\n"
 )
 
 _GOCHARTING_TRADE_MANAGEMENT_SUFFIX = (

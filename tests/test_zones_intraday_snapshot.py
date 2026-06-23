@@ -213,8 +213,6 @@ def test_build_scalp_update_user_text_gocharting_mentions_pan_back() -> None:
     assert "VAH" in t
     assert "#5B2D1B" in t
     assert "VAL" in t
-    assert "Volume histogram" in t
-    assert "Absorption" in t
 
 
 def test_format_intraday_update_time_line() -> None:

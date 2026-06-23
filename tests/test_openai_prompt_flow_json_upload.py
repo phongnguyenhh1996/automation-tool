@@ -235,10 +235,6 @@ def test_default_analysis_prompt_gocharting_bid_ask_on_detail() -> None:
     assert "VAH" in p
     assert "#5B2D1B" in p
     assert "VAL" in p
-    assert "Volume histogram" in p
-    assert "High Volume Node" in p
-    assert "Absorption" in p
-    assert "trapped traders" in p
 
 
 def test_gocharting_csv_header_notes_bid_ask(tmp_path: Path) -> None:
