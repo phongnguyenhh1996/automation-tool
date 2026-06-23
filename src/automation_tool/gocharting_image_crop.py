@@ -89,8 +89,28 @@ def crop_png_width_thirds(source: Path) -> list[Path]:
     return crop_paths
 
 
-def gocharting_detail_openai_image_paths(path: Path) -> list[Path]:
-    """Detail footprint PNGs → 3 crop panels; other images unchanged."""
-    if is_gocharting_detail_png(path):
+def gocharting_detail_openai_image_paths(
+    path: Path, *, crop_width_thirds: bool = True
+) -> list[Path]:
+    """Detail footprint PNGs → 3 crop panels when enabled; other images unchanged."""
+    if crop_width_thirds and is_gocharting_detail_png(path):
         return crop_png_width_thirds(path)
     return [path]
+
+
+def resolve_gocharting_detail_crop_width_thirds(
+    gocharting_cfg: dict | None = None,
+) -> bool:
+    """Read ``detail_chart.crop_width_thirds`` from config (default True)."""
+    if gocharting_cfg is None:
+        from automation_tool.config import default_gocharting_config_path
+
+        path = default_gocharting_config_path()
+        if not path.is_file():
+            return True
+        from automation_tool.gocharting_capture import load_gocharting_yaml
+
+        gocharting_cfg = load_gocharting_yaml(path)
+    from automation_tool.gocharting_capture import gocharting_detail_crop_width_thirds
+
+    return gocharting_detail_crop_width_thirds(gocharting_cfg)

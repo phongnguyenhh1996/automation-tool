@@ -1,1 +1,0 @@
-"""GoCharting protobuf schemas."""

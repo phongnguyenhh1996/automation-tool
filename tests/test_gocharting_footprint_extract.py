@@ -239,6 +239,52 @@ def test_extract_all_footprint_jsons_single_request(mock_openai_cls, tmp_path: P
     assert m15["chart_info"]["timeframe"] == "15m"
 
 
+@patch("automation_tool.gocharting_footprint_extract.OpenAI")
+def test_extract_all_footprint_jsons_no_crop(mock_openai_cls, tmp_path: Path) -> None:
+    charts = tmp_path / "charts"
+    charts.mkdir()
+    (charts / ".main_chart_symbol").write_text("XAUUSD\n", encoding="utf-8")
+    stamp = "20260623_120000"
+    _write_detail_pngs(charts, stamp, "5m")
+    _write_detail_pngs(charts, stamp, "15m")
+
+    cfg_path = tmp_path / "gocharting.yaml"
+    cfg_path.write_text(
+        "detail_chart:\n  crop_width_thirds: false\n"
+        "symbols:\n  XAUUSD:\n    export_label: GC\n    search_query: GC1!\n",
+        encoding="utf-8",
+    )
+
+    captured: dict[str, object] = {}
+
+    def _fake_create(**kwargs: object) -> MagicMock:
+        captured["kwargs"] = kwargs
+        resp = MagicMock()
+        resp.output_text = json.dumps(_combined_sample_payload())
+        return resp
+
+    mock_client = MagicMock()
+    mock_client.responses.create.side_effect = _fake_create
+    mock_openai_cls.return_value = mock_client
+
+    extract_all_footprint_jsons(
+        api_key="test-key",
+        charts_dir=charts,
+        output_dir=charts,
+        stamp=stamp,
+        main_symbol="XAUUSD",
+        gocharting_yaml=cfg_path,
+        model=DEFAULT_FOOTPRINT_EXTRACT_MODEL,
+        store=False,
+        include=[],
+    )
+
+    source_images = 6
+    assert _count_input_images(captured["kwargs"]) == source_images
+    prompt_text = str(captured["kwargs"])
+    assert "horizontal panels" not in prompt_text
+
+
 def test_extract_all_footprint_jsons_missing_png(tmp_path: Path) -> None:
     charts = tmp_path / "charts"
     charts.mkdir()

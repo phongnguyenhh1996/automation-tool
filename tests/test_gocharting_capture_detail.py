@@ -6,8 +6,10 @@ from unittest.mock import MagicMock
 import pytest
 
 from automation_tool.gocharting_capture import (
+    _apply_detail_chart_browser_zoom,
     _capture_gocharting_in_context,
     _chart_load_ms,
+    _detail_chart_browser_zoom_percent,
     _detail_chart_cfg_for_interval,
     _detail_chart_viewport,
     _gocharting_tick_search_already_set,
@@ -287,6 +289,51 @@ def test_detail_chart_viewport_uses_interval_overrides() -> None:
     assert _detail_chart_viewport(cfg, "5m") == (4000, 5500)
 
 
+def test_detail_chart_browser_zoom_percent_defaults_to_125() -> None:
+    assert _detail_chart_browser_zoom_percent({}) == 125
+    assert _detail_chart_browser_zoom_percent({"detail_chart": {}}) == 125
+
+
+def test_detail_chart_browser_zoom_percent_honors_overrides() -> None:
+    cfg = {
+        "detail_chart": {
+            "browser_zoom_percent": 150,
+            "by_interval": {"5m": {"browser_zoom_percent": 110}},
+        }
+    }
+    assert _detail_chart_browser_zoom_percent(cfg) == 150
+    assert _detail_chart_browser_zoom_percent(cfg, "5m") == 110
+    assert _detail_chart_browser_zoom_percent(cfg, "15m") == 150
+
+
+def test_apply_detail_chart_browser_zoom_uses_cdp() -> None:
+    page = MagicMock()
+    cdp = MagicMock()
+    page.context.new_cdp_session.return_value = cdp
+
+    _apply_detail_chart_browser_zoom(
+        page,
+        {"detail_chart": {"browser_zoom_percent": 125}},
+    )
+
+    page.context.new_cdp_session.assert_called_once_with(page)
+    cdp.send.assert_called_once_with(
+        "Emulation.setPageScaleFactor",
+        {"pageScaleFactor": 1.25},
+    )
+    page.evaluate.assert_not_called()
+
+
+def test_apply_detail_chart_browser_zoom_skips_at_100_percent() -> None:
+    page = MagicMock()
+    _apply_detail_chart_browser_zoom(
+        page,
+        {"detail_chart": {"browser_zoom_percent": 100}},
+    )
+    page.context.new_cdp_session.assert_not_called()
+    page.evaluate.assert_not_called()
+
+
 def test_capture_gocharting_in_context_overview_then_detail(monkeypatch, tmp_path: Path, gc_cfg: dict) -> None:
     context = MagicMock()
     main_page = MagicMock()
@@ -295,7 +342,15 @@ def test_capture_gocharting_in_context_overview_then_detail(monkeypatch, tmp_pat
 
     overview_calls: list[str] = []
     detail_zoom_saved: list[Path] = []
+    browser_zoom_calls: list[dict] = []
 
+    def fake_browser_zoom(page, cfg, *, interval=None):
+        browser_zoom_calls.append({"page": page, "cfg": cfg, "interval": interval})
+
+    monkeypatch.setattr(
+        "automation_tool.gocharting_capture._apply_detail_chart_browser_zoom",
+        fake_browser_zoom,
+    )
     monkeypatch.setattr(
         "automation_tool.gocharting_capture._maybe_login_gocharting",
         lambda *a, **k: None,
@@ -367,6 +422,8 @@ def test_capture_gocharting_in_context_overview_then_detail(monkeypatch, tmp_pat
     assert zoom in paths
     assert detail_zoom_saved == [zoom]
     detail_page.set_viewport_size.assert_called_once_with({"width": 2880, "height": 810})
+    assert len(browser_zoom_calls) == 1
+    assert browser_zoom_calls[0]["page"] is detail_page
     main_page.close.assert_called_once()
     detail_page.close.assert_called_once()
     assert context.new_page.call_count == 2

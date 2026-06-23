@@ -135,6 +135,31 @@ def test_ordered_chart_images_gocharting_includes_detail_crop_panels(tmp_path: P
     assert dxy_idx < m15_ov_idx < m15_zoom_part_idx
 
 
+def test_ordered_chart_images_gocharting_no_crop(tmp_path: Path) -> None:
+    charts = tmp_path / "charts"
+    charts.mkdir()
+    (charts / ".main_chart_symbol").write_text("XAUUSD\n", encoding="utf-8")
+    stamp = "20260616_120000"
+    sym = GOCHARTING_GOLD_EXPORT_LABEL
+    for slot_sym, iv in (("DXY", "15m"), (sym, "15m"), (sym, "5m")):
+        csv_p = charts / f"{stamp}_gocharting_{slot_sym}_{iv}.csv"
+        csv_p.write_text("Time,Open\n1,2\n", encoding="utf-8")
+    for iv in ("15m", "5m"):
+        ov = charts / f"{stamp}_gocharting_{sym}_{iv}.png"
+        ov.write_bytes(b"ov")
+        for suffix in ("zoom", "back_1"):
+            _write_rgb_png(charts / f"{stamp}_gocharting_{sym}_{iv}_detail_{suffix}.png")
+    (charts / f"{stamp}_gocharting_DXY_15m.png").write_bytes(b"dxy")
+    paths = ordered_chart_images(
+        charts,
+        stamp=stamp,
+        gocharting_cfg={"detail_chart": {"crop_width_thirds": False}},
+    )
+    names = [p.name for p in paths]
+    assert f"{stamp}_gocharting_{sym}_15m_detail_zoom.png" in names
+    assert f"{stamp}_gocharting_{sym}_15m_detail_zoom_part1.png" not in names
+
+
 def test_gocharting_detail_png_paths_order(tmp_path: Path) -> None:
     charts = tmp_path / "charts"
     charts.mkdir()

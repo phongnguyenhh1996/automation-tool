@@ -52,6 +52,10 @@ overview:
 
 detail_chart:
   page_url: "https://gocharting.com/terminal/chart/orlk0N-Da"
+  # Browser page zoom on the detail tab only (100 = no zoom).
+  browser_zoom_percent: 125
+  # Split each detail PNG into 3 horizontal panels for OpenAI (left / center / right).
+  crop_width_thirds: false
   # Detail tab only — omit viewport_width to use 2× session viewport_width (1440 → 2880).
   viewport_width: 1920
   viewport_height: 1920
@@ -81,7 +85,5 @@ capture_plan:
     intervals: ["15m", "5m"]
 
 clear_charts_before_capture: false
-footprint_indexeddb: false
-footprint_indexeddb_wait_ms: 45000
 viewport_width: 1920
 viewport_height: 1080

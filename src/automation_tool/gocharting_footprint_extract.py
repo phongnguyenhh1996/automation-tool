@@ -8,7 +8,10 @@ from typing import Any, Optional
 
 from openai import OpenAI
 
-from automation_tool.gocharting_capture import load_gocharting_yaml
+from automation_tool.gocharting_capture import (
+    gocharting_detail_crop_width_thirds,
+    load_gocharting_yaml,
+)
 from automation_tool.gocharting_image_crop import (
     GOCHARTING_IMAGE_WIDTH_THIRDS,
     gocharting_detail_openai_image_paths,
@@ -143,19 +146,23 @@ def _single_interval_schema_block(chart_info: dict[str, str]) -> str:
     )
 
 
-def build_footprint_extract_user_prompt(chart_info: dict[str, str]) -> str:
+def build_footprint_extract_user_prompt(
+    chart_info: dict[str, str], *, crop_width_thirds: bool = True
+) -> str:
     """User prompt for a single timeframe (used in tests and combined prompt)."""
     symbol = chart_info.get("symbol", "")
     timeframe = chart_info.get("timeframe", "")
     return (
         "Extract Bid/Ask Footprint data from the attached GoCharting detail chart image(s) "
         f"into JSON for {symbol} {timeframe}.\n\n"
-        + _footprint_extract_rules_text()
+        + _footprint_extract_rules_text(crop_width_thirds=crop_width_thirds)
     )
 
 
 def build_combined_footprint_extract_user_prompt(
     chart_infos_by_interval: dict[str, dict[str, str]],
+    *,
+    crop_width_thirds: bool = True,
 ) -> str:
     """User prompt for M5 + M15 in one OpenAI request."""
     blocks = [
@@ -164,28 +171,38 @@ def build_combined_footprint_extract_user_prompt(
         if iv in chart_infos_by_interval
     ]
     schema = "{\n" + ",\n".join(blocks) + "\n}"
+    panel_line = (
+        "Each source image is split into 3 horizontal panels (left, center, right).\n"
+        if crop_width_thirds
+        else ""
+    )
     return (
         "Extract Bid/Ask Footprint data from the attached GoCharting detail chart images.\n"
         "Images are grouped by timeframe (5m first, then 15m).\n"
-        "Each source image is split into 3 horizontal panels (left, center, right).\n\n"
+        f"{panel_line}\n"
         "Return ONLY one JSON object with top-level keys for each timeframe:\n"
         f"{schema}\n\n"
-        + _footprint_extract_rules_text()
+        + _footprint_extract_rules_text(crop_width_thirds=crop_width_thirds)
         + "\n- Top-level keys must be exactly \"5m\" and \"15m\".\n"
         "- Extract each timeframe only from its corresponding image group."
     )
 
 
-def _footprint_extract_rules_text() -> str:
+def _footprint_extract_rules_text(*, crop_width_thirds: bool = True) -> str:
+    panel_rule = (
+        "- Each source image is provided as 3 horizontal panels (left → center → right). "
+        "Read candles left-to-right across panels of the same source image before merging "
+        "across source images.\n"
+        if crop_width_thirds
+        else "- Read candles left-to-right within each source image before merging across source images.\n"
+    )
     return (
         "Rules:\n"
         "- ``bid`` and ``ask`` are non-negative integers read from each price level cell.\n"
         "- ``price_levels`` ordered from highest price to lowest price (top to bottom on chart).\n"
         '- ``attributes`` is a list of strings; use ``["imbalance"]`` when the cell is marked as imbalance.\n'
-        "- Each source image is provided as 3 horizontal panels (left → center → right). "
-        "Read candles left-to-right across panels of the same source image before merging "
-        "across source images.\n"
-        "- If multiple source images are attached for the same timeframe, merge all visible candles by ``time``, "
+        + panel_rule
+        + "- If multiple source images are attached for the same timeframe, merge all visible candles by ``time``, "
         "deduplicate, and sort ``candles`` chronologically.\n"
         "- Output JSON only, no markdown fences or extra text."
     )
@@ -194,6 +211,8 @@ def _footprint_extract_rules_text() -> str:
 def _build_combined_image_user_content(
     prompt: str,
     interval_png_paths: dict[str, list[Path]],
+    *,
+    crop_width_thirds: bool = True,
 ) -> tuple[list[dict[str, Any]], int, int]:
     parts: list[dict[str, Any]] = [{"type": "input_text", "text": prompt}]
     source_count = 0
@@ -212,16 +231,22 @@ def _build_combined_image_user_content(
         for p in png_paths:
             source_count += 1
             source_label = _detail_png_source_label(p)
-            crop_paths = gocharting_detail_openai_image_paths(p)
+            crop_paths = gocharting_detail_openai_image_paths(
+                p, crop_width_thirds=crop_width_thirds
+            )
             for part_idx, crop_path in enumerate(crop_paths, start=1):
                 panel_count += 1
+                if crop_width_thirds and len(crop_paths) > 1:
+                    label = (
+                        f"[{interval} {source_label} part {part_idx}/"
+                        f"{GOCHARTING_IMAGE_WIDTH_THIRDS} — {crop_path.name}]\n"
+                    )
+                else:
+                    label = f"[{interval} {source_label} — {crop_path.name}]\n"
                 parts.append(
                     {
                         "type": "input_text",
-                        "text": (
-                            f"[{interval} {source_label} part {part_idx}/"
-                            f"{GOCHARTING_IMAGE_WIDTH_THIRDS} — {crop_path.name}]\n"
-                        ),
+                        "text": label,
                     }
                 )
                 parts.append(
@@ -342,6 +367,7 @@ def extract_all_footprint_jsons(
     Returns mapping ``interval`` → output path (``5m``, ``15m``).
     """
     cfg = load_gocharting_yaml(gocharting_yaml)
+    crop_width_thirds = gocharting_detail_crop_width_thirds(cfg)
     sym = normalize_main_chart_symbol(main_symbol)
     export_label = gocharting_footprint_export_label(sym)
     instrument_slug = resolve_instrument_slug(cfg, sym)
@@ -366,9 +392,11 @@ def extract_all_footprint_jsons(
         )
         chart_infos[interval] = resolve_gocharting_chart_info(cfg, sym, interval)
 
-    prompt = build_combined_footprint_extract_user_prompt(chart_infos)
+    prompt = build_combined_footprint_extract_user_prompt(
+        chart_infos, crop_width_thirds=crop_width_thirds
+    )
     content, source_images, crop_panels = _build_combined_image_user_content(
-        prompt, interval_png_paths
+        prompt, interval_png_paths, crop_width_thirds=crop_width_thirds
     )
 
     client = OpenAI(api_key=api_key)

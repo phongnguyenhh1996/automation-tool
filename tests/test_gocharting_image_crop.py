@@ -57,6 +57,21 @@ def test_gocharting_detail_openai_image_paths(tmp_path: Path) -> None:
     panels = gocharting_detail_openai_image_paths(detail)
     assert len(panels) == 3
     assert gocharting_detail_openai_image_paths(overview) == [overview]
+    assert gocharting_detail_openai_image_paths(detail, crop_width_thirds=False) == [
+        detail
+    ]
+
+
+def test_resolve_gocharting_detail_crop_width_thirds(tmp_path: Path) -> None:
+    from automation_tool.gocharting_image_crop import resolve_gocharting_detail_crop_width_thirds
+
+    assert resolve_gocharting_detail_crop_width_thirds({"detail_chart": {}}) is True
+    assert (
+        resolve_gocharting_detail_crop_width_thirds(
+            {"detail_chart": {"crop_width_thirds": False}}
+        )
+        is False
+    )
 
 
 def test_crop_png_width_thirds_invalid_part() -> None:

@@ -106,6 +106,14 @@ def _normalize_interval_key(interval: str) -> str:
     return (interval or "").strip().lower()
 
 
+def gocharting_detail_crop_width_thirds(cfg: dict[str, Any]) -> bool:
+    """When True (default), split detail PNGs into 3 horizontal panels for OpenAI."""
+    detail = cfg.get("detail_chart") or {}
+    if not isinstance(detail, dict):
+        return True
+    return detail.get("crop_width_thirds", True) is not False
+
+
 def _detail_chart_cfg_for_interval(cfg: dict[str, Any], interval: str) -> dict[str, Any]:
     """Merge ``detail_chart`` with optional ``detail_chart.by_interval.{interval}`` overrides."""
     detail = cfg.get("detail_chart") or {}
@@ -157,6 +165,24 @@ def _detail_chart_viewport(cfg: dict[str, Any], interval: Optional[str] = None) 
     return max(1, width), max(1, height)
 
 
+def _detail_chart_browser_zoom_percent(
+    cfg: dict[str, Any],
+    interval: Optional[str] = None,
+) -> int:
+    """Browser page zoom for the detail tab (default 125%)."""
+    if interval:
+        detail = _detail_chart_cfg_for_interval(cfg, interval)
+    else:
+        raw = cfg.get("detail_chart") or {}
+        detail = raw if isinstance(raw, dict) else {}
+        detail = {k: v for k, v in detail.items() if k != "by_interval"}
+
+    try:
+        return max(1, int(detail.get("browser_zoom_percent", 125)))
+    except (TypeError, ValueError):
+        return 125
+
+
 def _apply_detail_chart_viewport(
     page: Page,
     cfg: dict[str, Any],
@@ -166,6 +192,32 @@ def _apply_detail_chart_viewport(
     w, h = _detail_chart_viewport(cfg, interval)
     page.set_viewport_size({"width": w, "height": h})
     _log.debug("gocharting: detail tab viewport %sx%s", w, h)
+
+
+def _apply_detail_chart_browser_zoom(
+    page: Page,
+    cfg: dict[str, Any],
+    *,
+    interval: Optional[str] = None,
+) -> None:
+    percent = _detail_chart_browser_zoom_percent(cfg, interval)
+    if percent == 100:
+        return
+
+    scale = percent / 100.0
+    try:
+        cdp = page.context.new_cdp_session(page)
+        cdp.send("Emulation.setPageScaleFactor", {"pageScaleFactor": scale})
+    except Exception as exc:
+        _log.warning(
+            "gocharting: CDP browser zoom failed (%s), falling back to CSS zoom",
+            exc,
+        )
+        page.evaluate(
+            "(pct) => { document.documentElement.style.zoom = pct + '%'; }",
+            percent,
+        )
+    _log.debug("gocharting: detail tab browser zoom %s%%", percent)
 
 
 def _detail_chart_enabled(cfg: dict[str, Any]) -> bool:
@@ -499,30 +551,6 @@ def _pan_detail_and_capture_back(
     _capture_png(page, cfg, dest, chart_section="detail_chart")
 
 
-def _footprint_indexeddb_enabled(
-    cfg: dict[str, Any],
-    detail: dict[str, Any],
-    *,
-    require_footprint_indexeddb: bool,
-) -> bool:
-    if require_footprint_indexeddb:
-        return True
-    if detail.get("footprint_indexeddb") is True:
-        return True
-    return bool(cfg.get("footprint_indexeddb"))
-
-
-def _footprint_indexeddb_wait_ms(cfg: dict[str, Any], detail: dict[str, Any]) -> int:
-    for block in (detail, cfg):
-        raw = block.get("footprint_indexeddb_wait_ms")
-        if raw is not None:
-            try:
-                return max(0, int(raw))
-            except (TypeError, ValueError):
-                pass
-    return 45_000
-
-
 def _capture_detail_footprint(
     context: BrowserContext,
     cfg: dict[str, Any],
@@ -533,9 +561,7 @@ def _capture_detail_footprint(
     stamp: str,
     entry: dict[str, Any],
     interval: str,
-    main_chart_symbol: Optional[str] = None,
     detail_history_steps: Optional[int] = None,
-    require_footprint_indexeddb: bool = False,
 ) -> list[Path]:
     detail = _detail_chart_cfg_for_interval(cfg, interval)
     detail_url = str(detail.get("page_url") or "").strip()
@@ -557,6 +583,7 @@ def _capture_detail_footprint(
     paths: list[Path] = []
     try:
         _apply_detail_chart_viewport(detail_page, detail_cfg)
+        _apply_detail_chart_browser_zoom(detail_page, detail_cfg)
         detail_page.goto(detail_url, wait_until="domcontentloaded", timeout=90_000)
         detail_page.wait_for_timeout(1200)
         _maybe_login_gocharting(detail_page, detail_cfg, email, password)
@@ -570,29 +597,6 @@ def _capture_detail_footprint(
         zoom_path = gocharting_detail_png_path(charts_dir, stamp, export_label, interval, "zoom")
         _capture_png(detail_page, detail_cfg, zoom_path, chart_section="detail_chart")
         paths.append(zoom_path)
-
-        if _footprint_indexeddb_enabled(cfg, detail, require_footprint_indexeddb=require_footprint_indexeddb) and main_chart_symbol:
-            from automation_tool.gocharting_footprint_extract import (
-                resolve_gocharting_chart_info,
-                resolve_instrument_slug,
-            )
-            from automation_tool.gocharting_footprint_indexeddb import write_footprint_json_from_page
-
-            main_sym = main_chart_symbol.strip().upper()
-            instrument_slug = resolve_instrument_slug(cfg, main_sym)
-            chart_info = resolve_gocharting_chart_info(cfg, main_sym, interval)
-            json_path = write_footprint_json_from_page(
-                detail_page,
-                output_dir=charts_dir,
-                entry=entry,
-                interval=interval,
-                instrument_slug=instrument_slug,
-                chart_info=chart_info,
-                wait_ms=_footprint_indexeddb_wait_ms(cfg, detail),
-                required=require_footprint_indexeddb,
-            )
-            if json_path is not None:
-                paths.append(json_path)
 
         # Each step: pan chart left (history) then capture PNG.
         for step in range(1, history_steps + 1):
@@ -671,7 +675,6 @@ def _capture_gocharting_in_context(
     only_slots: Optional[list[tuple[str, str]]] = None,
     detail_history_steps: Optional[int] = None,
     overview_capture: bool = True,
-    require_footprint_indexeddb: bool = False,
 ) -> list[Path]:
     slot_filter: set[tuple[str, str]] | None = None
     if only_slots:
@@ -702,9 +705,7 @@ def _capture_gocharting_in_context(
                         stamp=stamp,
                         entry=entry,
                         interval=interval,
-                        main_chart_symbol=main_chart_symbol,
                         detail_history_steps=detail_history_steps,
-                        require_footprint_indexeddb=require_footprint_indexeddb,
                     )
                     paths.extend(detail_paths)
         return paths
@@ -757,9 +758,7 @@ def _capture_gocharting_in_context(
                         stamp=stamp,
                         entry=entry,
                         interval=interval,
-                        main_chart_symbol=main_chart_symbol,
                         detail_history_steps=detail_history_steps,
-                        require_footprint_indexeddb=require_footprint_indexeddb,
                     )
                     paths.extend(detail_paths)
         return paths
@@ -786,7 +785,6 @@ def _capture_gocharting_with_context(
     only_slots: Optional[list[tuple[str, str]]] = None,
     detail_history_steps: Optional[int] = None,
     overview_capture: bool = True,
-    require_footprint_indexeddb: bool = False,
 ) -> list[Path]:
     paths = _capture_gocharting_in_context(
         context,
@@ -801,7 +799,6 @@ def _capture_gocharting_with_context(
         only_slots=only_slots,
         detail_history_steps=detail_history_steps,
         overview_capture=overview_capture,
-        require_footprint_indexeddb=require_footprint_indexeddb,
     )
     if save_storage_state and storage_state_path:
         _ensure_dir(storage_state_path.parent)
@@ -828,7 +825,6 @@ def capture_gocharting(
     require_browser_service: bool = False,
     detail_history_steps: Optional[int] = None,
     overview_capture: bool = True,
-    require_footprint_indexeddb: bool = False,
 ) -> list[Path]:
     """
     Capture GoCharting footprint charts: PNG screenshot + CSV export per (symbol, interval).
@@ -884,7 +880,6 @@ def capture_gocharting(
         only_slots=only_slots,
         detail_history_steps=detail_history_steps,
         overview_capture=overview_capture,
-        require_footprint_indexeddb=require_footprint_indexeddb,
     )
 
     if reuse_browser_context is not None:

@@ -1833,10 +1833,19 @@ def _post_fill_manage_job(
             current_sl=_fmt_level_for_prompt(current_sl),
             current_tp=_fmt_level_for_prompt(current_tp),
         )
+        from automation_tool.gocharting_capture import (
+            gocharting_detail_crop_width_thirds,
+            load_gocharting_yaml,
+        )
         from automation_tool.gocharting_image_crop import gocharting_detail_openai_image_paths
 
+        gc_cfg = load_gocharting_yaml(default_gocharting_config_path())
+        crop_width_thirds = gocharting_detail_crop_width_thirds(gc_cfg)
         detail_payloads = [
-            ("image", p) for p in gocharting_detail_openai_image_paths(detail_png)
+            ("image", p)
+            for p in gocharting_detail_openai_image_paths(
+                detail_png, crop_width_thirds=crop_width_thirds
+            )
         ]
         out_text, new_id = run_single_followup_responses(
             api_key=settings.openai_api_key,
