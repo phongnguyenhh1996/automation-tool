@@ -217,7 +217,31 @@ def _apply_detail_chart_browser_zoom(
             "(pct) => { document.documentElement.style.zoom = pct + '%'; }",
             percent,
         )
-    _log.debug("gocharting: detail tab browser zoom %s%%", percent)
+    _log.info("gocharting: detail tab browser zoom %s%%", percent)
+
+
+def _prepare_detail_chart(page: Page, cfg: dict[str, Any]) -> None:
+    """Browser zoom, refresh, then chart zoom-in — mirrors ``_prepare_overview_chart``."""
+    detail = cfg.get("detail_chart") or {}
+    if not isinstance(detail, dict):
+        return
+
+    refresh_id = str(detail.get("refresh_button_id") or "refresh-button")
+    zoom_in_id = str(detail.get("zoom_in_button_id") or "zoomIn-button")
+    zoom_clicks = int(detail.get("zoom_clicks", 2))
+    delay_ms = int(detail.get("zoom_click_delay_ms", 500))
+
+    _apply_detail_chart_browser_zoom(page, cfg)
+    _force_click_id(page, refresh_id)
+    for _ in range(max(0, zoom_clicks)):
+        _force_click_id(page, zoom_in_id, delay_ms=delay_ms)
+
+    percent = _detail_chart_browser_zoom_percent(cfg)
+    _log.info(
+        "gocharting: detail prepared (browser zoom %s%% + refresh + zoomIn x%s)",
+        percent,
+        zoom_clicks,
+    )
 
 
 def _detail_chart_enabled(cfg: dict[str, Any]) -> bool:
@@ -569,10 +593,6 @@ def _capture_detail_footprint(
         return []
 
     export_label = str(entry["export_label"]).strip().upper()
-    refresh_id = str(detail.get("refresh_button_id") or "refresh-button")
-    zoom_in_id = str(detail.get("zoom_in_button_id") or "zoomIn-button")
-    zoom_clicks = int(detail.get("zoom_clicks", 2))
-    delay_ms = int(detail.get("zoom_click_delay_ms", 500))
     if detail_history_steps is not None:
         history_steps = max(0, int(detail_history_steps))
     else:
@@ -583,16 +603,13 @@ def _capture_detail_footprint(
     paths: list[Path] = []
     try:
         _apply_detail_chart_viewport(detail_page, detail_cfg)
-        _apply_detail_chart_browser_zoom(detail_page, detail_cfg)
         detail_page.goto(detail_url, wait_until="domcontentloaded", timeout=90_000)
         detail_page.wait_for_timeout(1200)
         _maybe_login_gocharting(detail_page, detail_cfg, email, password)
         _select_chart_symbol(detail_page, detail_cfg, entry)
         _select_interval(detail_page, detail_cfg, interval)
 
-        _force_click_id(detail_page, refresh_id)
-        for _ in range(max(0, zoom_clicks)):
-            _force_click_id(detail_page, zoom_in_id, delay_ms=delay_ms)
+        _prepare_detail_chart(detail_page, detail_cfg)
 
         zoom_path = gocharting_detail_png_path(charts_dir, stamp, export_label, interval, "zoom")
         _capture_png(detail_page, detail_cfg, zoom_path, chart_section="detail_chart")

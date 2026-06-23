@@ -14,6 +14,7 @@ from automation_tool.gocharting_capture import (
     _detail_chart_viewport,
     _gocharting_tick_search_already_set,
     _pan_detail_chart,
+    _prepare_detail_chart,
     _prepare_overview_chart,
     _select_chart_symbol,
     _symbol_uses_dedicated_chart,
@@ -334,6 +335,44 @@ def test_apply_detail_chart_browser_zoom_skips_at_100_percent() -> None:
     page.evaluate.assert_not_called()
 
 
+def test_prepare_detail_chart_browser_zoom_refresh_and_zoom_in(monkeypatch) -> None:
+    page = MagicMock()
+    calls: list[str] = []
+
+    def fake_browser_zoom(p, cfg, *, interval=None):
+        calls.append("browser_zoom")
+
+    def fake_force_click_id(p, element_id, *, delay_ms=0):
+        calls.append(element_id)
+
+    monkeypatch.setattr(
+        "automation_tool.gocharting_capture._apply_detail_chart_browser_zoom",
+        fake_browser_zoom,
+    )
+    monkeypatch.setattr(
+        "automation_tool.gocharting_capture._force_click_id",
+        fake_force_click_id,
+    )
+    _prepare_detail_chart(
+        page,
+        {
+            "detail_chart": {
+                "browser_zoom_percent": 125,
+                "refresh_button_id": "refresh-button",
+                "zoom_in_button_id": "zoomIn-button",
+                "zoom_clicks": 2,
+                "zoom_click_delay_ms": 10,
+            }
+        },
+    )
+    assert calls == [
+        "browser_zoom",
+        "refresh-button",
+        "zoomIn-button",
+        "zoomIn-button",
+    ]
+
+
 def test_capture_gocharting_in_context_overview_then_detail(monkeypatch, tmp_path: Path, gc_cfg: dict) -> None:
     context = MagicMock()
     main_page = MagicMock()
@@ -341,15 +380,15 @@ def test_capture_gocharting_in_context_overview_then_detail(monkeypatch, tmp_pat
     context.new_page.side_effect = [main_page, detail_page]
 
     overview_calls: list[str] = []
+    detail_prepare_calls: list[MagicMock] = []
     detail_zoom_saved: list[Path] = []
-    browser_zoom_calls: list[dict] = []
 
-    def fake_browser_zoom(page, cfg, *, interval=None):
-        browser_zoom_calls.append({"page": page, "cfg": cfg, "interval": interval})
+    def fake_prepare_detail(page, cfg):
+        detail_prepare_calls.append(page)
 
     monkeypatch.setattr(
-        "automation_tool.gocharting_capture._apply_detail_chart_browser_zoom",
-        fake_browser_zoom,
+        "automation_tool.gocharting_capture._prepare_detail_chart",
+        fake_prepare_detail,
     )
     monkeypatch.setattr(
         "automation_tool.gocharting_capture._maybe_login_gocharting",
@@ -422,8 +461,7 @@ def test_capture_gocharting_in_context_overview_then_detail(monkeypatch, tmp_pat
     assert zoom in paths
     assert detail_zoom_saved == [zoom]
     detail_page.set_viewport_size.assert_called_once_with({"width": 2880, "height": 810})
-    assert len(browser_zoom_calls) == 1
-    assert browser_zoom_calls[0]["page"] is detail_page
+    assert detail_prepare_calls == [detail_page]
     main_page.close.assert_called_once()
     detail_page.close.assert_called_once()
     assert context.new_page.call_count == 2
