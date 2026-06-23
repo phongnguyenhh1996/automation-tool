@@ -137,12 +137,36 @@ def _interval_cfg(footprint_cfg: dict[str, Any], interval: str) -> dict[str, Any
     return dict(entry)
 
 
+def _zoom_detail_chart(page: Page, base_cfg: dict[str, Any], interval_cfg: dict[str, Any]) -> int:
+    detail = base_cfg.get("detail_chart") or {}
+    if not isinstance(detail, dict):
+        detail = {}
+    zoom_in_id = str(interval_cfg.get("zoom_in_button_id") or detail.get("zoom_in_button_id") or "zoomIn-button")
+    zoom_clicks = int(interval_cfg.get("zoom_clicks", 10))
+    delay_ms = int(interval_cfg.get("zoom_click_delay_ms") or detail.get("zoom_click_delay_ms") or 500)
+    for _ in range(max(0, zoom_clicks)):
+        _force_click_id(page, zoom_in_id, delay_ms=delay_ms)
+    return zoom_clicks
+
+
 def _refresh_detail_chart(page: Page, base_cfg: dict[str, Any], interval_cfg: dict[str, Any]) -> None:
     detail = base_cfg.get("detail_chart") or {}
     if not isinstance(detail, dict):
         detail = {}
     refresh_id = str(interval_cfg.get("refresh_button_id") or detail.get("refresh_button_id") or "refresh-button")
     _force_click_id(page, refresh_id)
+
+
+def _refresh_and_zoom_footprint_chart(
+    page: Page,
+    base_cfg: dict[str, Any],
+    interval_cfg: dict[str, Any],
+) -> int:
+    """Refresh resets chart zoom — always re-apply zoomIn after refresh."""
+    _refresh_detail_chart(page, base_cfg, interval_cfg)
+    zoom_clicks = _zoom_detail_chart(page, base_cfg, interval_cfg)
+    _wait_for_chart_before_export(page, base_cfg, section="detail_chart")
+    return zoom_clicks
 
 
 def _prepare_footprint_page(
@@ -165,18 +189,7 @@ def _prepare_footprint_page(
     page.wait_for_timeout(1200)
     _maybe_login_gocharting(page, base_cfg, email, password)
 
-    detail = base_cfg.get("detail_chart") or {}
-    if not isinstance(detail, dict):
-        detail = {}
-    refresh_id = str(interval_cfg.get("refresh_button_id") or detail.get("refresh_button_id") or "refresh-button")
-    zoom_in_id = str(interval_cfg.get("zoom_in_button_id") or detail.get("zoom_in_button_id") or "zoomIn-button")
-    zoom_clicks = int(interval_cfg.get("zoom_clicks", 10))
-    delay_ms = int(interval_cfg.get("zoom_click_delay_ms") or detail.get("zoom_click_delay_ms") or 500)
-
-    _force_click_id(page, refresh_id)
-    for _ in range(max(0, zoom_clicks)):
-        _force_click_id(page, zoom_in_id, delay_ms=delay_ms)
-    _wait_for_chart_before_export(page, base_cfg)
+    zoom_clicks = _refresh_and_zoom_footprint_chart(page, base_cfg, interval_cfg)
     _log.info(
         "gocharting footprint: prepared page (refresh + zoomIn x%s, viewport %sx%s)",
         zoom_clicks,
@@ -198,8 +211,8 @@ def _capture_footprint_shot(
     dest: Path,
 ) -> None:
     if bool(footprint_cfg.get("refresh_before_capture", True)):
-        _refresh_detail_chart(tab.page, base_cfg, tab.cfg)
-        _wait_for_chart_before_export(tab.page, base_cfg, section="detail_chart")
+        zoom_clicks = _refresh_and_zoom_footprint_chart(tab.page, base_cfg, tab.cfg)
+        _log.debug("gocharting footprint: refresh + zoomIn x%s before capture", zoom_clicks)
     clip = _clip_box_from_config(footprint_cfg.get("clip") or {})
     _clip_screenshot(tab.page, clip, dest)
     _log.info("gocharting footprint: saved %s", dest.name)
