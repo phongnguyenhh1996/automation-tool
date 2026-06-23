@@ -7,6 +7,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Optional, Tuple, Union
 
+from automation_tool.gocharting_image_crop import gocharting_detail_openai_image_paths
+
 # OpenAI multimodal slot: ``json`` / ``csv`` → Path; ``image`` → PNG; ``image_url`` → https string.
 ChartOpenAIPayload = Tuple[str, Union[Path, str]]
 
@@ -149,8 +151,11 @@ CHART_IMAGE_ORDER: tuple[tuple[str, str, str], ...] = chart_image_order_for_main
 CHART_SLOT_COUNT = len(CHART_IMAGE_ORDER)
 
 
-# Default ``--max-images-per-call`` for full analysis (11 slots + footprint extras).
-GOCHARTING_DETAIL_PNG_PER_SLOT = 4  # detail_zoom + 3 detail_back_* PNGs
+# Source detail PNGs per GC slot (zoom + 3 back); OpenAI gets 3× width panels each.
+GOCHARTING_DETAIL_SOURCE_PNG_PER_SLOT = 4
+GOCHARTING_DETAIL_PNG_PER_SLOT = (
+    GOCHARTING_DETAIL_SOURCE_PNG_PER_SLOT * 3
+)  # detail_zoom + back_* → part1..3 panels
 
 
 def _detail_back_step_from_stem(stem: str) -> Optional[int]:
@@ -183,8 +188,8 @@ def openai_payload_max_for_order(
     )
 
 
-# Default ``--max-images-per-call`` (one API call; fits GoCharting full capture ~22 payloads).
-OPENAI_PAYLOAD_MAX = 30
+# Default ``--max-images-per-call`` (one API call; fits GoCharting full capture with detail crops).
+OPENAI_PAYLOAD_MAX = 100
 
 
 def read_main_chart_symbol(charts_dir: Optional[Path] = None) -> str:
@@ -407,6 +412,24 @@ def gocharting_detail_png_paths(
     return sorted(paths, key=_sort_key)
 
 
+def gocharting_detail_openai_png_paths(
+    charts_dir: Path, stamp: str, sym: str, iv: str
+) -> list[Path]:
+    """Detail footprint crop panels for one GoCharting slot (for OpenAI payloads)."""
+    out: list[Path] = []
+    for dp in gocharting_detail_png_paths(charts_dir, stamp, sym, iv):
+        out.extend(gocharting_detail_openai_image_paths(dp))
+    return out
+
+
+def gocharting_detail_openai_png_paths_for_csv(csv_path: Path) -> list[Path]:
+    """Crop panels for all detail PNG siblings of a GoCharting CSV export."""
+    out: list[Path] = []
+    for dp in gocharting_detail_png_paths_for_csv(csv_path):
+        out.extend(gocharting_detail_openai_image_paths(dp))
+    return out
+
+
 def _append_gocharting_openai_payloads(
     out: list[ChartOpenAIPayload],
     *,
@@ -422,7 +445,7 @@ def _append_gocharting_openai_payloads(
         out.append(("csv", cp))
     if pp.is_file():
         out.append(("image", pp))
-    for dp in gocharting_detail_png_paths(charts_dir, stamp, sym, iv):
+    for dp in gocharting_detail_openai_png_paths(charts_dir, stamp, sym, iv):
         out.append(("image", dp))
 
 
@@ -492,7 +515,7 @@ def openai_payloads_for_attachment_paths(paths: Sequence[Path]) -> list[ChartOpe
             pp = gocharting_png_path_for_csv(p)
             if pp is not None:
                 out.append(("image", pp))
-            for dp in gocharting_detail_png_paths_for_csv(p):
+            for dp in gocharting_detail_openai_png_paths_for_csv(p):
                 out.append(("image", dp))
             continue
         out.append(("json", p))
@@ -639,7 +662,7 @@ def ordered_chart_images(charts_dir: Path, *, stamp: Optional[str] = None) -> li
         if p.is_file():
             out.append(p)
         if src == "gocharting":
-            out.extend(gocharting_detail_png_paths(charts_dir, st, sym, iv))
+            out.extend(gocharting_detail_openai_png_paths(charts_dir, st, sym, iv))
     return out
 
 

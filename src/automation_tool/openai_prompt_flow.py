@@ -348,7 +348,27 @@ def _gocharting_detail_png_attachment_header(path: Path) -> Optional[str]:
         return None
     if "_detail_" not in path.name:
         return None
+    from automation_tool.gocharting_image_crop import (
+        GOCHARTING_IMAGE_WIDTH_THIRDS,
+        gocharting_detail_crop_part_index,
+    )
+
     stem = path.stem
+    part = gocharting_detail_crop_part_index(path)
+    if part is not None:
+        base_stem = re.sub(r"_part\d+$", "", stem)
+        if base_stem.endswith("_detail_zoom"):
+            kind = "detail footprint zoomed in (current session)"
+        else:
+            back_step = _detail_back_step_from_stem(base_stem)
+            if back_step is not None:
+                kind = f"detail footprint — history pan step {back_step}"
+            else:
+                kind = "detail footprint"
+        return (
+            f"[GoCharting {kind} — panel {part}/{GOCHARTING_IMAGE_WIDTH_THIRDS} "
+            f"— file: {path.name}]\n"
+        )
     if stem.endswith("_detail_zoom"):
         kind = "detail footprint zoomed in (current session)"
     else:

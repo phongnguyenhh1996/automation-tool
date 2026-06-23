@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PIL import Image
+
 from automation_tool.gocharting_capture import (
     GOCHARTING_UPDATE_SCALP_DETAIL_HISTORY_STEPS,
     gocharting_export_stem,
 )
+from automation_tool.gocharting_image_crop import GOCHARTING_IMAGE_WIDTH_THIRDS
 from automation_tool.images import (
     GOCHARTING_GOLD_EXPORT_LABEL,
     GOCHARTING_DETAIL_PNG_PER_SLOT,
@@ -24,6 +27,11 @@ from automation_tool.images import (
 )
 
 
+def _write_rgb_png(path: Path, width: int = 300, height: int = 100) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (width, height), (0, 128, 255)).save(path, format="PNG")
+
+
 def test_gocharting_export_stem() -> None:
     assert gocharting_export_stem("20260616_120000", "GC", "15m") == (
         "20260616_120000_gocharting_GC_15m"
@@ -37,6 +45,11 @@ def test_update_scalp_gocharting_detail_history_steps() -> None:
 def test_gocharting_footprint_export_label() -> None:
     assert gocharting_footprint_export_label("XAUUSD") == GOCHARTING_GOLD_EXPORT_LABEL
     assert gocharting_footprint_export_label("EURUSD") == "EURUSD"
+
+
+def test_gocharting_detail_png_per_slot_is_tripled() -> None:
+    assert GOCHARTING_DETAIL_PNG_PER_SLOT == 12
+    assert GOCHARTING_DETAIL_PNG_PER_SLOT == 4 * GOCHARTING_IMAGE_WIDTH_THIRDS
 
 
 def test_footprint_source_detection(tmp_path: Path) -> None:
@@ -80,8 +93,9 @@ def test_ordered_chart_openai_payloads_gocharting(tmp_path: Path) -> None:
         png_p.write_bytes(b"x")
         if sym != "DXY":
             for suffix in ("zoom", "back_1", "back_2", "back_3"):
-                dp = charts / f"{stamp}_gocharting_{sym}_{iv}_detail_{suffix}.png"
-                dp.write_bytes(b"d")
+                _write_rgb_png(
+                    charts / f"{stamp}_gocharting_{sym}_{iv}_detail_{suffix}.png"
+                )
     payloads = ordered_chart_openai_payloads(charts, stamp=stamp)
     kinds = [k for k, _ in payloads]
     assert kinds.count("csv") == 3
@@ -90,10 +104,10 @@ def test_ordered_chart_openai_payloads_gocharting(tmp_path: Path) -> None:
 
 def test_openai_payload_max_gocharting_order() -> None:
     order = chart_image_order_for_main_symbol("XAUUSD", footprint_source="gocharting")
-    assert openai_payload_max_for_order(order) == 22
+    assert openai_payload_max_for_order(order) == 38
 
 
-def test_ordered_chart_images_gocharting_includes_detail_pngs(tmp_path: Path) -> None:
+def test_ordered_chart_images_gocharting_includes_detail_crop_panels(tmp_path: Path) -> None:
     charts = tmp_path / "charts"
     charts.mkdir()
     (charts / ".main_chart_symbol").write_text("XAUUSD\n", encoding="utf-8")
@@ -106,20 +120,19 @@ def test_ordered_chart_images_gocharting_includes_detail_pngs(tmp_path: Path) ->
         ov = charts / f"{stamp}_gocharting_{sym}_{iv}.png"
         ov.write_bytes(b"ov")
         for suffix in ("zoom", "back_1", "back_2", "back_3"):
-            dp = charts / f"{stamp}_gocharting_{sym}_{iv}_detail_{suffix}.png"
-            dp.write_bytes(b"d")
+            _write_rgb_png(charts / f"{stamp}_gocharting_{sym}_{iv}_detail_{suffix}.png")
     (charts / f"{stamp}_gocharting_DXY_15m.png").write_bytes(b"dxy")
     paths = ordered_chart_images(charts, stamp=stamp)
     names = [p.name for p in paths]
     assert f"{stamp}_gocharting_DXY_15m.png" in names
     for iv in ("15m", "5m"):
         assert f"{stamp}_gocharting_{sym}_{iv}.png" in names
-        for suffix in ("zoom", "back_1", "back_2", "back_3"):
-            assert f"{stamp}_gocharting_{sym}_{iv}_detail_{suffix}.png" in names
+        assert f"{stamp}_gocharting_{sym}_{iv}_detail_zoom_part1.png" in names
+        assert f"{stamp}_gocharting_{sym}_{iv}_detail_back_1_part3.png" in names
     dxy_idx = names.index(f"{stamp}_gocharting_DXY_15m.png")
     m15_ov_idx = names.index(f"{stamp}_gocharting_{sym}_15m.png")
-    m15_zoom_idx = names.index(f"{stamp}_gocharting_{sym}_15m_detail_zoom.png")
-    assert dxy_idx < m15_ov_idx < m15_zoom_idx
+    m15_zoom_part_idx = names.index(f"{stamp}_gocharting_{sym}_15m_detail_zoom_part1.png")
+    assert dxy_idx < m15_ov_idx < m15_zoom_part_idx
 
 
 def test_gocharting_detail_png_paths_order(tmp_path: Path) -> None:

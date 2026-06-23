@@ -1833,11 +1833,16 @@ def _post_fill_manage_job(
             current_sl=_fmt_level_for_prompt(current_sl),
             current_tp=_fmt_level_for_prompt(current_tp),
         )
+        from automation_tool.gocharting_image_crop import gocharting_detail_openai_image_paths
+
+        detail_payloads = [
+            ("image", p) for p in gocharting_detail_openai_image_paths(detail_png)
+        ]
         out_text, new_id = run_single_followup_responses(
             api_key=settings.openai_api_key,
             user_text=user_text,
             coinmap_json_paths=[],
-            extra_chart_payloads=[("image", detail_png)],
+            extra_chart_payloads=detail_payloads,
             previous_response_id=prev,
             vector_store_ids=settings.openai_vector_store_ids,
             store=settings.openai_responses_store,

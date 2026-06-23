@@ -214,7 +214,7 @@ def test_purge_json_folder_calls_cloudinary_api() -> None:
 def test_default_analysis_prompt_describes_json_and_png() -> None:
     p = default_analysis_prompt("XAUUSD")
     assert "[FULL_ANALYSIS]" in p
-    assert "14 payload" in p
+    assert "100 payload" in p
     assert "PNG" in p
     assert "Ưu tiên đọc ảnh chart" in p
     assert "Coinmap DXY M15" in p
@@ -252,16 +252,19 @@ def test_gocharting_csv_header_notes_bid_ask(tmp_path: Path) -> None:
 def test_gocharting_detail_png_headers_are_brief(tmp_path: Path) -> None:
     zoom = tmp_path / "stamp_gocharting_GC_15m_detail_zoom.png"
     back = tmp_path / "stamp_gocharting_GC_15m_detail_back_1.png"
+    zoom_part = tmp_path / "stamp_gocharting_GC_15m_detail_zoom_part2.png"
     overview = tmp_path / "stamp_gocharting_GC_15m.png"
-    for p in (zoom, back, overview):
+    for p in (zoom, back, zoom_part, overview):
         p.write_bytes(b"png")
 
     zoom_hdr = _gocharting_detail_png_attachment_header(zoom)
     back_hdr = _gocharting_detail_png_attachment_header(back)
+    part_hdr = _gocharting_detail_png_attachment_header(zoom_part)
     ov_hdr = _gocharting_png_attachment_header(overview)
 
     assert zoom_hdr is not None and "detail footprint zoomed in" in zoom_hdr
     assert back_hdr is not None and "history pan step 1" in back_hdr
+    assert part_hdr is not None and "panel 2/3" in part_hdr
     assert ov_hdr is not None and "chart screenshot" in ov_hdr
     for hdr in (zoom_hdr, back_hdr, ov_hdr):
         assert "KHÔNG có BID/ASK" not in hdr

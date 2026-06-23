@@ -9,6 +9,10 @@ from typing import Any, Optional
 from openai import OpenAI
 
 from automation_tool.gocharting_capture import load_gocharting_yaml
+from automation_tool.gocharting_image_crop import (
+    GOCHARTING_IMAGE_WIDTH_THIRDS,
+    gocharting_detail_openai_image_paths,
+)
 from automation_tool.images import (
     gocharting_detail_png_paths,
     gocharting_footprint_export_label,
@@ -24,65 +28,9 @@ DEFAULT_FOOTPRINT_EXTRACT_MODEL = "gpt-5.4"
 DEFAULT_FOOTPRINT_EXTRACT_REASONING_EFFORT = "medium"
 FOOTPRINT_EXTRACT_INTERVALS = ("5m", "15m")
 FOOTPRINT_CHART_TYPE = "Bid/Ask Footprint"
-FOOTPRINT_IMAGE_WIDTH_THIRDS = 3
 
 _INTERVAL_FILENAME_RE = re.compile(r"^(\d+)m$", re.I)
 _DETAIL_BACK_RE = re.compile(r"_detail_back_(\d+)$")
-
-
-def footprint_crop_part_path(source: Path, part: int) -> Path:
-    """``{stem}_part{N}.png`` sibling of the source detail PNG."""
-    if part < 1 or part > FOOTPRINT_IMAGE_WIDTH_THIRDS:
-        raise ValueError(f"crop part must be 1..{FOOTPRINT_IMAGE_WIDTH_THIRDS}, got {part}")
-    return source.with_name(f"{source.stem}_part{part}{source.suffix}")
-
-
-def _width_third_crop_boxes(width: int, height: int) -> list[tuple[int, int, int, int]]:
-    third = width // FOOTPRINT_IMAGE_WIDTH_THIRDS
-    return [
-        (0, 0, third, height),
-        (third, 0, 2 * third, height),
-        (2 * third, 0, width, height),
-    ]
-
-
-def _crops_are_fresh(source: Path, crop_paths: list[Path]) -> bool:
-    if not all(p.is_file() for p in crop_paths):
-        return False
-    try:
-        src_mtime = source.stat().st_mtime
-    except OSError:
-        return False
-    return all(p.stat().st_mtime >= src_mtime for p in crop_paths)
-
-
-def crop_png_width_thirds(source: Path) -> list[Path]:
-    """
-    Crop a detail PNG into 3 horizontal panels (left, center, right).
-
-    Writes ``{stem}_part1..3.png`` next to the source unless crops are already fresh.
-    """
-    from PIL import Image
-
-    if not source.is_file():
-        raise FileNotFoundError(f"Detail PNG not found: {source}")
-
-    crop_paths = [
-        footprint_crop_part_path(source, part)
-        for part in range(1, FOOTPRINT_IMAGE_WIDTH_THIRDS + 1)
-    ]
-    if _crops_are_fresh(source, crop_paths):
-        return crop_paths
-
-    with Image.open(source) as img:
-        rgb = img.convert("RGB")
-        boxes = _width_third_crop_boxes(*rgb.size)
-        for part, box in enumerate(boxes, start=1):
-            panel = rgb.crop(box)
-            out = crop_paths[part - 1]
-            out.parent.mkdir(parents=True, exist_ok=True)
-            panel.save(out, format="PNG")
-    return crop_paths
 
 
 def _detail_png_source_label(path: Path) -> str:
@@ -264,7 +212,7 @@ def _build_combined_image_user_content(
         for p in png_paths:
             source_count += 1
             source_label = _detail_png_source_label(p)
-            crop_paths = crop_png_width_thirds(p)
+            crop_paths = gocharting_detail_openai_image_paths(p)
             for part_idx, crop_path in enumerate(crop_paths, start=1):
                 panel_count += 1
                 parts.append(
@@ -272,7 +220,7 @@ def _build_combined_image_user_content(
                         "type": "input_text",
                         "text": (
                             f"[{interval} {source_label} part {part_idx}/"
-                            f"{FOOTPRINT_IMAGE_WIDTH_THIRDS} — {crop_path.name}]\n"
+                            f"{GOCHARTING_IMAGE_WIDTH_THIRDS} — {crop_path.name}]\n"
                         ),
                     }
                 )
