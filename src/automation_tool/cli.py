@@ -24,6 +24,7 @@ from automation_tool.gocharting_footprint_extract import (
     DEFAULT_FOOTPRINT_EXTRACT_MODEL,
     extract_all_footprint_jsons,
 )
+from automation_tool.gocharting_footprint_screenshot import run_footprint_gocharting_screenshot_daemon
 from automation_tool.config import (
     resolve_update_scalp_vector_store_ids,
     default_charts_dir,
@@ -367,6 +368,33 @@ def _parser() -> argparse.ArgumentParser:
         help=f"OpenAI model (default: {DEFAULT_FOOTPRINT_EXTRACT_MODEL}).",
     )
     agd.set_defaults(func=cmd_analyze_gocharting_detail)
+
+    fgs = sub.add_parser(
+        "footprint-gocharting-screenshot",
+        help="Daemon: chụp clip footprint GoCharting M5+M15 tại phút đầu mỗi nến mới.",
+    )
+    fgs.add_argument(
+        "--gocharting-config",
+        type=Path,
+        default=None,
+        help="YAML GoCharting (default: config/gocharting.yaml)",
+    )
+    fgs.add_argument("--charts-dir", type=Path, default=None)
+    fgs.add_argument(
+        "--main-symbol",
+        default=None,
+        metavar="SYM",
+        help="Cặp chính (vd. XAUUSD); mặc định active symbol.",
+    )
+    fgs.add_argument("--storage-state", type=Path, default=None, help="Playwright storage state JSON")
+    fgs.add_argument("--no-save-storage", action="store_true", help="Do not write storage state after run")
+    fgs.add_argument("--headed", action="store_true", help="Show browser window (without --use-service)")
+    fgs.add_argument(
+        "--no-use-service",
+        action="store_true",
+        help="Mở Chrome mới thay vì attach browser service (mặc định: dùng service).",
+    )
+    fgs.set_defaults(func=cmd_footprint_gocharting_screenshot)
 
     a = sub.add_parser(
         "analyze",
@@ -1943,6 +1971,48 @@ def cmd_capture_m5_footprint(args: argparse.Namespace) -> None:
     _log.info("capture-m5-footprint: xong | raw_m5=%s", raw_m5)
     print(f"Captured {len(paths)} file(s).")
     print(f"Raw Coinmap M5 JSON: {raw_m5}")
+
+
+def cmd_footprint_gocharting_screenshot(args: argparse.Namespace) -> None:
+    """Daemon: clip-screenshot GoCharting M5+M15 footprint at first minute of each new candle."""
+    from automation_tool.browser_client import is_service_responding
+    from automation_tool.images import normalize_main_chart_symbol, set_active_main_symbol_file
+
+    s = load_settings()
+    if getattr(args, "main_symbol", None):
+        set_active_main_symbol_file(args.main_symbol)
+
+    charts_dir = args.charts_dir or default_charts_dir()
+    main_sym = normalize_main_chart_symbol(
+        args.main_symbol or read_main_chart_symbol(charts_dir)
+    )
+    gc_yaml = args.gocharting_config or default_gocharting_config_path()
+    storage = args.storage_state or default_storage_state_path()
+    require_service = not bool(getattr(args, "no_use_service", False))
+
+    if require_service and not is_service_responding():
+        raise SystemExit(
+            "footprint-gocharting-screenshot: browser service không chạy hoặc không phản hồi. "
+            "Chạy trước: coinmap-automation browser up "
+            f"(và cần {default_data_dir() / 'browser_service_state.json'} với cdp_http)."
+        )
+
+    _log.info(
+        "footprint-gocharting-screenshot: bắt đầu | charts_dir=%s main=%s use_service=%s",
+        charts_dir,
+        main_sym,
+        require_service,
+    )
+    run_footprint_gocharting_screenshot_daemon(
+        gocharting_yaml=gc_yaml,
+        charts_dir=charts_dir,
+        email=s.gocharting_email or "",
+        password=s.gocharting_password or "",
+        storage_state_path=storage,
+        save_storage_state=not args.no_save_storage,
+        headless=not args.headed,
+        require_browser_service=require_service,
+    )
 
 
 def cmd_analyze_gocharting_detail(args: argparse.Namespace) -> None:

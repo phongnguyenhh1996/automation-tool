@@ -52,8 +52,8 @@ overview:
 
 detail_chart:
   page_url: "https://gocharting.com/terminal/chart/orlk0N-Da"
-  # Browser page zoom on the detail tab only (100 = no zoom).
-  browser_zoom_percent: 150
+  # CSS page zoom on the detail tab only (100 = no zoom).
+  browser_zoom_percent: 100
   # Split each detail PNG into 3 horizontal panels for OpenAI (left / center / right).
   crop_width_thirds: false
   # Detail tab only — omit viewport_width to use 2× session viewport_width (1440 → 2880).
@@ -83,6 +83,22 @@ capture_plan:
     intervals: ["15m"]
   - symbol: XAUUSD
     intervals: ["15m", "5m"]
+
+footprint_screenshot:
+  output_subdir: footprint_images
+  refresh_before_capture: true
+  clip: { x1: 50, y1: 50, x2: 300, y2: 1100 }
+  intervals:
+    15m:
+      page_url: "https://gocharting.com/terminal/chart/S0kcqfQKt"
+      viewport_width: 500
+      viewport_height: 1200
+      zoom_clicks: 10
+    5m:
+      page_url: "https://gocharting.com/terminal/chart/GC435uijM"
+      viewport_width: 500
+      viewport_height: 1200
+      zoom_clicks: 10
 
 clear_charts_before_capture: false
 viewport_width: 1920

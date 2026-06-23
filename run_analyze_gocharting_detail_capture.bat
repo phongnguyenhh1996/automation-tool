@@ -33,7 +33,7 @@ if errorlevel 1 (
 
 echo [%date% %time%] INFO: Starting coinmap-automation analyze-gocharting-detail --capture --headed --use-service
 >> "%LOG_FILE%" echo [%date% %time%] INFO: Starting coinmap-automation analyze-gocharting-detail --capture --headed --use-service
-coinmap-automation analyze-gocharting-detail --main-symbol XAUUSD --capture --headed --use-service %* >> "%LOG_FILE%" 2>&1
+coinmap-automation analyze-gocharting-detail --capture --headed --use-service %* >> "%LOG_FILE%" 2>&1
 set "EXIT_CODE=%ERRORLEVEL%"
 echo [%date% %time%] INFO: analyze-gocharting-detail capture finished with exit code %EXIT_CODE%
 >> "%LOG_FILE%" echo [%date% %time%] INFO: analyze-gocharting-detail capture finished with exit code %EXIT_CODE%
