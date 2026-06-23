@@ -20,6 +20,10 @@ from automation_tool.gocharting_capture import (
     GOCHARTING_UPDATE_SCALP_DETAIL_HISTORY_STEPS,
     capture_gocharting,
 )
+from automation_tool.gocharting_footprint_extract import (
+    DEFAULT_FOOTPRINT_EXTRACT_MODEL,
+    extract_all_footprint_jsons,
+)
 from automation_tool.config import (
     resolve_update_scalp_vector_store_ids,
     default_charts_dir,
@@ -59,8 +63,10 @@ from automation_tool.images import (
     coinmap_main_pair_interval_json_path,
     effective_chart_image_order,
     footprint_source_for_stamp,
-    gocharting_main_interval_csv_path,
+    gocharting_detail_png_paths,
     gocharting_detail_zoom_png_path_for_csv,
+    gocharting_footprint_export_label,
+    gocharting_main_interval_csv_path,
     gocharting_png_path_for_csv,
     latest_chart_stamp,
     ordered_chart_images,
@@ -308,6 +314,59 @@ def _parser() -> argparse.ArgumentParser:
         help="Bắt buộc attach browser service đang chạy thay vì mở Chrome mới.",
     )
     cm5.set_defaults(func=cmd_capture_m5_footprint)
+
+    agd = sub.add_parser(
+        "analyze-gocharting-detail",
+        help=(
+            "OpenAI gpt-5.4-mini: trích xuất JSON footprint từ ảnh detail GoCharting M5+M15 "
+            "(song song) → m5_GC1!_footprint.json, m15_GC1!_footprint.json"
+        ),
+    )
+    agd.add_argument("--charts-dir", type=Path, default=None)
+    agd.add_argument(
+        "--main-symbol",
+        default=None,
+        metavar="SYM",
+        help="Cặp chính (vd. XAUUSD); mặc định active symbol.",
+    )
+    agd.add_argument(
+        "--stamp",
+        default=None,
+        metavar="STAMP",
+        help="Stamp capture (YYYYMMDD_HHMMSS); mặc định stamp mới nhất trong charts_dir.",
+    )
+    agd.add_argument(
+        "--capture",
+        action="store_true",
+        help="Capture GoCharting M5+M15 detail trước khi phân tích.",
+    )
+    agd.add_argument(
+        "--gocharting-config",
+        type=Path,
+        default=None,
+        help="YAML GoCharting (default: config/gocharting.yaml)",
+    )
+    agd.add_argument("--storage-state", type=Path, default=None, help="Playwright storage state JSON")
+    agd.add_argument("--no-save-storage", action="store_true", help="Do not write storage state after capture")
+    agd.add_argument("--headed", action="store_true", help="Show browser window (with --capture)")
+    agd.add_argument(
+        "--use-service",
+        action="store_true",
+        help="Bắt buộc attach browser service khi --capture.",
+    )
+    agd.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Thư mục ghi JSON footprint (mặc định: charts_dir).",
+    )
+    agd.add_argument(
+        "--model",
+        default=None,
+        metavar="ID",
+        help=f"OpenAI model (default: {DEFAULT_FOOTPRINT_EXTRACT_MODEL}).",
+    )
+    agd.set_defaults(func=cmd_analyze_gocharting_detail)
 
     a = sub.add_parser(
         "analyze",
@@ -1884,6 +1943,87 @@ def cmd_capture_m5_footprint(args: argparse.Namespace) -> None:
     _log.info("capture-m5-footprint: xong | raw_m5=%s", raw_m5)
     print(f"Captured {len(paths)} file(s).")
     print(f"Raw Coinmap M5 JSON: {raw_m5}")
+
+
+def cmd_analyze_gocharting_detail(args: argparse.Namespace) -> None:
+    """Extract Bid/Ask footprint JSON from GoCharting detail PNGs (M5 + M15, parallel OpenAI)."""
+    from automation_tool.images import normalize_main_chart_symbol, set_active_main_symbol_file
+
+    s = load_settings()
+    require_openai(s)
+    if getattr(args, "main_symbol", None):
+        set_active_main_symbol_file(args.main_symbol)
+
+    charts_dir = args.charts_dir or default_charts_dir()
+    main_sym = normalize_main_chart_symbol(
+        args.main_symbol or read_main_chart_symbol(charts_dir)
+    )
+    gc_yaml = args.gocharting_config or default_gocharting_config_path()
+    storage = args.storage_state or default_storage_state_path()
+    model = (getattr(args, "model", None) or DEFAULT_FOOTPRINT_EXTRACT_MODEL).strip()
+    output_dir = args.output_dir or charts_dir
+
+    _log.info(
+        "analyze-gocharting-detail: bắt đầu | charts_dir=%s main=%s capture=%s model=%s",
+        charts_dir,
+        main_sym,
+        bool(getattr(args, "capture", False)),
+        model,
+    )
+
+    stamp: Optional[str] = (args.stamp or "").strip() or None
+    if getattr(args, "capture", False):
+        use_service = bool(getattr(args, "use_service", False))
+        paths = capture_gocharting(
+            gocharting_yaml=gc_yaml,
+            charts_dir=charts_dir,
+            email=s.gocharting_email or "",
+            password=s.gocharting_password or "",
+            storage_state_path=storage,
+            save_storage_state=not args.no_save_storage,
+            headless=not args.headed,
+            main_chart_symbol=main_sym,
+            capture_symbols=(main_sym,),
+            capture_intervals=("5m", "15m"),
+            require_browser_service=use_service,
+        )
+        stamp = stamp_from_capture_paths(paths) or stamp
+        _log.info("analyze-gocharting-detail: capture xong | files=%d stamp=%s", len(paths), stamp)
+
+    if not stamp:
+        stamp = latest_chart_stamp(charts_dir)
+    if not stamp:
+        raise SystemExit(
+            f"analyze-gocharting-detail: no chart stamp under {charts_dir}. "
+            "Run capture first or pass --stamp / --capture."
+        )
+
+    export_label = gocharting_footprint_export_label(main_sym)
+    for interval in ("5m", "15m"):
+        detail_paths = gocharting_detail_png_paths(charts_dir, stamp, export_label, interval)
+        if not detail_paths:
+            raise SystemExit(
+                f"analyze-gocharting-detail: no {interval} detail PNGs for stamp {stamp!r} "
+                f"under {charts_dir} (expected {stamp}_gocharting_{export_label}_{interval}_detail_*.png). "
+                "Run with --capture or ensure GoCharting detail capture completed."
+            )
+
+    results = extract_all_footprint_jsons(
+        api_key=s.openai_api_key,
+        charts_dir=charts_dir,
+        output_dir=output_dir,
+        stamp=stamp,
+        main_symbol=main_sym,
+        gocharting_yaml=gc_yaml,
+        model=model,
+        store=s.openai_responses_store,
+        include=s.openai_responses_include,
+    )
+    for interval in ("5m", "15m"):
+        path = results.get(interval)
+        if path is not None:
+            print(f"{interval} footprint JSON: {path}")
+    _log.info("analyze-gocharting-detail: xong | outputs=%s", results)
 
 
 def cmd_tvdatafeed_login(args: argparse.Namespace) -> None:

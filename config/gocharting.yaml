@@ -54,7 +54,7 @@ detail_chart:
   page_url: "https://gocharting.com/terminal/chart/orlk0N-Da"
   # Detail tab only — omit viewport_width to use 2× session viewport_width (1440 → 2880).
   viewport_width: 1920
-  viewport_height: 1080
+  viewport_height: 1920
   refresh_button_id: "refresh-button"
   zoom_in_button_id: "zoomIn-button"
   zoom_clicks: 4
