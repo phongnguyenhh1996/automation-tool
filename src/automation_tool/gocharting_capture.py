@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -25,6 +26,8 @@ _DEFAULT_DETAIL_HISTORY_STEPS = 3
 # ``update-scalp --gocharting``: detail zoom + this many pan-back PNGs per M15/M5 slot.
 GOCHARTING_UPDATE_SCALP_DETAIL_HISTORY_STEPS = 2
 _DEFAULT_CHART_LOAD_MS = 2000
+# Chrome UI zoom stops (100% → 110% → 125% …).
+_CHROME_ZOOM_LEVELS = (25, 33, 50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300, 400, 500)
 
 
 def _chart_load_ms(cfg: dict[str, Any], *, section: Optional[str] = None) -> int:
@@ -194,6 +197,62 @@ def _apply_detail_chart_viewport(
     _log.debug("gocharting: detail tab viewport %sx%s", w, h)
 
 
+def _nearest_chrome_zoom_level(percent: int) -> int:
+    target = max(1, int(percent))
+    return min(_CHROME_ZOOM_LEVELS, key=lambda lv: abs(lv - target))
+
+
+def _chrome_zoom_keyboard_steps(target_percent: int, *, from_percent: int = 100) -> int:
+    target = _nearest_chrome_zoom_level(target_percent)
+    base = _nearest_chrome_zoom_level(from_percent)
+    return _CHROME_ZOOM_LEVELS.index(target) - _CHROME_ZOOM_LEVELS.index(base)
+
+
+def _browser_zoom_mod_key() -> str:
+    return "Meta" if sys.platform == "darwin" else "Control"
+
+
+def _focus_page_for_keyboard(page: Page) -> None:
+    try:
+        page.locator("body").click(position={"x": 12, "y": 12}, timeout=3000)
+    except Exception:
+        try:
+            page.mouse.click(12, 12)
+        except Exception:
+            pass
+
+
+def _apply_css_browser_zoom(page: Page, percent: int) -> None:
+    page.evaluate(
+        """(pct) => {
+            const v = pct + '%';
+            document.documentElement.style.zoom = v;
+            if (document.body) document.body.style.zoom = v;
+        }""",
+        percent,
+    )
+
+
+def _read_page_zoom_percent(page: Page) -> Optional[int]:
+    try:
+        raw = page.evaluate(
+            """() => {
+                const css = document.documentElement.style.zoom || (document.body && document.body.style.zoom);
+                if (css) {
+                    const n = parseFloat(String(css).replace('%', ''));
+                    if (!Number.isNaN(n)) return Math.round(n);
+                }
+                if (window.visualViewport && window.visualViewport.scale) {
+                    return Math.round(window.visualViewport.scale * 100);
+                }
+                return null;
+            }"""
+        )
+        return int(raw) if raw else None
+    except Exception:
+        return None
+
+
 def _apply_detail_chart_browser_zoom(
     page: Page,
     cfg: dict[str, Any],
@@ -204,24 +263,39 @@ def _apply_detail_chart_browser_zoom(
     if percent == 100:
         return
 
-    scale = percent / 100.0
-    try:
-        cdp = page.context.new_cdp_session(page)
-        cdp.send("Emulation.setPageScaleFactor", {"pageScaleFactor": scale})
-    except Exception as exc:
-        _log.warning(
-            "gocharting: CDP browser zoom failed (%s), falling back to CSS zoom",
-            exc,
-        )
-        page.evaluate(
-            "(pct) => { document.documentElement.style.zoom = pct + '%'; }",
-            percent,
-        )
-    _log.info("gocharting: detail tab browser zoom %s%%", percent)
+    target = _nearest_chrome_zoom_level(percent)
+    steps = _chrome_zoom_keyboard_steps(target)
+    mod = _browser_zoom_mod_key()
+
+    _focus_page_for_keyboard(page)
+    page.keyboard.press(f"{mod}+Digit0")
+    page.wait_for_timeout(150)
+
+    if steps > 0:
+        for _ in range(steps):
+            page.keyboard.press(f"{mod}+Equal")
+            page.wait_for_timeout(120)
+    elif steps < 0:
+        for _ in range(-steps):
+            page.keyboard.press(f"{mod}+Minus")
+            page.wait_for_timeout(120)
+
+    # Keyboard zoom updates Chrome UI; CSS fallback keeps screenshots scaled if shortcuts miss.
+    observed = _read_page_zoom_percent(page)
+    if observed is None or abs(observed - target) > 12:
+        _apply_css_browser_zoom(page, target)
+        observed = _read_page_zoom_percent(page)
+
+    _log.info(
+        "gocharting: detail tab browser zoom target=%s%% steps=%+d observed=%s",
+        target,
+        steps,
+        f"{observed}%" if observed is not None else "unknown",
+    )
 
 
 def _prepare_detail_chart(page: Page, cfg: dict[str, Any]) -> None:
-    """Browser zoom, refresh, then chart zoom-in — mirrors ``_prepare_overview_chart``."""
+    """Refresh, chart zoom-in, then browser zoom (refresh resets browser zoom)."""
     detail = cfg.get("detail_chart") or {}
     if not isinstance(detail, dict):
         return
@@ -231,16 +305,16 @@ def _prepare_detail_chart(page: Page, cfg: dict[str, Any]) -> None:
     zoom_clicks = int(detail.get("zoom_clicks", 2))
     delay_ms = int(detail.get("zoom_click_delay_ms", 500))
 
-    _apply_detail_chart_browser_zoom(page, cfg)
     _force_click_id(page, refresh_id)
     for _ in range(max(0, zoom_clicks)):
         _force_click_id(page, zoom_in_id, delay_ms=delay_ms)
+    _apply_detail_chart_browser_zoom(page, cfg)
 
     percent = _detail_chart_browser_zoom_percent(cfg)
     _log.info(
-        "gocharting: detail prepared (browser zoom %s%% + refresh + zoomIn x%s)",
-        percent,
+        "gocharting: detail prepared (refresh + zoomIn x%s + browser zoom %s%%)",
         zoom_clicks,
+        percent,
     )
 
 
@@ -477,6 +551,8 @@ def _capture_png(
     *,
     chart_section: Optional[str] = None,
 ) -> None:
+    if chart_section == "detail_chart":
+        _apply_detail_chart_browser_zoom(page, cfg)
     _wait_for_chart_before_export(page, cfg, section=chart_section)
     shot = cfg.get("screenshot") or {}
     open_btn = str(shot.get("open_button") or "#user-screenshot-btn")

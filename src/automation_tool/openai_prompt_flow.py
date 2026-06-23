@@ -67,6 +67,8 @@ _GOCHARTING_CHART_READ_GUIDE = (
     "- Line ngang màu #FA6578 = POC.\n"
     "- Line ngang màu #17CE1B = VAH.\n"
     "- Line ngang màu #5B2D1B = VAL.\n"
+    "- Nếu không đọc rõ số BID/ASK trên footprint: nhìn màu sắc — "
+    "xanh lá (buy/BID) hoặc đỏ (sell/ASK); màu càng đậm thì volume càng lớn.\n"
 )
 
 _GOCHARTING_TRADE_MANAGEMENT_SUFFIX = (

@@ -9,10 +9,12 @@ from automation_tool.gocharting_capture import (
     _apply_detail_chart_browser_zoom,
     _capture_gocharting_in_context,
     _chart_load_ms,
+    _chrome_zoom_keyboard_steps,
     _detail_chart_browser_zoom_percent,
     _detail_chart_cfg_for_interval,
     _detail_chart_viewport,
     _gocharting_tick_search_already_set,
+    _nearest_chrome_zoom_level,
     _pan_detail_chart,
     _prepare_detail_chart,
     _prepare_overview_chart,
@@ -307,22 +309,33 @@ def test_detail_chart_browser_zoom_percent_honors_overrides() -> None:
     assert _detail_chart_browser_zoom_percent(cfg, "15m") == 150
 
 
-def test_apply_detail_chart_browser_zoom_uses_cdp() -> None:
+def test_chrome_zoom_keyboard_steps_for_125_percent() -> None:
+    assert _nearest_chrome_zoom_level(125) == 125
+    assert _chrome_zoom_keyboard_steps(125) == 2  # 100 → 110 → 125
+
+
+def test_apply_detail_chart_browser_zoom_uses_keyboard_then_css_fallback(monkeypatch) -> None:
     page = MagicMock()
-    cdp = MagicMock()
-    page.context.new_cdp_session.return_value = cdp
+    presses: list[str] = []
+    page.evaluate.return_value = None
+
+    def fake_press(key):
+        presses.append(key)
+
+    monkeypatch.setattr("automation_tool.gocharting_capture.sys.platform", "darwin")
+    monkeypatch.setattr(page.keyboard, "press", fake_press)
+    monkeypatch.setattr(
+        "automation_tool.gocharting_capture._read_page_zoom_percent",
+        lambda p: None,
+    )
 
     _apply_detail_chart_browser_zoom(
         page,
         {"detail_chart": {"browser_zoom_percent": 125}},
     )
 
-    page.context.new_cdp_session.assert_called_once_with(page)
-    cdp.send.assert_called_once_with(
-        "Emulation.setPageScaleFactor",
-        {"pageScaleFactor": 1.25},
-    )
-    page.evaluate.assert_not_called()
+    assert presses == ["Meta+Digit0", "Meta+Equal", "Meta+Equal"]
+    page.evaluate.assert_called_once()
 
 
 def test_apply_detail_chart_browser_zoom_skips_at_100_percent() -> None:
@@ -366,10 +379,10 @@ def test_prepare_detail_chart_browser_zoom_refresh_and_zoom_in(monkeypatch) -> N
         },
     )
     assert calls == [
-        "browser_zoom",
         "refresh-button",
         "zoomIn-button",
         "zoomIn-button",
+        "browser_zoom",
     ]
 
 
