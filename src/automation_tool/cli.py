@@ -318,8 +318,8 @@ def _parser() -> argparse.ArgumentParser:
     agd = sub.add_parser(
         "analyze-gocharting-detail",
         help=(
-            "OpenAI gpt-5.4-mini: trích xuất JSON footprint từ ảnh detail GoCharting M5+M15 "
-            "(song song) → m5_GC1!_footprint.json, m15_GC1!_footprint.json"
+            "OpenAI gpt-5.4: trích xuất JSON footprint từ ảnh detail GoCharting M5+M15 "
+            "(một request) → m5_GC1!_footprint.json, m15_GC1!_footprint.json"
         ),
     )
     agd.add_argument("--charts-dir", type=Path, default=None)

@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Optional
 
@@ -21,7 +20,7 @@ from automation_tool.prompts import responses_input_messages
 
 _log = logging.getLogger(__name__)
 
-DEFAULT_FOOTPRINT_EXTRACT_MODEL = "gpt-5.4-mini"
+DEFAULT_FOOTPRINT_EXTRACT_MODEL = "gpt-5.4"
 FOOTPRINT_EXTRACT_INTERVALS = ("5m", "15m")
 FOOTPRINT_CHART_TYPE = "Bid/Ask Footprint"
 
@@ -103,29 +102,63 @@ def resolve_detail_png_paths(
     return gocharting_detail_png_paths(charts_dir, stamp, export_label, interval)
 
 
-def build_footprint_extract_user_prompt(chart_info: dict[str, str]) -> str:
+def _single_interval_schema_block(chart_info: dict[str, str]) -> str:
     symbol = chart_info.get("symbol", "")
     timeframe = chart_info.get("timeframe", "")
     chart_type = chart_info.get("type", FOOTPRINT_CHART_TYPE)
     return (
+        f'    "{timeframe}": {{\n'
+        '      "chart_info": {\n'
+        f'        "symbol": "{symbol}",\n'
+        f'        "timeframe": "{timeframe}",\n'
+        f'        "type": "{chart_type}"\n'
+        "      },\n"
+        '      "candles": [\n'
+        "        {\n"
+        '          "time": "HH:MM",\n'
+        '          "price_levels": [\n'
+        '            { "bid": 0, "ask": 0, "attributes": [] }\n'
+        "          ]\n"
+        "        }\n"
+        "      ]\n"
+        "    }"
+    )
+
+
+def build_footprint_extract_user_prompt(chart_info: dict[str, str]) -> str:
+    """User prompt for a single timeframe (used in tests and combined prompt)."""
+    symbol = chart_info.get("symbol", "")
+    timeframe = chart_info.get("timeframe", "")
+    return (
         "Extract Bid/Ask Footprint data from the attached GoCharting detail chart image(s) "
         f"into JSON for {symbol} {timeframe}.\n\n"
-        "Return ONLY a JSON object with this structure:\n"
-        "{\n"
-        '  "chart_info": {\n'
-        f'    "symbol": "{symbol}",\n'
-        f'    "timeframe": "{timeframe}",\n'
-        f'    "type": "{chart_type}"\n'
-        "  },\n"
-        '  "candles": [\n'
-        "    {\n"
-        '      "time": "HH:MM",\n'
-        '      "price_levels": [\n'
-        '        { "bid": 0, "ask": 0, "attributes": [] }\n'
-        "      ]\n"
-        "    }\n"
-        "  ]\n"
-        "}\n\n"
+        + _footprint_extract_rules_text()
+    )
+
+
+def build_combined_footprint_extract_user_prompt(
+    chart_infos_by_interval: dict[str, dict[str, str]],
+) -> str:
+    """User prompt for M5 + M15 in one OpenAI request."""
+    blocks = [
+        _single_interval_schema_block(chart_infos_by_interval[iv])
+        for iv in FOOTPRINT_EXTRACT_INTERVALS
+        if iv in chart_infos_by_interval
+    ]
+    schema = "{\n" + ",\n".join(blocks) + "\n}"
+    return (
+        "Extract Bid/Ask Footprint data from the attached GoCharting detail chart images.\n"
+        "Images are grouped by timeframe (5m first, then 15m).\n\n"
+        "Return ONLY one JSON object with top-level keys for each timeframe:\n"
+        f"{schema}\n\n"
+        + _footprint_extract_rules_text()
+        + "\n- Top-level keys must be exactly \"5m\" and \"15m\".\n"
+        "- Extract each timeframe only from its corresponding image group."
+    )
+
+
+def _footprint_extract_rules_text() -> str:
+    return (
         "Rules:\n"
         "- ``bid`` and ``ask`` are non-negative integers read from each price level cell.\n"
         "- ``price_levels`` ordered from highest price to lowest price (top to bottom on chart).\n"
@@ -136,21 +169,35 @@ def build_footprint_extract_user_prompt(chart_info: dict[str, str]) -> str:
     )
 
 
-def _build_image_user_content(prompt: str, png_paths: list[Path]) -> list[dict[str, Any]]:
+def _build_combined_image_user_content(
+    prompt: str,
+    interval_png_paths: dict[str, list[Path]],
+) -> list[dict[str, Any]]:
     parts: list[dict[str, Any]] = [{"type": "input_text", "text": prompt}]
-    for p in png_paths:
+    for interval in FOOTPRINT_EXTRACT_INTERVALS:
+        png_paths = interval_png_paths.get(interval) or []
+        if not png_paths:
+            continue
+        names = ", ".join(p.name for p in png_paths)
         parts.append(
             {
-                "type": "input_image",
-                "image_url": image_to_data_url(p),
-                "detail": "auto",
+                "type": "input_text",
+                "text": f"[{interval} detail footprint images — {names}]\n",
             }
         )
+        for p in png_paths:
+            parts.append(
+                {
+                    "type": "input_image",
+                    "image_url": image_to_data_url(p),
+                    "detail": "auto",
+                }
+            )
     return parts
 
 
 def validate_footprint_extract_json(data: Any) -> dict[str, Any]:
-    """Validate and normalize footprint extraction JSON."""
+    """Validate and normalize footprint extraction JSON for one timeframe."""
     if not isinstance(data, dict):
         raise ValueError("Footprint JSON root must be an object")
 
@@ -211,88 +258,31 @@ def validate_footprint_extract_json(data: Any) -> dict[str, Any]:
     }
 
 
+def validate_combined_footprint_extract_json(data: Any) -> dict[str, dict[str, Any]]:
+    """Validate combined response with top-level ``5m`` and ``15m`` keys."""
+    if not isinstance(data, dict):
+        raise ValueError("Combined footprint JSON root must be an object")
+    out: dict[str, dict[str, Any]] = {}
+    for interval in FOOTPRINT_EXTRACT_INTERVALS:
+        block = data.get(interval)
+        if block is None:
+            raise ValueError(f'Missing top-level key "{interval}" in combined footprint JSON')
+        try:
+            out[interval] = validate_footprint_extract_json(block)
+        except ValueError as e:
+            raise ValueError(f"{interval}: {e}") from e
+        tf = out[interval]["chart_info"]["timeframe"]
+        if tf != interval:
+            raise ValueError(
+                f'{interval}: chart_info.timeframe must be "{interval}", got {tf!r}'
+            )
+    return out
+
+
 def write_footprint_extract_json(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     raw = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
     path.write_text(raw, encoding="utf-8")
-
-
-def extract_gocharting_footprint_json(
-    *,
-    api_key: str,
-    png_paths: list[Path],
-    chart_info: dict[str, str],
-    model: str = DEFAULT_FOOTPRINT_EXTRACT_MODEL,
-    store: bool = True,
-    include: Optional[list[str]] = None,
-) -> dict[str, Any]:
-    """One OpenAI vision call for a single interval's detail PNG set."""
-    if not png_paths:
-        raise ValueError("Need at least one detail PNG path")
-    for p in png_paths:
-        if not p.is_file():
-            raise FileNotFoundError(f"Detail PNG not found: {p}")
-
-    prompt = build_footprint_extract_user_prompt(chart_info)
-    content = _build_image_user_content(prompt, png_paths)
-
-    client = OpenAI(api_key=api_key)
-    create_kw: dict[str, Any] = {
-        "model": (model or DEFAULT_FOOTPRINT_EXTRACT_MODEL).strip(),
-        "input": responses_input_messages(
-            user_content=content,
-            system_prompt=FOOTPRINT_EXTRACT_SYSTEM_PROMPT,
-        ),
-        "store": store,
-    }
-    if include:
-        create_kw["include"] = list(include)
-
-    _log.info(
-        "gocharting-footprint-extract: OpenAI call | timeframe=%s images=%d model=%s",
-        chart_info.get("timeframe"),
-        len(png_paths),
-        create_kw["model"],
-    )
-    response = client.responses.create(**create_kw)
-    raw_text = (response.output_text or "").strip()
-    parsed = extract_json_object(raw_text)
-    if parsed is None:
-        snippet = raw_text[:500] if raw_text else "(empty)"
-        raise ValueError(
-            f"Could not parse JSON from OpenAI output for {chart_info.get('timeframe')}: {snippet!r}"
-        )
-    return validate_footprint_extract_json(parsed)
-
-
-def _extract_one_interval(
-    *,
-    interval: str,
-    png_paths: list[Path],
-    output_path: Path,
-    api_key: str,
-    cfg: dict[str, Any],
-    main_symbol: str,
-    model: str,
-    store: bool,
-    include: Optional[list[str]],
-) -> tuple[str, Path]:
-    chart_info = resolve_gocharting_chart_info(cfg, main_symbol, interval)
-    data = extract_gocharting_footprint_json(
-        api_key=api_key,
-        png_paths=png_paths,
-        chart_info=chart_info,
-        model=model,
-        store=store,
-        include=include,
-    )
-    write_footprint_extract_json(output_path, data)
-    _log.info(
-        "gocharting-footprint-extract: wrote %s (%d candles)",
-        output_path,
-        len(data.get("candles") or []),
-    )
-    return interval, output_path
 
 
 def extract_all_footprint_jsons(
@@ -308,7 +298,7 @@ def extract_all_footprint_jsons(
     include: Optional[list[str]] = None,
 ) -> dict[str, Path]:
     """
-    Extract M5 + M15 footprint JSON in parallel.
+    Extract M5 + M15 footprint JSON in one OpenAI request; write two files.
 
     Returns mapping ``interval`` → output path (``5m``, ``15m``).
     """
@@ -317,7 +307,10 @@ def extract_all_footprint_jsons(
     export_label = gocharting_footprint_export_label(sym)
     instrument_slug = resolve_instrument_slug(cfg, sym)
 
-    jobs: list[tuple[str, list[Path], Path]] = []
+    interval_png_paths: dict[str, list[Path]] = {}
+    output_paths: dict[str, Path] = {}
+    chart_infos: dict[str, dict[str, str]] = {}
+
     for interval in FOOTPRINT_EXTRACT_INTERVALS:
         png_paths = resolve_detail_png_paths(charts_dir, stamp, export_label, interval)
         if not png_paths:
@@ -325,40 +318,55 @@ def extract_all_footprint_jsons(
                 f"No {interval} detail PNGs for stamp {stamp!r} under {charts_dir} "
                 f"(expected {stamp}_gocharting_{export_label}_{interval}_detail_*.png)"
             )
-        out_path = footprint_json_output_path(output_dir, interval, instrument_slug)
-        jobs.append((interval, png_paths, out_path))
-
-    results: dict[str, Path] = {}
-    errors: list[str] = []
-
-    with ThreadPoolExecutor(max_workers=2) as ex:
-        futures = {
-            ex.submit(
-                _extract_one_interval,
-                interval=interval,
-                png_paths=png_paths,
-                output_path=out_path,
-                api_key=api_key,
-                cfg=cfg,
-                main_symbol=sym,
-                model=model,
-                store=store,
-                include=include,
-            ): interval
-            for interval, png_paths, out_path in jobs
-        }
-        for fut in as_completed(futures):
-            interval = futures[fut]
-            try:
-                iv, path = fut.result()
-                results[iv] = path
-            except BaseException as e:
-                errors.append(f"{interval}: {e}")
-
-    if errors:
-        raise RuntimeError(
-            "GoCharting footprint extraction failed:\n" + "\n".join(errors)
+        for p in png_paths:
+            if not p.is_file():
+                raise FileNotFoundError(f"Detail PNG not found: {p}")
+        interval_png_paths[interval] = png_paths
+        output_paths[interval] = footprint_json_output_path(
+            output_dir, interval, instrument_slug
         )
+        chart_infos[interval] = resolve_gocharting_chart_info(cfg, sym, interval)
+
+    prompt = build_combined_footprint_extract_user_prompt(chart_infos)
+    content = _build_combined_image_user_content(prompt, interval_png_paths)
+    total_images = sum(len(v) for v in interval_png_paths.values())
+
+    client = OpenAI(api_key=api_key)
+    create_kw: dict[str, Any] = {
+        "model": (model or DEFAULT_FOOTPRINT_EXTRACT_MODEL).strip(),
+        "input": responses_input_messages(
+            user_content=content,
+            system_prompt=FOOTPRINT_EXTRACT_SYSTEM_PROMPT,
+        ),
+        "store": store,
+    }
+    if include:
+        create_kw["include"] = list(include)
+
+    _log.info(
+        "gocharting-footprint-extract: OpenAI call | intervals=%s images=%d model=%s",
+        ",".join(FOOTPRINT_EXTRACT_INTERVALS),
+        total_images,
+        create_kw["model"],
+    )
+    response = client.responses.create(**create_kw)
+    raw_text = (response.output_text or "").strip()
+    parsed = extract_json_object(raw_text)
+    if parsed is None:
+        snippet = raw_text[:500] if raw_text else "(empty)"
+        raise ValueError(f"Could not parse JSON from OpenAI output: {snippet!r}")
+
+    validated = validate_combined_footprint_extract_json(parsed)
+    results: dict[str, Path] = {}
+    for interval in FOOTPRINT_EXTRACT_INTERVALS:
+        out_path = output_paths[interval]
+        write_footprint_extract_json(out_path, validated[interval])
+        _log.info(
+            "gocharting-footprint-extract: wrote %s (%d candles)",
+            out_path,
+            len(validated[interval].get("candles") or []),
+        )
+        results[interval] = out_path
     return results
 
 

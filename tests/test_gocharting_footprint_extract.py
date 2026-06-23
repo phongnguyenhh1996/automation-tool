@@ -8,11 +8,13 @@ import pytest
 
 from automation_tool.gocharting_footprint_extract import (
     DEFAULT_FOOTPRINT_EXTRACT_MODEL,
+    build_combined_footprint_extract_user_prompt,
     build_footprint_extract_user_prompt,
     extract_all_footprint_jsons,
     footprint_json_output_path,
     resolve_gocharting_chart_info,
     resolve_instrument_slug,
+    validate_combined_footprint_extract_json,
     validate_footprint_extract_json,
     write_footprint_extract_json,
 )
@@ -38,6 +40,13 @@ def _sample_payload(*, timeframe: str = "15m") -> dict:
     }
 
 
+def _combined_sample_payload() -> dict:
+    return {
+        "5m": _sample_payload(timeframe="5m"),
+        "15m": _sample_payload(timeframe="15m"),
+    }
+
+
 def _gocharting_cfg() -> dict:
     return {
         "symbols": {
@@ -50,6 +59,10 @@ def _gocharting_cfg() -> dict:
             },
         }
     }
+
+
+def test_default_model_is_gpt_5_4() -> None:
+    assert DEFAULT_FOOTPRINT_EXTRACT_MODEL == "gpt-5.4"
 
 
 def test_footprint_json_output_path() -> None:
@@ -88,6 +101,13 @@ def test_validate_footprint_extract_json_accepts_valid() -> None:
     assert out["candles"][0]["price_levels"][1]["attributes"] == ["imbalance"]
 
 
+def test_validate_combined_footprint_extract_json() -> None:
+    out = validate_combined_footprint_extract_json(_combined_sample_payload())
+    assert set(out.keys()) == {"5m", "15m"}
+    assert out["5m"]["chart_info"]["timeframe"] == "5m"
+    assert out["15m"]["chart_info"]["timeframe"] == "15m"
+
+
 def test_validate_footprint_extract_json_rejects_invalid() -> None:
     with pytest.raises(ValueError, match="chart_info"):
         validate_footprint_extract_json({"candles": []})
@@ -115,6 +135,18 @@ def test_build_footprint_extract_user_prompt_includes_schema() -> None:
     assert "#8FAF8E" not in prompt
 
 
+def test_build_combined_footprint_extract_user_prompt() -> None:
+    prompt = build_combined_footprint_extract_user_prompt(
+        {
+            "5m": {"symbol": "COMEX:GC1!", "timeframe": "5m", "type": "Bid/Ask Footprint"},
+            "15m": {"symbol": "COMEX:GC1!", "timeframe": "15m", "type": "Bid/Ask Footprint"},
+        }
+    )
+    assert '"5m"' in prompt
+    assert '"15m"' in prompt
+    assert "5m first, then 15m" in prompt
+
+
 def test_write_footprint_extract_json(tmp_path: Path) -> None:
     path = tmp_path / "m5_GC1!_footprint.json"
     data = _sample_payload(timeframe="5m")
@@ -131,7 +163,7 @@ def _write_detail_pngs(charts: Path, stamp: str, iv: str) -> None:
 
 
 @patch("automation_tool.gocharting_footprint_extract.OpenAI")
-def test_extract_all_footprint_jsons_parallel(mock_openai_cls, tmp_path: Path) -> None:
+def test_extract_all_footprint_jsons_single_request(mock_openai_cls, tmp_path: Path) -> None:
     charts = tmp_path / "charts"
     charts.mkdir()
     (charts / ".main_chart_symbol").write_text("XAUUSD\n", encoding="utf-8")
@@ -146,13 +178,8 @@ def test_extract_all_footprint_jsons_parallel(mock_openai_cls, tmp_path: Path) -
     )
 
     def _fake_create(**kwargs: object) -> MagicMock:
-        text_blob = json.dumps(kwargs.get("input"))
-        if "COMEX:GC1! 15m" in text_blob:
-            timeframe = "15m"
-        else:
-            timeframe = "5m"
         resp = MagicMock()
-        resp.output_text = json.dumps(_sample_payload(timeframe=timeframe))
+        resp.output_text = json.dumps(_combined_sample_payload())
         return resp
 
     mock_client = MagicMock()
@@ -176,7 +203,7 @@ def test_extract_all_footprint_jsons_parallel(mock_openai_cls, tmp_path: Path) -
     assert results["15m"] == charts / "m15_GC1!_footprint.json"
     assert results["5m"].is_file()
     assert results["15m"].is_file()
-    assert mock_client.responses.create.call_count == 2
+    assert mock_client.responses.create.call_count == 1
 
     m5 = json.loads(results["5m"].read_text(encoding="utf-8"))
     m15 = json.loads(results["15m"].read_text(encoding="utf-8"))

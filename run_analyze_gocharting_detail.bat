@@ -9,7 +9,7 @@ echo CWD    : %cd%
 echo Args   : %*
 echo ============================================================
 
-REM GoCharting detail footprint -^> JSON (M5 + M15 song song, gpt-5.4-mini).
+REM GoCharting detail footprint -^> JSON (M5 + M15, một request gpt-5.4).
 REM Can detail PNG da co trong data\XAUUSD\charts\ (stamp moi nhat).
 REM Output: m5_GC1!_footprint.json, m15_GC1!_footprint.json
 cd /d "%~dp0"

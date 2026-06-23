@@ -9,7 +9,7 @@ echo CWD    : %cd%
 echo Args   : %*
 echo ============================================================
 
-REM Capture GoCharting detail M5+M15 roi trich xuat JSON footprint (OpenAI song song).
+REM Capture GoCharting detail M5+M15 roi trich xuat JSON footprint (mot request OpenAI gpt-5.4).
 REM Chay browser_up.bat truoc neu dung --use-service.
 REM Output: data\XAUUSD\charts\m5_GC1!_footprint.json, m15_GC1!_footprint.json
 cd /d "%~dp0"
