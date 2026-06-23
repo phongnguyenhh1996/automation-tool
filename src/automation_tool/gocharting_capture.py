@@ -183,6 +183,45 @@ def _symbol_detail_chart_enabled(cfg: dict[str, Any], entry: dict[str, Any]) -> 
     return True
 
 
+def _symbol_chart_page_url(cfg: dict[str, Any], entry: dict[str, Any]) -> str:
+    """Per-symbol saved chart URL, else global ``chart_page_url``."""
+    url = str(entry.get("chart_page_url") or "").strip()
+    if url:
+        return url
+    return str(cfg.get("chart_page_url") or "").strip()
+
+
+def _symbol_uses_dedicated_chart(entry: dict[str, Any]) -> bool:
+    return bool(str(entry.get("chart_page_url") or "").strip())
+
+
+def _ensure_chart_page(
+    page: Page,
+    cfg: dict[str, Any],
+    entry: dict[str, Any],
+    email: str,
+    password: str,
+    *,
+    current_url: Optional[str],
+) -> str:
+    chart_url = _symbol_chart_page_url(cfg, entry)
+    if not chart_url:
+        raise ValueError("gocharting.yaml chart_page_url is required")
+    if current_url == chart_url:
+        return chart_url
+    page.goto(chart_url, wait_until="domcontentloaded", timeout=90_000)
+    page.wait_for_timeout(1200)
+    if current_url is None:
+        _maybe_login_gocharting(page, cfg, email, password)
+    export_label = str(entry.get("export_label") or "").strip().upper()
+    _log.info(
+        "gocharting: opened chart page for %s → %s",
+        export_label or "?",
+        chart_url,
+    )
+    return chart_url
+
+
 def _resolve_symbol_entry(
     cfg: dict[str, Any],
     plan_symbol: str,
@@ -618,20 +657,25 @@ def _capture_gocharting_in_context(
                     paths.extend(detail_paths)
         return paths
 
-    chart_url = str(cfg.get("chart_page_url") or "").strip()
-    if not chart_url:
+    if not str(cfg.get("chart_page_url") or "").strip():
         raise ValueError("gocharting.yaml chart_page_url is required")
 
     main_page = context.new_page()
     try:
-        main_page.goto(chart_url, wait_until="domcontentloaded", timeout=90_000)
-        main_page.wait_for_timeout(1200)
-        _maybe_login_gocharting(main_page, cfg, email, password)
-
         paths = []
+        current_chart_url: Optional[str] = None
         for entry, _plan_sym, intervals in plan:
             export_label = str(entry["export_label"]).strip().upper()
-            _select_chart_symbol(main_page, cfg, entry)
+            current_chart_url = _ensure_chart_page(
+                main_page,
+                cfg,
+                entry,
+                email,
+                password,
+                current_url=current_chart_url,
+            )
+            if not _symbol_uses_dedicated_chart(entry):
+                _select_chart_symbol(main_page, cfg, entry)
             for interval in intervals:
                 if slot_filter is not None:
                     if (export_label, interval.lower()) not in slot_filter:

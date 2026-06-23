@@ -21,6 +21,7 @@ symbols:
   DXY:
     export_label: DXY
     detail_chart: false
+    chart_page_url: "https://gocharting.com/terminal/chart/9mK0iRZGS"
   XAUUSD:
     export_label: GC
     # COMEX Gold Future on GoCharting (not spot EXNESS:XAUUSD).

@@ -14,6 +14,7 @@ from automation_tool.gocharting_capture import (
     _pan_detail_chart,
     _prepare_overview_chart,
     _select_chart_symbol,
+    _symbol_uses_dedicated_chart,
     gocharting_detail_png_path,
 )
 
@@ -559,3 +560,94 @@ def test_capture_gocharting_in_context_skips_detail_when_symbol_disabled(
     assert not detail_called
     assert len(paths) == 2
     assert context.new_page.call_count == 1
+
+
+def test_symbol_uses_dedicated_chart() -> None:
+    assert _symbol_uses_dedicated_chart(
+        {"chart_page_url": "https://gocharting.com/terminal/chart/9mK0iRZGS"}
+    )
+    assert not _symbol_uses_dedicated_chart({"export_label": "DXY"})
+
+
+def test_capture_gocharting_in_context_dxy_skips_symbol_search_with_dedicated_url(
+    monkeypatch, tmp_path: Path, gc_cfg: dict
+) -> None:
+    gc_cfg["capture_plan"] = [
+        {"symbol": "DXY", "intervals": ["15m"]},
+        {"symbol": "XAUUSD", "intervals": ["15m"]},
+    ]
+    gc_cfg["symbols"] = {
+        "DXY": {
+            "export_label": "DXY",
+            "detail_chart": False,
+            "chart_page_url": "https://gocharting.com/terminal/chart/9mK0iRZGS",
+        },
+        "XAUUSD": {
+            "export_label": "GC",
+            "search_query": "GC1!",
+        },
+    }
+
+    context = MagicMock()
+    main_page = MagicMock()
+    detail_page = MagicMock()
+    context.new_page.side_effect = [main_page, detail_page]
+
+    goto_urls: list[str] = []
+    main_page.goto.side_effect = lambda url, **kwargs: goto_urls.append(url)
+
+    select_calls: list[str] = []
+
+    def fake_select(page, cfg, entry):
+        select_calls.append(str(entry["export_label"]))
+
+    monkeypatch.setattr(
+        "automation_tool.gocharting_capture._maybe_login_gocharting",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        "automation_tool.gocharting_capture._select_chart_symbol",
+        fake_select,
+    )
+    monkeypatch.setattr(
+        "automation_tool.gocharting_capture._select_interval",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        "automation_tool.gocharting_capture._prepare_overview_chart",
+        lambda *a, **k: None,
+    )
+
+    def fake_png(page, cfg, dest, **kwargs):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"png")
+
+    monkeypatch.setattr("automation_tool.gocharting_capture._capture_png", fake_png)
+
+    def fake_csv(page, cfg, dest, **kwargs):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text("h\n1", encoding="utf-8")
+
+    monkeypatch.setattr("automation_tool.gocharting_capture._capture_csv", fake_csv)
+    monkeypatch.setattr(
+        "automation_tool.gocharting_capture._capture_detail_footprint",
+        lambda *a, **k: [],
+    )
+
+    _capture_gocharting_in_context(
+        context,
+        gc_cfg,
+        charts_dir=tmp_path,
+        email="a@b.com",
+        password="pw",
+        stamp="20260617_120000",
+        main_chart_symbol=None,
+        capture_symbols=None,
+        capture_intervals=None,
+    )
+
+    assert goto_urls == [
+        "https://gocharting.com/terminal/chart/9mK0iRZGS",
+        "https://gocharting.com/terminal/chart/OpJogbwTR",
+    ]
+    assert select_calls == ["GC"]
