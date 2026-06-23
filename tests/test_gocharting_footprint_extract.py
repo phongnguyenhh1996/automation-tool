@@ -5,12 +5,16 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from PIL import Image
 
 from automation_tool.gocharting_footprint_extract import (
     DEFAULT_FOOTPRINT_EXTRACT_MODEL,
+    FOOTPRINT_IMAGE_WIDTH_THIRDS,
     build_combined_footprint_extract_user_prompt,
     build_footprint_extract_user_prompt,
+    crop_png_width_thirds,
     extract_all_footprint_jsons,
+    footprint_crop_part_path,
     footprint_json_output_path,
     resolve_gocharting_chart_info,
     resolve_instrument_slug,
@@ -61,8 +65,50 @@ def _gocharting_cfg() -> dict:
     }
 
 
+def _write_rgb_png(path: Path, width: int, height: int, color: tuple[int, int, int]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (width, height), color).save(path, format="PNG")
+
+
 def test_default_model_is_gpt_5_4() -> None:
     assert DEFAULT_FOOTPRINT_EXTRACT_MODEL == "gpt-5.4"
+
+
+def test_footprint_crop_part_path() -> None:
+    source = Path("/tmp/charts/20260623_120000_gocharting_GC_5m_detail_zoom.png")
+    assert footprint_crop_part_path(source, 1) == Path(
+        "/tmp/charts/20260623_120000_gocharting_GC_5m_detail_zoom_part1.png"
+    )
+    assert footprint_crop_part_path(source, 3) == Path(
+        "/tmp/charts/20260623_120000_gocharting_GC_5m_detail_zoom_part3.png"
+    )
+
+
+def test_crop_png_width_thirds(tmp_path: Path) -> None:
+    source = tmp_path / "sample_detail_zoom.png"
+    _write_rgb_png(source, 300, 100, (255, 0, 0))
+
+    crops = crop_png_width_thirds(source)
+    assert len(crops) == FOOTPRINT_IMAGE_WIDTH_THIRDS
+    assert [p.name for p in crops] == [
+        "sample_detail_zoom_part1.png",
+        "sample_detail_zoom_part2.png",
+        "sample_detail_zoom_part3.png",
+    ]
+    widths = []
+    for p in crops:
+        assert p.is_file()
+        with Image.open(p) as img:
+            widths.append(img.size[0])
+    assert widths == [100, 100, 100]
+    assert all(p.stat().st_mtime >= source.stat().st_mtime for p in crops)
+
+    # Fresh crops are reused without rewriting.
+    for p in crops:
+        p.write_bytes(b"stale")
+    crops2 = crop_png_width_thirds(source)
+    assert crops2 == crops
+    assert crops[0].read_bytes() == b"stale"
 
 
 def test_footprint_json_output_path() -> None:
@@ -131,6 +177,7 @@ def test_build_footprint_extract_user_prompt_includes_schema() -> None:
     assert "COMEX:GC1!" in prompt
     assert "price_levels" in prompt
     assert "imbalance" in prompt
+    assert "horizontal panels" in prompt
     assert "Hướng dẫn đọc chart" not in prompt
     assert "#8FAF8E" not in prompt
 
@@ -145,6 +192,7 @@ def test_build_combined_footprint_extract_user_prompt() -> None:
     assert '"5m"' in prompt
     assert '"15m"' in prompt
     assert "5m first, then 15m" in prompt
+    assert "3 horizontal panels" in prompt
 
 
 def test_write_footprint_extract_json(tmp_path: Path) -> None:
@@ -159,7 +207,20 @@ def _write_detail_pngs(charts: Path, stamp: str, iv: str) -> None:
     sym = GOCHARTING_GOLD_EXPORT_LABEL
     for suffix in ("zoom", "back_1", "back_2"):
         p = charts / f"{stamp}_gocharting_{sym}_{iv}_detail_{suffix}.png"
-        p.write_bytes(b"\x89PNG\r\n\x1a\n")
+        _write_rgb_png(p, 300, 100, (0, 128, 255))
+
+
+def _count_input_images(create_kwargs: dict) -> int:
+    messages = create_kwargs.get("input") or []
+    count = 0
+    for msg in messages:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "input_image":
+                count += 1
+    return count
 
 
 @patch("automation_tool.gocharting_footprint_extract.OpenAI")
@@ -177,7 +238,10 @@ def test_extract_all_footprint_jsons_single_request(mock_openai_cls, tmp_path: P
         encoding="utf-8",
     )
 
+    captured: dict[str, object] = {}
+
     def _fake_create(**kwargs: object) -> MagicMock:
+        captured["kwargs"] = kwargs
         resp = MagicMock()
         resp.output_text = json.dumps(_combined_sample_payload())
         return resp
@@ -204,6 +268,9 @@ def test_extract_all_footprint_jsons_single_request(mock_openai_cls, tmp_path: P
     assert results["5m"].is_file()
     assert results["15m"].is_file()
     assert mock_client.responses.create.call_count == 1
+
+    source_images = 6  # 3 per interval × 2 intervals
+    assert _count_input_images(captured["kwargs"]) == source_images * FOOTPRINT_IMAGE_WIDTH_THIRDS
 
     m5 = json.loads(results["5m"].read_text(encoding="utf-8"))
     m15 = json.loads(results["15m"].read_text(encoding="utf-8"))

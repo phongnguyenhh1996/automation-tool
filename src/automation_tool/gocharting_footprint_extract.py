@@ -21,10 +21,80 @@ from automation_tool.prompts import responses_input_messages
 _log = logging.getLogger(__name__)
 
 DEFAULT_FOOTPRINT_EXTRACT_MODEL = "gpt-5.4"
+DEFAULT_FOOTPRINT_EXTRACT_REASONING_EFFORT = "medium"
 FOOTPRINT_EXTRACT_INTERVALS = ("5m", "15m")
 FOOTPRINT_CHART_TYPE = "Bid/Ask Footprint"
+FOOTPRINT_IMAGE_WIDTH_THIRDS = 3
 
 _INTERVAL_FILENAME_RE = re.compile(r"^(\d+)m$", re.I)
+_DETAIL_BACK_RE = re.compile(r"_detail_back_(\d+)$")
+
+
+def footprint_crop_part_path(source: Path, part: int) -> Path:
+    """``{stem}_part{N}.png`` sibling of the source detail PNG."""
+    if part < 1 or part > FOOTPRINT_IMAGE_WIDTH_THIRDS:
+        raise ValueError(f"crop part must be 1..{FOOTPRINT_IMAGE_WIDTH_THIRDS}, got {part}")
+    return source.with_name(f"{source.stem}_part{part}{source.suffix}")
+
+
+def _width_third_crop_boxes(width: int, height: int) -> list[tuple[int, int, int, int]]:
+    third = width // FOOTPRINT_IMAGE_WIDTH_THIRDS
+    return [
+        (0, 0, third, height),
+        (third, 0, 2 * third, height),
+        (2 * third, 0, width, height),
+    ]
+
+
+def _crops_are_fresh(source: Path, crop_paths: list[Path]) -> bool:
+    if not all(p.is_file() for p in crop_paths):
+        return False
+    try:
+        src_mtime = source.stat().st_mtime
+    except OSError:
+        return False
+    return all(p.stat().st_mtime >= src_mtime for p in crop_paths)
+
+
+def crop_png_width_thirds(source: Path) -> list[Path]:
+    """
+    Crop a detail PNG into 3 horizontal panels (left, center, right).
+
+    Writes ``{stem}_part1..3.png`` next to the source unless crops are already fresh.
+    """
+    from PIL import Image
+
+    if not source.is_file():
+        raise FileNotFoundError(f"Detail PNG not found: {source}")
+
+    crop_paths = [
+        footprint_crop_part_path(source, part)
+        for part in range(1, FOOTPRINT_IMAGE_WIDTH_THIRDS + 1)
+    ]
+    if _crops_are_fresh(source, crop_paths):
+        return crop_paths
+
+    with Image.open(source) as img:
+        rgb = img.convert("RGB")
+        boxes = _width_third_crop_boxes(*rgb.size)
+        for part, box in enumerate(boxes, start=1):
+            panel = rgb.crop(box)
+            out = crop_paths[part - 1]
+            out.parent.mkdir(parents=True, exist_ok=True)
+            panel.save(out, format="PNG")
+    return crop_paths
+
+
+def _detail_png_source_label(path: Path) -> str:
+    stem = path.stem
+    if stem.endswith("_detail_zoom"):
+        return "detail zoom"
+    m = _DETAIL_BACK_RE.search(stem)
+    if m:
+        return f"back {m.group(1)}"
+    if "_detail_" in stem:
+        return stem.rsplit("_detail_", 1)[-1].replace("_", " ")
+    return stem
 
 
 def interval_footprint_filename_slug(interval: str) -> str:
@@ -148,7 +218,8 @@ def build_combined_footprint_extract_user_prompt(
     schema = "{\n" + ",\n".join(blocks) + "\n}"
     return (
         "Extract Bid/Ask Footprint data from the attached GoCharting detail chart images.\n"
-        "Images are grouped by timeframe (5m first, then 15m).\n\n"
+        "Images are grouped by timeframe (5m first, then 15m).\n"
+        "Each source image is split into 3 horizontal panels (left, center, right).\n\n"
         "Return ONLY one JSON object with top-level keys for each timeframe:\n"
         f"{schema}\n\n"
         + _footprint_extract_rules_text()
@@ -163,7 +234,10 @@ def _footprint_extract_rules_text() -> str:
         "- ``bid`` and ``ask`` are non-negative integers read from each price level cell.\n"
         "- ``price_levels`` ordered from highest price to lowest price (top to bottom on chart).\n"
         '- ``attributes`` is a list of strings; use ``["imbalance"]`` when the cell is marked as imbalance.\n'
-        "- If multiple images are attached for the same timeframe, merge all visible candles by ``time``, "
+        "- Each source image is provided as 3 horizontal panels (left → center → right). "
+        "Read candles left-to-right across panels of the same source image before merging "
+        "across source images.\n"
+        "- If multiple source images are attached for the same timeframe, merge all visible candles by ``time``, "
         "deduplicate, and sort ``candles`` chronologically.\n"
         "- Output JSON only, no markdown fences or extra text."
     )
@@ -172,8 +246,10 @@ def _footprint_extract_rules_text() -> str:
 def _build_combined_image_user_content(
     prompt: str,
     interval_png_paths: dict[str, list[Path]],
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], int, int]:
     parts: list[dict[str, Any]] = [{"type": "input_text", "text": prompt}]
+    source_count = 0
+    panel_count = 0
     for interval in FOOTPRINT_EXTRACT_INTERVALS:
         png_paths = interval_png_paths.get(interval) or []
         if not png_paths:
@@ -182,18 +258,32 @@ def _build_combined_image_user_content(
         parts.append(
             {
                 "type": "input_text",
-                "text": f"[{interval} detail footprint images — {names}]\n",
+                "text": f"[{interval} detail footprint source images — {names}]\n",
             }
         )
         for p in png_paths:
-            parts.append(
-                {
-                    "type": "input_image",
-                    "image_url": image_to_data_url(p),
-                    "detail": "auto",
-                }
-            )
-    return parts
+            source_count += 1
+            source_label = _detail_png_source_label(p)
+            crop_paths = crop_png_width_thirds(p)
+            for part_idx, crop_path in enumerate(crop_paths, start=1):
+                panel_count += 1
+                parts.append(
+                    {
+                        "type": "input_text",
+                        "text": (
+                            f"[{interval} {source_label} part {part_idx}/"
+                            f"{FOOTPRINT_IMAGE_WIDTH_THIRDS} — {crop_path.name}]\n"
+                        ),
+                    }
+                )
+                parts.append(
+                    {
+                        "type": "input_image",
+                        "image_url": image_to_data_url(crop_path),
+                        "detail": "auto",
+                    }
+                )
+    return parts, source_count, panel_count
 
 
 def validate_footprint_extract_json(data: Any) -> dict[str, Any]:
@@ -296,6 +386,7 @@ def extract_all_footprint_jsons(
     model: str = DEFAULT_FOOTPRINT_EXTRACT_MODEL,
     store: bool = True,
     include: Optional[list[str]] = None,
+    reasoning_effort: str = DEFAULT_FOOTPRINT_EXTRACT_REASONING_EFFORT,
 ) -> dict[str, Path]:
     """
     Extract M5 + M15 footprint JSON in one OpenAI request; write two files.
@@ -328,8 +419,9 @@ def extract_all_footprint_jsons(
         chart_infos[interval] = resolve_gocharting_chart_info(cfg, sym, interval)
 
     prompt = build_combined_footprint_extract_user_prompt(chart_infos)
-    content = _build_combined_image_user_content(prompt, interval_png_paths)
-    total_images = sum(len(v) for v in interval_png_paths.values())
+    content, source_images, crop_panels = _build_combined_image_user_content(
+        prompt, interval_png_paths
+    )
 
     client = OpenAI(api_key=api_key)
     create_kw: dict[str, Any] = {
@@ -342,12 +434,17 @@ def extract_all_footprint_jsons(
     }
     if include:
         create_kw["include"] = list(include)
+    _eff = (reasoning_effort or "").strip()
+    if _eff:
+        create_kw["reasoning"] = {"summary": "auto", "effort": _eff}
 
     _log.info(
-        "gocharting-footprint-extract: OpenAI call | intervals=%s images=%d model=%s",
+        "gocharting-footprint-extract: OpenAI call | intervals=%s source_images=%d crop_panels=%d model=%s reasoning_effort=%s",
         ",".join(FOOTPRINT_EXTRACT_INTERVALS),
-        total_images,
+        source_images,
+        crop_panels,
         create_kw["model"],
+        _eff or "(none)",
     )
     response = client.responses.create(**create_kw)
     raw_text = (response.output_text or "").strip()
