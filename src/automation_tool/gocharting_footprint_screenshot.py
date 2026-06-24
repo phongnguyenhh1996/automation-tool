@@ -424,24 +424,38 @@ def _run_footprint_ocr_for_captures(
     )
 
     for item in ok:
-        captured.add(item.dedupe_key)
-        _trim_dedupe(captured)
         print(f"Captured {item.dest.name} at {now.strftime('%H:%M:%S')}", flush=True)
         json_path = footprint_interval_json_path(out_dir, item.interval)
-        ocr_result = process_footprint_clip_image(
-            item.dest,
-            ocr_api_key=ocr_key,
-            closed_candle_open=item.closed_open,
-            image_width=clip_width,
-            out_json_path=json_path,
-            symbol=symbol,
-            timeframe=item.interval,
-            split_ratio=ocr_split_ratio,
-            delete_image_after=delete_after_ocr,
-        )
+        try:
+            ocr_result = process_footprint_clip_image(
+                item.dest,
+                ocr_api_key=ocr_key,
+                closed_candle_open=item.closed_open,
+                image_width=clip_width,
+                out_json_path=json_path,
+                symbol=symbol,
+                timeframe=item.interval,
+                split_ratio=ocr_split_ratio,
+                delete_image_after=delete_after_ocr,
+            )
+        except Exception:
+            _log.exception(
+                "gocharting footprint: OCR failed interval=%s image=%s",
+                item.interval,
+                item.dest.name,
+            )
+            print(
+                f"OCR failed {item.dest.name} (daemon continues)",
+                flush=True,
+            )
+            continue
         if ocr_result is None:
+            captured.add(item.dedupe_key)
+            _trim_dedupe(captured)
             print(f"OCR skip {item.dest.name} (no bid/ask pair lines)", flush=True)
             continue
+        captured.add(item.dedupe_key)
+        _trim_dedupe(captured)
         candle, _doc = ocr_result
         print(
             f"OCR → {json_path.name} | time={candle['time']} "
@@ -541,17 +555,20 @@ def run_footprint_gocharting_screenshot_daemon(
                 continue
 
             if ok:
-                _run_footprint_ocr_for_captures(
-                    ok=ok,
-                    out_dir=out_dir,
-                    ocr_key=ocr_key,
-                    clip_width=clip_width,
-                    symbol=symbol,
-                    ocr_split_ratio=ocr_split_ratio,
-                    delete_after_ocr=delete_after_ocr,
-                    captured=captured,
-                    now=now,
-                )
+                try:
+                    _run_footprint_ocr_for_captures(
+                        ok=ok,
+                        out_dir=out_dir,
+                        ocr_key=ocr_key,
+                        clip_width=clip_width,
+                        symbol=symbol,
+                        ocr_split_ratio=ocr_split_ratio,
+                        delete_after_ocr=delete_after_ocr,
+                        captured=captured,
+                        now=now,
+                    )
+                except Exception:
+                    _log.exception("gocharting footprint: OCR batch failed")
     except KeyboardInterrupt:
         _log.info("gocharting footprint daemon: stopped by user")
         print("\nfootprint-gocharting-screenshot daemon stopped.", flush=True)

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from automation_tool.gocharting_footprint_screenshot import (
+    _FootprintCaptureDue,
     _candle_open_local,
     _clip_box_from_config,
     _closed_candle_open,
@@ -15,6 +16,7 @@ from automation_tool.gocharting_footprint_screenshot import (
     _format_candle_time_label,
     _interval_minutes,
     _is_first_minute_of_candle,
+    _run_footprint_ocr_for_captures,
     _wait_seconds_until_next_minute,
 )
 
@@ -126,3 +128,88 @@ def test_due_footprint_captures_skips_deduped(tmp_path: Path) -> None:
         out_dir=tmp_path,
     )
     assert due == []
+
+
+def test_run_footprint_ocr_for_captures_continues_after_http_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import httpx
+
+    closed = datetime(2025, 6, 24, 9, 55)
+    items = [
+        _FootprintCaptureDue(
+            interval="5m",
+            closed_open=closed,
+            dest=tmp_path / "a.png",
+            dedupe_key=("5m", closed),
+        ),
+        _FootprintCaptureDue(
+            interval="15m",
+            closed_open=closed,
+            dest=tmp_path / "b.png",
+            dedupe_key=("15m", closed),
+        ),
+    ]
+    calls: list[Path] = []
+
+    def fake_process(image_path: Path, **kwargs: object) -> object:
+        calls.append(image_path)
+        if image_path.name == "a.png":
+            raise httpx.HTTPStatusError(
+                "504 Gateway Timeout",
+                request=httpx.Request("POST", "https://api.ocr.space/parse/image"),
+                response=httpx.Response(504),
+            )
+        return (
+            {"time": "09:55", "price_levels": [{"price": 1.0, "bid": 1, "ask": 2}]},
+            {"candles": []},
+        )
+
+    monkeypatch.setattr(
+        "automation_tool.gocharting_footprint_ocr.process_footprint_clip_image",
+        fake_process,
+    )
+    captured: set[tuple[str, datetime]] = set()
+    _run_footprint_ocr_for_captures(
+        ok=items,
+        out_dir=tmp_path,
+        ocr_key="test-key",
+        clip_width=250,
+        symbol="COMEX:GC1!",
+        ocr_split_ratio=0.5,
+        delete_after_ocr=False,
+        captured=captured,
+        now=datetime(2025, 6, 24, 10, 1),
+    )
+    assert calls == [tmp_path / "a.png", tmp_path / "b.png"]
+    assert captured == {("15m", closed)}
+
+
+def test_run_footprint_ocr_for_captures_marks_skip_as_captured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    closed = datetime(2025, 6, 24, 9, 55)
+    item = _FootprintCaptureDue(
+        interval="5m",
+        closed_open=closed,
+        dest=tmp_path / "a.png",
+        dedupe_key=("5m", closed),
+    )
+
+    monkeypatch.setattr(
+        "automation_tool.gocharting_footprint_ocr.process_footprint_clip_image",
+        lambda *args, **kwargs: None,
+    )
+    captured: set[tuple[str, datetime]] = set()
+    _run_footprint_ocr_for_captures(
+        ok=[item],
+        out_dir=tmp_path,
+        ocr_key="test-key",
+        clip_width=250,
+        symbol="COMEX:GC1!",
+        ocr_split_ratio=0.5,
+        delete_after_ocr=False,
+        captured=captured,
+        now=datetime(2025, 6, 24, 10, 1),
+    )
+    assert captured == {("5m", closed)}
