@@ -13,7 +13,7 @@ from collections.abc import Iterable
 from typing import Any, Optional
 
 import httpx
-from PIL import Image, ImageOps
+from PIL import Image
 
 _log = logging.getLogger(__name__)
 
@@ -26,6 +26,8 @@ _DATE_LINE_RE = re.compile(
     re.I,
 )
 _PAIR_LINE_RE = re.compile(r"^\s*(\d+)\s+(\d+)\s*$")
+_DIGITS_RE = re.compile(r"^\d+$")
+_ROW_BUCKET_PX = 10
 _FOOTPRINT_OCR_ENGINE = "3"
 _FOOTPRINT_OCR_TIMEOUT_S = 180.0
 _FOOTPRINT_OCR_BATCH_DELAY_S = 5.0
@@ -312,7 +314,8 @@ def append_candle_to_footprint_document(
 
 
 def preprocess_footprint_clip_image(image: Image.Image) -> Image.Image:
-    return ImageOps.autocontrast(image.convert("L"), cutoff=1)
+    # Grayscale only — autocontrast/thresholding can erase faint footprint digits.
+    return image.convert("L")
 
 
 def preprocess_footprint_clip_path(image_path: Path) -> Image.Image:
@@ -602,6 +605,15 @@ def _iter_overlay_lines(ocr_payload: dict[str, Any]) -> list[dict[str, Any]]:
     return lines
 
 
+def _iter_overlay_words(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    words: list[dict[str, Any]] = []
+    for line in lines:
+        for word in line.get("Words") or []:
+            if isinstance(word, dict):
+                words.append(word)
+    return words
+
+
 def _line_top(line: dict[str, Any]) -> int:
     try:
         if line.get("MinTop") is not None:
@@ -691,17 +703,69 @@ def parse_price_levels_from_text_lines(
     return levels
 
 
+def parse_price_levels_from_overlay_words(
+    words: list[dict[str, Any]],
+    *,
+    image_width: int = 0,
+    split_ratio: float = 0.5,
+    footer_cutoff_top: Optional[int] = None,
+) -> list[dict[str, int]]:
+    """Pair left/right OCR words into bid/ask rows when digits are split by column."""
+    del image_width, split_ratio
+    rows: dict[int, list[tuple[int, int]]] = {}
+
+    for word in words:
+        text = str(word.get("WordText") or "").strip().replace(",", "")
+        if not _DIGITS_RE.match(text):
+            continue
+        try:
+            value = int(text)
+            left = int(word.get("Left") or 0)
+            top = int(word.get("Top") or 0)
+        except (TypeError, ValueError):
+            continue
+        if footer_cutoff_top is not None and top >= footer_cutoff_top:
+            continue
+        bucket = (top // _ROW_BUCKET_PX) * _ROW_BUCKET_PX
+        rows.setdefault(bucket, []).append((left, value))
+
+    levels: list[dict[str, int]] = []
+    for bucket in sorted(rows.keys()):
+        cells = sorted(rows[bucket], key=lambda item: item[0])
+        if not cells:
+            continue
+        bid = cells[0][1]
+        ask = cells[-1][1] if len(cells) > 1 else 0
+        if bid == 0 and ask == 0:
+            continue
+        levels.append({"bid": bid, "ask": ask})
+    return levels
+
+
 def parse_price_levels_from_overlay(
     *,
     lines: Optional[list[dict[str, Any]]] = None,
     parsed_text: str = "",
+    image_width: Optional[int] = None,
+    split_ratio: float = 0.5,
 ) -> list[dict[str, int]]:
-    """Only accept OCR lines matching ``bid ask`` (two integers per row)."""
+    """Accept ``bid ask`` pair lines, else pair split left/right OCR words by column."""
     if lines:
         text_line_levels = parse_price_levels_from_text_lines(lines)
         if text_line_levels:
             return text_line_levels
-    return parse_price_levels_from_parsed_text(parsed_text)
+    text_levels = parse_price_levels_from_parsed_text(parsed_text)
+    if text_levels:
+        return text_levels
+    if lines:
+        footer_cutoff = _footer_cutoff_top(lines)
+        word_levels = parse_price_levels_from_overlay_words(
+            _iter_overlay_words(lines),
+            footer_cutoff_top=footer_cutoff,
+        )
+        if word_levels:
+            return word_levels
+    return []
 
 
 def parse_footprint_candle_from_clip_image(
@@ -712,7 +776,6 @@ def parse_footprint_candle_from_clip_image(
     image_width: int,
     split_ratio: float = 0.5,
 ) -> dict[str, Any]:
-    del image_width, split_ratio
     ocr_image = preprocess_footprint_clip_path(image_path)
     payload = ocr_space_parse_pil_image(
         ocr_image,
@@ -724,7 +787,13 @@ def parse_footprint_candle_from_clip_image(
     results = payload.get("ParsedResults") or []
     if results and isinstance(results[0], dict):
         parsed_text = str(results[0].get("ParsedText") or "")
-    price_levels = parse_price_levels_from_overlay(lines=lines, parsed_text=parsed_text)
+    ocr_width = ocr_image.size[0]
+    price_levels = parse_price_levels_from_overlay(
+        lines=lines,
+        parsed_text=parsed_text,
+        image_width=ocr_width,
+        split_ratio=split_ratio,
+    )
     if not price_levels:
         raise FootprintOcrSkipped(
             f"no bid/ask pair lines in OCR for {image_path.name}"
@@ -748,7 +817,6 @@ def parse_footprint_candle_from_ocr(
     closed_candle_open: datetime,
     split_ratio: float = 0.5,
 ) -> dict[str, Any]:
-    del image_width, split_ratio
     parsed_text = ""
     results = ocr_payload.get("ParsedResults") or []
     if results and isinstance(results[0], dict):
@@ -757,7 +825,12 @@ def parse_footprint_candle_from_ocr(
         closed_candle_open
     )
     lines = _iter_overlay_lines(ocr_payload)
-    price_levels = parse_price_levels_from_overlay(lines=lines, parsed_text=parsed_text)
+    price_levels = parse_price_levels_from_overlay(
+        lines=lines,
+        parsed_text=parsed_text,
+        image_width=image_width,
+        split_ratio=split_ratio,
+    )
     if not price_levels:
         raise FootprintOcrSkipped("no bid/ask pair lines in OCR payload")
     return {"time": time_val, "price_levels": price_levels}

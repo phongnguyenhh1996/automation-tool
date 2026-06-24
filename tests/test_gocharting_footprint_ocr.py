@@ -402,6 +402,39 @@ def test_parse_price_levels_from_overlay_rejects_single_column() -> None:
     assert parse_price_levels_from_overlay(parsed_text="0\n8\n0\n6\n") == []
 
 
+def test_parse_price_levels_from_overlay_pairs_split_columns() -> None:
+    """OCR sometimes emits bid/ask as separate words on left/right of center."""
+    lines = [
+        {
+            "LineText": "0",
+            "MinTop": 100,
+            "Words": [{"WordText": "0", "Left": 55, "Top": 100}],
+        },
+        {
+            "LineText": "1",
+            "MinTop": 100,
+            "Words": [{"WordText": "1", "Left": 83, "Top": 100}],
+        },
+        {
+            "LineText": "26",
+            "MinTop": 200,
+            "Words": [{"WordText": "26", "Left": 52, "Top": 200}],
+        },
+        {
+            "LineText": "4",
+            "MinTop": 200,
+            "Words": [{"WordText": "4", "Left": 83, "Top": 200}],
+        },
+    ]
+    levels = parse_price_levels_from_overlay(
+        lines=lines,
+        parsed_text="",
+        image_width=179,
+        split_ratio=0.5,
+    )
+    assert levels == [{"bid": 0, "ask": 1}, {"bid": 26, "ask": 4}]
+
+
 def _footprint_line(bid: int, ask: int, top: int) -> dict:
     return {
         "LineText": f"{bid} {ask}",
