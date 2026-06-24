@@ -398,6 +398,72 @@ def test_parse_price_levels_from_parsed_text() -> None:
     ]
 
 
+def test_sanitize_parsed_text_strips_no_text_detected() -> None:
+    from automation_tool.gocharting_footprint_ocr import _sanitize_parsed_text
+
+    assert _sanitize_parsed_text("*[No text detected]*") == ""
+    assert _sanitize_parsed_text("0 1\n1 2\n") == "0 1\n1 2"
+
+
+def test_parse_footprint_clip_image_retries_rgb_when_grayscale_empty(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from automation_tool.gocharting_footprint_ocr import parse_footprint_candle_from_clip_image
+
+    image = tmp_path / "20260624_13h35m_5m.png"
+    image.write_bytes(
+        (Path(__file__).resolve().parent / "fixtures" / "footprint_20260624_17h25m_5m.png").read_bytes()
+    )
+    calls: list[str] = []
+
+    def _fake_ocr(image, **_kwargs):
+        mode = "L" if image.mode == "L" else "RGB"
+        calls.append(mode)
+        if mode == "L":
+            return {
+                "ParsedResults": [
+                    {
+                        "ParsedText": "*[No text detected]*",
+                        "FileParseExitCode": "1",
+                        "TextOverlay": {"Lines": []},
+                    }
+                ]
+            }
+        return {
+            "ParsedResults": [
+                {
+                    "ParsedText": "0 1\n",
+                    "FileParseExitCode": "1",
+                    "TextOverlay": {
+                        "Lines": [
+                            {
+                                "LineText": "0 1",
+                                "MinTop": 100,
+                                "Words": [{"WordText": "0 1", "Left": 55, "Top": 100}],
+                            }
+                        ]
+                    },
+                }
+            ]
+        }
+
+    monkeypatch.setattr(
+        "automation_tool.gocharting_footprint_ocr.ocr_space_parse_pil_image",
+        _fake_ocr,
+    )
+
+    candle = parse_footprint_candle_from_clip_image(
+        image,
+        api_key="test-key",
+        closed_candle_open=datetime(2026, 6, 24, 13, 35),
+        image_width=240,
+    )
+    assert calls == ["L", "RGB"]
+    assert candle["time"] == "13:35"
+    assert candle["price_levels"] == [{"bid": 0, "ask": 1}]
+
+
 def test_parse_price_levels_from_overlay_rejects_single_column() -> None:
     assert parse_price_levels_from_overlay(parsed_text="0\n8\n0\n6\n") == []
 

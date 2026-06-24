@@ -32,6 +32,7 @@ _FOOTPRINT_OCR_ENGINE = "3"
 _FOOTPRINT_OCR_TIMEOUT_S = 180.0
 _FOOTPRINT_OCR_BATCH_DELAY_S = 5.0
 _GARBAGE_OCR_LINE_RE = re.compile(r"[@$=\\]|\\phi", re.I)
+_NO_TEXT_DETECTED_RE = re.compile(r"\[No text detected\]", re.I)
 _FOOTPRINT_CLIP_PNG_RE = re.compile(
     r"^(\d{8})_(\d{1,2})h(\d{1,2})m_(\d+m)\.png$",
     re.I,
@@ -593,6 +594,52 @@ def resolve_gocharting_csv_for_footprint_json(
     return gocharting_main_interval_csv_path(cd, iv, stamp=stamp)
 
 
+def _sanitize_parsed_text(text: str) -> str:
+    raw = (text or "").strip()
+    if not raw or _NO_TEXT_DETECTED_RE.search(raw):
+        return ""
+    return raw
+
+
+def _price_levels_from_ocr_payload(
+    payload: dict[str, Any],
+    *,
+    split_ratio: float = 0.5,
+    image_width: Optional[int] = None,
+) -> tuple[list[dict[str, int]], str, int]:
+    lines = _iter_overlay_lines(payload)
+    parsed_text = ""
+    results = payload.get("ParsedResults") or []
+    if results and isinstance(results[0], dict):
+        parsed_text = _sanitize_parsed_text(str(results[0].get("ParsedText") or ""))
+    ocr_width = image_width
+    if ocr_width is None and lines:
+        max_right = 0
+        for word in _iter_overlay_words(lines):
+            try:
+                left = int(word.get("Left") or 0)
+                width = int(word.get("Width") or 0)
+            except (TypeError, ValueError):
+                continue
+            max_right = max(max_right, left + width)
+        ocr_width = max(max_right, 1)
+    price_levels = parse_price_levels_from_overlay(
+        lines=lines,
+        parsed_text=parsed_text,
+        image_width=ocr_width,
+        split_ratio=split_ratio,
+    )
+    return price_levels, parsed_text, len(lines)
+
+
+def _footprint_ocr_images(image_path: Path) -> list[tuple[str, Image.Image]]:
+    """Grayscale first; retry raw RGB if OCR yields no bid/ask rows."""
+    with Image.open(image_path) as raw:
+        rgb = raw.convert("RGB")
+        gray = preprocess_footprint_clip_image(rgb)
+    return [("grayscale", gray), ("rgb", rgb)]
+
+
 def _iter_overlay_lines(ocr_payload: dict[str, Any]) -> list[dict[str, Any]]:
     lines: list[dict[str, Any]] = []
     for block in ocr_payload.get("ParsedResults") or []:
@@ -776,38 +823,48 @@ def parse_footprint_candle_from_clip_image(
     image_width: int,
     split_ratio: float = 0.5,
 ) -> dict[str, Any]:
-    ocr_image = preprocess_footprint_clip_path(image_path)
-    payload = ocr_space_parse_pil_image(
-        ocr_image,
-        filename=image_path.name,
-        api_key=api_key,
-    )
-    lines = _iter_overlay_lines(payload)
-    parsed_text = ""
-    results = payload.get("ParsedResults") or []
-    if results and isinstance(results[0], dict):
-        parsed_text = str(results[0].get("ParsedText") or "")
-    ocr_width = ocr_image.size[0]
-    price_levels = parse_price_levels_from_overlay(
-        lines=lines,
-        parsed_text=parsed_text,
-        image_width=ocr_width,
-        split_ratio=split_ratio,
-    )
-    if not price_levels:
-        raise FootprintOcrSkipped(
-            f"no bid/ask pair lines in OCR for {image_path.name}"
+    del image_width
+    last_parsed_text = ""
+    last_line_count = 0
+    last_size: tuple[int, int] | None = None
+
+    for attempt_label, ocr_image in _footprint_ocr_images(image_path):
+        payload = ocr_space_parse_pil_image(
+            ocr_image,
+            filename=image_path.name,
+            api_key=api_key,
         )
-    _log.info(
-        "footprint OCR: parsed %s | size=%s levels=%d",
-        image_path.name,
-        ocr_image.size,
-        len(price_levels),
+        price_levels, parsed_text, line_count = _price_levels_from_ocr_payload(
+            payload,
+            split_ratio=split_ratio,
+            image_width=ocr_image.size[0],
+        )
+        last_parsed_text = parsed_text
+        last_line_count = line_count
+        last_size = ocr_image.size
+        if price_levels:
+            if attempt_label != "grayscale":
+                _log.info(
+                    "footprint OCR: %s succeeded on %s retry",
+                    image_path.name,
+                    attempt_label,
+                )
+            _log.info(
+                "footprint OCR: parsed %s | size=%s levels=%d",
+                image_path.name,
+                ocr_image.size,
+                len(price_levels),
+            )
+            return {
+                "time": closed_candle_time_hhmm(closed_candle_open),
+                "price_levels": price_levels,
+            }
+
+    raise FootprintOcrSkipped(
+        f"no bid/ask pair lines in OCR for {image_path.name} "
+        f"(overlay_lines={last_line_count}, parsed_text={last_parsed_text[:80]!r}, "
+        f"size={last_size})"
     )
-    return {
-        "time": closed_candle_time_hhmm(closed_candle_open),
-        "price_levels": price_levels,
-    }
 
 
 def parse_footprint_candle_from_ocr(
@@ -820,16 +877,14 @@ def parse_footprint_candle_from_ocr(
     parsed_text = ""
     results = ocr_payload.get("ParsedResults") or []
     if results and isinstance(results[0], dict):
-        parsed_text = str(results[0].get("ParsedText") or "")
+        parsed_text = _sanitize_parsed_text(str(results[0].get("ParsedText") or ""))
     time_val = extract_time_hhmm_from_ocr_text(parsed_text) or closed_candle_time_hhmm(
         closed_candle_open
     )
-    lines = _iter_overlay_lines(ocr_payload)
-    price_levels = parse_price_levels_from_overlay(
-        lines=lines,
-        parsed_text=parsed_text,
-        image_width=image_width,
+    price_levels, _, _ = _price_levels_from_ocr_payload(
+        ocr_payload,
         split_ratio=split_ratio,
+        image_width=image_width,
     )
     if not price_levels:
         raise FootprintOcrSkipped("no bid/ask pair lines in OCR payload")
