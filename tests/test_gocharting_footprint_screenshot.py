@@ -9,6 +9,7 @@ from automation_tool.gocharting_footprint_screenshot import (
     _candle_open_local,
     _clip_box_from_config,
     _closed_candle_open,
+    _due_footprint_captures,
     _footprint_image_path,
     _footprint_screenshot_cfg,
     _format_candle_time_label,
@@ -99,3 +100,29 @@ def test_footprint_screenshot_cfg_yaml_override() -> None:
     )
     assert cfg["intervals"]["5m"]["zoom_clicks"] == 7
     assert cfg["intervals"]["15m"]["page_url"].endswith("S0kcqfQKt")
+
+
+def test_due_footprint_captures_at_m5_and_m15_trigger_minute(tmp_path: Path) -> None:
+    now = datetime(2025, 6, 24, 10, 1)
+    captured: set[tuple[str, datetime]] = set()
+    due = _due_footprint_captures(
+        now=now,
+        intervals=("5m", "15m"),
+        captured=captured,
+        out_dir=tmp_path,
+    )
+    assert len(due) == 2
+    assert {d.interval for d in due} == {"5m", "15m"}
+
+
+def test_due_footprint_captures_skips_deduped(tmp_path: Path) -> None:
+    now = datetime(2025, 6, 24, 10, 6)
+    closed = _closed_candle_open(now, 5)
+    captured = {("5m", closed)}
+    due = _due_footprint_captures(
+        now=now,
+        intervals=("5m",),
+        captured=captured,
+        out_dir=tmp_path,
+    )
+    assert due == []

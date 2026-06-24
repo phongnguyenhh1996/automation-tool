@@ -55,3 +55,24 @@ def test_wait_until_idle_waits_while_busy(lock_path, monkeypatch) -> None:
     monkeypatch.setattr(lock.time, "sleep", fake_sleep)
     lock.wait_until_gocharting_capture_idle(sleep_s=60)
     assert sleeps == [60.0]
+
+
+def test_capture_lock_waits_then_acquires(lock_path, monkeypatch) -> None:
+    sleeps: list[float] = []
+    attempts = {"n": 0}
+    real_acquire = lock.acquire_gocharting_capture_lock
+
+    def flaky_acquire() -> None:
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise RuntimeError("busy")
+        real_acquire()
+
+    monkeypatch.setattr(lock, "acquire_gocharting_capture_lock", flaky_acquire)
+    monkeypatch.setattr(lock.time, "sleep", lambda s: sleeps.append(s))
+
+    with lock.gocharting_capture_lock(sleep_s=5):
+        assert lock.is_gocharting_capture_in_progress()
+    assert not lock.is_gocharting_capture_in_progress()
+    assert attempts["n"] == 2
+    assert sleeps == [5.0]

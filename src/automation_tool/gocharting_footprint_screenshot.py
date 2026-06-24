@@ -17,7 +17,7 @@ from automation_tool.gocharting_capture import (
     _wait_for_chart_before_export,
     load_gocharting_yaml,
 )
-from automation_tool.gocharting_capture_lock import wait_until_gocharting_capture_idle
+from automation_tool.gocharting_capture_lock import gocharting_capture_lock
 from automation_tool.playwright_browser import close_browser_and_context, launch_chrome_context
 
 _log = logging.getLogger(__name__)
@@ -281,6 +281,173 @@ def _trim_dedupe(captured: set[tuple[str, datetime]]) -> None:
         captured.discard(key)
 
 
+@dataclass(frozen=True)
+class _FootprintCaptureDue:
+    interval: str
+    closed_open: datetime
+    dest: Path
+    dedupe_key: tuple[str, datetime]
+
+
+def _due_footprint_captures(
+    *,
+    now: datetime,
+    intervals: tuple[str, ...],
+    captured: set[tuple[str, datetime]],
+    out_dir: Path,
+) -> list[_FootprintCaptureDue]:
+    due: list[_FootprintCaptureDue] = []
+    for interval in intervals:
+        interval_min = _interval_minutes(interval)
+        if not _is_first_minute_of_candle(now, interval_min):
+            continue
+        closed_open = _closed_candle_open(now, interval_min)
+        dedupe_key = (interval, closed_open)
+        if dedupe_key in captured:
+            continue
+        due.append(
+            _FootprintCaptureDue(
+                interval=interval,
+                closed_open=closed_open,
+                dest=_footprint_image_path(out_dir, closed_open, interval),
+                dedupe_key=dedupe_key,
+            )
+        )
+    return due
+
+
+def _connect_footprint_browser(
+    p: Any,
+    *,
+    require_browser_service: bool,
+    headless: bool,
+    storage: Path,
+) -> tuple[Any, BrowserContext, bool]:
+    attached = try_attach_playwright_via_service(p, force=require_browser_service)
+    if attached is not None:
+        browser, context = attached
+        _log.info("gocharting footprint: attached to browser service")
+        return browser, context, True
+    if require_browser_service:
+        raise SystemExit(
+            "footprint-gocharting-screenshot requires browser service but could not attach via CDP. "
+            "Run: coinmap-automation browser up "
+            f"(state file: {browser_service_state_path()})."
+        )
+    browser, context = launch_chrome_context(
+        p,
+        headless=headless,
+        storage_state_path=storage if storage.is_file() else None,
+        viewport_width=500,
+        viewport_height=1200,
+    )
+    _log.info("gocharting footprint: launched standalone Chrome")
+    return browser, context, False
+
+
+def _disconnect_footprint_browser(browser: Any, context: BrowserContext, *, use_browser_service: bool) -> None:
+    if use_browser_service:
+        try:
+            browser.close()
+        except Exception:
+            pass
+    else:
+        close_browser_and_context(browser, context)
+
+
+def _capture_footprint_intervals_on_context(
+    context: BrowserContext,
+    *,
+    base_cfg: dict[str, Any],
+    footprint_cfg: dict[str, Any],
+    email: str,
+    password: str,
+    due: list[_FootprintCaptureDue],
+    storage: Path,
+    save_storage_state: bool,
+    use_browser_service: bool,
+) -> list[_FootprintCaptureDue]:
+    """Capture due intervals on an already-connected context; returns successful items."""
+    ok: list[_FootprintCaptureDue] = []
+    for item in due:
+        tab: FootprintIntervalTab | None = None
+        try:
+            tab = _open_interval_tab(
+                context,
+                base_cfg,
+                footprint_cfg,
+                interval=item.interval,
+                email=email,
+                password=password,
+            )
+            _capture_footprint_shot(
+                tab,
+                base_cfg,
+                footprint_cfg,
+                dest=item.dest,
+            )
+            ok.append(item)
+        except Exception:
+            _log.exception(
+                "gocharting footprint: capture failed interval=%s closed_open=%s",
+                item.interval,
+                item.closed_open,
+            )
+        finally:
+            if tab is not None:
+                _close_interval_tabs([tab])
+    if save_storage_state and not use_browser_service and ok:
+        try:
+            context.storage_state(path=str(storage))
+        except Exception:
+            _log.warning("gocharting footprint: could not save storage state", exc_info=True)
+    return ok
+
+
+def _run_footprint_ocr_for_captures(
+    *,
+    ok: list[_FootprintCaptureDue],
+    out_dir: Path,
+    ocr_key: str,
+    clip_width: int,
+    symbol: str,
+    ocr_split_ratio: float,
+    delete_after_ocr: bool,
+    captured: set[tuple[str, datetime]],
+    now: datetime,
+) -> None:
+    from automation_tool.gocharting_footprint_ocr import (
+        footprint_interval_json_path,
+        process_footprint_clip_image,
+    )
+
+    for item in ok:
+        captured.add(item.dedupe_key)
+        _trim_dedupe(captured)
+        print(f"Captured {item.dest.name} at {now.strftime('%H:%M:%S')}", flush=True)
+        json_path = footprint_interval_json_path(out_dir, item.interval)
+        ocr_result = process_footprint_clip_image(
+            item.dest,
+            ocr_api_key=ocr_key,
+            closed_candle_open=item.closed_open,
+            image_width=clip_width,
+            out_json_path=json_path,
+            symbol=symbol,
+            timeframe=item.interval,
+            split_ratio=ocr_split_ratio,
+            delete_image_after=delete_after_ocr,
+        )
+        if ocr_result is None:
+            print(f"OCR skip {item.dest.name} (no bid/ask pair lines)", flush=True)
+            continue
+        candle, _doc = ocr_result
+        print(
+            f"OCR → {json_path.name} | time={candle['time']} "
+            f"levels={len(candle['price_levels'])}",
+            flush=True,
+        )
+
+
 def run_footprint_gocharting_screenshot_daemon(
     *,
     gocharting_yaml: Path,
@@ -327,117 +494,62 @@ def run_footprint_gocharting_screenshot_daemon(
         require_browser_service,
     )
 
-    with sync_playwright() as p:
-        attached = try_attach_playwright_via_service(p, force=require_browser_service)
-        if attached is not None:
-            browser, context = attached
-            use_browser_service = True
-            _log.info("gocharting footprint: attached to browser service")
-        elif require_browser_service:
-            raise SystemExit(
-                "footprint-gocharting-screenshot requires browser service but could not attach via CDP. "
-                "Run: coinmap-automation browser up "
-                f"(state file: {browser_service_state_path()})."
+    print(f"footprint-gocharting-screenshot daemon running; output → {out_dir}", flush=True)
+    try:
+        while True:
+            _wait_until_next_minute()
+            now = datetime.now()
+            due = _due_footprint_captures(
+                now=now,
+                intervals=intervals,
+                captured=captured,
+                out_dir=out_dir,
             )
-        else:
-            browser, context = launch_chrome_context(
-                p,
-                headless=headless,
-                storage_state_path=storage if storage.is_file() else None,
-                viewport_width=500,
-                viewport_height=1200,
-            )
-            use_browser_service = False
-            _log.info("gocharting footprint: launched standalone Chrome")
+            if not due:
+                continue
 
-        try:
-            print(f"footprint-gocharting-screenshot daemon running; output → {out_dir}", flush=True)
-            while True:
-                _wait_until_next_minute()
-                now = datetime.now()
-                for interval in intervals:
-                    interval_min = _interval_minutes(interval)
-                    if not _is_first_minute_of_candle(now, interval_min):
-                        continue
-                    closed_open = _closed_candle_open(now, interval_min)
-                    dedupe_key = (interval, closed_open)
-                    if dedupe_key in captured:
-                        continue
-                    dest = _footprint_image_path(out_dir, closed_open, interval)
-                    tab: FootprintIntervalTab | None = None
-                    try:
-                        wait_until_gocharting_capture_idle(sleep_s=_CAPTURE_BUSY_WAIT_S)
-                        tab = _open_interval_tab(
-                            context,
-                            base_cfg,
-                            footprint_cfg,
-                            interval=interval,
-                            email=email,
-                            password=password,
+            ok: list[_FootprintCaptureDue] = []
+            try:
+                with gocharting_capture_lock(sleep_s=_CAPTURE_BUSY_WAIT_S):
+                    with sync_playwright() as p:
+                        browser, context, use_browser_service = _connect_footprint_browser(
+                            p,
+                            require_browser_service=require_browser_service,
+                            headless=headless,
+                            storage=storage,
                         )
-                        if save_storage_state and not use_browser_service:
-                            try:
-                                context.storage_state(path=str(storage))
-                            except Exception:
-                                _log.warning(
-                                    "gocharting footprint: could not save storage state",
-                                    exc_info=True,
-                                )
-                        _capture_footprint_shot(
-                            tab,
-                            base_cfg,
-                            footprint_cfg,
-                            dest=dest,
-                        )
-                        captured.add(dedupe_key)
-                        _trim_dedupe(captured)
-                        print(f"Captured {dest.name} at {now.strftime('%H:%M:%S')}", flush=True)
-                        from automation_tool.gocharting_footprint_ocr import (
-                            footprint_interval_json_path,
-                            process_footprint_clip_image,
-                        )
-
-                        json_path = footprint_interval_json_path(out_dir, interval)
-                        ocr_result = process_footprint_clip_image(
-                            dest,
-                            ocr_api_key=ocr_key,
-                            closed_candle_open=closed_open,
-                            image_width=clip_width,
-                            out_json_path=json_path,
-                            symbol=symbol,
-                            timeframe=interval,
-                            split_ratio=ocr_split_ratio,
-                            delete_image_after=delete_after_ocr,
-                        )
-                        if ocr_result is None:
-                            print(
-                                f"OCR skip {dest.name} (no bid/ask pair lines)",
-                                flush=True,
+                        try:
+                            ok = _capture_footprint_intervals_on_context(
+                                context,
+                                base_cfg=base_cfg,
+                                footprint_cfg=footprint_cfg,
+                                email=email,
+                                password=password,
+                                due=due,
+                                storage=storage,
+                                save_storage_state=save_storage_state,
+                                use_browser_service=use_browser_service,
                             )
-                            continue
-                        candle, _doc = ocr_result
-                        print(
-                            f"OCR → {json_path.name} | time={candle['time']} "
-                            f"levels={len(candle['price_levels'])}",
-                            flush=True,
-                        )
-                    except Exception:
-                        _log.exception(
-                            "gocharting footprint: capture failed interval=%s closed_open=%s",
-                            interval,
-                            closed_open,
-                        )
-                    finally:
-                        if tab is not None:
-                            _close_interval_tabs([tab])
-        except KeyboardInterrupt:
-            _log.info("gocharting footprint daemon: stopped by user")
-            print("\nfootprint-gocharting-screenshot daemon stopped.", flush=True)
-        finally:
-            if use_browser_service:
-                try:
-                    browser.close()
-                except Exception:
-                    pass
-            else:
-                close_browser_and_context(browser, context)
+                        finally:
+                            _disconnect_footprint_browser(
+                                browser, context, use_browser_service=use_browser_service
+                            )
+            except Exception:
+                _log.exception("gocharting footprint: browser capture session failed")
+                continue
+
+            if ok:
+                _run_footprint_ocr_for_captures(
+                    ok=ok,
+                    out_dir=out_dir,
+                    ocr_key=ocr_key,
+                    clip_width=clip_width,
+                    symbol=symbol,
+                    ocr_split_ratio=ocr_split_ratio,
+                    delete_after_ocr=delete_after_ocr,
+                    captured=captured,
+                    now=now,
+                )
+    except KeyboardInterrupt:
+        _log.info("gocharting footprint daemon: stopped by user")
+        print("\nfootprint-gocharting-screenshot daemon stopped.", flush=True)

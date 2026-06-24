@@ -1,4 +1,4 @@
-"""Lock file while ``all --gocharting`` / ``update-scalp --gocharting`` capture runs."""
+"""Exclusive lock for GoCharting browser capture (``all``, ``update-scalp``, footprint daemon)."""
 
 from __future__ import annotations
 
@@ -57,7 +57,7 @@ def release_stale_gocharting_capture_lock() -> None:
 
 
 def is_gocharting_capture_in_progress() -> bool:
-    """True when an intraday GoCharting capture holds the lock (``all`` / ``update-scalp``)."""
+    """True when any GoCharting capture flow holds the lock."""
     release_stale_gocharting_capture_lock()
     path = gocharting_capture_lock_path()
     if not path.is_file():
@@ -104,8 +104,22 @@ def release_gocharting_capture_lock() -> None:
 
 
 @contextmanager
-def gocharting_capture_lock() -> Iterator[None]:
-    acquire_gocharting_capture_lock()
+def gocharting_capture_lock(*, sleep_s: float = _DEFAULT_BUSY_WAIT_S) -> Iterator[None]:
+    """Acquire exclusive GoCharting capture lock, waiting if another flow holds it."""
+    while True:
+        try:
+            acquire_gocharting_capture_lock()
+            break
+        except RuntimeError:
+            _log.info(
+                "gocharting capture: another flow holds the lock — waiting %.0fs",
+                sleep_s,
+            )
+            print(
+                f"gocharting capture: luồng GoCharting khác đang chạy — chờ {int(sleep_s)}s...",
+                flush=True,
+            )
+            time.sleep(max(1.0, float(sleep_s)))
     try:
         yield
     finally:
@@ -113,14 +127,14 @@ def gocharting_capture_lock() -> Iterator[None]:
 
 
 def wait_until_gocharting_capture_idle(*, sleep_s: float = _DEFAULT_BUSY_WAIT_S) -> None:
-    """Block until no intraday GoCharting capture is running; retry every ``sleep_s`` seconds."""
+    """Block until no GoCharting capture holds the lock; retry every ``sleep_s`` seconds."""
     while is_gocharting_capture_in_progress():
         _log.info(
-            "gocharting footprint: intraday capture busy (all/update-scalp), waiting %.0fs",
+            "gocharting capture: waiting %.0fs for lock to clear",
             sleep_s,
         )
         print(
-            f"gocharting footprint: all/update-scalp capture đang chạy — chờ {int(sleep_s)}s...",
+            f"gocharting capture: luồng GoCharting khác đang chạy — chờ {int(sleep_s)}s...",
             flush=True,
         )
         time.sleep(max(1.0, float(sleep_s)))
