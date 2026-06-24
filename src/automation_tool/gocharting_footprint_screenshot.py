@@ -195,10 +195,8 @@ def _prepare_footprint_page(
     page.wait_for_timeout(1200)
     _maybe_login_gocharting(page, base_cfg, email, password)
 
-    zoom_clicks = _refresh_and_zoom_footprint_chart(page, base_cfg, interval_cfg)
     _log.info(
-        "gocharting footprint: prepared page (refresh + zoomIn x%s, viewport %sx%s)",
-        zoom_clicks,
+        "gocharting footprint: prepared page (viewport %sx%s)",
         width,
         height,
     )
@@ -218,7 +216,11 @@ def _capture_footprint_shot(
 ) -> None:
     if bool(footprint_cfg.get("refresh_before_capture", True)):
         zoom_clicks = _refresh_and_zoom_footprint_chart(tab.page, base_cfg, tab.cfg)
-        _log.debug("gocharting footprint: refresh + zoomIn x%s before capture", zoom_clicks)
+        _log.info("gocharting footprint: refresh + zoomIn x%s before capture", zoom_clicks)
+    else:
+        zoom_clicks = _zoom_detail_chart(tab.page, base_cfg, tab.cfg)
+        _log.info("gocharting footprint: zoomIn x%s before capture", zoom_clicks)
+        _wait_for_chart_before_export(tab.page, base_cfg, section="detail_chart")
     clip = _clip_box_from_config(footprint_cfg.get("clip") or {})
     _clip_screenshot(tab.page, clip, dest)
     _log.info("gocharting footprint: saved %s", dest.name)
