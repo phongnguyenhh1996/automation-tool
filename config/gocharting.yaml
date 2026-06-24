@@ -87,8 +87,8 @@ capture_plan:
 footprint_screenshot:
   output_subdir: footprint_images
   symbol: "COMEX:GC1!"
-  ocr_split_ratio: 0.42
-  delete_screenshot_after_ocr: true
+  ocr_split_ratio: 0.5
+  delete_screenshot_after_ocr: false
   refresh_before_capture: true
   clip: { x1: 50, y1: 60, x2: 290, y2: 1500 }
   intervals:

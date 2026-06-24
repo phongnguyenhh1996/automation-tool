@@ -25,8 +25,8 @@ _DEFAULT_INTERVALS = ("5m", "15m")
 _DEFAULT_FOOTPRINT_SCREENSHOT: dict[str, Any] = {
     "output_subdir": "footprint_images",
     "symbol": "COMEX:GC1!",
-    "ocr_split_ratio": 0.42,
-    "delete_screenshot_after_ocr": True,
+    "ocr_split_ratio": 0.5,
+    "delete_screenshot_after_ocr": False,
     "refresh_before_capture": True,
     "clip": {"x1": 50, "y1": 50, "x2": 300, "y2": 1100},
     "intervals": {
@@ -288,8 +288,8 @@ def run_footprint_gocharting_screenshot_daemon(
     out_dir = charts_dir / out_subdir
     out_dir.mkdir(parents=True, exist_ok=True)
     symbol = str(footprint_cfg.get("symbol") or "COMEX:GC1!").strip()
-    ocr_split_ratio = float(footprint_cfg.get("ocr_split_ratio", 0.42))
-    delete_after_ocr = bool(footprint_cfg.get("delete_screenshot_after_ocr", True))
+    ocr_split_ratio = float(footprint_cfg.get("ocr_split_ratio", 0.5))
+    delete_after_ocr = bool(footprint_cfg.get("delete_screenshot_after_ocr", False))
     clip_cfg = footprint_cfg.get("clip") or {}
     clip_width = max(1, int(clip_cfg.get("x2", 300)) - int(clip_cfg.get("x1", 50)))
     ocr_key = (ocr_api_key or "").strip()

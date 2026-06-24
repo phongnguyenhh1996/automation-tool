@@ -35,13 +35,94 @@ def test_closed_candle_time_hhmm() -> None:
 
 def test_parse_price_levels_from_overlay() -> None:
     words = [
-        {"WordText": "0", "Left": 30, "Top": 100},
-        {"WordText": "2", "Left": 180, "Top": 100},
-        {"WordText": "4", "Left": 25, "Top": 120},
-        {"WordText": "0", "Left": 185, "Top": 120},
+        {"WordText": "0", "Left": 30, "Top": 100, "Height": 12},
+        {"WordText": "2", "Left": 180, "Top": 100, "Height": 12},
+        {"WordText": "4", "Left": 25, "Top": 120, "Height": 12},
+        {"WordText": "0", "Left": 185, "Top": 120, "Height": 12},
     ]
-    levels = parse_price_levels_from_overlay(words, image_width=230, split_ratio=0.42)
+    levels = parse_price_levels_from_overlay(words, image_width=230, split_ratio=0.5)
     assert levels == [{"bid": 0, "ask": 2}, {"bid": 4, "ask": 0}]
+
+
+def _footprint_line(bid: int, ask: int, top: int, *, split_x: int = 120) -> dict:
+    bid_x = max(10, split_x - 70)
+    ask_x = split_x + 60
+    return {
+        "LineText": f"{bid} {ask}",
+        "MinTop": top,
+        "Words": [
+            {"WordText": str(bid), "Left": bid_x, "Top": top, "Width": 10, "Height": 12},
+            {"WordText": str(ask), "Left": ask_x, "Top": top, "Width": 10, "Height": 12},
+        ],
+    }
+
+
+def test_parse_price_levels_ignores_footer_date_line() -> None:
+    rows = [
+        (0, 1, 100),
+        (0, 7, 118),
+        (3, 0, 136),
+    ]
+    lines = [_footprint_line(bid, ask, top) for bid, ask, top in rows]
+    lines.append(
+        {
+            "LineText": "Wed 24 Jun 26 09:20",
+            "MinTop": 900,
+            "Words": [
+                {"WordText": "24", "Left": 80, "Top": 900, "Width": 12, "Height": 12},
+                {"WordText": "26", "Left": 140, "Top": 900, "Width": 12, "Height": 12},
+                {"WordText": "09", "Left": 170, "Top": 900, "Width": 12, "Height": 12},
+                {"WordText": "20", "Left": 200, "Top": 900, "Width": 12, "Height": 12},
+            ],
+        }
+    )
+    levels = parse_price_levels_from_overlay(
+        [],
+        image_width=240,
+        split_ratio=0.5,
+        lines=lines,
+        image_height=950,
+    )
+    assert levels == [
+        {"bid": 0, "ask": 1},
+        {"bid": 0, "ask": 7},
+        {"bid": 3, "ask": 0},
+    ]
+
+
+def test_parse_price_levels_full_footprint_candle_shape() -> None:
+    expected_rows = [
+        (0, 1),
+        (0, 7),
+        (1, 10),
+        (7, 27),
+        (14, 31),
+        (63, 28),
+        (16, 20),
+        (7, 17),
+        (12, 10),
+        (5, 6),
+        (2, 6),
+        (2, 4),
+        (6, 8),
+        (8, 6),
+        (14, 6),
+        (12, 10),
+        (8, 1),
+        (2, 4),
+        (7, 3),
+        (2, 0),
+        (3, 0),
+    ]
+    lines = [_footprint_line(bid, ask, 80 + idx * 16) for idx, (bid, ask) in enumerate(expected_rows)]
+    levels = parse_price_levels_from_overlay(
+        [],
+        image_width=240,
+        split_ratio=0.5,
+        lines=lines,
+        image_height=420,
+    )
+    assert levels == [{"bid": bid, "ask": ask} for bid, ask in expected_rows]
 
 
 def test_parse_footprint_candle_from_ocr() -> None:

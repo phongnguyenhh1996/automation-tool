@@ -16,6 +16,10 @@ FOOTPRINT_CHART_TYPE = "Bid/Ask Footprint"
 _DEFAULT_SYMBOL = "COMEX:GC1!"
 _ROW_BUCKET_PX = 10
 _TIME_RE = re.compile(r"\b(\d{1,2}):(\d{2})\b")
+_DATE_LINE_RE = re.compile(
+    r"\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b|\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b",
+    re.I,
+)
 _DIGITS_RE = re.compile(r"^\d+$")
 
 
@@ -149,44 +153,257 @@ def _iter_overlay_words(ocr_payload: dict[str, Any]) -> list[dict[str, Any]]:
     return words
 
 
-def parse_price_levels_from_overlay(
-    words: list[dict[str, Any]],
-    *,
-    image_width: int,
-    split_ratio: float = 0.42,
-) -> list[dict[str, int]]:
-    center_x = max(1, int(image_width * split_ratio))
-    rows: dict[int, dict[str, Optional[tuple[int, int]]]] = {}
+def _iter_overlay_lines(ocr_payload: dict[str, Any]) -> list[dict[str, Any]]:
+    lines: list[dict[str, Any]] = []
+    for block in ocr_payload.get("ParsedResults") or []:
+        overlay = block.get("TextOverlay")
+        if not isinstance(overlay, dict):
+            continue
+        for line in overlay.get("Lines") or []:
+            if isinstance(line, dict):
+                lines.append(line)
+    return lines
 
-    for word in words:
+
+def _line_top(line: dict[str, Any]) -> int:
+    try:
+        if line.get("MinTop") is not None:
+            return int(float(line["MinTop"]))
+    except (TypeError, ValueError):
+        pass
+    tops: list[int] = []
+    for word in line.get("Words") or []:
+        if isinstance(word, dict):
+            try:
+                tops.append(int(word.get("Top") or 0))
+            except (TypeError, ValueError):
+                continue
+    return min(tops) if tops else 0
+
+
+def _line_text(line: dict[str, Any]) -> str:
+    return str(line.get("LineText") or "").strip()
+
+
+def _word_center_x(word: dict[str, Any]) -> int:
+    left = int(word.get("Left") or 0)
+    width = int(word.get("Width") or 0)
+    return left + width // 2
+
+
+def _digit_words_in_line(line: dict[str, Any]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for word in line.get("Words") or []:
+        if not isinstance(word, dict):
+            continue
         text = str(word.get("WordText") or "").strip().replace(",", "")
         if not _DIGITS_RE.match(text):
             continue
         try:
             value = int(text)
-            left = int(word.get("Left") or 0)
+        except ValueError:
+            continue
+        out.append({**word, "_value": value})
+    return out
+
+
+def _estimate_image_height(
+    words: list[dict[str, Any]],
+    lines: list[dict[str, Any]],
+) -> int:
+    bottoms: list[int] = []
+    for word in words:
+        try:
             top = int(word.get("Top") or 0)
+            height = int(word.get("Height") or 0)
         except (TypeError, ValueError):
             continue
-        bucket = (top // _ROW_BUCKET_PX) * _ROW_BUCKET_PX
-        row = rows.setdefault(bucket, {"bid": None, "ask": None})
-        side = "bid" if left < center_x else "ask"
-        current = row[side]
-        if current is None:
-            row[side] = (value, abs(left - center_x))
+        bottoms.append(top + height)
+    for line in lines:
+        bottoms.append(_line_top(line) + 20)
+    return max(bottoms) if bottoms else 0
+
+
+def _footer_cutoff_top(lines: list[dict[str, Any]]) -> Optional[int]:
+    cutoffs: list[int] = []
+    for line in lines:
+        text = _line_text(line)
+        if _DATE_LINE_RE.search(text):
+            cutoffs.append(_line_top(line))
             continue
-        if abs(left - center_x) < current[1]:
-            row[side] = (value, abs(left - center_x))
+        if len(_digit_words_in_line(line)) > 2:
+            cutoffs.append(_line_top(line))
+    if not cutoffs:
+        return None
+    return min(cutoffs) - 4
+
+
+def _is_footer_or_time_line(
+    line: dict[str, Any],
+    *,
+    footer_cutoff_top: Optional[int] = None,
+) -> bool:
+    text = _line_text(line)
+    if _DATE_LINE_RE.search(text):
+        return True
+    digit_words = _digit_words_in_line(line)
+    if len(digit_words) > 2:
+        return True
+    if footer_cutoff_top is not None and _line_top(line) >= footer_cutoff_top:
+        return True
+    return False
+
+
+def estimate_footprint_split_x(
+    digit_words: list[dict[str, Any]],
+    image_width: int,
+    *,
+    fallback_ratio: float = 0.5,
+) -> int:
+    if len(digit_words) < 2:
+        return max(1, int(image_width * fallback_ratio))
+    xs = sorted(_word_center_x(word) for word in digit_words)
+    best_gap = 0
+    split = image_width * fallback_ratio
+    for idx in range(len(xs) - 1):
+        gap = xs[idx + 1] - xs[idx]
+        if gap > best_gap:
+            best_gap = gap
+            split = (xs[idx] + xs[idx + 1]) / 2
+    if best_gap < image_width * 0.15:
+        return max(1, int(image_width * fallback_ratio))
+    return max(1, int(split))
+
+
+def _pair_bid_ask_from_digit_words(
+    digit_words: list[dict[str, Any]],
+    *,
+    split_x: int,
+) -> dict[str, int]:
+    if len(digit_words) >= 2:
+        left_word, right_word = sorted(digit_words, key=_word_center_x)[:2]
+        return {"bid": int(left_word["_value"]), "ask": int(right_word["_value"])}
+    word = digit_words[0]
+    value = int(word["_value"])
+    if _word_center_x(word) < split_x:
+        return {"bid": value, "ask": 0}
+    return {"bid": 0, "ask": value}
+
+
+def _parse_price_levels_from_lines(
+    lines: list[dict[str, Any]],
+    *,
+    image_width: int,
+    split_ratio: float,
+    image_height: int,
+) -> list[dict[str, int]]:
+    footer_cutoff = _footer_cutoff_top(lines)
+    _ = image_height
+    candle_lines: list[tuple[int, list[dict[str, Any]]]] = []
+    digit_words_all: list[dict[str, Any]] = []
+    for line in lines:
+        if _is_footer_or_time_line(line, footer_cutoff_top=footer_cutoff):
+            continue
+        digit_words = _digit_words_in_line(line)
+        if not digit_words or len(digit_words) > 2:
+            continue
+        candle_lines.append((_line_top(line), digit_words))
+        digit_words_all.extend(digit_words)
+    if not candle_lines:
+        return []
+
+    split_x = estimate_footprint_split_x(
+        digit_words_all,
+        image_width,
+        fallback_ratio=split_ratio,
+    )
+    levels: list[dict[str, int]] = []
+    for _top, digit_words in sorted(candle_lines, key=lambda item: item[0]):
+        level = _pair_bid_ask_from_digit_words(digit_words, split_x=split_x)
+        if level["bid"] == 0 and level["ask"] == 0:
+            continue
+        levels.append(level)
+    return levels
+
+
+def _row_bucket_px(words: list[dict[str, Any]]) -> int:
+    heights: list[int] = []
+    for word in words:
+        text = str(word.get("WordText") or "").strip().replace(",", "")
+        if not _DIGITS_RE.match(text):
+            continue
+        try:
+            heights.append(max(8, int(word.get("Height") or 12)))
+        except (TypeError, ValueError):
+            continue
+    if not heights:
+        return _ROW_BUCKET_PX
+    heights.sort()
+    median = heights[len(heights) // 2]
+    return max(8, int(median * 0.85))
+
+
+def _parse_price_levels_from_word_buckets(
+    words: list[dict[str, Any]],
+    *,
+    image_width: int,
+    split_ratio: float,
+) -> list[dict[str, int]]:
+    digit_words: list[dict[str, Any]] = []
+    for word in words:
+        text = str(word.get("WordText") or "").strip().replace(",", "")
+        if not _DIGITS_RE.match(text):
+            continue
+        try:
+            digit_words.append({**word, "_value": int(text)})
+        except (TypeError, ValueError):
+            continue
+    if not digit_words:
+        return []
+
+    split_x = estimate_footprint_split_x(
+        digit_words,
+        image_width,
+        fallback_ratio=split_ratio,
+    )
+    bucket_px = _row_bucket_px(words)
+    rows: dict[int, list[dict[str, Any]]] = {}
+    for word in digit_words:
+        top = int(word.get("Top") or 0)
+        bucket = (top // bucket_px) * bucket_px
+        rows.setdefault(bucket, []).append(word)
 
     levels: list[dict[str, int]] = []
     for bucket in sorted(rows.keys()):
-        row = rows[bucket]
-        bid = row["bid"][0] if row["bid"] is not None else 0
-        ask = row["ask"][0] if row["ask"] is not None else 0
-        if bid == 0 and ask == 0:
+        level = _pair_bid_ask_from_digit_words(rows[bucket], split_x=split_x)
+        if level["bid"] == 0 and level["ask"] == 0:
             continue
-        levels.append({"bid": bid, "ask": ask})
+        levels.append(level)
     return levels
+
+
+def parse_price_levels_from_overlay(
+    words: list[dict[str, Any]],
+    *,
+    image_width: int,
+    split_ratio: float = 0.5,
+    lines: Optional[list[dict[str, Any]]] = None,
+    image_height: int = 0,
+) -> list[dict[str, int]]:
+    if lines:
+        levels = _parse_price_levels_from_lines(
+            lines,
+            image_width=image_width,
+            split_ratio=split_ratio,
+            image_height=image_height,
+        )
+        if levels:
+            return levels
+    return _parse_price_levels_from_word_buckets(
+        words,
+        image_width=image_width,
+        split_ratio=split_ratio,
+    )
 
 
 def parse_footprint_candle_from_ocr(
@@ -194,7 +411,7 @@ def parse_footprint_candle_from_ocr(
     *,
     image_width: int,
     closed_candle_open: datetime,
-    split_ratio: float = 0.42,
+    split_ratio: float = 0.5,
 ) -> dict[str, Any]:
     parsed_text = ""
     results = ocr_payload.get("ParsedResults") or []
@@ -204,10 +421,14 @@ def parse_footprint_candle_from_ocr(
         closed_candle_open
     )
     words = _iter_overlay_words(ocr_payload)
+    lines = _iter_overlay_lines(ocr_payload)
+    image_height = _estimate_image_height(words, lines)
     price_levels = parse_price_levels_from_overlay(
         words,
         image_width=image_width,
         split_ratio=split_ratio,
+        lines=lines,
+        image_height=image_height,
     )
     if not price_levels:
         raise RuntimeError("OCR produced no bid/ask price levels")
@@ -223,8 +444,8 @@ def process_footprint_clip_image(
     out_json_path: Path,
     symbol: str,
     timeframe: str,
-    split_ratio: float = 0.42,
-    delete_image_after: bool = True,
+    split_ratio: float = 0.5,
+    delete_image_after: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """
     OCR clip PNG → append candle to interval JSON → optionally delete PNG.
