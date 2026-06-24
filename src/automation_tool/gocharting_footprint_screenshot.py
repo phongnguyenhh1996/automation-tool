@@ -17,9 +17,12 @@ from automation_tool.gocharting_capture import (
     _wait_for_chart_before_export,
     load_gocharting_yaml,
 )
+from automation_tool.gocharting_capture_lock import wait_until_gocharting_capture_idle
 from automation_tool.playwright_browser import close_browser_and_context, launch_chrome_context
 
 _log = logging.getLogger(__name__)
+
+_CAPTURE_BUSY_WAIT_S = 60.0
 
 _DEFAULT_INTERVALS = ("5m", "15m")
 _DEFAULT_FOOTPRINT_SCREENSHOT: dict[str, Any] = {
@@ -221,6 +224,26 @@ def _capture_footprint_shot(
     _log.info("gocharting footprint: saved %s", dest.name)
 
 
+def _open_interval_tab(
+    context: BrowserContext,
+    base_cfg: dict[str, Any],
+    footprint_cfg: dict[str, Any],
+    *,
+    interval: str,
+    email: str,
+    password: str,
+) -> FootprintIntervalTab:
+    interval_cfg = _interval_cfg(footprint_cfg, interval)
+    page = context.new_page()
+    _prepare_footprint_page(page, base_cfg, interval_cfg, email=email, password=password)
+    return FootprintIntervalTab(
+        interval=interval,
+        interval_minutes=_interval_minutes(interval),
+        page=page,
+        cfg=interval_cfg,
+    )
+
+
 def _open_interval_tabs(
     context: BrowserContext,
     base_cfg: dict[str, Any],
@@ -230,20 +253,17 @@ def _open_interval_tabs(
     email: str,
     password: str,
 ) -> list[FootprintIntervalTab]:
-    tabs: list[FootprintIntervalTab] = []
-    for interval in intervals:
-        interval_cfg = _interval_cfg(footprint_cfg, interval)
-        page = context.new_page()
-        _prepare_footprint_page(page, base_cfg, interval_cfg, email=email, password=password)
-        tabs.append(
-            FootprintIntervalTab(
-                interval=interval,
-                interval_minutes=_interval_minutes(interval),
-                page=page,
-                cfg=interval_cfg,
-            )
+    return [
+        _open_interval_tab(
+            context,
+            base_cfg,
+            footprint_cfg,
+            interval=interval,
+            email=email,
+            password=password,
         )
-    return tabs
+        for interval in intervals
+    ]
 
 
 def _close_interval_tabs(tabs: list[FootprintIntervalTab]) -> None:
@@ -330,35 +350,39 @@ def run_footprint_gocharting_screenshot_daemon(
             use_browser_service = False
             _log.info("gocharting footprint: launched standalone Chrome")
 
-        tabs: list[FootprintIntervalTab] = []
         try:
-            tabs = _open_interval_tabs(
-                context,
-                base_cfg,
-                footprint_cfg,
-                intervals=intervals,
-                email=email,
-                password=password,
-            )
-            if save_storage_state and not use_browser_service:
-                try:
-                    context.storage_state(path=str(storage))
-                except Exception:
-                    _log.warning("gocharting footprint: could not save storage state", exc_info=True)
-
             print(f"footprint-gocharting-screenshot daemon running; output → {out_dir}", flush=True)
             while True:
                 _wait_until_next_minute()
                 now = datetime.now()
-                for tab in tabs:
-                    if not _is_first_minute_of_candle(now, tab.interval_minutes):
+                for interval in intervals:
+                    interval_min = _interval_minutes(interval)
+                    if not _is_first_minute_of_candle(now, interval_min):
                         continue
-                    closed_open = _closed_candle_open(now, tab.interval_minutes)
-                    dedupe_key = (tab.interval, closed_open)
+                    closed_open = _closed_candle_open(now, interval_min)
+                    dedupe_key = (interval, closed_open)
                     if dedupe_key in captured:
                         continue
-                    dest = _footprint_image_path(out_dir, closed_open, tab.interval)
+                    dest = _footprint_image_path(out_dir, closed_open, interval)
+                    tab: FootprintIntervalTab | None = None
                     try:
+                        wait_until_gocharting_capture_idle(sleep_s=_CAPTURE_BUSY_WAIT_S)
+                        tab = _open_interval_tab(
+                            context,
+                            base_cfg,
+                            footprint_cfg,
+                            interval=interval,
+                            email=email,
+                            password=password,
+                        )
+                        if save_storage_state and not use_browser_service:
+                            try:
+                                context.storage_state(path=str(storage))
+                            except Exception:
+                                _log.warning(
+                                    "gocharting footprint: could not save storage state",
+                                    exc_info=True,
+                                )
                         _capture_footprint_shot(
                             tab,
                             base_cfg,
@@ -373,18 +397,25 @@ def run_footprint_gocharting_screenshot_daemon(
                             process_footprint_clip_image,
                         )
 
-                        json_path = footprint_interval_json_path(out_dir, tab.interval)
-                        candle, _doc = process_footprint_clip_image(
+                        json_path = footprint_interval_json_path(out_dir, interval)
+                        ocr_result = process_footprint_clip_image(
                             dest,
                             ocr_api_key=ocr_key,
                             closed_candle_open=closed_open,
                             image_width=clip_width,
                             out_json_path=json_path,
                             symbol=symbol,
-                            timeframe=tab.interval,
+                            timeframe=interval,
                             split_ratio=ocr_split_ratio,
                             delete_image_after=delete_after_ocr,
                         )
+                        if ocr_result is None:
+                            print(
+                                f"OCR skip {dest.name} (no bid/ask pair lines)",
+                                flush=True,
+                            )
+                            continue
+                        candle, _doc = ocr_result
                         print(
                             f"OCR → {json_path.name} | time={candle['time']} "
                             f"levels={len(candle['price_levels'])}",
@@ -393,14 +424,16 @@ def run_footprint_gocharting_screenshot_daemon(
                     except Exception:
                         _log.exception(
                             "gocharting footprint: capture failed interval=%s closed_open=%s",
-                            tab.interval,
+                            interval,
                             closed_open,
                         )
+                    finally:
+                        if tab is not None:
+                            _close_interval_tabs([tab])
         except KeyboardInterrupt:
             _log.info("gocharting footprint daemon: stopped by user")
             print("\nfootprint-gocharting-screenshot daemon stopped.", flush=True)
         finally:
-            _close_interval_tabs(tabs)
             if use_browser_service:
                 try:
                     browser.close()

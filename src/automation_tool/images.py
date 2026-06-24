@@ -30,6 +30,24 @@ def gocharting_footprint_export_label(main_sym: str) -> str:
         return GOCHARTING_GOLD_EXPORT_LABEL
     return m
 
+
+def footprint_bid_ask_openai_payloads(charts_dir: Path) -> list[ChartOpenAIPayload]:
+    """OCR footprint JSON from ``footprint-gocharting-screenshot`` daemon (if on disk)."""
+    from automation_tool.gocharting_footprint_ocr import existing_footprint_bid_ask_json_paths
+
+    return [("json", path) for path in existing_footprint_bid_ask_json_paths(charts_dir)]
+
+
+def extend_openai_payloads_with_footprint_bid_ask(
+    payloads: list[ChartOpenAIPayload],
+    charts_dir: Path,
+) -> list[ChartOpenAIPayload]:
+    extra = footprint_bid_ask_openai_payloads(charts_dir)
+    if not extra:
+        return payloads
+    return [*payloads, *extra]
+
+
 def normalize_main_chart_symbol(s: str) -> str:
     """Uppercase forex/crypto pair id for filenames (watchlist id on Coinmap / TV label)."""
     t = (s or "").strip().upper()

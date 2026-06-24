@@ -12,6 +12,7 @@ from playwright.sync_api import BrowserContext, Page, sync_playwright
 from automation_tool.browser_client import browser_service_state_path, try_attach_playwright_via_service
 from automation_tool.chart_payload_validate import prepare_gocharting_csv_file
 from automation_tool.config import default_storage_state_path
+from automation_tool.gocharting_capture_lock import gocharting_capture_lock
 from automation_tool.playwright_browser import close_browser_and_context, launch_chrome_context
 
 _log = logging.getLogger(__name__)
@@ -896,38 +897,39 @@ def capture_gocharting(
         overview_capture=overview_capture,
     )
 
-    if reuse_browser_context is not None:
-        return _capture_gocharting_with_context(reuse_browser_context, **common_kw)
+    with gocharting_capture_lock():
+        if reuse_browser_context is not None:
+            return _capture_gocharting_with_context(reuse_browser_context, **common_kw)
 
-    with sync_playwright() as p:
-        attached = try_attach_playwright_via_service(p, force=require_browser_service)
-        if attached is not None:
-            browser, context = attached
-            use_browser_service = True
-            _log.info("gocharting: attached to browser service")
-        elif require_browser_service:
-            raise SystemExit(
-                "GoCharting capture requires browser service but could not attach via CDP. "
-                "Run: coinmap-automation browser up "
-                f"(state file: {browser_service_state_path()})."
-            )
-        else:
-            browser, context = launch_chrome_context(
-                p,
-                headless=headless,
-                storage_state_path=storage if storage.is_file() else None,
-                viewport_width=vw,
-                viewport_height=vh,
-            )
-            use_browser_service = False
-            _log.info("gocharting: launched standalone Chrome (no browser service)")
-        try:
-            return _capture_gocharting_with_context(context, **common_kw)
-        finally:
-            if use_browser_service:
-                try:
-                    browser.close()
-                except Exception:
-                    pass
+        with sync_playwright() as p:
+            attached = try_attach_playwright_via_service(p, force=require_browser_service)
+            if attached is not None:
+                browser, context = attached
+                use_browser_service = True
+                _log.info("gocharting: attached to browser service")
+            elif require_browser_service:
+                raise SystemExit(
+                    "GoCharting capture requires browser service but could not attach via CDP. "
+                    "Run: coinmap-automation browser up "
+                    f"(state file: {browser_service_state_path()})."
+                )
             else:
-                close_browser_and_context(browser, context)
+                browser, context = launch_chrome_context(
+                    p,
+                    headless=headless,
+                    storage_state_path=storage if storage.is_file() else None,
+                    viewport_width=vw,
+                    viewport_height=vh,
+                )
+                use_browser_service = False
+                _log.info("gocharting: launched standalone Chrome (no browser service)")
+            try:
+                return _capture_gocharting_with_context(context, **common_kw)
+            finally:
+                if use_browser_service:
+                    try:
+                        browser.close()
+                    except Exception:
+                        pass
+                else:
+                    close_browser_and_context(browser, context)

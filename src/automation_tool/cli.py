@@ -24,6 +24,7 @@ from automation_tool.gocharting_footprint_extract import (
     DEFAULT_FOOTPRINT_EXTRACT_MODEL,
     extract_all_footprint_jsons,
 )
+from automation_tool.gocharting_footprint_ocr import existing_footprint_bid_ask_json_paths
 from automation_tool.gocharting_footprint_screenshot import run_footprint_gocharting_screenshot_daemon
 from automation_tool.config import (
     resolve_update_scalp_vector_store_ids,
@@ -63,6 +64,7 @@ from automation_tool.images import (
     ChartOpenAIPayload,
     coinmap_main_pair_interval_json_path,
     effective_chart_image_order,
+    extend_openai_payloads_with_footprint_bid_ask,
     footprint_source_for_stamp,
     gocharting_detail_png_paths,
     gocharting_detail_zoom_png_path_for_csv,
@@ -2253,6 +2255,41 @@ def _resolved_analysis_prompt(args: argparse.Namespace, charts_dir: Path) -> str
     return default_analysis_prompt(sym, footprint_source=fp)
 
 
+def _extend_payloads_with_footprint_bid_ask_json(
+    payloads: list[ChartOpenAIPayload],
+    charts_dir: Path,
+) -> list[ChartOpenAIPayload]:
+    extended = extend_openai_payloads_with_footprint_bid_ask(payloads, charts_dir)
+    added = len(extended) - len(payloads)
+    if added:
+        names = [
+            p.name
+            for kind, p in extended[len(payloads) :]
+            if kind == "json" and isinstance(p, Path)
+        ]
+        _log.info(
+            "footprint bid/ask JSON: đính kèm %s file(s) | %s",
+            added,
+            ", ".join(names),
+        )
+    return extended
+
+
+def _append_footprint_bid_ask_json_paths(paths: list[Path], charts_dir: Path) -> list[Path]:
+    before = len(paths)
+    for path in existing_footprint_bid_ask_json_paths(charts_dir):
+        if path not in paths:
+            paths.append(path)
+    added = len(paths) - before
+    if added:
+        _log.info(
+            "footprint bid/ask JSON: đính kèm %s file(s) vào JSON paths | %s",
+            added,
+            ", ".join(p.name for p in paths[before:]),
+        )
+    return paths
+
+
 def _warn_if_incomplete_chart_payloads(
     charts_dir: Path, payloads: list[ChartOpenAIPayload]
 ) -> None:
@@ -3048,6 +3085,7 @@ def cmd_all_2(args: argparse.Namespace) -> None:
     require_valid_coinmap_exports_for_stamp(charts_dir, stamp)
     require_openai(s)
     payloads = ordered_chart_openai_payloads(charts_dir, stamp=stamp)
+    payloads = _extend_payloads_with_footprint_bid_ask_json(payloads, charts_dir)
     _warn_if_incomplete_chart_payloads(charts_dir, payloads)
     if not payloads:
         raise SystemExit(
@@ -3245,6 +3283,7 @@ def cmd_all(args: argparse.Namespace) -> None:
     capture_pngs = ordered_chart_images(charts_dir, stamp=stamp)
     require_openai(s)
     payloads = ordered_chart_openai_payloads(charts_dir)
+    payloads = _extend_payloads_with_footprint_bid_ask_json(payloads, charts_dir)
     _warn_if_incomplete_chart_payloads(charts_dir, payloads)
     if not payloads:
         raise SystemExit(
@@ -3894,6 +3933,7 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
         footprint_paths = [m15, m5]
         if mt5_spot is not None:
             footprint_paths.append(mt5_spot)
+        footprint_paths = _append_footprint_bid_ask_json_paths(footprint_paths, charts_dir)
         m15_png = gocharting_png_path_for_csv(m15)
         m5_png = gocharting_png_path_for_csv(m5)
         m15_detail = gocharting_detail_zoom_png_path_for_csv(m15)
@@ -3939,6 +3979,7 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
             )
         require_valid_coinmap_exports_for_stamp(charts_dir, stamp or "")
         footprint_paths = [m15, m5]
+        footprint_paths = _append_footprint_bid_ask_json_paths(footprint_paths, charts_dir)
         from automation_tool.images import coinmap_png_path_for_json
 
         m15_png = coinmap_png_path_for_json(m15)

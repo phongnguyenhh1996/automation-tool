@@ -145,7 +145,8 @@ def default_analysis_prompt(
             f"GoCharting {_gocharting_main_footprint_label(sym)} M15 và M5 "
             "(footprint hợp đồng tương lai vàng GC1! trên GoCharting; không phải spot XAUUSD; "
             "mỗi khung: CSV + PNG overview + 4 PNG detail) → "
-            f"MT5 spot {sym} M5 (50 nến OHLC broker mới nhất; giá vàng spot thực thi, bổ sung cho GC1!).\n"
+            f"MT5 spot {sym} M5 (50 nến OHLC broker mới nhất; giá vàng spot thực thi, bổ sung cho GC1!) → "
+            "footprint_bid_ask_15m.json và footprint_bid_ask_5m.json (nếu có — bid/ask theo price level).\n"
             "Ưu tiên đọc ảnh chart (GoCharting PNG detail/overview, TradingView snapshot). "
             "GoCharting CSV không có BID/ASK theo price level — stacked BID/ASK, absorption, RL "
             "phải đọc trên ảnh detail footprint, không suy từ CSV. "
@@ -160,7 +161,8 @@ def default_analysis_prompt(
             f"TradingView {sym} (H4, H1, M15, M15 Session Liquidity Check / ICT Killzones, M5) "
             "(snapshot URL/PNG hoặc JSON OHLC tvdatafeed) → "
             "Coinmap DXY M15 (JSON footprint; PNG fullscreen ngay sau nếu có) → "
-            f"Coinmap {sym} M15 và M5 (mỗi khung: JSON; PNG ngay sau nếu có; hoặc merged JSON thay M15+M5, PNG M5 vẫn riêng).\n"
+            f"Coinmap {sym} M15 và M5 (mỗi khung: JSON; PNG ngay sau nếu có; hoặc merged JSON thay M15+M5, PNG M5 vẫn riêng) → "
+            "footprint_bid_ask_15m.json và footprint_bid_ask_5m.json (nếu có — bid/ask GC1! từ OCR clip footprint).\n"
             "Ưu tiên đọc ảnh chart (Coinmap PNG, TradingView snapshot); khi dữ liệu không rõ, "
             "không đọc được trên chart, hoặc cần con số chính xác (order flow, CVD, VWAP, delta, OHLC) "
             "thì tra JSON cm-api / tvdatafeed tương ứng.\n"
@@ -262,6 +264,13 @@ def _json_file_header_and_body(path: Path, *, max_chars: int) -> tuple[str, str]
             f"[MT5 spot OHLC (broker execution price) — file: {path.name}]\n"
             "Instrument: spot XAUUSD on broker MT5 (not GC1! futures footprint).\n"
             "Bar times (`t`) and generated_at are Asia/Ho_Chi_Minh (UTC+7).\n"
+        )
+    elif path.name.startswith("footprint_bid_ask_") and path.suffix.lower() == ".json":
+        iv = path.stem.replace("footprint_bid_ask_", "")
+        header = (
+            f"[GoCharting Bid/Ask footprint OCR — {iv} — file: {path.name}]\n"
+            "Instrument: COMEX:GC1! futures. Each candle: time (HH:MM) + price_levels "
+            "[{bid, ask}, ...] top→bottom per closed bar.\n"
         )
     elif "_openai_coinmap_merged" in path.name or path.name.endswith("_merged.json"):
         header = f"[Coinmap merged analysis — file: {path.name}]\n"
@@ -995,7 +1004,9 @@ def build_scalp_update_user_text(
             f" (footprint {GOCHARTING_GOLD_FUTURE_LABEL} trên GoCharting — hợp đồng tương lai vàng GC1!, "
             "không phải spot XAUUSD; mỗi khung: CSV orderflow; PNG overview; "
             "một PNG detail footprint zoom và hai PNG pan-back lịch sử; "
-            "kèm thêm JSON MT5 spot XAUUSD M5 — 50 nến OHLC broker mới nhất)."
+            "kèm thêm JSON MT5 spot XAUUSD M5 — 50 nến OHLC broker mới nhất; "
+            "cuối cùng footprint_bid_ask_15m.json và footprint_bid_ask_5m.json nếu có — "
+            "bid/ask theo price level từ OCR clip footprint)."
         )
         if first_after_all:
             return (
@@ -1013,7 +1024,8 @@ def build_scalp_update_user_text(
             "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
             f"Đính kèm **ba** file: **(1)** GoCharting M15 CSV, **(2)** M5 CSV, **(3)** MT5 spot XAUUSD M5 JSON "
             f"(50 nến broker; footprint {GOCHARTING_GOLD_FUTURE_LABEL}; "
-            "PNG overview, detail zoom và hai PNG pan-back ngay sau mỗi CSV nếu có).\n"
+            "PNG overview, detail zoom và hai PNG pan-back ngay sau mỗi CSV nếu có; "
+            "footprint_bid_ask_15m.json và footprint_bid_ask_5m.json nếu có).\n"
             f"{_GOCHARTING_SCALP_UPDATE_SUFFIX}"
         )
 

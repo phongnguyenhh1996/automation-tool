@@ -90,7 +90,7 @@ footprint_screenshot:
   ocr_split_ratio: 0.5
   delete_screenshot_after_ocr: false
   refresh_before_capture: true
-  clip: { x1: 50, y1: 60, x2: 290, y2: 1500 }
+  clip: { x1: 50, y1: 60, x2: 290, y2: 1360 }
   intervals:
     15m:
       page_url: "https://gocharting.com/terminal/chart/S0kcqfQKt"
