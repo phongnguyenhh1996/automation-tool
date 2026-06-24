@@ -162,7 +162,7 @@ def default_analysis_prompt(
             "(snapshot URL/PNG hoặc JSON OHLC tvdatafeed) → "
             "Coinmap DXY M15 (JSON footprint; PNG fullscreen ngay sau nếu có) → "
             f"Coinmap {sym} M15 và M5 (mỗi khung: JSON; PNG ngay sau nếu có; hoặc merged JSON thay M15+M5, PNG M5 vẫn riêng) → "
-            "footprint_bid_ask_15m.json và footprint_bid_ask_5m.json (nếu có — bid/ask GC1! từ OCR clip footprint).\n"
+            "footprint_bid_ask_15m.json và footprint_bid_ask_5m.json (nếu có — bid/ask GC1! theo price level).\n"
             "Ưu tiên đọc ảnh chart (Coinmap PNG, TradingView snapshot); khi dữ liệu không rõ, "
             "không đọc được trên chart, hoặc cần con số chính xác (order flow, CVD, VWAP, delta, OHLC) "
             "thì tra JSON cm-api / tvdatafeed tương ứng.\n"
@@ -292,7 +292,7 @@ def _json_file_header_and_body(
     elif path.name.startswith("footprint_bid_ask_") and path.suffix.lower() == ".json":
         iv = path.stem.replace("footprint_bid_ask_", "")
         header = (
-            f"[GoCharting Bid/Ask footprint OCR — {iv} — file: {path.name}]\n"
+            f"[GoCharting Bid/Ask footprint — {iv} — file: {path.name}]\n"
             "Instrument: COMEX:GC1! futures. Each candle: time (HH:MM) + price_levels "
             "[{bid, ask, price}, ...] top→bottom per closed bar "
             "(price from CSV High snapped to GoCharting Tick Manager block cluster, default 0.4).\n"
@@ -1039,7 +1039,7 @@ def build_scalp_update_user_text(
             "một PNG detail footprint zoom và hai PNG pan-back lịch sử; "
             "kèm thêm JSON MT5 spot XAUUSD M5 — 50 nến OHLC broker mới nhất; "
             "cuối cùng footprint_bid_ask_15m.json và footprint_bid_ask_5m.json nếu có — "
-            "bid/ask theo price level từ OCR clip footprint)."
+            "bid/ask theo price level)."
         )
         if first_after_all:
             return (
