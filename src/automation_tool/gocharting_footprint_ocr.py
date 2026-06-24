@@ -4,6 +4,7 @@ import io
 import json
 import logging
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 from collections.abc import Iterable
@@ -25,6 +26,7 @@ _DATE_LINE_RE = re.compile(
 _PAIR_LINE_RE = re.compile(r"^\s*(\d+)\s+(\d+)\s*$")
 _FOOTPRINT_OCR_ENGINE = "3"
 _FOOTPRINT_OCR_TIMEOUT_S = 180.0
+_FOOTPRINT_OCR_BATCH_DELAY_S = 5.0
 _GARBAGE_OCR_LINE_RE = re.compile(r"[@$=\\]|\\phi", re.I)
 _FOOTPRINT_CLIP_PNG_RE = re.compile(
     r"^(\d{8})_(\d{1,2})h(\d{1,2})m_(\d+m)\.png$",
@@ -168,6 +170,23 @@ def merge_footprint_candles_by_time(
     return sorted(by_time.values(), key=lambda c: str(c.get("time") or ""))
 
 
+def footprint_candle_has_price_levels(candle: dict[str, Any]) -> bool:
+    levels = candle.get("price_levels")
+    return isinstance(levels, list) and len(levels) > 0
+
+
+def existing_footprint_times_with_levels(doc: dict[str, Any]) -> set[str]:
+    """Return candle times in ``doc`` that already have at least one price level."""
+    times: set[str] = set()
+    for candle in doc.get("candles", []):
+        if not isinstance(candle, dict):
+            continue
+        time_key = str(candle.get("time") or "").strip()
+        if time_key and footprint_candle_has_price_levels(candle):
+            times.add(time_key)
+    return times
+
+
 def batch_ocr_footprint_clip_images(
     out_dir: Path,
     *,
@@ -177,10 +196,14 @@ def batch_ocr_footprint_clip_images(
     split_ratio: float = 0.5,
     intervals: tuple[str, ...] = ("15m", "5m"),
     delete_image_after: bool = False,
+    ocr_delay_s: float = _FOOTPRINT_OCR_BATCH_DELAY_S,
 ) -> dict[str, dict[str, Any]]:
     """
-    OCR every footprint clip PNG under ``out_dir`` and write one JSON per interval.
+    OCR footprint clip PNGs missing from on-disk interval JSON and merge results.
 
+    Skips PNGs whose candle ``time`` already exists in the interval JSON with
+    at least one ``price_level``. Times present but empty are OCR'd again.
+    Waits ``ocr_delay_s`` between OCR.space calls to reduce 429 rate limits.
     Candles are sorted by ``time`` with no duplicates; on duplicate times the candle
     with more ``price_levels`` wins.
     """
@@ -189,12 +212,35 @@ def batch_ocr_footprint_clip_images(
         out_dir,
         intervals=interval_set or None,
     )
-    candles_by_interval: dict[str, list[dict[str, Any]]] = {
+
+    existing_docs: dict[str, dict[str, Any]] = {}
+    existing_times_with_levels: dict[str, set[str]] = {}
+    for interval in interval_set:
+        json_path = footprint_interval_json_path(out_dir, interval)
+        doc = load_footprint_document(json_path, symbol=symbol, timeframe=interval)
+        existing_docs[interval] = doc
+        existing_times_with_levels[interval] = existing_footprint_times_with_levels(doc)
+
+    new_candles_by_interval: dict[str, list[dict[str, Any]]] = {
         iv: [] for iv in interval_set
     }
+    ocr_calls = 0
 
     for path, closed_open, interval in png_items:
-        candles_by_interval.setdefault(interval, [])
+        time_key = closed_candle_time_hhmm(closed_open)
+        if time_key in existing_times_with_levels.get(interval, set()):
+            _log.debug(
+                "footprint OCR batch: skip %s | time=%s already has price_levels in JSON",
+                path.name,
+                time_key,
+            )
+            continue
+
+        if ocr_calls > 0 and ocr_delay_s > 0:
+            _log.debug("footprint OCR batch: wait %.1fs before next OCR call", ocr_delay_s)
+            time.sleep(ocr_delay_s)
+
+        candles_by_interval = new_candles_by_interval.setdefault(interval, [])
         try:
             candle = parse_footprint_candle_from_clip_image(
                 path,
@@ -204,9 +250,11 @@ def batch_ocr_footprint_clip_images(
                 split_ratio=split_ratio,
             )
         except FootprintOcrSkipped as exc:
+            ocr_calls += 1
             _log.warning("footprint OCR batch: skip %s | %s", path.name, exc)
             continue
-        candles_by_interval[interval].append(candle)
+        ocr_calls += 1
+        candles_by_interval.append(candle)
         if delete_image_after:
             try:
                 path.unlink()
@@ -219,19 +267,25 @@ def batch_ocr_footprint_clip_images(
                 )
 
     docs: dict[str, dict[str, Any]] = {}
-    write_intervals = interval_set or set(candles_by_interval)
+    write_intervals = interval_set or set(new_candles_by_interval)
     for interval in sorted(write_intervals):
-        merged = merge_footprint_candles_by_time(candles_by_interval.get(interval, []))
+        prior = [
+            c for c in existing_docs.get(interval, {}).get("candles", []) if isinstance(c, dict)
+        ]
+        merged = merge_footprint_candles_by_time(
+            [*prior, *new_candles_by_interval.get(interval, [])]
+        )
         doc = new_footprint_document(symbol=symbol, timeframe=interval)
         doc["candles"] = merged
         json_path = footprint_interval_json_path(out_dir, interval)
         write_footprint_document(json_path, doc)
         docs[interval] = doc
+        added = len(new_candles_by_interval.get(interval, []))
         _log.info(
-            "footprint OCR batch: %s → %d candles from %d PNG(s)",
+            "footprint OCR batch: %s → %d candles (+%d new from OCR)",
             json_path.name,
             len(merged),
-            len(candles_by_interval.get(interval, [])),
+            added,
         )
     return docs
 

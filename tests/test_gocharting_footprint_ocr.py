@@ -108,6 +108,7 @@ def test_batch_ocr_footprint_clip_images_writes_sorted_deduped_json(
         symbol="COMEX:GC1!",
         image_width=230,
         intervals=("5m",),
+        ocr_delay_s=0,
     )
     assert len(docs["5m"]["candles"]) == 2
     assert [c["time"] for c in docs["5m"]["candles"]] == ["09:55", "10:00"]
@@ -118,6 +119,130 @@ def test_batch_ocr_footprint_clip_images_writes_sorted_deduped_json(
     on_disk = json.loads(json_path.read_text(encoding="utf-8"))
     assert on_disk["type"] == FOOTPRINT_CHART_TYPE
     assert [c["time"] for c in on_disk["candles"]] == ["09:55", "10:00"]
+
+
+def test_batch_ocr_skips_times_already_in_json(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    out = tmp_path / "footprint_images"
+    out.mkdir()
+    json_path = out / "footprint_bid_ask_5m.json"
+    json_path.write_text(
+        json.dumps(
+            {
+                "symbol": "COMEX:GC1!",
+                "timeframe": "5m",
+                "type": FOOTPRINT_CHART_TYPE,
+                "candles": [{"time": "09:55", "price_levels": [{"bid": 9, "ask": 9}]}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    for name in ("20250624_9h55m_5m.png", "20250624_10h0m_5m.png"):
+        (out / name).write_bytes(b"png")
+
+    calls: list[str] = []
+
+    def _fake_parse(path: Path, **_kwargs):
+        calls.append(path.name)
+        if path.name == "20250624_10h0m_5m.png":
+            return {"time": "10:00", "price_levels": [{"bid": 1, "ask": 2}]}
+        raise AssertionError(path.name)
+
+    monkeypatch.setattr(
+        "automation_tool.gocharting_footprint_ocr.parse_footprint_candle_from_clip_image",
+        _fake_parse,
+    )
+
+    docs = batch_ocr_footprint_clip_images(
+        out,
+        ocr_api_key="test-key",
+        symbol="COMEX:GC1!",
+        image_width=230,
+        intervals=("5m",),
+        ocr_delay_s=0,
+    )
+    assert calls == ["20250624_10h0m_5m.png"]
+    assert [c["time"] for c in docs["5m"]["candles"]] == ["09:55", "10:00"]
+    assert docs["5m"]["candles"][0]["price_levels"] == [{"bid": 9, "ask": 9}]
+
+
+def test_batch_ocr_retries_times_with_empty_price_levels_in_json(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    out = tmp_path / "footprint_images"
+    out.mkdir()
+    json_path = out / "footprint_bid_ask_5m.json"
+    json_path.write_text(
+        json.dumps(
+            {
+                "symbol": "COMEX:GC1!",
+                "timeframe": "5m",
+                "type": FOOTPRINT_CHART_TYPE,
+                "candles": [{"time": "09:55", "price_levels": []}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (out / "20250624_9h55m_5m.png").write_bytes(b"png")
+
+    monkeypatch.setattr(
+        "automation_tool.gocharting_footprint_ocr.parse_footprint_candle_from_clip_image",
+        lambda *_a, **_k: {
+            "time": "09:55",
+            "price_levels": [{"bid": 1, "ask": 2}, {"bid": 3, "ask": 4}],
+        },
+    )
+
+    docs = batch_ocr_footprint_clip_images(
+        out,
+        ocr_api_key="test-key",
+        symbol="COMEX:GC1!",
+        image_width=230,
+        intervals=("5m",),
+        ocr_delay_s=0,
+    )
+    assert len(docs["5m"]["candles"]) == 1
+    assert docs["5m"]["candles"][0]["price_levels"] == [
+        {"bid": 1, "ask": 2},
+        {"bid": 3, "ask": 4},
+    ]
+
+
+def test_batch_ocr_waits_between_api_calls(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    out = tmp_path / "footprint_images"
+    out.mkdir()
+    for name in ("20250624_9h55m_5m.png", "20250624_10h0m_5m.png"):
+        (out / name).write_bytes(b"png")
+
+    sleeps: list[float] = []
+
+    def _fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr("automation_tool.gocharting_footprint_ocr.time.sleep", _fake_sleep)
+    monkeypatch.setattr(
+        "automation_tool.gocharting_footprint_ocr.parse_footprint_candle_from_clip_image",
+        lambda path, **_kwargs: {
+            "time": "09:55" if path.name.endswith("9h55m_5m.png") else "10:00",
+            "price_levels": [{"bid": 1, "ask": 2}],
+        },
+    )
+
+    batch_ocr_footprint_clip_images(
+        out,
+        ocr_api_key="test-key",
+        symbol="COMEX:GC1!",
+        image_width=230,
+        intervals=("5m",),
+        ocr_delay_s=5.0,
+    )
+    assert sleeps == [5.0]
 
 
 def test_existing_footprint_bid_ask_json_paths(tmp_path: Path) -> None:
