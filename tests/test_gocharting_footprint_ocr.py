@@ -10,10 +10,14 @@ from automation_tool.gocharting_footprint_ocr import (
     FOOTPRINT_CHART_TYPE,
     FootprintOcrSkipped,
     append_candle_to_footprint_document,
+    batch_ocr_footprint_clip_images,
     closed_candle_time_hhmm,
     extract_time_hhmm_from_ocr_text,
     footprint_interval_json_path,
+    list_footprint_clip_pngs,
+    merge_footprint_candles_by_time,
     new_footprint_document,
+    parse_footprint_clip_png_name,
     parse_footprint_candle_from_ocr,
     parse_price_levels_from_overlay,
     parse_price_levels_from_parsed_text,
@@ -24,6 +28,96 @@ from automation_tool.gocharting_footprint_ocr import (
 def test_footprint_interval_json_path() -> None:
     p = footprint_interval_json_path(Path("/tmp/out"), "5m")
     assert p.name == "footprint_bid_ask_5m.json"
+
+
+def test_parse_footprint_clip_png_name() -> None:
+    parsed = parse_footprint_clip_png_name("20250624_9h55m_5m.png")
+    assert parsed is not None
+    closed_open, interval = parsed
+    assert closed_open == datetime(2025, 6, 24, 9, 55)
+    assert interval == "5m"
+    assert parse_footprint_clip_png_name("not_a_footprint.png") is None
+
+
+def test_list_footprint_clip_pngs_sorts_by_time(tmp_path: Path) -> None:
+    out = tmp_path / "footprint_images"
+    out.mkdir()
+    for name in (
+        "20250624_10h0m_5m.png",
+        "20250624_9h55m_5m.png",
+        "20250624_10h0m_15m.png",
+    ):
+        (out / name).write_bytes(b"png")
+    items = list_footprint_clip_pngs(out, intervals={"5m"})
+    assert [p.name for p, _, iv in items] == [
+        "20250624_9h55m_5m.png",
+        "20250624_10h0m_5m.png",
+    ]
+    assert all(iv == "5m" for _, _, iv in items)
+
+
+def test_merge_footprint_candles_by_time_keeps_more_levels() -> None:
+    merged = merge_footprint_candles_by_time(
+        [
+            {"time": "08:25", "price_levels": [{"bid": 1, "ask": 2}]},
+            {"time": "08:20", "price_levels": [{"bid": 0, "ask": 1}, {"bid": 2, "ask": 3}]},
+            {"time": "08:25", "price_levels": [{"bid": 1, "ask": 2}, {"bid": 3, "ask": 4}]},
+        ]
+    )
+    assert [c["time"] for c in merged] == ["08:20", "08:25"]
+    assert len(merged[1]["price_levels"]) == 2
+
+
+def test_batch_ocr_footprint_clip_images_writes_sorted_deduped_json(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    out = tmp_path / "footprint_images"
+    out.mkdir()
+    for name in (
+        "20250624_9h55m_5m.png",
+        "20250623_10h0m_5m.png",
+        "20250624_10h0m_5m.png",
+    ):
+        (out / name).write_bytes(b"png")
+
+    def _fake_parse(path: Path, **_kwargs):
+        if path.name == "20250624_9h55m_5m.png":
+            return {"time": "09:55", "price_levels": [{"bid": 1, "ask": 2}]}
+        if path.name == "20250623_10h0m_5m.png":
+            return {"time": "10:00", "price_levels": [{"bid": 1, "ask": 2}]}
+        if path.name == "20250624_10h0m_5m.png":
+            return {
+                "time": "10:00",
+                "price_levels": [
+                    {"bid": 1, "ask": 2},
+                    {"bid": 3, "ask": 4},
+                    {"bid": 5, "ask": 6},
+                ],
+            }
+        raise AssertionError(path.name)
+
+    monkeypatch.setattr(
+        "automation_tool.gocharting_footprint_ocr.parse_footprint_candle_from_clip_image",
+        _fake_parse,
+    )
+
+    docs = batch_ocr_footprint_clip_images(
+        out,
+        ocr_api_key="test-key",
+        symbol="COMEX:GC1!",
+        image_width=230,
+        intervals=("5m",),
+    )
+    assert len(docs["5m"]["candles"]) == 2
+    assert [c["time"] for c in docs["5m"]["candles"]] == ["09:55", "10:00"]
+    assert len(docs["5m"]["candles"][1]["price_levels"]) == 3
+
+    json_path = out / "footprint_bid_ask_5m.json"
+    assert json_path.is_file()
+    on_disk = json.loads(json_path.read_text(encoding="utf-8"))
+    assert on_disk["type"] == FOOTPRINT_CHART_TYPE
+    assert [c["time"] for c in on_disk["candles"]] == ["09:55", "10:00"]
 
 
 def test_existing_footprint_bid_ask_json_paths(tmp_path: Path) -> None:

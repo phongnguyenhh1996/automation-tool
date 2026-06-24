@@ -24,7 +24,12 @@ from automation_tool.gocharting_footprint_extract import (
     DEFAULT_FOOTPRINT_EXTRACT_MODEL,
     extract_all_footprint_jsons,
 )
-from automation_tool.gocharting_footprint_ocr import existing_footprint_bid_ask_json_paths
+from automation_tool.gocharting_footprint_ocr import (
+    batch_ocr_footprint_clip_images,
+    existing_footprint_bid_ask_json_paths,
+    footprint_images_dir,
+    footprint_interval_json_path,
+)
 from automation_tool.gocharting_footprint_screenshot import run_footprint_gocharting_screenshot_daemon
 from automation_tool.config import (
     resolve_update_scalp_vector_store_ids,
@@ -397,6 +402,42 @@ def _parser() -> argparse.ArgumentParser:
         help="Mở Chrome mới thay vì attach browser service (mặc định: dùng service).",
     )
     fgs.set_defaults(func=cmd_footprint_gocharting_screenshot)
+
+    fgo = sub.add_parser(
+        "footprint-gocharting-ocr",
+        help="OCR tất cả PNG footprint trong footprint_images → JSON (dedupe theo time).",
+    )
+    fgo.add_argument(
+        "--gocharting-config",
+        type=Path,
+        default=None,
+        help="YAML GoCharting (default: config/gocharting.yaml)",
+    )
+    fgo.add_argument("--charts-dir", type=Path, default=None)
+    fgo.add_argument(
+        "--footprint-dir",
+        type=Path,
+        default=None,
+        help="Thư mục chứa PNG footprint (mặc định: charts_dir/footprint_images).",
+    )
+    fgo.add_argument(
+        "--main-symbol",
+        default=None,
+        metavar="SYM",
+        help="Cặp chính (vd. XAUUSD); mặc định active symbol.",
+    )
+    fgo.add_argument(
+        "--intervals",
+        default=None,
+        metavar="LIST",
+        help="Interval cần ghi JSON, phân cách bằng dấu phẩy (mặc định: 15m,5m từ config).",
+    )
+    fgo.add_argument(
+        "--delete-after",
+        action="store_true",
+        help="Xóa PNG sau khi OCR thành công.",
+    )
+    fgo.set_defaults(func=cmd_footprint_gocharting_ocr)
 
     a = sub.add_parser(
         "analyze",
@@ -2016,6 +2057,75 @@ def cmd_footprint_gocharting_screenshot(args: argparse.Namespace) -> None:
         require_browser_service=require_service,
         ocr_api_key=s.ocr_space_api_key,
     )
+
+
+def cmd_footprint_gocharting_ocr(args: argparse.Namespace) -> None:
+    """OCR all footprint clip PNGs in footprint_images → interval JSON files."""
+    from automation_tool.gocharting_capture import load_gocharting_yaml
+    from automation_tool.gocharting_footprint_screenshot import _footprint_screenshot_cfg
+    from automation_tool.images import normalize_main_chart_symbol, set_active_main_symbol_file
+
+    s = load_settings()
+    if getattr(args, "main_symbol", None):
+        set_active_main_symbol_file(args.main_symbol)
+
+    charts_dir = args.charts_dir or default_charts_dir()
+    main_sym = normalize_main_chart_symbol(
+        args.main_symbol or read_main_chart_symbol(charts_dir)
+    )
+    gc_yaml = args.gocharting_config or default_gocharting_config_path()
+    base_cfg = load_gocharting_yaml(gc_yaml)
+    footprint_cfg = _footprint_screenshot_cfg(base_cfg)
+    out_dir = args.footprint_dir or footprint_images_dir(charts_dir, gocharting_yaml=gc_yaml)
+
+    ocr_key = (s.ocr_space_api_key or "").strip()
+    if not ocr_key:
+        raise SystemExit(
+            "OCR_SPACE_API_KEY is required for footprint-gocharting-ocr "
+            "(OCR clip PNG → JSON on disk)."
+        )
+
+    symbol = str(footprint_cfg.get("symbol") or "COMEX:GC1!").strip()
+    ocr_split_ratio = float(footprint_cfg.get("ocr_split_ratio", 0.5))
+    delete_after = bool(getattr(args, "delete_after", False))
+    clip_cfg = footprint_cfg.get("clip") or {}
+    clip_width = max(1, int(clip_cfg.get("x2", 300)) - int(clip_cfg.get("x1", 50)))
+
+    if getattr(args, "intervals", None):
+        intervals = tuple(
+            iv.strip().lower()
+            for iv in str(args.intervals).split(",")
+            if iv.strip()
+        )
+    else:
+        raw_intervals = footprint_cfg.get("intervals")
+        if isinstance(raw_intervals, dict) and raw_intervals:
+            intervals = tuple(str(k).strip().lower() for k in raw_intervals)
+        else:
+            intervals = ("15m", "5m")
+
+    _log.info(
+        "footprint-gocharting-ocr: bắt đầu | out_dir=%s main=%s intervals=%s",
+        out_dir,
+        main_sym,
+        ",".join(intervals),
+    )
+    docs = batch_ocr_footprint_clip_images(
+        out_dir,
+        ocr_api_key=ocr_key,
+        symbol=symbol,
+        image_width=clip_width,
+        split_ratio=ocr_split_ratio,
+        intervals=intervals,
+        delete_image_after=delete_after,
+    )
+    for interval in sorted(docs):
+        doc = docs[interval]
+        json_path = footprint_interval_json_path(out_dir, interval)
+        print(
+            f"{json_path.name}: {len(doc.get('candles', []))} candle(s)",
+            flush=True,
+        )
 
 
 def cmd_analyze_gocharting_detail(args: argparse.Namespace) -> None:
