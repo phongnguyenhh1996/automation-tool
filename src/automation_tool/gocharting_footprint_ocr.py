@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import csv
 import io
 import json
 import logging
+import math
 import re
 import time
 from datetime import datetime
@@ -396,6 +398,184 @@ def extract_time_hhmm_from_ocr_text(text: str) -> Optional[str]:
 
 def closed_candle_time_hhmm(closed_candle_open: datetime) -> str:
     return closed_candle_open.strftime("%H:%M")
+
+
+def csv_time_to_hhmm(time_str: str) -> str:
+    """``2026-06-16 10:05:00`` → ``10:05``."""
+    raw = (time_str or "").strip()
+    if not raw:
+        return ""
+    clock = raw.split(" ", 1)[1] if " " in raw else raw
+    parts = clock.split(":")
+    if len(parts) < 2:
+        return ""
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1][:2])
+    except ValueError:
+        return ""
+    if hour > 23 or minute > 59:
+        return ""
+    return f"{hour:02d}:{minute:02d}"
+
+
+def parse_gocharting_csv_ohlc_by_hhmm(text: str) -> dict[str, dict[str, float]]:
+    """Map ``HH:MM`` → ``{high, low}``; duplicate times keep the last (newest) row."""
+    from automation_tool.chart_payload_validate import normalize_gocharting_csv_text
+
+    normalized = normalize_gocharting_csv_text(text)
+    by_hhmm: dict[str, dict[str, float]] = {}
+    reader = csv.DictReader(io.StringIO(normalized))
+    for row in reader:
+        if not row:
+            continue
+        time_raw = row.get("Time") or row.get("Date") or row.get("time") or ""
+        hhmm = csv_time_to_hhmm(str(time_raw))
+        if not hhmm:
+            continue
+        try:
+            high = float(row.get("High") or row.get("high"))
+            low = float(row.get("Low") or row.get("low"))
+        except (TypeError, ValueError):
+            continue
+        by_hhmm[hhmm] = {"high": high, "low": low}
+    return by_hhmm
+
+
+DEFAULT_FOOTPRINT_BLOCK_SIZE = 0.4
+
+
+def footprint_block_size(*, gocharting_yaml: Optional[Path] = None) -> float:
+    """GoCharting Tick Manager cluster height: ``tick_size × block_multiplier`` (default 0.4)."""
+    try:
+        from automation_tool.config import default_gocharting_config_path
+        from automation_tool.gocharting_capture import load_gocharting_yaml
+
+        yaml_path = gocharting_yaml or default_gocharting_config_path()
+        cfg = load_gocharting_yaml(yaml_path)
+        raw = cfg.get("footprint_screenshot")
+        if isinstance(raw, dict):
+            if raw.get("block_size") is not None:
+                return float(raw["block_size"])
+            tick = float(raw.get("tick_size", 0.1))
+            block = float(raw.get("block_multiplier", 4))
+            return tick * block
+    except Exception:
+        pass
+    return DEFAULT_FOOTPRINT_BLOCK_SIZE
+
+
+def snap_high_to_footprint_block(high: float, block_size: float) -> float:
+    """Snap CSV high down to the top footprint cluster boundary."""
+    if block_size <= 0:
+        return round(high, 1)
+    top = math.floor((high + 1e-9) / block_size) * block_size
+    return round(top, 1)
+
+
+def compute_footprint_level_prices(
+    high: float,
+    n: int,
+    *,
+    block_size: float = DEFAULT_FOOTPRINT_BLOCK_SIZE,
+) -> list[float]:
+    """Top→bottom prices: CSV high snapped to block grid, then ``- i × block_size``."""
+    if n <= 0:
+        return []
+    top = snap_high_to_footprint_block(high, block_size)
+    return [round(top - i * block_size, 1) for i in range(n)]
+
+
+def enrich_footprint_bid_ask_document(
+    doc: dict[str, Any],
+    csv_path: Path,
+    *,
+    block_size: float | None = None,
+) -> dict[str, Any]:
+    """Add ``price`` to each ``price_levels`` item using CSV High + Tick Manager block size."""
+    bs = block_size if block_size is not None else footprint_block_size()
+    try:
+        csv_text = csv_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        _log.debug("footprint enrich: cannot read CSV %s: %s", csv_path, exc)
+        return doc
+
+    ohlc_by_hhmm = parse_gocharting_csv_ohlc_by_hhmm(csv_text)
+    if not ohlc_by_hhmm:
+        _log.debug("footprint enrich: no OHLC rows in %s", csv_path)
+        return doc
+
+    candles_raw = doc.get("candles")
+    if not isinstance(candles_raw, list):
+        return doc
+
+    out = dict(doc)
+    enriched_candles: list[dict[str, Any]] = []
+    for candle in candles_raw:
+        if not isinstance(candle, dict):
+            enriched_candles.append(candle)
+            continue
+        time_key = str(candle.get("time") or "").strip()
+        levels_raw = candle.get("price_levels")
+        if not isinstance(levels_raw, list):
+            enriched_candles.append(dict(candle))
+            continue
+        ohlc = ohlc_by_hhmm.get(time_key)
+        if ohlc is None:
+            _log.warning(
+                "footprint enrich: no CSV row for candle time=%s in %s",
+                time_key,
+                csv_path.name,
+            )
+            enriched_candles.append(dict(candle))
+            continue
+        high = ohlc["high"]
+        n = len(levels_raw)
+        if n == 0:
+            _log.warning("footprint enrich: empty price_levels for time=%s", time_key)
+            enriched_candles.append(dict(candle))
+            continue
+        prices = compute_footprint_level_prices(high, n, block_size=bs)
+        new_levels: list[dict[str, Any]] = []
+        for i, level in enumerate(levels_raw):
+            if not isinstance(level, dict):
+                new_levels.append(level)
+                continue
+            new_level = dict(level)
+            new_level["price"] = prices[i]
+            new_levels.append(new_level)
+        new_candle = dict(candle)
+        new_candle["price_levels"] = new_levels
+        enriched_candles.append(new_candle)
+    out["candles"] = enriched_candles
+    return out
+
+
+def charts_dir_from_footprint_json_path(json_path: Path) -> Optional[Path]:
+    """``charts_dir/footprint_images/footprint_bid_ask_*.json`` → ``charts_dir``."""
+    parent = json_path.parent
+    if parent.name == "footprint_images":
+        return parent.parent
+    return None
+
+
+def resolve_gocharting_csv_for_footprint_json(
+    json_path: Path,
+    *,
+    charts_dir: Optional[Path] = None,
+    stamp: Optional[str] = None,
+) -> Optional[Path]:
+    if not json_path.name.startswith("footprint_bid_ask_") or json_path.suffix.lower() != ".json":
+        return None
+    iv = json_path.stem.replace("footprint_bid_ask_", "")
+    if not iv:
+        return None
+    cd = charts_dir or charts_dir_from_footprint_json_path(json_path)
+    if cd is None or not cd.is_dir():
+        return None
+    from automation_tool.images import gocharting_main_interval_csv_path
+
+    return gocharting_main_interval_csv_path(cd, iv, stamp=stamp)
 
 
 def _iter_overlay_lines(ocr_payload: dict[str, Any]) -> list[dict[str, Any]]:

@@ -17,6 +17,7 @@ from automation_tool.openai_prompt_flow import (
     _csv_file_header_and_body,
     _gocharting_detail_png_attachment_header,
     _gocharting_png_attachment_header,
+    _json_file_header_and_body,
     _prepare_json_headers_bodies,
     _should_attach_last_filter,
     default_analysis_prompt,
@@ -328,3 +329,49 @@ def test_build_mixed_full_analysis_includes_last_filter(tmp_path: Path) -> None:
     assert "fresh" in parts[1]["text"].lower()
     assert parts[2]["type"] == "input_text"
     assert "TradingView" in parts[2]["text"]
+
+
+def test_footprint_json_enriched_with_price_before_openai(tmp_path: Path) -> None:
+    stamp = "20260101_120000"
+    charts_dir = tmp_path / "charts"
+    fp_dir = charts_dir / "footprint_images"
+    fp_dir.mkdir(parents=True)
+    csv_path = charts_dir / f"{stamp}_gocharting_GC_5m.csv"
+    csv_path.write_text(
+        "Time,Open,High,Low,Close\n"
+        "2026-06-16 10:05:00,4200,4220,4200,4210\n",
+        encoding="utf-8",
+    )
+    json_path = fp_dir / "footprint_bid_ask_5m.json"
+    levels = [{"bid": i, "ask": i + 1} for i in range(10)]
+    json_path.write_text(
+        json.dumps(
+            {
+                "symbol": "COMEX:GC1!",
+                "timeframe": "5m",
+                "candles": [{"time": "10:05", "price_levels": levels}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    _header, body = _json_file_header_and_body(
+        json_path,
+        max_chars=100_000,
+        chart_stamp=stamp,
+    )
+    payload = json.loads(body)
+    prices = [lv["price"] for lv in payload["candles"][0]["price_levels"]]
+    assert prices == [
+        4220.0,
+        4219.6,
+        4219.2,
+        4218.8,
+        4218.4,
+        4218.0,
+        4217.6,
+        4217.2,
+        4216.8,
+        4216.4,
+    ]
+    assert '"price":4220' in body or '"price": 4220' in body

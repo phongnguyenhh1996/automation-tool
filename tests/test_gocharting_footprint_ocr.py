@@ -12,6 +12,9 @@ from automation_tool.gocharting_footprint_ocr import (
     append_candle_to_footprint_document,
     batch_ocr_footprint_clip_images,
     closed_candle_time_hhmm,
+    compute_footprint_level_prices,
+    csv_time_to_hhmm,
+    enrich_footprint_bid_ask_document,
     extract_time_hhmm_from_ocr_text,
     footprint_interval_json_path,
     list_footprint_clip_pngs,
@@ -19,6 +22,7 @@ from automation_tool.gocharting_footprint_ocr import (
     new_footprint_document,
     parse_footprint_clip_png_name,
     parse_footprint_candle_from_ocr,
+    parse_gocharting_csv_ohlc_by_hhmm,
     parse_price_levels_from_overlay,
     parse_price_levels_from_parsed_text,
     process_footprint_clip_image,
@@ -279,6 +283,76 @@ def test_extract_time_hhmm_from_ocr_text() -> None:
 
 def test_closed_candle_time_hhmm() -> None:
     assert closed_candle_time_hhmm(datetime(2025, 6, 24, 8, 25)) == "08:25"
+
+
+def test_csv_time_to_hhmm() -> None:
+    assert csv_time_to_hhmm("2026-06-16 10:05:00") == "10:05"
+    assert csv_time_to_hhmm("10:05:00") == "10:05"
+
+
+def test_compute_footprint_level_prices() -> None:
+    assert compute_footprint_level_prices(4091.6, 5, block_size=0.4) == [
+        4091.6,
+        4091.2,
+        4090.8,
+        4090.4,
+        4090.0,
+    ]
+    assert compute_footprint_level_prices(4220, 10, block_size=0.4) == [
+        4220.0,
+        4219.6,
+        4219.2,
+        4218.8,
+        4218.4,
+        4218.0,
+        4217.6,
+        4217.2,
+        4216.8,
+        4216.4,
+    ]
+    assert compute_footprint_level_prices(4091.25, 3, block_size=0.4) == [4091.2, 4090.8, 4090.4]
+
+
+def test_footprint_block_size_from_yaml() -> None:
+    from automation_tool.gocharting_footprint_ocr import footprint_block_size
+
+    assert footprint_block_size() == 0.4
+
+
+def test_parse_gocharting_csv_ohlc_by_hhmm() -> None:
+    fixture = (Path(__file__).resolve().parent / "fixtures" / "gocharting_sample.csv").read_text(
+        encoding="utf-8"
+    )
+    out = parse_gocharting_csv_ohlc_by_hhmm(fixture)
+    assert out["10:00"] == {"high": 2651.2, "low": 2649.5}
+    assert out["10:05"] == {"high": 2652.0, "low": 2650.2}
+
+
+def test_enrich_footprint_bid_ask_document(tmp_path: Path) -> None:
+    csv_path = tmp_path / "gc_5m.csv"
+    csv_path.write_text(
+        "Time,Open,High,Low,Close\n"
+        "2026-06-16 10:05:00,4200,4220,4200,4210\n",
+        encoding="utf-8",
+    )
+    doc = {
+        "symbol": "COMEX:GC1!",
+        "timeframe": "5m",
+        "candles": [
+            {
+                "time": "10:05",
+                "price_levels": [
+                    {"bid": 1, "ask": 2},
+                    {"bid": 3, "ask": 4},
+                ],
+            }
+        ],
+    }
+    out = enrich_footprint_bid_ask_document(doc, csv_path)
+    levels = out["candles"][0]["price_levels"]
+    assert levels[0]["price"] == 4220
+    assert levels[1]["price"] == 4219.6
+    assert doc["candles"][0]["price_levels"][0] == {"bid": 1, "ask": 2}
 
 
 def test_parse_price_levels_from_parsed_text() -> None:

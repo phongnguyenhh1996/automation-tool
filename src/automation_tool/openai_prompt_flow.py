@@ -232,7 +232,12 @@ def _csv_file_header_and_body(path: Path, *, max_chars: int) -> tuple[str, str]:
     return header, body
 
 
-def _json_file_header_and_body(path: Path, *, max_chars: int) -> tuple[str, str]:
+def _json_file_header_and_body(
+    path: Path,
+    *,
+    max_chars: int,
+    chart_stamp: str | None = None,
+) -> tuple[str, str]:
     """
     Header (input_text) + body string for upload. Slim only Coinmap paths when enabled;
     TradingView JSON is compacted but not passed through ``slim_coinmap_export_for_openai``.
@@ -246,6 +251,25 @@ def _json_file_header_and_body(path: Path, *, max_chars: int) -> tuple[str, str]
             and should_slim_coinmap_json_path(path)
         ):
             data = slim_coinmap_export_for_openai(data, path=path)
+        if (
+            isinstance(data, dict)
+            and path.name.startswith("footprint_bid_ask_")
+            and path.suffix.lower() == ".json"
+        ):
+            from automation_tool.gocharting_footprint_ocr import (
+                charts_dir_from_footprint_json_path,
+                enrich_footprint_bid_ask_document,
+                resolve_gocharting_csv_for_footprint_json,
+            )
+
+            charts_dir = charts_dir_from_footprint_json_path(path)
+            csv_path = resolve_gocharting_csv_for_footprint_json(
+                path,
+                charts_dir=charts_dir,
+                stamp=chart_stamp,
+            )
+            if csv_path is not None:
+                data = enrich_footprint_bid_ask_document(data, csv_path)
         compact = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     except json.JSONDecodeError:
         compact = raw
@@ -270,7 +294,8 @@ def _json_file_header_and_body(path: Path, *, max_chars: int) -> tuple[str, str]
         header = (
             f"[GoCharting Bid/Ask footprint OCR — {iv} — file: {path.name}]\n"
             "Instrument: COMEX:GC1! futures. Each candle: time (HH:MM) + price_levels "
-            "[{bid, ask}, ...] top→bottom per closed bar.\n"
+            "[{bid, ask, price}, ...] top→bottom per closed bar "
+            "(price from CSV High snapped to GoCharting Tick Manager block cluster, default 0.4).\n"
         )
     elif "_openai_coinmap_merged" in path.name or path.name.endswith("_merged.json"):
         header = f"[Coinmap merged analysis — file: {path.name}]\n"
@@ -296,6 +321,7 @@ def _prepare_json_headers_bodies(
     paths: list[Path],
     *,
     max_json_chars: int,
+    chart_stamp: str | None = None,
 ) -> list[tuple[str, str]]:
     """Return ``(header, body)`` per path, same order as ``paths``."""
     if not paths:
@@ -303,7 +329,7 @@ def _prepare_json_headers_bodies(
     if len(paths) == 1:
         p0 = paths[0]
         mx0 = _max_json_chars_for_path(p0, default_max=max_json_chars)
-        return [_json_file_header_and_body(p0, max_chars=mx0)]
+        return [_json_file_header_and_body(p0, max_chars=mx0, chart_stamp=chart_stamp)]
     n = len(paths)
     workers = min(n, max(4, (os.cpu_count() or 2) * 2))
     with ThreadPoolExecutor(max_workers=workers) as ex:
@@ -312,6 +338,7 @@ def _prepare_json_headers_bodies(
                 lambda pp: _json_file_header_and_body(
                     pp,
                     max_chars=_max_json_chars_for_path(pp, default_max=max_json_chars),
+                    chart_stamp=chart_stamp,
                 ),
                 paths,
             )
@@ -441,11 +468,16 @@ def _build_mixed_chart_user_content(
     payloads: list[ChartOpenAIPayload],
     *,
     max_json_chars: int,
+    chart_stamp: str | None = None,
 ) -> list[dict[str, Any]]:
     json_paths = [p for k, p in payloads if k == "json" and isinstance(p, Path)]
     csv_paths = [p for k, p in payloads if k == "csv" and isinstance(p, Path)]
     json_queue = iter(
-        _prepare_json_headers_bodies(json_paths, max_json_chars=max_json_chars)
+        _prepare_json_headers_bodies(
+            json_paths,
+            max_json_chars=max_json_chars,
+            chart_stamp=chart_stamp,
+        )
     )
     mx_csv = _default_max_gocharting_csv_chars()
     csv_queue = iter(
@@ -613,6 +645,7 @@ def run_analysis_responses_flow(
     purge_json_attachment_storage: bool = False,
     purge_openai_user_data_files: bool | None = None,
     model: str | None = None,
+    chart_stamp: str | None = None,
 ) -> PromptTwoStepResult:
     """
     Một lần (hoặc nhiều batch nếu quá nhiều ảnh): user message multimodal với ``analysis_prompt``
@@ -720,7 +753,7 @@ def run_analysis_responses_flow(
             )
         try:
             content = _build_mixed_chart_user_content(
-                p_text, batch, max_json_chars=mx_json
+                p_text, batch, max_json_chars=mx_json, chart_stamp=chart_stamp
             )
             kwargs: dict[str, Any] = {
                 **common,
@@ -1183,6 +1216,7 @@ def run_single_followup_responses(
     reasoning_effort: str | None = DEFAULT_REASONING_EFFORT,
     max_coinmap_json_chars: int | None = None,
     model: str | None = None,
+    chart_stamp: str | None = None,
 ) -> tuple[str, str]:
     """
     One multimodal user turn: optional ``morning_snapshot_path`` + Coinmap JSON paths,
@@ -1249,6 +1283,7 @@ def run_single_followup_responses(
         user_text,
         json_payloads + extra_payloads,
         max_json_chars=mx_json,
+        chart_stamp=chart_stamp,
     )
     create_kw: dict[str, Any] = {
         **common,

@@ -1867,6 +1867,7 @@ def _run_openai_flow(
     model: str | None = None,
     vector_store_ids: list[str] | None = None,
     reasoning_effort: str | None = DEFAULT_REASONING_EFFORT,
+    chart_stamp: str | None = None,
 ) -> PromptTwoStepResult:
     return run_analysis_responses_flow(
         api_key=s.openai_api_key,
@@ -1883,6 +1884,7 @@ def _run_openai_flow(
         purge_openai_user_data_files=purge_openai_user_data_files,
         model=model,
         reasoning_effort=reasoning_effort,
+        chart_stamp=chart_stamp,
     )
 
 
@@ -3137,6 +3139,7 @@ def _run_all_second_flow(
     zones_dir: Optional[Path] = None,
     session_slot: Optional[SessionSlot] = None,
     mt5_accounts_json: Optional[Path] = None,
+    chart_stamp: str | None = None,
 ) -> PromptTwoStepResult:
     """Luồng OpenAI thứ hai của ``all``: vector store riêng, Telegram nhóm 2, ghi shard ``-2``."""
     try:
@@ -3150,6 +3153,7 @@ def _run_all_second_flow(
             model=resolved_openai_model(s, model),
             vector_store_ids=[_ALL_SECOND_FLOW_VECTOR_STORE_ID],
             reasoning_effort=ALL_FLOW_REASONING_EFFORT,
+            chart_stamp=chart_stamp,
         )
     except Exception as e:
         re_raise_unless_openai(e)
@@ -3216,6 +3220,7 @@ def cmd_all_2(args: argparse.Namespace) -> None:
         zones_dir=zones_dir,
         session_slot=run_slot,
         mt5_accounts_json=getattr(args, "mt5_accounts_json", None),
+        chart_stamp=stamp,
     )
 
 
@@ -3415,6 +3420,7 @@ def cmd_all(args: argparse.Namespace) -> None:
             on_first_model_text=None,
             model=openai_model,
             reasoning_effort=ALL_FLOW_REASONING_EFFORT,
+            chart_stamp=stamp,
         )
 
     try:
@@ -3516,6 +3522,7 @@ def cmd_all(args: argparse.Namespace) -> None:
         zones_dir=zones_dir,
         session_slot=run_slot,
         mt5_accounts_json=getattr(args, "mt5_accounts_json", None),
+        chart_stamp=stamp,
     )
 
 
@@ -4143,6 +4150,7 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
             store=s.openai_responses_store,
             include=s.openai_responses_include,
             model=scalp_openai_model,
+            chart_stamp=stamp,
         )
 
     try:
