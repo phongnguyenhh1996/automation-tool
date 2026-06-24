@@ -401,22 +401,34 @@ def closed_candle_time_hhmm(closed_candle_open: datetime) -> str:
 
 
 def csv_time_to_hhmm(time_str: str) -> str:
-    """``2026-06-16 10:05:00`` → ``10:05``."""
+    """``2026-06-16 10:05:00`` or GoCharting ``Tue Jun 23 2026 10:00:00 GMT+0700`` → ``10:05`` / ``10:00``."""
     raw = (time_str or "").strip()
     if not raw:
         return ""
-    clock = raw.split(" ", 1)[1] if " " in raw else raw
-    parts = clock.split(":")
-    if len(parts) < 2:
-        return ""
-    try:
-        hour = int(parts[0])
-        minute = int(parts[1][:2])
-    except ValueError:
-        return ""
-    if hour > 23 or minute > 59:
-        return ""
-    return f"{hour:02d}:{minute:02d}"
+    hms = re.search(r"\b(\d{1,2}):(\d{2}):\d{2}\b", raw)
+    if hms:
+        hour = int(hms.group(1))
+        minute = int(hms.group(2))
+        if hour <= 23 and minute <= 59:
+            return f"{hour:02d}:{minute:02d}"
+    if " " in raw:
+        clock = raw.split(" ", 1)[1]
+        parts = clock.split(":")
+        if len(parts) >= 2:
+            try:
+                hour = int(parts[0])
+                minute = int(parts[1][:2])
+                if hour <= 23 and minute <= 59:
+                    return f"{hour:02d}:{minute:02d}"
+            except ValueError:
+                pass
+    hm = _TIME_RE.search(raw)
+    if hm:
+        hour = int(hm.group(1))
+        minute = int(hm.group(2))
+        if hour <= 23 and minute <= 59:
+            return f"{hour:02d}:{minute:02d}"
+    return ""
 
 
 def parse_gocharting_csv_ohlc_by_hhmm(text: str) -> dict[str, dict[str, float]]:

@@ -288,6 +288,40 @@ def test_closed_candle_time_hhmm() -> None:
 def test_csv_time_to_hhmm() -> None:
     assert csv_time_to_hhmm("2026-06-16 10:05:00") == "10:05"
     assert csv_time_to_hhmm("10:05:00") == "10:05"
+    assert (
+        csv_time_to_hhmm("Tue Jun 23 2026 10:00:00 GMT+0700 (Indochina Time)")
+        == "10:00"
+    )
+
+
+def test_parse_gocharting_csv_gmt_date_format() -> None:
+    csv_text = (
+        "Time,Open,High,Low,Close\n"
+        "Tue Jun 23 2026 10:00:00 GMT+0700 (Indochina Time),4164.9,4167.6,4156.3,4160.7\n"
+    )
+    out = parse_gocharting_csv_ohlc_by_hhmm(csv_text)
+    assert out["10:00"] == {"high": 4167.6, "low": 4156.3}
+
+
+def test_enrich_footprint_with_gocharting_gmt_csv_time(tmp_path: Path) -> None:
+    csv_path = tmp_path / "gc.csv"
+    csv_path.write_text(
+        "Time,Open,High,Low,Close\n"
+        "Tue Jun 23 2026 10:00:00 GMT+0700 (Indochina Time),4164.9,4167.6,4156.3,4160.7\n",
+        encoding="utf-8",
+    )
+    doc = {
+        "candles": [
+            {
+                "time": "10:00",
+                "price_levels": [{"bid": 0, "ask": 4}, {"bid": 2, "ask": 0}],
+            }
+        ],
+    }
+    out = enrich_footprint_bid_ask_document(doc, csv_path, block_size=0.4)
+    levels = out["candles"][0]["price_levels"]
+    assert levels[0]["price"] == 4167.6
+    assert levels[1]["price"] == 4167.2
 
 
 def test_compute_footprint_level_prices() -> None:
