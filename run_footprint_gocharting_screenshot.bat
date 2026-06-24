@@ -11,7 +11,8 @@ echo ============================================================
 
 REM Daemon clip-screenshot GoCharting M5+M15 tai phut dau moi nen (mac dinh attach browser service).
 REM Chay browser_up.bat truoc.
-REM Output: data\XAUUSD\charts\footprint_images\YYYYMMDD_HhMm_interval.png
+REM Output: data\XAUUSD\charts\footprint_images\footprint_bid_ask_5m.json, footprint_bid_ask_15m.json
+REM Can OCR_SPACE_API_KEY trong .env (ocr.space)
 cd /d "%~dp0"
 set "LOG_DIR=%~dp0logs"
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"

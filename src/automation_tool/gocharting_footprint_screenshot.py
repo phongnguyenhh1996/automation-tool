@@ -24,6 +24,9 @@ _log = logging.getLogger(__name__)
 _DEFAULT_INTERVALS = ("5m", "15m")
 _DEFAULT_FOOTPRINT_SCREENSHOT: dict[str, Any] = {
     "output_subdir": "footprint_images",
+    "symbol": "COMEX:GC1!",
+    "ocr_split_ratio": 0.42,
+    "delete_screenshot_after_ocr": True,
     "refresh_before_capture": True,
     "clip": {"x1": 50, "y1": 50, "x2": 300, "y2": 1100},
     "intervals": {
@@ -269,7 +272,7 @@ def run_footprint_gocharting_screenshot_daemon(
     headless: bool = True,
     require_browser_service: bool = True,
     intervals: tuple[str, ...] = _DEFAULT_INTERVALS,
-    openai_api_key: Optional[str] = None,
+    ocr_api_key: Optional[str] = None,
 ) -> None:
     storage = storage_state_path or default_storage_state_path()
     if not email or not password:
@@ -284,6 +287,17 @@ def run_footprint_gocharting_screenshot_daemon(
     out_subdir = str(footprint_cfg.get("output_subdir") or "footprint_images").strip()
     out_dir = charts_dir / out_subdir
     out_dir.mkdir(parents=True, exist_ok=True)
+    symbol = str(footprint_cfg.get("symbol") or "COMEX:GC1!").strip()
+    ocr_split_ratio = float(footprint_cfg.get("ocr_split_ratio", 0.42))
+    delete_after_ocr = bool(footprint_cfg.get("delete_screenshot_after_ocr", True))
+    clip_cfg = footprint_cfg.get("clip") or {}
+    clip_width = max(1, int(clip_cfg.get("x2", 300)) - int(clip_cfg.get("x1", 50)))
+    ocr_key = (ocr_api_key or "").strip()
+    if not ocr_key:
+        raise SystemExit(
+            "OCR_SPACE_API_KEY is required for footprint-gocharting-screenshot "
+            "(OCR clip → JSON on disk)."
+        )
 
     captured: set[tuple[str, datetime]] = set()
     _log.info(
@@ -354,28 +368,28 @@ def run_footprint_gocharting_screenshot_daemon(
                         captured.add(dedupe_key)
                         _trim_dedupe(captured)
                         print(f"Captured {dest.name} at {now.strftime('%H:%M:%S')}", flush=True)
-                        api_key = (openai_api_key or "").strip()
-                        if api_key:
-                            try:
-                                from automation_tool.openai_footprint_vector_store import (
-                                    upload_footprint_image_to_vector_store_with_retry,
-                                )
+                        from automation_tool.gocharting_footprint_ocr import (
+                            footprint_interval_json_path,
+                            process_footprint_clip_image,
+                        )
 
-                                file_id = upload_footprint_image_to_vector_store_with_retry(
-                                    api_key=api_key,
-                                    image_path=dest,
-                                    interval=tab.interval,
-                                )
-                                print(
-                                    f"Uploaded {dest.name} to vector store (file_id={file_id})",
-                                    flush=True,
-                                )
-                            except Exception:
-                                _log.exception(
-                                    "gocharting footprint: vector store upload failed interval=%s path=%s",
-                                    tab.interval,
-                                    dest,
-                                )
+                        json_path = footprint_interval_json_path(out_dir, tab.interval)
+                        candle, _doc = process_footprint_clip_image(
+                            dest,
+                            ocr_api_key=ocr_key,
+                            closed_candle_open=closed_open,
+                            image_width=clip_width,
+                            out_json_path=json_path,
+                            symbol=symbol,
+                            timeframe=tab.interval,
+                            split_ratio=ocr_split_ratio,
+                            delete_image_after=delete_after_ocr,
+                        )
+                        print(
+                            f"OCR → {json_path.name} | time={candle['time']} "
+                            f"levels={len(candle['price_levels'])}",
+                            flush=True,
+                        )
                     except Exception:
                         _log.exception(
                             "gocharting footprint: capture failed interval=%s closed_open=%s",

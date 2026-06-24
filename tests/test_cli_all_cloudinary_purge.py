@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 
 from automation_tool.cli import _parser
-from automation_tool.openai_footprint_vector_store import with_gocharting_footprint_vector_store_ids
 
 
 def test_all_does_not_request_cloudinary_json_purge(monkeypatch, tmp_path: Path) -> None:
@@ -232,12 +231,8 @@ def test_all_runs_second_flow_with_dedicated_vector_channel_and_all2_shards(
     cli.cmd_all(args)
 
     assert len(openai_calls) == 2
-    assert openai_calls[0]["vector_store_ids"] == with_gocharting_footprint_vector_store_ids(
-        ["vs_primary"]
-    )
-    assert openai_calls[1]["vector_store_ids"] == with_gocharting_footprint_vector_store_ids(
-        ["vs_69fa9d55f3b48191b4aea51214b880d6"]
-    )
+    assert openai_calls[0]["vector_store_ids"] == ["vs_primary"]
+    assert openai_calls[1]["vector_store_ids"] == ["vs_69fa9d55f3b48191b4aea51214b880d6"]
     assert telegram_calls[1]["chat_id"] == "-1003996623506"
     assert (zones_dir / "vung_plan_chinh_sang-2.json").is_file()
     shard = json.loads((zones_dir / "vung_plan_chinh_sang-2.json").read_text(encoding="utf-8"))
@@ -335,9 +330,7 @@ def test_all_2_standalone_uses_existing_charts_without_capture(monkeypatch, tmp_
 
     assert capture_called["n"] == 0
     assert len(openai_calls) == 1
-    assert openai_calls[0]["vector_store_ids"] == with_gocharting_footprint_vector_store_ids(
-        ["vs_69fa9d55f3b48191b4aea51214b880d6"]
-    )
+    assert openai_calls[0]["vector_store_ids"] == ["vs_69fa9d55f3b48191b4aea51214b880d6"]
     assert telegram_calls[0]["chat_id"] == "-1003996623506"
     assert len(write_calls) == 1
     assert write_calls[0]["shard_suffix"] == "-2"

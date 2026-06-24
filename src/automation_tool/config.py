@@ -64,6 +64,7 @@ class Settings:
     openai_vector_store_ids: list[str]
     #: ``update-scalp`` / ``OPENAI_UPDATE_SCALP_VECTOR_STORE_ID(S)``; rỗng → caller dùng fallback (vd. all-2).
     openai_update_scalp_vector_store_ids: list[str]
+    ocr_space_api_key: Optional[str]
     openai_responses_store: bool
     openai_responses_include: List[str]
     telegram_bot_token: str
@@ -197,6 +198,7 @@ def load_settings() -> Settings:
         openai_model=((os.getenv("OPENAI_MODEL") or "").strip() or None),
         openai_vector_store_ids=_parse_vector_store_ids(),
         openai_update_scalp_vector_store_ids=_parse_update_scalp_vector_store_ids(),
+        ocr_space_api_key=(os.getenv("OCR_SPACE_API_KEY") or "").strip() or None,
         openai_responses_store=_env_bool("OPENAI_RESPONSES_STORE", True),
         openai_responses_include=_parse_include(),
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
