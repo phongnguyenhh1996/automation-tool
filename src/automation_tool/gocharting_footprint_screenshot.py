@@ -269,6 +269,7 @@ def run_footprint_gocharting_screenshot_daemon(
     headless: bool = True,
     require_browser_service: bool = True,
     intervals: tuple[str, ...] = _DEFAULT_INTERVALS,
+    openai_api_key: Optional[str] = None,
 ) -> None:
     storage = storage_state_path or default_storage_state_path()
     if not email or not password:
@@ -353,6 +354,28 @@ def run_footprint_gocharting_screenshot_daemon(
                         captured.add(dedupe_key)
                         _trim_dedupe(captured)
                         print(f"Captured {dest.name} at {now.strftime('%H:%M:%S')}", flush=True)
+                        api_key = (openai_api_key or "").strip()
+                        if api_key:
+                            try:
+                                from automation_tool.openai_footprint_vector_store import (
+                                    upload_footprint_image_to_vector_store_with_retry,
+                                )
+
+                                file_id = upload_footprint_image_to_vector_store_with_retry(
+                                    api_key=api_key,
+                                    image_path=dest,
+                                    interval=tab.interval,
+                                )
+                                print(
+                                    f"Uploaded {dest.name} to vector store (file_id={file_id})",
+                                    flush=True,
+                                )
+                            except Exception:
+                                _log.exception(
+                                    "gocharting footprint: vector store upload failed interval=%s path=%s",
+                                    tab.interval,
+                                    dest,
+                                )
                     except Exception:
                         _log.exception(
                             "gocharting footprint: capture failed interval=%s closed_open=%s",

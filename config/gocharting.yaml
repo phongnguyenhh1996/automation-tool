@@ -87,17 +87,17 @@ capture_plan:
 footprint_screenshot:
   output_subdir: footprint_images
   refresh_before_capture: true
-  clip: { x1: 50, y1: 55, x2: 290, y2: 1200 }
+  clip: { x1: 50, y1: 60, x2: 290, y2: 1500 }
   intervals:
     15m:
       page_url: "https://gocharting.com/terminal/chart/S0kcqfQKt"
       viewport_width: 500
-      viewport_height: 1200
+      viewport_height: 1500
       zoom_clicks: 10
     5m:
       page_url: "https://gocharting.com/terminal/chart/GC435uijM"
       viewport_width: 500
-      viewport_height: 1200
+      viewport_height: 1500
       zoom_clicks: 10
 
 clear_charts_before_capture: false

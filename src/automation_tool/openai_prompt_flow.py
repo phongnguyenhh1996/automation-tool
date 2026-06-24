@@ -24,6 +24,7 @@ from automation_tool.coinmap_openai_slim import (
     slim_coinmap_export_for_openai,
 )
 from automation_tool.chart_payload_validate import prepare_gocharting_csv_text
+from automation_tool.openai_footprint_vector_store import append_footprint_vector_store_hint
 from automation_tool.prompts import load_last_filter, responses_input_messages
 from automation_tool.images import (
     CHART_SLOT_COUNT,
@@ -620,6 +621,7 @@ def run_analysis_responses_flow(
     """
     if not (analysis_prompt or "").strip():
         analysis_prompt = default_analysis_prompt(read_main_chart_symbol(charts_dir))
+    analysis_prompt = append_footprint_vector_store_hint(analysis_prompt, vector_store_ids)
     client = OpenAI(api_key=api_key)
     tools: list[dict[str, Any]] = []
     if vector_store_ids:
@@ -1233,6 +1235,7 @@ def run_single_followup_responses(
     )
 
     json_payloads = openai_payloads_for_attachment_paths(paths)
+    user_text = append_footprint_vector_store_hint(user_text, vector_store_ids)
     content = _build_mixed_chart_user_content(
         user_text,
         json_payloads + extra_payloads,
@@ -1291,7 +1294,7 @@ def run_text_followup_responses(
     _merge_model(common, model)
 
     imgs = [p for p in (image_paths or []) if isinstance(p, Path) and p.is_file()]
-    text = (user_text or "").strip()
+    text = append_footprint_vector_store_hint((user_text or "").strip(), vector_store_ids)
     if imgs:
         payloads: list[ChartOpenAIPayload] = [("image", p) for p in imgs]
         user_content: str | list[dict[str, Any]] = _build_mixed_chart_user_content(

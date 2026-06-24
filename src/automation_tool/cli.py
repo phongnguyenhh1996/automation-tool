@@ -25,6 +25,7 @@ from automation_tool.gocharting_footprint_extract import (
     extract_all_footprint_jsons,
 )
 from automation_tool.gocharting_footprint_screenshot import run_footprint_gocharting_screenshot_daemon
+from automation_tool.openai_footprint_vector_store import with_gocharting_footprint_vector_store_ids
 from automation_tool.config import (
     resolve_update_scalp_vector_store_ids,
     default_charts_dir,
@@ -2012,6 +2013,7 @@ def cmd_footprint_gocharting_screenshot(args: argparse.Namespace) -> None:
         save_storage_state=not args.no_save_storage,
         headless=not args.headed,
         require_browser_service=require_service,
+        openai_api_key=s.openai_api_key,
     )
 
 
@@ -3000,7 +3002,9 @@ def _run_all_second_flow(
             chart_payloads=chart_payloads,
             on_first_model_text=None,
             model=resolved_openai_model(s, model),
-            vector_store_ids=[_ALL_SECOND_FLOW_VECTOR_STORE_ID],
+            vector_store_ids=with_gocharting_footprint_vector_store_ids(
+                [_ALL_SECOND_FLOW_VECTOR_STORE_ID]
+            ),
             reasoning_effort=ALL_FLOW_REASONING_EFFORT,
         )
     except Exception as e:
@@ -3264,6 +3268,7 @@ def cmd_all(args: argparse.Namespace) -> None:
             chart_payloads=payloads,
             on_first_model_text=None,
             model=openai_model,
+            vector_store_ids=with_gocharting_footprint_vector_store_ids(s.openai_vector_store_ids),
             reasoning_effort=ALL_FLOW_REASONING_EFFORT,
         )
 
@@ -3973,9 +3978,11 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
             "/ ICT Killzones và **5m** khung thường (không ICT).\n"
         )
 
-    scalp_vector_store_ids = resolve_update_scalp_vector_store_ids(
-        s,
-        fallback=[_ALL_SECOND_FLOW_VECTOR_STORE_ID],
+    scalp_vector_store_ids = with_gocharting_footprint_vector_store_ids(
+        resolve_update_scalp_vector_store_ids(
+            s,
+            fallback=[_ALL_SECOND_FLOW_VECTOR_STORE_ID],
+        )
     )
     scalp_openai_model = resolved_openai_model(s, getattr(args, "model", None))
 
