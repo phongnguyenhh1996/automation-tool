@@ -124,3 +124,31 @@ def test_openai_payloads_for_attachment_paths_interleaves_gocharting_png(tmp_pat
         ("image", m5_back_1),
         ("image", m5_back_2),
     ]
+
+
+def test_openai_payloads_for_attachment_paths_gocharting_zoom_only(tmp_path: Path) -> None:
+    m15_csv = tmp_path / "20260101_120000_gocharting_GC_15m.csv"
+    m15_ov = tmp_path / "20260101_120000_gocharting_GC_15m.png"
+    m15_detail = tmp_path / "20260101_120000_gocharting_GC_15m_detail_zoom.png"
+    m15_back_1 = tmp_path / "20260101_120000_gocharting_GC_15m_detail_back_1.png"
+    m5_csv = tmp_path / "20260101_120000_gocharting_GC_5m.csv"
+    m5_ov = tmp_path / "20260101_120000_gocharting_GC_5m.png"
+    m5_detail = tmp_path / "20260101_120000_gocharting_GC_5m_detail_zoom.png"
+    m5_back_1 = tmp_path / "20260101_120000_gocharting_GC_5m_detail_back_1.png"
+    for p in (m15_csv, m5_csv):
+        p.write_text("h\n1", encoding="utf-8")
+    for p in (m15_ov, m15_detail, m15_back_1, m5_ov, m5_detail, m5_back_1):
+        p.write_bytes(b"png")
+
+    payloads = openai_payloads_for_attachment_paths(
+        [m15_csv, m5_csv],
+        gocharting_detail_zoom_only=True,
+    )
+    assert payloads == [
+        ("csv", m15_csv),
+        ("image", m15_ov),
+        ("image", m15_detail),
+        ("csv", m5_csv),
+        ("image", m5_ov),
+        ("image", m5_detail),
+    ]

@@ -863,10 +863,10 @@ _MORNING_CONTEXT_HINT = (
 )
 
 _SCALP_UPDATE_PLAN_HINT = (
-    "Nhiệm vụ chính: tìm **1 plan scalp đẹp nhất** trong phiên hiện tại (hop_luu >= 60, "
+    "Nhiệm vụ chính: tìm **1 plan đẹp nhất** trong phiên hiện tại (hop_luu >= 60, "
     "có đủ hợp lưu M5 để vào lệnh nhanh). "
-    "Không cần đánh giá lại plan cũ; chỉ tập trung vào setup scalp mới đủ chất lượng. "
-    "Nếu có 2–3 setup scalp đủ chất lượng thì có thể trả thêm, nhưng không bắt buộc. "
+    "Không cần đánh giá lại plan cũ; chỉ tập trung vào plan mới đủ chất lượng. "
+    "Nếu có 2–3 plan đủ chất lượng thì có thể trả thêm, nhưng không bắt buộc. "
     "Bắt buộc dùng label dạng `scalp_<id>` cho mỗi plan trong `prices` "
     "(ví dụ: `scalp_1`, `scalp_2`, `scalp_3`). "
     "Không dùng label `plan_chinh` hay `plan_phu` cho luồng scalp này.\n"
@@ -882,7 +882,7 @@ _INTRADAY_CHART_READ_PRIORITY_HINT = (
 )
 
 _GOCHARTING_INTRADAY_CHART_READ_PRIORITY_HINT = (
-    "Ưu tiên đọc ảnh GoCharting detail footprint (zoom + pan-back) cho stacked BID/ASK, absorption, RL; "
+    "Ưu tiên đọc ảnh GoCharting detail footprint (zoom) cho stacked BID/ASK, absorption, RL; "
     "CSV GoCharting chỉ có CVD/delta/volume theo nến — không có BID/ASK theo price level. "
     "TradingView snapshot khi cần cấu trúc giá / liquidity.\n"
     f"{_GOCHARTING_CHART_READ_GUIDE}"
@@ -1021,9 +1021,9 @@ def build_scalp_update_user_text(
 ) -> str:
     """
     User message cho ``coinmap-automation update-scalp``: giống ``build_intraday_update_user_text``
-    nhưng yêu cầu tìm plan scalp đẹp nhất và dùng label ``scalp_<timeframe>``.
+    nhưng yêu cầu tìm plan đẹp nhất và dùng label ``scalp_<timeframe>``.
 
-    * ``footprint_source="gocharting"``: CSV + PNG overview + detail zoom và 2 PNG pan-back GoCharting M15/M5.
+    * ``footprint_source="gocharting"``: CSV + PNG overview + detail zoom GoCharting M15/M5.
     * ``coinmap_attachment_mode="merged"`` (default): file ``coinmap_merged`` đa khung (15m + 5m).
     * ``coinmap_attachment_mode="merged_m5"``: file ``coinmap_merged`` chỉ có khung **5m** trong
       ``frames`` (build từ raw M5 qua ``write_openai_coinmap_merged_from_raw_export``).
@@ -1036,7 +1036,7 @@ def build_scalp_update_user_text(
         gc_hint = (
             f" (footprint {GOCHARTING_GOLD_FUTURE_LABEL} trên GoCharting — hợp đồng tương lai vàng GC1!, "
             "không phải spot XAUUSD; mỗi khung: CSV orderflow; PNG overview; "
-            "một PNG detail footprint zoom và hai PNG pan-back lịch sử; "
+            "một PNG detail footprint zoom; "
             "kèm thêm JSON MT5 spot XAUUSD M5 — 50 nến OHLC broker mới nhất; "
             "cuối cùng footprint_bid_ask_15m.json và footprint_bid_ask_5m.json nếu có — "
             "bid/ask theo price level)."
@@ -1057,7 +1057,7 @@ def build_scalp_update_user_text(
             "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
             f"Đính kèm **ba** file: **(1)** GoCharting M15 CSV, **(2)** M5 CSV, **(3)** MT5 spot XAUUSD M5 JSON "
             f"(50 nến broker; footprint {GOCHARTING_GOLD_FUTURE_LABEL}; "
-            "PNG overview, detail zoom và hai PNG pan-back ngay sau mỗi CSV nếu có; "
+            "PNG overview và detail zoom ngay sau mỗi CSV nếu có; "
             "footprint_bid_ask_15m.json và footprint_bid_ask_5m.json nếu có).\n"
             f"{_GOCHARTING_SCALP_UPDATE_SUFFIX}"
         )
@@ -1217,6 +1217,7 @@ def run_single_followup_responses(
     max_coinmap_json_chars: int | None = None,
     model: str | None = None,
     chart_stamp: str | None = None,
+    gocharting_detail_zoom_only: bool = False,
 ) -> tuple[str, str]:
     """
     One multimodal user turn: optional ``morning_snapshot_path`` + Coinmap JSON paths,
@@ -1278,7 +1279,10 @@ def run_single_followup_responses(
         else _default_max_coinmap_json_chars()
     )
 
-    json_payloads = openai_payloads_for_attachment_paths(paths)
+    json_payloads = openai_payloads_for_attachment_paths(
+        paths,
+        gocharting_detail_zoom_only=gocharting_detail_zoom_only,
+    )
     content = _build_mixed_chart_user_content(
         user_text,
         json_payloads + extra_payloads,

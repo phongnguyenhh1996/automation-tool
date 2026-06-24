@@ -456,12 +456,18 @@ def gocharting_detail_openai_png_paths_for_csv(
     csv_path: Path,
     *,
     crop_width_thirds: bool | None = None,
+    zoom_only: bool = False,
 ) -> list[Path]:
-    """Crop panels for all detail PNG siblings of a GoCharting CSV export."""
+    """Crop panels for detail PNG siblings of a GoCharting CSV export."""
     if crop_width_thirds is None:
         crop_width_thirds = resolve_gocharting_detail_crop_width_thirds()
+    if zoom_only:
+        zoom = gocharting_detail_zoom_png_path_for_csv(csv_path)
+        detail_paths = [zoom] if zoom is not None else []
+    else:
+        detail_paths = gocharting_detail_png_paths_for_csv(csv_path)
     out: list[Path] = []
-    for dp in gocharting_detail_png_paths_for_csv(csv_path):
+    for dp in detail_paths:
         out.extend(
             gocharting_detail_openai_image_paths(dp, crop_width_thirds=crop_width_thirds)
         )
@@ -547,11 +553,12 @@ def openai_payloads_for_attachment_paths(
     paths: Sequence[Path],
     *,
     crop_width_thirds: bool | None = None,
+    gocharting_detail_zoom_only: bool = False,
 ) -> list[ChartOpenAIPayload]:
     """
     Build OpenAI payloads from JSON/CSV attachment paths; for each Coinmap JSON, append
     sibling PNG immediately after (per-interval or M15+M5 for merged). For GoCharting CSV,
-    append overview PNG then detail-zoom and detail-back PNGs when on disk.
+    append overview PNG then detail-zoom (and detail-back PNGs unless ``gocharting_detail_zoom_only``).
     """
     out: list[ChartOpenAIPayload] = []
     for p in paths:
@@ -561,7 +568,9 @@ def openai_payloads_for_attachment_paths(
             if pp is not None:
                 out.append(("image", pp))
             for dp in gocharting_detail_openai_png_paths_for_csv(
-                p, crop_width_thirds=crop_width_thirds
+                p,
+                crop_width_thirds=crop_width_thirds,
+                zoom_only=gocharting_detail_zoom_only,
             ):
                 out.append(("image", dp))
             continue

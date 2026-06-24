@@ -193,19 +193,19 @@ def test_build_scalp_update_user_text_first_after_all_legacy_m15_m5() -> None:
     assert "scalp" in t.lower()
 
 
-def test_build_scalp_update_user_text_gocharting_mentions_pan_back() -> None:
+def test_build_scalp_update_user_text_gocharting_mentions_detail_zoom() -> None:
     t = build_scalp_update_user_text(
         first_after_all=True,
         footprint_source="gocharting",
     )
-    assert "pan-back" in t
+    assert "pan-back" not in t
     assert "detail footprint zoom" in t
     assert "MT5 spot XAUUSD M5" in t
     assert "50 nến" in t
     assert "stacked BID/ASK" in t
     assert "không có BID/ASK theo price level" in t
     assert "#8FAF8E" in t
-    assert "stacked ASK (3 level, ratio 300%)" in t
+    assert "stacked ASK (3 level imbalance, ratio 3.0x)" in t
     assert "#FF6600" in t
     assert "volume POC" in t
     assert "#FA6578" in t

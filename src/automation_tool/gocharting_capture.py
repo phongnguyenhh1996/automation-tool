@@ -23,8 +23,8 @@ _DEFAULT_DOWNLOAD_BUTTON = (
     'button:has(span div:text-is("Tải xuống"))'
 )
 _DEFAULT_DETAIL_HISTORY_STEPS = 3
-# ``update-scalp --gocharting``: detail zoom + this many pan-back PNGs per M15/M5 slot.
-GOCHARTING_UPDATE_SCALP_DETAIL_HISTORY_STEPS = 2
+# ``update-scalp --gocharting``: detail zoom only (no pan-back history PNGs).
+GOCHARTING_UPDATE_SCALP_DETAIL_HISTORY_STEPS = 0
 _DEFAULT_CHART_LOAD_MS = 2000
 
 

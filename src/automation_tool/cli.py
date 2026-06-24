@@ -951,11 +951,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     up.set_defaults(func=cmd_update)
 
-    # --- update-scalp: same as update but asks for best scalp plan; scalp_<id> labels ---
+    # --- update-scalp: same as update but asks for best plan; scalp_<id> labels ---
     ups = sub.add_parser(
         "update-scalp",
         help=(
-            "Scalp intraday: TradingView 15m ICT + 5m rồi Coinmap M15 + M5 (JSON + PNG) → OpenAI tìm plan scalp; "
+            "Scalp intraday: TradingView 15m ICT + 5m rồi Coinmap M15 + M5 (JSON + PNG) → OpenAI tìm plan đẹp nhất; "
             "vector store từ OPENAI_UPDATE_SCALP_VECTOR_STORE_ID(S) hoặc mặc định all-2; "
             "zones lưu vào data/<SYM>/zones/ với label scalp_<id>."
         ),
@@ -3938,7 +3938,7 @@ def cmd_update(args: argparse.Namespace) -> None:
 def cmd_update_scalp(args: argparse.Namespace) -> None:
     """
     Luồng ``update-scalp``: TradingView **15m ICT + 5m**, rồi Coinmap **M15 + M5** (JSON + PNG,
-    ``bearer_request``) → OpenAI, tìm plan scalp đẹp nhất. Dùng ``--no-tradingview`` để chỉ Coinmap.
+    ``bearer_request``) → OpenAI, tìm plan đẹp nhất. Dùng ``--no-tradingview`` để chỉ Coinmap.
     - Vector store: ``OPENAI_UPDATE_SCALP_VECTOR_STORE_ID(S)``; nếu không set thì giống ``all-2``
       (``_ALL_SECOND_FLOW_VECTOR_STORE_ID``), không dùng ``OPENAI_VECTOR_STORE_IDS``.
     - Thread OpenAI riêng (``last_scalp_response_id.txt``).
@@ -4151,6 +4151,7 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
             include=s.openai_responses_include,
             model=scalp_openai_model,
             chart_stamp=stamp,
+            gocharting_detail_zoom_only=use_gc,
         )
 
     try:
