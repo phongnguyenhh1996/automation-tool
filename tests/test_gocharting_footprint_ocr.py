@@ -8,12 +8,15 @@ import pytest
 
 from automation_tool.gocharting_footprint_ocr import (
     FOOTPRINT_CHART_TYPE,
+    align_bid_ask_y_entries,
     append_candle_to_footprint_document,
     closed_candle_time_hhmm,
+    cluster_y_value_entries,
     extract_time_hhmm_from_ocr_text,
     footprint_interval_json_path,
     new_footprint_document,
     parse_footprint_candle_from_ocr,
+    parse_price_levels_from_parsed_text,
     parse_price_levels_from_overlay,
     process_footprint_clip_image,
 )
@@ -31,6 +34,31 @@ def test_extract_time_hhmm_from_ocr_text() -> None:
 
 def test_closed_candle_time_hhmm() -> None:
     assert closed_candle_time_hhmm(datetime(2025, 6, 24, 8, 25)) == "08:25"
+
+
+def test_cluster_y_value_entries_merges_same_row() -> None:
+    merged = cluster_y_value_entries([(100, 2), (103, 2), (118, 5)])
+    assert merged == [(101, 2), (118, 5)]
+
+
+def test_align_bid_ask_y_entries_pairs_split_columns() -> None:
+    bid_entries = [(100, 2), (116, 0), (132, 7)]
+    ask_entries = [(101, 5), (117, 3), (133, 0)]
+    levels = align_bid_ask_y_entries(bid_entries, ask_entries)
+    assert levels == [
+        {"bid": 2, "ask": 5},
+        {"bid": 0, "ask": 3},
+        {"bid": 7, "ask": 0},
+    ]
+
+
+def test_parse_price_levels_from_parsed_text() -> None:
+    text = "2 5\n0 4\n1 9\n@ @ @ @\n"
+    assert parse_price_levels_from_parsed_text(text) == [
+        {"bid": 2, "ask": 5},
+        {"bid": 0, "ask": 4},
+        {"bid": 1, "ask": 9},
+    ]
 
 
 def test_parse_price_levels_from_overlay() -> None:
@@ -186,23 +214,10 @@ def test_process_footprint_clip_image_deletes_png(
     json_path = tmp_path / "footprint_bid_ask_5m.json"
 
     monkeypatch.setattr(
-        "automation_tool.gocharting_footprint_ocr.ocr_space_parse_image",
+        "automation_tool.gocharting_footprint_ocr.parse_footprint_candle_from_clip_image",
         lambda *_a, **_k: {
-            "ParsedResults": [
-                {
-                    "ParsedText": "08:25",
-                    "TextOverlay": {
-                        "Lines": [
-                            {
-                                "Words": [
-                                    {"WordText": "1", "Left": 20, "Top": 50},
-                                    {"WordText": "2", "Left": 170, "Top": 50},
-                                ]
-                            }
-                        ]
-                    },
-                }
-            ]
+            "time": "08:25",
+            "price_levels": [{"bid": 1, "ask": 2}],
         },
     )
 
