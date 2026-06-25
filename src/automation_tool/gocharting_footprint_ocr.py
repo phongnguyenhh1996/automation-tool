@@ -38,6 +38,46 @@ _FOOTPRINT_CLIP_PNG_RE = re.compile(
     r"^(\d{8})_(\d{1,2})h(\d{1,2})m_(\d+m)\.png$",
     re.I,
 )
+FOOTPRINT_CANDLE_TZ_SUFFIX = " GMT+0700"
+_TIME_ONLY_RE = re.compile(r"^\d{1,2}:\d{2}$")
+_LEGACY_ISO_MINUTE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2})$")
+_WEEKDAY_ABBR = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+_MONTH_NAMES = (
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+)
+_GOCHARTING_DATETIME_RE = re.compile(
+    r"\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+"
+    r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+"
+    r"(\d{1,2})\s+"
+    r"(\d{4})\s+"
+    r"(\d{1,2}):(\d{2}):\d{2}",
+    re.I,
+)
+_MONTH_ABBR = {
+    "jan": 1,
+    "feb": 2,
+    "mar": 3,
+    "apr": 4,
+    "may": 5,
+    "jun": 6,
+    "jul": 7,
+    "aug": 8,
+    "sep": 9,
+    "oct": 10,
+    "nov": 11,
+    "dec": 12,
+}
 
 
 class FootprintOcrSkipped(Exception):
@@ -154,25 +194,113 @@ def list_footprint_clip_pngs(
     return items
 
 
+def _hhmm_suffix_from_footprint_time(time_key: str) -> str:
+    if _TIME_ONLY_RE.match(time_key):
+        return time_key
+    iso = _LEGACY_ISO_MINUTE_RE.match(time_key)
+    if iso:
+        return f"{int(iso.group(4)):02d}:{iso.group(5)}"
+    hms = re.search(r"\b(\d{1,2}):(\d{2}):\d{2}\b", time_key)
+    if hms:
+        return f"{int(hms.group(1)):02d}:{hms.group(2)}"
+    if " " in time_key:
+        return time_key.rsplit(" ", 1)[-1]
+    return time_key
+
+
+def _is_legacy_hhmm_footprint_time(time_key: str) -> bool:
+    return bool(_TIME_ONLY_RE.match(time_key))
+
+
+def _is_legacy_footprint_time(time_key: str) -> bool:
+    return bool(_TIME_ONLY_RE.match(time_key) or _LEGACY_ISO_MINUTE_RE.match(time_key))
+
+
+def format_footprint_candle_time(closed_candle_open: datetime) -> str:
+    """Canonical footprint candle ``time`` key (GoCharting CSV style, GMT+0700)."""
+    return (
+        f"{_WEEKDAY_ABBR[closed_candle_open.weekday()]} "
+        f"{_MONTH_NAMES[closed_candle_open.month - 1]} "
+        f"{closed_candle_open.day} "
+        f"{closed_candle_open.year} "
+        f"{closed_candle_open.strftime('%H:%M:%S')}"
+        f"{FOOTPRINT_CANDLE_TZ_SUFFIX}"
+    )
+
+
+def canonical_footprint_time_key(time_key: str) -> str:
+    """Normalize known dated footprint time strings to the canonical GMT+0700 key."""
+    raw = (time_key or "").strip()
+    if not raw:
+        return ""
+    if FOOTPRINT_CANDLE_TZ_SUFFIX in raw:
+        return csv_time_to_footprint_key(raw)
+    iso = _LEGACY_ISO_MINUTE_RE.match(raw)
+    if iso:
+        year, month, day, hour, minute = map(int, iso.groups())
+        return format_footprint_candle_time(datetime(year, month, day, hour, minute))
+    return ""
+
+
+def _footprint_time_already_in_set(closed_open: datetime, existing_times: set[str]) -> bool:
+    canonical = format_footprint_candle_time(closed_open)
+    if canonical in existing_times:
+        return True
+    legacy_keys = {
+        closed_open.strftime("%Y-%m-%d %H:%M"),
+        closed_open.strftime("%H:%M"),
+    }
+    if legacy_keys & existing_times:
+        return True
+    return any(canonical_footprint_time_key(time_key) == canonical for time_key in existing_times)
+
+
+def _drop_superseded_legacy_hhmm_candles(
+    candles: Iterable[dict[str, Any]],
+    *,
+    full_time_key: str,
+) -> list[dict[str, Any]]:
+    """Remove legacy ``HH:MM`` / ISO-minute rows replaced by a canonical candle."""
+    canonical = canonical_footprint_time_key(full_time_key) or full_time_key
+    hhmm_suffix = _hhmm_suffix_from_footprint_time(canonical)
+    if not hhmm_suffix or _is_legacy_footprint_time(full_time_key):
+        return [c for c in candles if isinstance(c, dict)]
+    kept: list[dict[str, Any]] = []
+    for candle in candles:
+        if not isinstance(candle, dict):
+            continue
+        time_key = str(candle.get("time") or "").strip()
+        other_canonical = canonical_footprint_time_key(time_key)
+        if other_canonical and other_canonical == canonical:
+            continue
+        if _is_legacy_hhmm_footprint_time(time_key) and time_key == hhmm_suffix:
+            continue
+        kept.append(candle)
+    return kept
+
+
 def merge_footprint_candles_by_time(
     candles: Iterable[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """Deduplicate candles by ``time``; keep the row with more ``price_levels``."""
     by_time: dict[str, dict[str, Any]] = {}
     for candle in candles:
-        time_key = str(candle.get("time") or "").strip()
-        if not time_key:
+        raw_time = str(candle.get("time") or "").strip()
+        if not raw_time:
             continue
+        time_key = canonical_footprint_time_key(raw_time) or raw_time
         levels = candle.get("price_levels")
         level_count = len(levels) if isinstance(levels, list) else 0
         existing = by_time.get(time_key)
+        stored = dict(candle)
+        stored["time"] = time_key
         if existing is None:
-            by_time[time_key] = candle
+            by_time[time_key] = stored
             continue
         existing_levels = existing.get("price_levels")
         existing_count = len(existing_levels) if isinstance(existing_levels, list) else 0
         if level_count > existing_count:
-            by_time[time_key] = candle
+            by_time[time_key] = stored
     return sorted(by_time.values(), key=lambda c: str(c.get("time") or ""))
 
 
@@ -233,12 +361,12 @@ def batch_ocr_footprint_clip_images(
     ocr_calls = 0
 
     for path, closed_open, interval in png_items:
-        time_key = closed_candle_time_hhmm(closed_open)
-        if time_key in existing_times_with_levels.get(interval, set()):
+        existing_times = existing_times_with_levels.get(interval, set())
+        if _footprint_time_already_in_set(closed_open, existing_times):
             _log.debug(
                 "footprint OCR batch: skip %s | time=%s already has price_levels in JSON",
                 path.name,
-                time_key,
+                format_footprint_candle_time(closed_open),
             )
             continue
 
@@ -278,9 +406,13 @@ def batch_ocr_footprint_clip_images(
         prior = [
             c for c in existing_docs.get(interval, {}).get("candles", []) if isinstance(c, dict)
         ]
-        merged = merge_footprint_candles_by_time(
-            [*prior, *new_candles_by_interval.get(interval, [])]
-        )
+        new_candles = new_candles_by_interval.get(interval, [])
+        for candle in new_candles:
+            prior = _drop_superseded_legacy_hhmm_candles(
+                prior,
+                full_time_key=str(candle.get("time") or "").strip(),
+            )
+        merged = merge_footprint_candles_by_time([*prior, *new_candles])
         doc = new_footprint_document(symbol=symbol, timeframe=interval)
         doc["candles"] = merged
         json_path = footprint_interval_json_path(out_dir, interval)
@@ -306,7 +438,12 @@ def append_candle_to_footprint_document(
     doc = load_footprint_document(path, symbol=symbol, timeframe=timeframe)
     time_key = str(candle.get("time") or "").strip()
     candles: list[dict[str, Any]] = [
-        c for c in doc.get("candles", []) if str(c.get("time") or "").strip() != time_key
+        c
+        for c in _drop_superseded_legacy_hhmm_candles(
+            doc.get("candles", []),
+            full_time_key=time_key,
+        )
+        if str(c.get("time") or "").strip() != time_key
     ]
     candles.append(candle)
     candles.sort(key=lambda c: str(c.get("time") or ""))
@@ -402,7 +539,34 @@ def extract_time_hhmm_from_ocr_text(text: str) -> Optional[str]:
 
 
 def closed_candle_time_hhmm(closed_candle_open: datetime) -> str:
-    return closed_candle_open.strftime("%H:%M")
+    """Canonical footprint candle ``time`` key (GoCharting CSV style, GMT+0700)."""
+    return format_footprint_candle_time(closed_candle_open)
+
+
+def csv_time_to_footprint_key(time_str: str) -> str:
+    """Normalize CSV / GoCharting time strings to canonical ``... GMT+0700`` key."""
+    raw = (time_str or "").strip()
+    if not raw:
+        return ""
+    gmt = _GOCHARTING_DATETIME_RE.search(raw)
+    if gmt:
+        month = _MONTH_ABBR[gmt.group(1).lower()[:3]]
+        day = int(gmt.group(2))
+        year = int(gmt.group(3))
+        hour = int(gmt.group(4))
+        minute = int(gmt.group(5))
+        second = 0
+        sec_match = re.search(r"\b(\d{1,2}):(\d{2}):(\d{2})\b", raw)
+        if sec_match:
+            second = int(sec_match.group(3))
+        return format_footprint_candle_time(datetime(year, month, day, hour, minute, second))
+    std = re.search(r"(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2})", raw)
+    if std:
+        year, month, day, hour, minute = std.groups()
+        return format_footprint_candle_time(
+            datetime(int(year), int(month), int(day), int(hour), int(minute))
+        )
+    return csv_time_to_hhmm(raw)
 
 
 def csv_time_to_hhmm(time_str: str) -> str:
@@ -437,26 +601,54 @@ def csv_time_to_hhmm(time_str: str) -> str:
 
 
 def parse_gocharting_csv_ohlc_by_hhmm(text: str) -> dict[str, dict[str, float]]:
-    """Map ``HH:MM`` → ``{high, low}``; duplicate times keep the last (newest) row."""
+    """Map footprint time key → ``{high, low}``; duplicate times keep the last row."""
     from automation_tool.chart_payload_validate import normalize_gocharting_csv_text
 
     normalized = normalize_gocharting_csv_text(text)
-    by_hhmm: dict[str, dict[str, float]] = {}
+    by_time: dict[str, dict[str, float]] = {}
     reader = csv.DictReader(io.StringIO(normalized))
     for row in reader:
         if not row:
             continue
         time_raw = row.get("Time") or row.get("Date") or row.get("time") or ""
-        hhmm = csv_time_to_hhmm(str(time_raw))
-        if not hhmm:
+        time_key = csv_time_to_footprint_key(str(time_raw))
+        if not time_key:
             continue
         try:
             high = float(row.get("High") or row.get("high"))
             low = float(row.get("Low") or row.get("low"))
         except (TypeError, ValueError):
             continue
-        by_hhmm[hhmm] = {"high": high, "low": low}
+        by_time[time_key] = {"high": high, "low": low}
+    return by_time
+
+
+def _ohlc_index_by_hhmm(
+    ohlc_by_time: dict[str, dict[str, float]],
+) -> dict[str, dict[str, float]]:
+    """Legacy ``HH:MM`` index for candles written before canonical GMT+0700 keys."""
+    by_hhmm: dict[str, dict[str, float]] = {}
+    for time_key, ohlc in ohlc_by_time.items():
+        by_hhmm[_hhmm_suffix_from_footprint_time(time_key)] = ohlc
     return by_hhmm
+
+
+def _lookup_ohlc_for_candle_time(
+    time_key: str,
+    ohlc_by_time: dict[str, dict[str, float]],
+    ohlc_by_hhmm: dict[str, dict[str, float]],
+) -> Optional[dict[str, float]]:
+    canonical = canonical_footprint_time_key(time_key)
+    if canonical:
+        ohlc = ohlc_by_time.get(canonical)
+        if ohlc is not None:
+            return ohlc
+    ohlc = ohlc_by_time.get(time_key)
+    if ohlc is not None:
+        return ohlc
+    if _is_legacy_footprint_time(time_key):
+        return ohlc_by_hhmm.get(_hhmm_suffix_from_footprint_time(time_key))
+    return None
 
 
 DEFAULT_FOOTPRINT_BLOCK_SIZE = 0.4
@@ -544,10 +736,11 @@ def enrich_footprint_bid_ask_document(
         _log.debug("footprint enrich: cannot read CSV %s: %s", csv_path, exc)
         return doc
 
-    ohlc_by_hhmm = parse_gocharting_csv_ohlc_by_hhmm(csv_text)
-    if not ohlc_by_hhmm:
+    ohlc_by_time = parse_gocharting_csv_ohlc_by_hhmm(csv_text)
+    if not ohlc_by_time:
         _log.debug("footprint enrich: no OHLC rows in %s", csv_path)
         return doc
+    ohlc_by_hhmm = _ohlc_index_by_hhmm(ohlc_by_time)
 
     candles_raw = doc.get("candles")
     if not isinstance(candles_raw, list):
@@ -564,7 +757,7 @@ def enrich_footprint_bid_ask_document(
         if not isinstance(levels_raw, list):
             enriched_candles.append(dict(candle))
             continue
-        ohlc = ohlc_by_hhmm.get(time_key)
+        ohlc = _lookup_ohlc_for_candle_time(time_key, ohlc_by_time, ohlc_by_hhmm)
         if ohlc is None:
             _log.warning(
                 "footprint enrich: no CSV row for candle time=%s in %s",
@@ -906,9 +1099,7 @@ def parse_footprint_candle_from_ocr(
     results = ocr_payload.get("ParsedResults") or []
     if results and isinstance(results[0], dict):
         parsed_text = _sanitize_parsed_text(str(results[0].get("ParsedText") or ""))
-    time_val = extract_time_hhmm_from_ocr_text(parsed_text) or closed_candle_time_hhmm(
-        closed_candle_open
-    )
+    time_val = closed_candle_time_hhmm(closed_candle_open)
     price_levels, _, _ = _price_levels_from_ocr_payload(
         ocr_payload,
         split_ratio=split_ratio,

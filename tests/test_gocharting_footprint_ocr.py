@@ -29,6 +29,10 @@ from automation_tool.gocharting_footprint_ocr import (
 )
 
 
+def _fp_time(dt: datetime) -> str:
+    return closed_candle_time_hhmm(dt)
+
+
 def test_footprint_interval_json_path() -> None:
     p = footprint_interval_json_path(Path("/tmp/out"), "5m")
     assert p.name == "footprint_bid_ask_5m.json"
@@ -87,12 +91,18 @@ def test_batch_ocr_footprint_clip_images_writes_sorted_deduped_json(
 
     def _fake_parse(path: Path, **_kwargs):
         if path.name == "20250624_9h55m_5m.png":
-            return {"time": "09:55", "price_levels": [{"bid": 1, "ask": 2}]}
+            return {
+                "time": _fp_time(datetime(2025, 6, 24, 9, 55)),
+                "price_levels": [{"bid": 1, "ask": 2}],
+            }
         if path.name == "20250623_10h0m_5m.png":
-            return {"time": "10:00", "price_levels": [{"bid": 1, "ask": 2}]}
+            return {
+                "time": _fp_time(datetime(2025, 6, 23, 10, 0)),
+                "price_levels": [{"bid": 1, "ask": 2}],
+            }
         if path.name == "20250624_10h0m_5m.png":
             return {
-                "time": "10:00",
+                "time": _fp_time(datetime(2025, 6, 24, 10, 0)),
                 "price_levels": [
                     {"bid": 1, "ask": 2},
                     {"bid": 3, "ask": 4},
@@ -114,15 +124,23 @@ def test_batch_ocr_footprint_clip_images_writes_sorted_deduped_json(
         intervals=("5m",),
         ocr_delay_s=0,
     )
-    assert len(docs["5m"]["candles"]) == 2
-    assert [c["time"] for c in docs["5m"]["candles"]] == ["09:55", "10:00"]
-    assert len(docs["5m"]["candles"][1]["price_levels"]) == 3
+    assert len(docs["5m"]["candles"]) == 3
+    assert [c["time"] for c in docs["5m"]["candles"]] == [
+        _fp_time(datetime(2025, 6, 23, 10, 0)),
+        _fp_time(datetime(2025, 6, 24, 9, 55)),
+        _fp_time(datetime(2025, 6, 24, 10, 0)),
+    ]
+    assert len(docs["5m"]["candles"][2]["price_levels"]) == 3
 
     json_path = out / "footprint_bid_ask_5m.json"
     assert json_path.is_file()
     on_disk = json.loads(json_path.read_text(encoding="utf-8"))
     assert on_disk["type"] == FOOTPRINT_CHART_TYPE
-    assert [c["time"] for c in on_disk["candles"]] == ["09:55", "10:00"]
+    assert [c["time"] for c in on_disk["candles"]] == [
+        _fp_time(datetime(2025, 6, 23, 10, 0)),
+        _fp_time(datetime(2025, 6, 24, 9, 55)),
+        _fp_time(datetime(2025, 6, 24, 10, 0)),
+    ]
 
 
 def test_batch_ocr_skips_times_already_in_json(
@@ -138,7 +156,12 @@ def test_batch_ocr_skips_times_already_in_json(
                 "symbol": "COMEX:GC1!",
                 "timeframe": "5m",
                 "type": FOOTPRINT_CHART_TYPE,
-                "candles": [{"time": "09:55", "price_levels": [{"bid": 9, "ask": 9}]}],
+                "candles": [
+                    {
+                        "time": _fp_time(datetime(2025, 6, 24, 9, 55)),
+                        "price_levels": [{"bid": 9, "ask": 9}],
+                    }
+                ],
             }
         ),
         encoding="utf-8",
@@ -151,7 +174,10 @@ def test_batch_ocr_skips_times_already_in_json(
     def _fake_parse(path: Path, **_kwargs):
         calls.append(path.name)
         if path.name == "20250624_10h0m_5m.png":
-            return {"time": "10:00", "price_levels": [{"bid": 1, "ask": 2}]}
+            return {
+                "time": _fp_time(datetime(2025, 6, 24, 10, 0)),
+                "price_levels": [{"bid": 1, "ask": 2}],
+            }
         raise AssertionError(path.name)
 
     monkeypatch.setattr(
@@ -168,7 +194,10 @@ def test_batch_ocr_skips_times_already_in_json(
         ocr_delay_s=0,
     )
     assert calls == ["20250624_10h0m_5m.png"]
-    assert [c["time"] for c in docs["5m"]["candles"]] == ["09:55", "10:00"]
+    assert [c["time"] for c in docs["5m"]["candles"]] == [
+        _fp_time(datetime(2025, 6, 24, 9, 55)),
+        _fp_time(datetime(2025, 6, 24, 10, 0)),
+    ]
     assert docs["5m"]["candles"][0]["price_levels"] == [{"bid": 9, "ask": 9}]
 
 
@@ -195,7 +224,7 @@ def test_batch_ocr_retries_times_with_empty_price_levels_in_json(
     monkeypatch.setattr(
         "automation_tool.gocharting_footprint_ocr.parse_footprint_candle_from_clip_image",
         lambda *_a, **_k: {
-            "time": "09:55",
+            "time": _fp_time(datetime(2025, 6, 24, 9, 55)),
             "price_levels": [{"bid": 1, "ask": 2}, {"bid": 3, "ask": 4}],
         },
     )
@@ -233,7 +262,11 @@ def test_batch_ocr_waits_between_api_calls(
     monkeypatch.setattr(
         "automation_tool.gocharting_footprint_ocr.parse_footprint_candle_from_clip_image",
         lambda path, **_kwargs: {
-            "time": "09:55" if path.name.endswith("9h55m_5m.png") else "10:00",
+            "time": (
+                _fp_time(datetime(2025, 6, 24, 9, 55))
+                if path.name.endswith("9h55m_5m.png")
+                else _fp_time(datetime(2025, 6, 24, 10, 0))
+            ),
             "price_levels": [{"bid": 1, "ask": 2}],
         },
     )
@@ -282,7 +315,23 @@ def test_extract_time_hhmm_from_ocr_text() -> None:
 
 
 def test_closed_candle_time_hhmm() -> None:
-    assert closed_candle_time_hhmm(datetime(2025, 6, 24, 8, 25)) == "08:25"
+    assert (
+        closed_candle_time_hhmm(datetime(2025, 6, 24, 8, 25))
+        == "Tue Jun 24 2025 08:25:00 GMT+0700"
+    )
+
+
+def test_csv_time_to_footprint_key() -> None:
+    from automation_tool.gocharting_footprint_ocr import csv_time_to_footprint_key
+
+    assert (
+        csv_time_to_footprint_key("2026-06-16 10:05:00")
+        == "Tue Jun 16 2026 10:05:00 GMT+0700"
+    )
+    assert (
+        csv_time_to_footprint_key("Tue Jun 23 2026 10:00:00 GMT+0700 (Indochina Time)")
+        == "Tue Jun 23 2026 10:00:00 GMT+0700"
+    )
 
 
 def test_csv_time_to_hhmm() -> None:
@@ -300,7 +349,7 @@ def test_parse_gocharting_csv_gmt_date_format() -> None:
         "Tue Jun 23 2026 10:00:00 GMT+0700 (Indochina Time),4164.9,4167.6,4156.3,4160.7\n"
     )
     out = parse_gocharting_csv_ohlc_by_hhmm(csv_text)
-    assert out["10:00"] == {"high": 4167.6, "low": 4156.3}
+    assert out["Tue Jun 23 2026 10:00:00 GMT+0700"] == {"high": 4167.6, "low": 4156.3}
 
 
 def test_enrich_footprint_with_gocharting_gmt_csv_time(tmp_path: Path) -> None:
@@ -313,7 +362,7 @@ def test_enrich_footprint_with_gocharting_gmt_csv_time(tmp_path: Path) -> None:
     doc = {
         "candles": [
             {
-                "time": "10:00",
+                "time": "Tue Jun 23 2026 10:00:00 GMT+0700",
                 "price_levels": [{"bid": 0, "ask": 4}, {"bid": 2, "ask": 0}],
             }
         ],
@@ -358,8 +407,27 @@ def test_parse_gocharting_csv_ohlc_by_hhmm() -> None:
         encoding="utf-8"
     )
     out = parse_gocharting_csv_ohlc_by_hhmm(fixture)
-    assert out["10:00"] == {"high": 2651.2, "low": 2649.5}
-    assert out["10:05"] == {"high": 2652.0, "low": 2650.2}
+    assert out["Tue Jun 16 2026 10:00:00 GMT+0700"] == {"high": 2651.2, "low": 2649.5}
+    assert out["Tue Jun 16 2026 10:05:00 GMT+0700"] == {"high": 2652.0, "low": 2650.2}
+
+
+def test_enrich_footprint_bid_ask_document_legacy_hhmm_time(tmp_path: Path) -> None:
+    csv_path = tmp_path / "gc_5m.csv"
+    csv_path.write_text(
+        "Time,Open,High,Low,Close\n"
+        "2026-06-16 10:05:00,4200,4220,4200,4210\n",
+        encoding="utf-8",
+    )
+    doc = {
+        "candles": [
+            {
+                "time": "10:05",
+                "price_levels": [{"bid": 1, "ask": 2}],
+            }
+        ],
+    }
+    out = enrich_footprint_bid_ask_document(doc, csv_path)
+    assert out["candles"][0]["price_levels"][0]["price"] == 4220
 
 
 def test_enrich_footprint_bid_ask_document(tmp_path: Path) -> None:
@@ -374,7 +442,7 @@ def test_enrich_footprint_bid_ask_document(tmp_path: Path) -> None:
         "timeframe": "5m",
         "candles": [
             {
-                "time": "10:05",
+                "time": "Tue Jun 16 2026 10:05:00 GMT+0700",
                 "price_levels": [
                     {"bid": 1, "ask": 2},
                     {"bid": 3, "ask": 4},
@@ -484,7 +552,7 @@ def test_parse_footprint_clip_image_retries_rgb_when_grayscale_empty(
         image_width=240,
     )
     assert calls == ["L", "RGB"]
-    assert candle["time"] == "13:35"
+    assert candle["time"] == _fp_time(datetime(2026, 6, 24, 13, 35))
     assert candle["price_levels"] == [{"bid": 0, "ask": 1}]
 
 
@@ -577,7 +645,7 @@ def test_parse_footprint_candle_from_ocr() -> None:
         image_width=230,
         closed_candle_open=datetime(2025, 6, 24, 8, 25),
     )
-    assert candle["time"] == "08:25"
+    assert candle["time"] == _fp_time(datetime(2025, 6, 24, 8, 25))
     assert candle["price_levels"] == [{"bid": 0, "ask": 2}]
 
 
@@ -655,7 +723,7 @@ def test_process_footprint_clip_image_deletes_png(
     monkeypatch.setattr(
         "automation_tool.gocharting_footprint_ocr.parse_footprint_candle_from_clip_image",
         lambda *_a, **_k: {
-            "time": "08:25",
+            "time": _fp_time(datetime(2025, 6, 24, 8, 25)),
             "price_levels": [{"bid": 1, "ask": 2}],
         },
     )
@@ -672,7 +740,7 @@ def test_process_footprint_clip_image_deletes_png(
     )
     assert result is not None
     candle, doc = result
-    assert candle["time"] == "08:25"
+    assert candle["time"] == _fp_time(datetime(2025, 6, 24, 8, 25))
     assert not image.is_file()
     assert json_path.is_file()
     assert len(doc["candles"]) == 1
