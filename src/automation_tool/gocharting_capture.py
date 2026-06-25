@@ -10,7 +10,10 @@ import yaml
 from playwright.sync_api import BrowserContext, Page, sync_playwright
 
 from automation_tool.browser_client import browser_service_state_path, try_attach_playwright_via_service
-from automation_tool.chart_payload_validate import prepare_gocharting_csv_file
+from automation_tool.chart_payload_validate import (
+    prepare_gocharting_csv_file,
+    validate_gocharting_csv_file,
+)
 from automation_tool.config import default_storage_state_path
 from automation_tool.gocharting_capture_lock import gocharting_capture_lock
 from automation_tool.playwright_browser import close_browser_and_context, launch_chrome_context
@@ -26,6 +29,8 @@ _DEFAULT_DETAIL_HISTORY_STEPS = 3
 # ``update-scalp --gocharting``: detail zoom only (no pan-back history PNGs).
 GOCHARTING_UPDATE_SCALP_DETAIL_HISTORY_STEPS = 0
 _DEFAULT_CHART_LOAD_MS = 2000
+_DEFAULT_EMPTY_DOWNLOAD_MAX_RETRIES = 2
+_DEFAULT_EMPTY_DOWNLOAD_RETRY_DELAY_MS = 500
 
 
 def _chart_load_ms(cfg: dict[str, Any], *, section: Optional[str] = None) -> int:
@@ -458,6 +463,29 @@ def _prepare_overview_chart(page: Page, cfg: dict[str, Any]) -> None:
     _log.debug("gocharting: overview prepared (refresh + zoomOut x%s)", zoom_clicks)
 
 
+def _empty_download_max_retries(cfg: dict[str, Any]) -> int:
+    try:
+        return max(0, int(cfg.get("empty_download_max_retries", _DEFAULT_EMPTY_DOWNLOAD_MAX_RETRIES)))
+    except (TypeError, ValueError):
+        return _DEFAULT_EMPTY_DOWNLOAD_MAX_RETRIES
+
+
+def _empty_download_retry_delay_ms(cfg: dict[str, Any]) -> int:
+    try:
+        return max(0, int(cfg.get("empty_download_retry_delay_ms", _DEFAULT_EMPTY_DOWNLOAD_RETRY_DELAY_MS)))
+    except (TypeError, ValueError):
+        return _DEFAULT_EMPTY_DOWNLOAD_RETRY_DELAY_MS
+
+
+def _gocharting_png_is_empty(path: Path) -> tuple[bool, str]:
+    try:
+        if path.stat().st_size == 0:
+            return True, "empty PNG"
+    except OSError as e:
+        return True, f"read error: {e}"
+    return False, ""
+
+
 def _save_download(page: Page, click_fn, dest: Path, timeout_ms: int) -> None:
     _ensure_dir(dest.parent)
     with page.expect_download(timeout=timeout_ms) as dl_info:
@@ -481,17 +509,40 @@ def _capture_png(
     dl_btn = str(shot.get("download_button") or _DEFAULT_DOWNLOAD_BUTTON)
     timeout_ms = int(shot.get("download_timeout_ms", 30_000))
     escapes = int(shot.get("popup_escape_presses", 1))
+    max_retries = _empty_download_max_retries(cfg)
+    retry_delay_ms = _empty_download_retry_delay_ms(cfg)
 
-    page.locator(open_btn).first.click(timeout=15_000)
-    page.wait_for_timeout(400)
+    for attempt in range(max_retries + 1):
+        page.locator(open_btn).first.click(timeout=15_000)
+        page.wait_for_timeout(400)
 
-    def _click_download() -> None:
-        page.locator(dl_btn).first.click(timeout=15_000)
+        def _click_download() -> None:
+            page.locator(dl_btn).first.click(timeout=15_000)
 
-    _save_download(page, _click_download, dest, timeout_ms)
-    for _ in range(max(0, escapes)):
-        page.keyboard.press("Escape")
-        page.wait_for_timeout(200)
+        _save_download(page, _click_download, dest, timeout_ms)
+        for _ in range(max(0, escapes)):
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(200)
+
+        empty, reason = _gocharting_png_is_empty(dest)
+        if not empty:
+            return
+        if attempt < max_retries:
+            _log.warning(
+                "gocharting: PNG empty (%s) — retry download %d/%d (%s)",
+                reason,
+                attempt + 1,
+                max_retries,
+                dest.name,
+            )
+            if retry_delay_ms > 0:
+                page.wait_for_timeout(retry_delay_ms)
+        else:
+            _log.warning(
+                "gocharting: PNG still empty after %d retries (%s)",
+                max_retries,
+                dest.name,
+            )
 
 
 def _capture_csv(
@@ -508,13 +559,37 @@ def _capture_csv(
         or 'button:has(svg path[d*="M439.658,91.21"])'
     )
     timeout_ms = int(csv_cfg.get("download_timeout_ms", 30_000))
+    max_retries = _empty_download_max_retries(cfg)
+    retry_delay_ms = _empty_download_retry_delay_ms(cfg)
 
-    def _click_csv() -> None:
-        page.locator(btn).first.click(timeout=15_000)
+    for attempt in range(max_retries + 1):
 
-    _save_download(page, _click_csv, dest, timeout_ms)
-    if prepare_gocharting_csv_file(dest):
-        _log.debug("gocharting: normalized CSV on disk (%s)", dest.name)
+        def _click_csv() -> None:
+            page.locator(btn).first.click(timeout=15_000)
+
+        _save_download(page, _click_csv, dest, timeout_ms)
+        if prepare_gocharting_csv_file(dest):
+            _log.debug("gocharting: normalized CSV on disk (%s)", dest.name)
+
+        ok, reason = validate_gocharting_csv_file(dest)
+        if ok:
+            return
+        if attempt < max_retries:
+            _log.warning(
+                "gocharting: CSV empty (%s) — retry download %d/%d (%s)",
+                reason,
+                attempt + 1,
+                max_retries,
+                dest.name,
+            )
+            if retry_delay_ms > 0:
+                page.wait_for_timeout(retry_delay_ms)
+        else:
+            _log.warning(
+                "gocharting: CSV still empty after %d retries (%s)",
+                max_retries,
+                dest.name,
+            )
 
 
 def _drag_in_box(

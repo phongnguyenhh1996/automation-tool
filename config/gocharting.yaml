@@ -68,15 +68,15 @@ detail_chart:
   pan_end_x_ratio: 0.9
   pan_y_ratio: 0.5
   pan_drag_steps: 12
-  history_steps: 4
+  history_steps: 2
   # Per-interval overrides (merged on top of keys above).
   by_interval:
     15m:
       zoom_clicks: 4
-      history_steps: 4
+      history_steps: 2
     5m:
       zoom_clicks: 4
-      history_steps: 4
+      history_steps: 2
 
 capture_plan:
   - symbol: DXY
