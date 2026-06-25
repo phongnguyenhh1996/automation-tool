@@ -285,7 +285,7 @@ def merge_footprint_with_mt5_spot(
     footprint_doc: dict[str, Any],
     mt5_payload: dict[str, Any],
 ) -> dict[str, Any]:
-    """Attach ``XAUUSD_OHLC`` per candle keyed by ``time_gmt7``."""
+    """Attach ``mt5_spot_ohlc`` per candle keyed by ``time_gmt7``."""
     spot_index = build_mt5_spot_ohlc_index(mt5_payload)
     merged = dict(footprint_doc)
     candles_out: list[dict[str, Any]] = []
@@ -296,7 +296,7 @@ def merge_footprint_with_mt5_spot(
         block = dict(candle)
         time_key = str(block.get("time_gmt7") or "").strip()
         spot = spot_index.get(time_key)
-        block["XAUUSD_OHLC"] = spot
+        block["mt5_spot_ohlc"] = spot
         if spot is not None:
             matched += 1
         candles_out.append(block)

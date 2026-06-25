@@ -212,6 +212,6 @@ def test_merge_footprint_with_mt5_spot() -> None:
         ],
     }
     merged = merge_footprint_with_mt5_spot(doc, mt5_payload)
-    assert merged["candles"][0]["XAUUSD_OHLC"]["open"] == 4020.1
-    assert merged["candles"][1]["XAUUSD_OHLC"] is None
+    assert merged["candles"][0]["mt5_spot_ohlc"]["open"] == 4020.1
+    assert merged["candles"][1]["mt5_spot_ohlc"] is None
     assert merged["mt5_spot"]["matched"] == 1

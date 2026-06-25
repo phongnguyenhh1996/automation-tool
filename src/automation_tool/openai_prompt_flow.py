@@ -138,7 +138,7 @@ def default_analysis_prompt(
             "(footprint hợp đồng tương lai vàng GC1! trên GoCharting; không phải spot XAUUSD; "
             "mỗi khung: CSV + PNG overview) → "
             f"MT5 spot {sym} OHLC (broker) nằm trong footprint_combined JSON "
-            "(mỗi nến: ``XAUUSD_OHLC``) → "
+            "(mỗi nến: ``mt5_spot_ohlc``) → "
             "footprint_combined_15m.json và footprint_combined_5m.json (WS: GC ohlc + footprint[] + spot OHLC, "
             "N nến mới nhất).\n"
             "Ưu tiên footprint_combined JSON cho stacked BID/ASK, absorption, RL theo price level; "
@@ -303,7 +303,7 @@ def _json_file_header_and_body(
         header = (
             f"[GoCharting footprint combined — {iv} — file: {path.name}]\n"
             "Instrument: COMEX:GC1! futures. Each candle: time_gmt7, ohlc (GC1!), "
-            "XAUUSD_OHLC (spot broker), footprint[] "
+            "mt5_spot_ohlc (spot broker), footprint[] "
             "with buy/sell volume per price level (latest N candles from WS capture).\n"
         )
     elif path.name.startswith("footprint_bid_ask_") and path.suffix.lower() == ".json":
@@ -1054,7 +1054,7 @@ def build_scalp_update_user_text(
             f" (footprint {GOCHARTING_GOLD_FUTURE_LABEL} trên GoCharting — hợp đồng tương lai vàng GC1!, "
             "không phải spot XAUUSD; mỗi khung: CSV orderflow; PNG overview; "
             "cuối cùng footprint_combined_15m.json và footprint_combined_5m.json — "
-            "GC ohlc + footprint[] + XAUUSD_OHLC spot broker, N nến mới nhất)."
+            "GC ohlc + footprint[] + mt5_spot_ohlc spot broker, N nến mới nhất)."
         )
         if first_after_all:
             return (
@@ -1073,7 +1073,7 @@ def build_scalp_update_user_text(
             f"Đính kèm **hai** file: **(1)** GoCharting M15 CSV, **(2)** M5 CSV "
             f"(footprint {GOCHARTING_GOLD_FUTURE_LABEL}; "
             "PNG overview ngay sau mỗi CSV nếu có; "
-            "footprint_combined_15m.json và footprint_combined_5m.json gồm XAUUSD_OHLC).\n"
+            "footprint_combined_15m.json và footprint_combined_5m.json gồm mt5_spot_ohlc).\n"
             f"{_GOCHARTING_SCALP_UPDATE_SUFFIX}"
         )
 
