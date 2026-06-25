@@ -45,7 +45,7 @@ from automation_tool.zones_state import format_intraday_update_time_line
 _log = logging.getLogger(__name__)
 
 DEFAULT_REASONING_EFFORT = "medium"
-ALL_FLOW_REASONING_EFFORT = "high"
+ALL_FLOW_REASONING_EFFORT = "medium"
 
 # GoCharting footprint for main gold pair: COMEX GC1! future, not spot XAUUSD.
 GOCHARTING_GOLD_FUTURE_LABEL = "Gold Future (GC1!)"
