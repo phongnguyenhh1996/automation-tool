@@ -12,7 +12,9 @@ from automation_tool.gocharting_image_crop import GOCHARTING_IMAGE_WIDTH_THIRDS
 from automation_tool.images import (
     GOCHARTING_GOLD_EXPORT_LABEL,
     GOCHARTING_DETAIL_PNG_PER_SLOT,
+    append_footprint_json_paths,
     chart_image_order_for_main_symbol,
+    extend_openai_payloads_with_footprint_json,
     footprint_source_for_stamp,
     gocharting_detail_png_paths,
     gocharting_detail_zoom_png_path_for_csv,
@@ -86,6 +88,10 @@ def test_ordered_chart_openai_payloads_gocharting(tmp_path: Path) -> None:
     charts.mkdir()
     (charts / ".main_chart_symbol").write_text("XAUUSD\n", encoding="utf-8")
     stamp = "20260616_120000"
+    detail_cfg = {
+        "detail_chart": {"page_url": "https://example.com/detail", "crop_width_thirds": True},
+        "footprint_ws": {"enabled": False},
+    }
     for sym, iv in (("DXY", "15m"), (GOCHARTING_GOLD_EXPORT_LABEL, "15m"), (GOCHARTING_GOLD_EXPORT_LABEL, "5m")):
         csv_p = charts / f"{stamp}_gocharting_{sym}_{iv}.csv"
         png_p = charts / f"{stamp}_gocharting_{sym}_{iv}.png"
@@ -96,15 +102,44 @@ def test_ordered_chart_openai_payloads_gocharting(tmp_path: Path) -> None:
                 _write_rgb_png(
                     charts / f"{stamp}_gocharting_{sym}_{iv}_detail_{suffix}.png"
                 )
-    payloads = ordered_chart_openai_payloads(charts, stamp=stamp)
+    payloads = ordered_chart_openai_payloads(charts, stamp=stamp, gocharting_cfg=detail_cfg)
     kinds = [k for k, _ in payloads]
     assert kinds.count("csv") == 3
     assert kinds.count("image") == 3 + 2 * GOCHARTING_DETAIL_PNG_PER_SLOT
 
 
+def test_ordered_chart_openai_payloads_gocharting_ws_skips_detail(tmp_path: Path) -> None:
+    charts = tmp_path / "charts"
+    charts.mkdir()
+    (charts / ".main_chart_symbol").write_text("XAUUSD\n", encoding="utf-8")
+    stamp = "20260616_120000"
+    ws_cfg = {"footprint_ws": {"enabled": True}}
+    fp_dir = charts / "footprint_images"
+    fp_dir.mkdir()
+    for iv in ("15m", "5m"):
+        (fp_dir / f"footprint_combined_{iv}.json").write_text(
+            '{"symbol":"COMEX:GC1!","candles":[]}\n', encoding="utf-8"
+        )
+    for sym, iv in (("DXY", "15m"), (GOCHARTING_GOLD_EXPORT_LABEL, "15m"), (GOCHARTING_GOLD_EXPORT_LABEL, "5m")):
+        csv_p = charts / f"{stamp}_gocharting_{sym}_{iv}.csv"
+        png_p = charts / f"{stamp}_gocharting_{sym}_{iv}.png"
+        csv_p.write_text("Time,Open\n1,2\n", encoding="utf-8")
+        png_p.write_bytes(b"x")
+        if sym != "DXY":
+            _write_rgb_png(charts / f"{stamp}_gocharting_{sym}_{iv}_detail_zoom.png")
+    payloads = ordered_chart_openai_payloads(charts, stamp=stamp, gocharting_cfg=ws_cfg)
+    kinds = [k for k, _ in payloads]
+    assert kinds.count("csv") == 3
+    assert kinds.count("image") == 3
+    assert all("_detail_" not in p.name for k, p in payloads if k == "image")
+
+
 def test_openai_payload_max_gocharting_order() -> None:
     order = chart_image_order_for_main_symbol("XAUUSD", footprint_source="gocharting")
-    assert openai_payload_max_for_order(order) == 38
+    detail_cfg = {"footprint_ws": {"enabled": False}}
+    assert openai_payload_max_for_order(order, gocharting_cfg=detail_cfg) == 38
+    ws_cfg = {"footprint_ws": {"enabled": True}}
+    assert openai_payload_max_for_order(order, gocharting_cfg=ws_cfg) == 14
 
 
 def test_ordered_chart_images_gocharting_includes_detail_crop_panels(tmp_path: Path) -> None:
@@ -122,7 +157,11 @@ def test_ordered_chart_images_gocharting_includes_detail_crop_panels(tmp_path: P
         for suffix in ("zoom", "back_1", "back_2", "back_3"):
             _write_rgb_png(charts / f"{stamp}_gocharting_{sym}_{iv}_detail_{suffix}.png")
     (charts / f"{stamp}_gocharting_DXY_15m.png").write_bytes(b"dxy")
-    paths = ordered_chart_images(charts, stamp=stamp)
+    paths = ordered_chart_images(
+        charts,
+        stamp=stamp,
+        gocharting_cfg={"footprint_ws": {"enabled": False}},
+    )
     names = [p.name for p in paths]
     assert f"{stamp}_gocharting_DXY_15m.png" in names
     for iv in ("15m", "5m"):
@@ -153,11 +192,46 @@ def test_ordered_chart_images_gocharting_no_crop(tmp_path: Path) -> None:
     paths = ordered_chart_images(
         charts,
         stamp=stamp,
-        gocharting_cfg={"detail_chart": {"crop_width_thirds": False}},
+        gocharting_cfg={
+            "detail_chart": {"crop_width_thirds": False},
+            "footprint_ws": {"enabled": False},
+        },
     )
     names = [p.name for p in paths]
     assert f"{stamp}_gocharting_{sym}_15m_detail_zoom.png" in names
     assert f"{stamp}_gocharting_{sym}_15m_detail_zoom_part1.png" not in names
+
+
+def test_extend_openai_payloads_with_footprint_combined_json(tmp_path: Path) -> None:
+    charts = tmp_path / "charts"
+    fp_dir = charts / "footprint_images"
+    fp_dir.mkdir(parents=True)
+    combined = fp_dir / "footprint_combined_5m.json"
+    combined.write_text('{"candles":[]}\n', encoding="utf-8")
+    payloads = extend_openai_payloads_with_footprint_json(
+        [],
+        charts,
+        gocharting_cfg={"footprint_ws": {"enabled": True}},
+    )
+    assert len(payloads) == 1
+    assert payloads[0] == ("json", combined)
+
+
+def test_append_footprint_json_paths_prefers_combined(tmp_path: Path) -> None:
+    charts = tmp_path / "charts"
+    fp_dir = charts / "footprint_images"
+    fp_dir.mkdir(parents=True)
+    combined = fp_dir / "footprint_combined_15m.json"
+    combined.write_text('{"candles":[]}\n', encoding="utf-8")
+    bid_ask = fp_dir / "footprint_bid_ask_15m.json"
+    bid_ask.write_text('{"candles":[]}\n', encoding="utf-8")
+    paths = append_footprint_json_paths(
+        [],
+        charts,
+        gocharting_cfg={"footprint_ws": {"enabled": True}},
+    )
+    assert combined in paths
+    assert bid_ask not in paths
 
 
 def test_gocharting_detail_png_paths_order(tmp_path: Path) -> None:

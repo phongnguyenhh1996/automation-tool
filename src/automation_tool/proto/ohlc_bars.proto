@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package protobars;
+
+option go_package = "gocharting/gocharting-server-golang/proto/protobars;protobars";
+
+message IntradayOHLCBars {
+    int32 count = 1;
+    string start = 2;
+    int32 volume_precision = 3;
+    int32 price_precision = 4;
+    repeated Candle candles = 5;
+}
+
+message EoDOHLCBars {
+    string start = 1;
+    int32 volume_precision = 2;
+    int32 price_precision = 3;
+    repeated Candle candles = 4;
+    string next_close = 5;
+}
+
+message OHLCBarResult {
+    string zone = 1;
+    int32 count = 2;
+    string offset_in = 3;
+    map<string, IntradayOHLCBars> intraday_candles = 4;
+    optional EoDOHLCBars eod_candles = 5;
+}
+
+message Candle {
+    int32 offset = 1;
+    int64 open = 2;
+    int64 high = 3;
+    int64 low = 4;
+    int64 close = 5;
+    int64 volume = 6;
+    int64 oi = 7;
+    int64 volume2 = 8;
+}

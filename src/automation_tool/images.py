@@ -38,6 +38,30 @@ def footprint_bid_ask_openai_payloads(charts_dir: Path) -> list[ChartOpenAIPaylo
     return [("json", path) for path in existing_footprint_bid_ask_json_paths(charts_dir)]
 
 
+def existing_footprint_combined_json_paths(
+    charts_dir: Path,
+    *,
+    gocharting_yaml: Optional[Path] = None,
+    intervals: tuple[str, ...] = ("15m", "5m"),
+) -> list[Path]:
+    """Return on-disk WS combined footprint JSON files (15m then 5m), skipping missing paths."""
+    from automation_tool.gocharting_footprint_ocr import footprint_images_dir
+    from automation_tool.gocharting_ws_decode import footprint_combined_json_path
+
+    out_dir = footprint_images_dir(charts_dir, gocharting_yaml=gocharting_yaml)
+    paths: list[Path] = []
+    for interval in intervals:
+        path = footprint_combined_json_path(out_dir, interval)
+        if path.is_file():
+            paths.append(path)
+    return paths
+
+
+def footprint_combined_openai_payloads(charts_dir: Path) -> list[ChartOpenAIPayload]:
+    """WS combined footprint JSON from ``footprint_ws`` capture (if on disk)."""
+    return [("json", path) for path in existing_footprint_combined_json_paths(charts_dir)]
+
+
 def extend_openai_payloads_with_footprint_bid_ask(
     payloads: list[ChartOpenAIPayload],
     charts_dir: Path,
@@ -46,6 +70,55 @@ def extend_openai_payloads_with_footprint_bid_ask(
     if not extra:
         return payloads
     return [*payloads, *extra]
+
+
+def extend_openai_payloads_with_footprint_json(
+    payloads: list[ChartOpenAIPayload],
+    charts_dir: Path,
+    *,
+    gocharting_cfg: dict | None = None,
+) -> list[ChartOpenAIPayload]:
+    """Append WS combined JSON when ``footprint_ws.enabled``; else OCR bid/ask JSON."""
+    if _footprint_ws_active(gocharting_cfg):
+        extra = footprint_combined_openai_payloads(charts_dir)
+    else:
+        extra = footprint_bid_ask_openai_payloads(charts_dir)
+    if not extra:
+        return payloads
+    return [*payloads, *extra]
+
+
+def _default_gocharting_cfg() -> dict:
+    from automation_tool.config import default_gocharting_config_path
+    from automation_tool.gocharting_capture import load_gocharting_yaml
+
+    return load_gocharting_yaml(default_gocharting_config_path())
+
+
+def _footprint_ws_active(gocharting_cfg: dict | None = None) -> bool:
+    from automation_tool.gocharting_ws_decode import footprint_ws_enabled
+
+    cfg = gocharting_cfg if gocharting_cfg is not None else _default_gocharting_cfg()
+    return footprint_ws_enabled(cfg)
+
+
+def append_footprint_json_paths(
+    paths: list[Path],
+    charts_dir: Path,
+    *,
+    gocharting_cfg: dict | None = None,
+) -> list[Path]:
+    """Append WS combined or OCR bid/ask footprint JSON paths when on disk."""
+    if _footprint_ws_active(gocharting_cfg):
+        candidates = existing_footprint_combined_json_paths(charts_dir)
+    else:
+        from automation_tool.gocharting_footprint_ocr import existing_footprint_bid_ask_json_paths
+
+        candidates = existing_footprint_bid_ask_json_paths(charts_dir)
+    for path in candidates:
+        if path not in paths:
+            paths.append(path)
+    return paths
 
 
 def normalize_main_chart_symbol(s: str) -> str:
@@ -186,8 +259,10 @@ def _detail_back_step_from_stem(stem: str) -> Optional[int]:
     return int(m.group(1))
 
 
-def _gocharting_detail_png_per_slot(sym: str) -> int:
+def _gocharting_detail_png_per_slot(sym: str, *, gocharting_cfg: dict | None = None) -> int:
     """DXY GoCharting uses overview only (no detail footprint tab)."""
+    if _footprint_ws_active(gocharting_cfg):
+        return 0
     if sym.strip().upper() == "DXY":
         return 0
     return GOCHARTING_DETAIL_PNG_PER_SLOT
@@ -195,11 +270,13 @@ def _gocharting_detail_png_per_slot(sym: str) -> int:
 
 def openai_payload_max_for_order(
     order: tuple[tuple[str, str, str], ...],
+    *,
+    gocharting_cfg: dict | None = None,
 ) -> int:
     """Upper bound when each footprint slot sends data file + PNG alongside other slot payloads."""
     return len(order) + sum(
         (
-            1 + _gocharting_detail_png_per_slot(sym)
+            1 + _gocharting_detail_png_per_slot(sym, gocharting_cfg=gocharting_cfg)
             if src == "gocharting"
             else 1
             if src == "coinmap"
@@ -482,6 +559,7 @@ def _append_gocharting_openai_payloads(
     sym: str,
     iv: str,
     crop_width_thirds: bool | None = None,
+    gocharting_cfg: dict | None = None,
 ) -> None:
     iv_slug = re.sub(r"[^\w]+", "_", iv).strip("_")[:20] or "iv"
     cp = charts_dir / f"{stamp}_gocharting_{sym}_{iv_slug}.csv"
@@ -490,6 +568,8 @@ def _append_gocharting_openai_payloads(
         out.append(("csv", cp))
     if pp.is_file():
         out.append(("image", pp))
+    if _footprint_ws_active(gocharting_cfg):
+        return
     for dp in gocharting_detail_openai_png_paths(
         charts_dir, stamp, sym, iv, crop_width_thirds=crop_width_thirds
     ):
@@ -553,13 +633,15 @@ def openai_payloads_for_attachment_paths(
     paths: Sequence[Path],
     *,
     crop_width_thirds: bool | None = None,
+    gocharting_cfg: dict | None = None,
     gocharting_detail_zoom_only: bool = False,
 ) -> list[ChartOpenAIPayload]:
     """
     Build OpenAI payloads from JSON/CSV attachment paths; for each Coinmap JSON, append
     sibling PNG immediately after (per-interval or M15+M5 for merged). For GoCharting CSV,
-    append overview PNG then detail-zoom (and detail-back PNGs unless ``gocharting_detail_zoom_only``).
+    append overview PNG then detail-zoom PNGs unless ``footprint_ws.enabled``.
     """
+    ws_active = _footprint_ws_active(gocharting_cfg)
     out: list[ChartOpenAIPayload] = []
     for p in paths:
         if p.suffix.lower() == ".csv":
@@ -567,12 +649,13 @@ def openai_payloads_for_attachment_paths(
             pp = gocharting_png_path_for_csv(p)
             if pp is not None:
                 out.append(("image", pp))
-            for dp in gocharting_detail_openai_png_paths_for_csv(
-                p,
-                crop_width_thirds=crop_width_thirds,
-                zoom_only=gocharting_detail_zoom_only,
-            ):
-                out.append(("image", dp))
+            if not ws_active:
+                for dp in gocharting_detail_openai_png_paths_for_csv(
+                    p,
+                    crop_width_thirds=crop_width_thirds,
+                    zoom_only=gocharting_detail_zoom_only,
+                ):
+                    out.append(("image", dp))
             continue
         out.append(("json", p))
         if "_coinmap_" not in p.name or p.suffix.lower() != ".json":
@@ -651,6 +734,7 @@ def ordered_chart_openai_payloads(
                 sym=sym,
                 iv=iv,
                 crop_width_thirds=crop_width_thirds,
+                gocharting_cfg=gocharting_cfg,
             )
         else:
             jp = charts_dir / f"{st}_tradingview_{sym}_{iv}.json"
@@ -667,7 +751,7 @@ def ordered_chart_openai_payloads(
                     out.append(("image", pp))
             elif pp.is_file():
                 out.append(("image", pp))
-    _append_gocharting_mt5_spot_payload(out, charts_dir=charts_dir, stamp=st)
+    _append_gocharting_mt5_spot_payload(out, charts_dir=charts_dir, stamp=st, gocharting_cfg=gocharting_cfg)
     return out
 
 
@@ -699,9 +783,12 @@ def _append_gocharting_mt5_spot_payload(
     *,
     charts_dir: Path,
     stamp: str,
+    gocharting_cfg: dict | None = None,
 ) -> None:
-    """After GoCharting footprint slots, attach MT5 spot OHLC JSON when present."""
+    """After GoCharting footprint slots, attach MT5 spot OHLC JSON when present (legacy)."""
     if footprint_source_for_stamp(charts_dir, stamp=stamp) != "gocharting":
+        return
+    if _footprint_ws_active(gocharting_cfg):
         return
     p = mt5_spot_candles_json_path_for_stamp(charts_dir, stamp=stamp)
     if p is not None:
@@ -732,7 +819,7 @@ def ordered_chart_images(
         p = charts_dir / f"{st}_{src}_{sym}_{iv}.png"
         if p.is_file():
             out.append(p)
-        if src == "gocharting":
+        if src == "gocharting" and not _footprint_ws_active(gocharting_cfg):
             out.extend(
                 gocharting_detail_openai_png_paths(
                     charts_dir, st, sym, iv, crop_width_thirds=crop_width_thirds

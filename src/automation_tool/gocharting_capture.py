@@ -253,6 +253,10 @@ def _detail_chart_enabled(cfg: dict[str, Any]) -> bool:
 
 
 def _symbol_detail_chart_enabled(cfg: dict[str, Any], entry: dict[str, Any]) -> bool:
+    from automation_tool.gocharting_ws_decode import footprint_ws_enabled
+
+    if footprint_ws_enabled(cfg):
+        return False
     if not _detail_chart_enabled(cfg):
         return False
     if entry.get("detail_chart") is False:
@@ -765,6 +769,8 @@ def _capture_gocharting_in_context(
     only_slots: Optional[list[tuple[str, str]]] = None,
     detail_history_steps: Optional[int] = None,
     overview_capture: bool = True,
+    gocharting_yaml: Optional[Path] = None,
+    mt5_accounts_json: Optional[Path] = None,
 ) -> list[Path]:
     slot_filter: set[tuple[str, str]] | None = None
     if only_slots:
@@ -851,6 +857,23 @@ def _capture_gocharting_in_context(
                         detail_history_steps=detail_history_steps,
                     )
                     paths.extend(detail_paths)
+        if overview_capture:
+            from automation_tool.gocharting_ws_decode import footprint_ws_enabled
+
+            if footprint_ws_enabled(cfg):
+                from automation_tool.gocharting_ws_capture import capture_footprint_ws_plan
+
+                ws_paths = capture_footprint_ws_plan(
+                    context,
+                    cfg,
+                    charts_dir=charts_dir,
+                    email=email,
+                    password=password,
+                    gocharting_yaml=gocharting_yaml,
+                    main_symbol=main_chart_symbol,
+                    mt5_accounts_json=mt5_accounts_json,
+                )
+                paths.extend(ws_paths)
         return paths
     finally:
         try:
@@ -875,6 +898,8 @@ def _capture_gocharting_with_context(
     only_slots: Optional[list[tuple[str, str]]] = None,
     detail_history_steps: Optional[int] = None,
     overview_capture: bool = True,
+    gocharting_yaml: Optional[Path] = None,
+    mt5_accounts_json: Optional[Path] = None,
 ) -> list[Path]:
     paths = _capture_gocharting_in_context(
         context,
@@ -889,6 +914,8 @@ def _capture_gocharting_with_context(
         only_slots=only_slots,
         detail_history_steps=detail_history_steps,
         overview_capture=overview_capture,
+        gocharting_yaml=gocharting_yaml,
+        mt5_accounts_json=mt5_accounts_json,
     )
     if save_storage_state and storage_state_path:
         _ensure_dir(storage_state_path.parent)
@@ -915,14 +942,15 @@ def capture_gocharting(
     require_browser_service: bool = False,
     detail_history_steps: Optional[int] = None,
     overview_capture: bool = True,
+    mt5_accounts_json: Optional[Path] = None,
 ) -> list[Path]:
     """
     Capture GoCharting footprint charts: PNG screenshot + CSV export per (symbol, interval).
 
-    When ``detail_chart.page_url`` is set, also captures detail footprint PNGs on a separate tab
-    (zoom + optional pan history steps). ``detail_history_steps=0`` captures zoom only.
+    When ``footprint_ws.enabled`` is true, captures combined footprint JSON via WebSocket
+    (``footprint_screenshot.intervals.*.page_url``) instead of detail-chart PNGs.
 
-    ``overview_capture=False`` — chỉ capture detail footprint (không PNG/CSV overview).
+    ``overview_capture=False`` — chỉ capture detail footprint (legacy; no-op when WS enabled).
 
     Attaches to the long-lived browser service when ``data/browser_service_state.json`` is
     present (same as Coinmap/TV ``capture_charts``). Otherwise launches a standalone Chrome.
@@ -970,6 +998,8 @@ def capture_gocharting(
         only_slots=only_slots,
         detail_history_steps=detail_history_steps,
         overview_capture=overview_capture,
+        gocharting_yaml=gocharting_yaml,
+        mt5_accounts_json=mt5_accounts_json,
     )
 
     with gocharting_capture_lock():

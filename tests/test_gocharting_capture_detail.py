@@ -22,6 +22,23 @@ from automation_tool.gocharting_capture import (
 )
 
 
+_DETAIL_CHART_CFG = {
+    "detail_chart": {
+        "page_url": "https://gocharting.com/terminal/chart/orlk0N-Da",
+        "refresh_button_id": "refresh-button",
+        "zoom_in_button_id": "zoomIn-button",
+        "zoom_clicks": 2,
+        "zoom_click_delay_ms": 500,
+        "chart_root_id": "chart-root-0",
+        "pan_start_x_ratio": 0.1,
+        "pan_end_x_ratio": 0.9,
+        "pan_y_ratio": 0.5,
+        "history_steps": 3,
+    },
+    "footprint_ws": {"enabled": False},
+}
+
+
 @pytest.fixture
 def gc_cfg() -> dict:
     return {
@@ -33,18 +50,7 @@ def gc_cfg() -> dict:
             "zoom_click_delay_ms": 500,
         },
         "chart_load_ms": 0,
-        "detail_chart": {
-            "page_url": "https://gocharting.com/terminal/chart/orlk0N-Da",
-            "refresh_button_id": "refresh-button",
-            "zoom_in_button_id": "zoomIn-button",
-            "zoom_clicks": 2,
-            "zoom_click_delay_ms": 500,
-            "chart_root_id": "chart-root-0",
-            "pan_start_x_ratio": 0.1,
-            "pan_end_x_ratio": 0.9,
-            "pan_y_ratio": 0.5,
-            "history_steps": 3,
-        },
+        **_DETAIL_CHART_CFG,
         "capture_plan": [{"symbol": "XAUUSD", "intervals": ["15m"]}],
         "symbols": {
             "XAUUSD": {
@@ -739,3 +745,84 @@ def test_capture_gocharting_in_context_dxy_skips_symbol_search_with_dedicated_ur
         "https://gocharting.com/terminal/chart/OpJogbwTR",
     ]
     assert select_calls == ["GC"]
+
+
+def test_capture_gocharting_skips_detail_and_calls_ws_when_enabled(
+    monkeypatch, tmp_path: Path, gc_cfg: dict
+) -> None:
+    cfg = dict(gc_cfg)
+    cfg["footprint_ws"] = {"enabled": True}
+    cfg["footprint_screenshot"] = {
+        "intervals": {
+            "5m": {"page_url": "https://gocharting.com/terminal/chart/GC435uijM"},
+        }
+    }
+
+    context = MagicMock()
+    main_page = MagicMock()
+    context.new_page.return_value = main_page
+
+    detail_called = False
+    ws_called = False
+
+    def fake_detail(*args, **kwargs):
+        nonlocal detail_called
+        detail_called = True
+        return []
+
+    def fake_ws_plan(*args, **kwargs):
+        nonlocal ws_called
+        ws_called = True
+        p = tmp_path / "footprint_images" / "footprint_combined_5m.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text('{"candles":[]}\n', encoding="utf-8")
+        return [p]
+
+    monkeypatch.setattr(
+        "automation_tool.gocharting_capture._maybe_login_gocharting",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        "automation_tool.gocharting_capture._select_chart_symbol",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        "automation_tool.gocharting_capture._select_interval",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        "automation_tool.gocharting_capture._prepare_overview_chart",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        "automation_tool.gocharting_capture._capture_png",
+        lambda page, cfg, dest, **kwargs: dest.write_bytes(b"png"),
+    )
+    monkeypatch.setattr(
+        "automation_tool.gocharting_capture._capture_csv",
+        lambda page, cfg, dest, **kwargs: dest.write_text("h\n1", encoding="utf-8"),
+    )
+    monkeypatch.setattr(
+        "automation_tool.gocharting_capture._capture_detail_footprint",
+        fake_detail,
+    )
+    monkeypatch.setattr(
+        "automation_tool.gocharting_ws_capture.capture_footprint_ws_plan",
+        fake_ws_plan,
+    )
+
+    paths = _capture_gocharting_in_context(
+        context,
+        cfg,
+        charts_dir=tmp_path,
+        email="a@b.com",
+        password="pw",
+        stamp="20260617_120000",
+        main_chart_symbol=None,
+        capture_symbols=None,
+        capture_intervals=None,
+    )
+
+    assert detail_called is False
+    assert ws_called is True
+    assert any(p.name == "footprint_combined_5m.json" for p in paths)

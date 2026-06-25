@@ -53,26 +53,19 @@ GOCHARTING_GOLD_FUTURE_LABEL = "Gold Future (GC1!)"
 _GOCHARTING_BID_ASK_HINT = (
     "GoCharting CSV export chỉ có OHLC, Volume, Delta, CVD theo nến — "
     "KHÔNG có BID/ASK theo từng price level (stacked BID/ASK, volume bid/ask từng mức, RL). "
-    "Khi playbook yêu cầu stacked BID/ASK, absorption hoặc footprint theo mức giá: "
-    "đọc trực tiếp trên ảnh GoCharting detail footprint (zoom + pan-back), không suy từ CSV. "
-    "Ảnh detail footprint hiển thị BID/ASK theo price level — nguồn chính cho stacked BID/ASK, "
-    "absorption và RL khi dùng GoCharting.\n"
+    "Stacked BID/ASK, absorption, RL: đọc từ footprint_combined_15m.json và footprint_combined_5m.json "
+    "(mỗi candle: ohlc + footprint[] với buy/sell volume theo price level), không suy từ CSV.\n"
 )
 
 _GOCHARTING_CHART_READ_GUIDE = (
-    "Hướng dẫn đọc chart GoCharting (footprint overview/detail):\n"
-    "- Box màu #8FAF8E = stacked BID (3 level imbalance, ratio 3.0x).\n"
-    "- Box màu #D37C85 = stacked ASK (3 level imbalance, ratio 3.0x).\n"
-    "- Box có border #FF6600 ở detail view = volume POC.\n"
-    "- Line ngang màu #FA6578 = POC.\n"
-    "- Line ngang màu #17CE1B = VAH.\n"
-    "- Line ngang màu #5B2D1B = VAL.\n"
-    "- Nếu không đọc rõ số BID/ASK trên footprint: nhìn màu sắc — "
-    "xanh lá (buy/BID) hoặc đỏ (sell/ASK); màu càng đậm thì volume càng lớn.\n"
+    "Hướng dẫn đọc footprint GoCharting (JSON combined + overview PNG):\n"
+    "- footprint[].buy.volume / footprint[].sell.volume = BID/ASK volume theo price level.\n"
+    "- totals / ending_summary: delta, CVD, high/low theo nến.\n"
+    "- ohlc trên mỗi candle khớp TS/V2; CSV GoCharting bổ sung CVD/delta khi cần.\n"
 )
 
 _GOCHARTING_TRADE_MANAGEMENT_SUFFIX = (
-    "Stacked BID/ASK, absorption, RL: đọc trên ảnh detail footprint, không từ CSV.\n"
+    "Stacked BID/ASK, absorption, RL: đọc từ footprint_combined_5m.json (footprint[]), không từ CSV.\n"
     f"{_GOCHARTING_CHART_READ_GUIDE}"
 )
 
@@ -136,22 +129,20 @@ def default_analysis_prompt(
     fp = (footprint_source or "coinmap").strip().lower()
     if fp == "gocharting":
         footprint_desc = (
-            f"({CHART_SLOT_COUNT} slot chart; mỗi slot GoCharting: CSV orderflow, PNG overview, "
-            "rồi 4 ảnh detail footprint — zoom + 3 bước pan lịch sử):\n"
+            f"({CHART_SLOT_COUNT} slot chart; mỗi slot GoCharting: CSV orderflow + PNG overview):\n"
             "TradingView DXY (H4, H1, M15) → "
             f"TradingView {sym} (H4, H1, M15, M15 Session Liquidity Check / ICT Killzones, M5) "
             "(snapshot URL/PNG hoặc JSON OHLC tvdatafeed) → "
             "GoCharting DXY M15 (CSV; PNG overview) → "
             f"GoCharting {_gocharting_main_footprint_label(sym)} M15 và M5 "
             "(footprint hợp đồng tương lai vàng GC1! trên GoCharting; không phải spot XAUUSD; "
-            "mỗi khung: CSV + PNG overview + 4 PNG detail) → "
-            f"MT5 spot {sym} M5 (50 nến OHLC broker mới nhất; giá vàng spot thực thi, bổ sung cho GC1!) → "
-            "footprint_bid_ask_15m.json và footprint_bid_ask_5m.json (nếu có — bid/ask theo price level).\n"
-            "Ưu tiên đọc ảnh chart (GoCharting PNG detail/overview, TradingView snapshot). "
-            "GoCharting CSV không có BID/ASK theo price level — stacked BID/ASK, absorption, RL "
-            "phải đọc trên ảnh detail footprint, không suy từ CSV. "
-            "Khi cần con số chính xác theo nến (CVD, delta, volume) thì tra CSV GoCharting; "
-            "OHLC thì tra JSON tvdatafeed tương ứng.\n"
+            "mỗi khung: CSV + PNG overview) → "
+            f"MT5 spot {sym} OHLC (broker) nằm trong footprint_combined JSON "
+            "(mỗi nến: ``XAUUSD_OHLC``) → "
+            "footprint_combined_15m.json và footprint_combined_5m.json (WS: GC ohlc + footprint[] + spot OHLC, "
+            "N nến mới nhất).\n"
+            "Ưu tiên footprint_combined JSON cho stacked BID/ASK, absorption, RL theo price level; "
+            "GoCharting CSV cho CVD/delta/volume theo nến; OHLC tvdatafeed khi cần cấu trúc giá TV.\n"
             f"{_GOCHARTING_CHART_READ_GUIDE}"
         )
     else:
@@ -253,6 +244,22 @@ def _json_file_header_and_body(
             data = slim_coinmap_export_for_openai(data, path=path)
         if (
             isinstance(data, dict)
+            and path.name.startswith("footprint_combined_")
+            and path.suffix.lower() == ".json"
+        ):
+            from automation_tool.gocharting_ws_decode import (
+                footprint_ws_max_candles_from_cfg,
+                trim_footprint_document,
+            )
+            from automation_tool.images import _default_gocharting_cfg
+
+            cfg = _default_gocharting_cfg()
+            data = trim_footprint_document(
+                data,
+                max_candles=footprint_ws_max_candles_from_cfg(cfg),
+            )
+        if (
+            isinstance(data, dict)
             and path.name.startswith("footprint_bid_ask_")
             and path.suffix.lower() == ".json"
         ):
@@ -290,6 +297,14 @@ def _json_file_header_and_body(
             f"[MT5 spot OHLC (broker execution price) — file: {path.name}]\n"
             "Instrument: spot XAUUSD on broker MT5 (not GC1! futures footprint).\n"
             "Bar times (`t`) and generated_at are Asia/Ho_Chi_Minh (UTC+7).\n"
+        )
+    elif path.name.startswith("footprint_combined_") and path.suffix.lower() == ".json":
+        iv = path.stem.replace("footprint_combined_", "")
+        header = (
+            f"[GoCharting footprint combined — {iv} — file: {path.name}]\n"
+            "Instrument: COMEX:GC1! futures. Each candle: time_gmt7, ohlc (GC1!), "
+            "XAUUSD_OHLC (spot broker), footprint[] "
+            "with buy/sell volume per price level (latest N candles from WS capture).\n"
         )
     elif path.name.startswith("footprint_bid_ask_") and path.suffix.lower() == ".json":
         iv = path.stem.replace("footprint_bid_ask_", "")
@@ -884,7 +899,7 @@ _INTRADAY_CHART_READ_PRIORITY_HINT = (
 )
 
 _GOCHARTING_INTRADAY_CHART_READ_PRIORITY_HINT = (
-    "Ưu tiên đọc ảnh GoCharting detail footprint (zoom) cho stacked BID/ASK, absorption, RL; "
+    "Ưu tiên footprint_combined JSON cho stacked BID/ASK, absorption, RL theo price level; "
     "CSV GoCharting chỉ có CVD/delta/volume theo nến — không có BID/ASK theo price level. "
     "TradingView snapshot khi cần cấu trúc giá / liquidity.\n"
     f"{_GOCHARTING_CHART_READ_GUIDE}"
@@ -1025,7 +1040,7 @@ def build_scalp_update_user_text(
     User message cho ``coinmap-automation update-scalp``: giống ``build_intraday_update_user_text``
     nhưng yêu cầu tìm plan đẹp nhất và dùng label ``scalp_<timeframe>``.
 
-    * ``footprint_source="gocharting"``: CSV + PNG overview + detail zoom GoCharting M15/M5.
+    * ``footprint_source="gocharting"``: CSV + PNG overview GoCharting M15/M5 + footprint_combined JSON.
     * ``coinmap_attachment_mode="merged"`` (default): file ``coinmap_merged`` đa khung (15m + 5m).
     * ``coinmap_attachment_mode="merged_m5"``: file ``coinmap_merged`` chỉ có khung **5m** trong
       ``frames`` (build từ raw M5 qua ``write_openai_coinmap_merged_from_raw_export``).
@@ -1038,18 +1053,16 @@ def build_scalp_update_user_text(
         gc_hint = (
             f" (footprint {GOCHARTING_GOLD_FUTURE_LABEL} trên GoCharting — hợp đồng tương lai vàng GC1!, "
             "không phải spot XAUUSD; mỗi khung: CSV orderflow; PNG overview; "
-            "một PNG detail footprint zoom; "
-            "kèm thêm JSON MT5 spot XAUUSD M5 — 50 nến OHLC broker mới nhất; "
-            "cuối cùng footprint_bid_ask_15m.json và footprint_bid_ask_5m.json nếu có — "
-            "bid/ask theo price level)."
+            "cuối cùng footprint_combined_15m.json và footprint_combined_5m.json — "
+            "GC ohlc + footprint[] + XAUUSD_OHLC spot broker, N nến mới nhất)."
         )
         if first_after_all:
             return (
                 "[INTRADAY_UPDATE]\n"
                 f"{time_line}"
                 "Phân tích buổi sáng (Schema A) nằm trong file **morning_full_analysis.json** đính kèm đầu tiên.\n"
-                "Đính kèm **bốn** file theo thứ tự: **(1)** morning_full_analysis.json, **(2)** GoCharting M15 CSV, "
-                f"**(3)** M5 CSV, **(4)** MT5 spot XAUUSD M5 JSON (50 nến broker mới nhất){gc_hint}\n"
+                "Đính kèm **ba** file theo thứ tự: **(1)** morning_full_analysis.json, **(2)** GoCharting M15 CSV, "
+                f"**(3)** M5 CSV{gc_hint}\n"
                 f"{_MORNING_CONTEXT_HINT}"
                 f"{_GOCHARTING_SCALP_UPDATE_SUFFIX}"
             )
@@ -1057,10 +1070,10 @@ def build_scalp_update_user_text(
             "[INTRADAY_UPDATE]\n"
             f"{time_line}"
             "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
-            f"Đính kèm **ba** file: **(1)** GoCharting M15 CSV, **(2)** M5 CSV, **(3)** MT5 spot XAUUSD M5 JSON "
-            f"(50 nến broker; footprint {GOCHARTING_GOLD_FUTURE_LABEL}; "
-            "PNG overview và detail zoom ngay sau mỗi CSV nếu có; "
-            "footprint_bid_ask_15m.json và footprint_bid_ask_5m.json nếu có).\n"
+            f"Đính kèm **hai** file: **(1)** GoCharting M15 CSV, **(2)** M5 CSV "
+            f"(footprint {GOCHARTING_GOLD_FUTURE_LABEL}; "
+            "PNG overview ngay sau mỗi CSV nếu có; "
+            "footprint_combined_15m.json và footprint_combined_5m.json gồm XAUUSD_OHLC).\n"
             f"{_GOCHARTING_SCALP_UPDATE_SUFFIX}"
         )
 
@@ -1191,7 +1204,7 @@ R1_POST_TOUCH_USER_TEMPLATE = (
 POST_FILL_MANAGEMENT_USER_TEMPLATE = (
     "[TRADE_MANAGEMENT]\n"
     "Lệnh đã khớp khoảng {minutes_after_fill} phút trước. "
-    f"Đánh giá Footprint GoCharting M5 detail đính kèm — {GOCHARTING_GOLD_FUTURE_LABEL} "
+    f"Đánh giá Footprint GoCharting M5 (footprint_combined_5m.json) đính kèm — {GOCHARTING_GOLD_FUTURE_LABEL} "
     "(hợp đồng tương lai vàng COMEX GC1! trên GoCharting; không phải spot XAUUSD MT5) "
     "(giữ hay thoát / chỉnh SL/TP).\n"
     f"{_GOCHARTING_TRADE_MANAGEMENT_SUFFIX}"
@@ -1281,8 +1294,11 @@ def run_single_followup_responses(
         else _default_max_coinmap_json_chars()
     )
 
+    from automation_tool.images import _default_gocharting_cfg
+
     json_payloads = openai_payloads_for_attachment_paths(
         paths,
+        gocharting_cfg=_default_gocharting_cfg(),
         gocharting_detail_zoom_only=gocharting_detail_zoom_only,
     )
     content = _build_mixed_chart_user_content(
