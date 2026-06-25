@@ -116,7 +116,10 @@ def test_merge_footprint_with_ohlc_fixture() -> None:
     assert first["ohlc"] is not None
     assert first["ohlc"]["open"] == 4019.0
     assert first["footprint"]
-    assert first["ending_summary"]["high"] == "40249"
+    assert "ending_summary" not in first
+    assert "max" not in first
+    assert "min" not in first
+    assert "is_complete" not in merged
 
 
 @pytest.mark.skipif(not _FIXTURE_DIR.is_dir(), reason="sniff fixture missing")
@@ -149,6 +152,31 @@ def test_trim_footprint_document_keeps_newest_candles() -> None:
     assert len(trimmed["candles"]) == 3
     assert trimmed["candles"][0]["time_gmt7"] == "t7"
     assert trimmed["candles"][-1]["time_gmt7"] == "t9"
+
+
+def test_slim_footprint_combined_document() -> None:
+    from automation_tool.gocharting_ws_decode import slim_footprint_combined_document
+
+    doc = {
+        "is_complete": True,
+        "candles": [
+            {
+                "time_gmt7": "t1",
+                "ending_summary": {"high": "1"},
+                "max": {"buy": {}},
+                "min": {"sell": {}},
+                "totals": {"buy": {}},
+                "footprint": [],
+            }
+        ],
+    }
+    slim = slim_footprint_combined_document(doc)
+    assert "is_complete" not in slim
+    c0 = slim["candles"][0]
+    assert "ending_summary" not in c0
+    assert "max" not in c0
+    assert "min" not in c0
+    assert "totals" in c0
 
 
 def test_mt5_bar_time_to_footprint_key() -> None:

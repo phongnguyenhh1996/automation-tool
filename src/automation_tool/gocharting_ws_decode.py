@@ -198,6 +198,30 @@ def build_ohlc_index(docs: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return index
 
 
+_COMBINED_DOC_DROP_KEYS = ("is_complete",)
+_COMBINED_CANDLE_DROP_KEYS = ("ending_summary", "max", "min")
+
+
+def slim_footprint_combined_document(doc: dict[str, Any]) -> dict[str, Any]:
+    """Drop verbose protobuf fields from combined export (keeps raw export unchanged)."""
+    out = dict(doc)
+    for key in _COMBINED_DOC_DROP_KEYS:
+        out.pop(key, None)
+    candles_raw = out.get("candles")
+    if not isinstance(candles_raw, list):
+        return out
+    slim_candles: list[dict[str, Any]] = []
+    for candle in candles_raw:
+        if not isinstance(candle, dict):
+            continue
+        block = dict(candle)
+        for key in _COMBINED_CANDLE_DROP_KEYS:
+            block.pop(key, None)
+        slim_candles.append(block)
+    out["candles"] = slim_candles
+    return out
+
+
 def merge_footprint_raw_with_ohlc(
     footprint_doc: dict[str, Any],
     ohlc_index: dict[str, dict[str, Any]],
@@ -218,7 +242,7 @@ def merge_footprint_raw_with_ohlc(
     merged["candles"] = candles_out
     merged["ohlc_matched"] = matched
     merged["ohlc_available"] = len(ohlc_index)
-    return merged
+    return slim_footprint_combined_document(merged)
 
 
 def mt5_bar_time_to_footprint_key(iso_t: str) -> str:
