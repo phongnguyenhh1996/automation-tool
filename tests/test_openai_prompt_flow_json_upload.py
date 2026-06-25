@@ -19,7 +19,6 @@ from automation_tool.openai_prompt_flow import (
     _gocharting_png_attachment_header,
     _json_file_header_and_body,
     _prepare_json_headers_bodies,
-    _should_attach_last_filter,
     default_analysis_prompt,
     run_analysis_responses_flow,
 )
@@ -217,25 +216,16 @@ def test_default_analysis_prompt_describes_json_and_png() -> None:
     assert "[FULL_ANALYSIS]" in p
     assert "100 payload" in p
     assert "PNG" in p
-    assert "Ưu tiên đọc ảnh chart" in p
-    assert "Coinmap DXY M15" in p
+    assert "GoCharting DXY M15" in p
+    assert "footprint_combined_15m.json" in p
+    assert "Coinmap" not in p
 
 
 def test_default_analysis_prompt_gocharting_bid_ask_on_detail() -> None:
     p = default_analysis_prompt("XAUUSD", footprint_source="gocharting")
-    assert "GoCharting CSV không có BID/ASK" in p
-    assert "detail footprint" in p
-    assert "#8FAF8E" in p
-    assert "stacked BID (3 level, ratio 300%)" in p
-    assert "#D37C85" in p
-    assert "stacked ASK (3 level, ratio 300%)" in p
-    assert "#FF6600" in p
-    assert "volume POC" in p
-    assert "#FA6578" in p
-    assert "#17CE1B" in p
-    assert "VAH" in p
-    assert "#5B2D1B" in p
-    assert "VAL" in p
+    assert "KHÔNG có BID/ASK theo từng price level" in p
+    assert "footprint_combined" in p
+    assert "Coinmap" not in p
 
 
 def test_gocharting_csv_header_notes_bid_ask(tmp_path: Path) -> None:
@@ -243,7 +233,7 @@ def test_gocharting_csv_header_notes_bid_ask(tmp_path: Path) -> None:
     csv_p.write_text("Time,Open,High,Low,Close,Volume,Delta,CVD\n2026-01-01,1,2,3,4,5,6,7\n")
     header, _ = _csv_file_header_and_body(csv_p, max_chars=10_000)
     assert "KHÔNG có BID/ASK theo từng price level" in header
-    assert "detail footprint" in header
+    assert "footprint_combined" in header
 
 
 def test_gocharting_detail_png_headers_are_brief(tmp_path: Path) -> None:
@@ -307,14 +297,7 @@ def test_build_mixed_coinmap_json_then_png_header(tmp_path: Path) -> None:
     assert parts[4]["type"] == "input_image"
 
 
-def test_should_attach_last_filter_modes() -> None:
-    assert _should_attach_last_filter("[FULL_ANALYSIS]\nhi")
-    assert _should_attach_last_filter("[INTRADAY_UPDATE]\nupdate")
-    assert not _should_attach_last_filter("[TRADE_MANAGEMENT]\nmanage")
-    assert not _should_attach_last_filter("plain prompt")
-
-
-def test_build_mixed_full_analysis_includes_last_filter(tmp_path: Path) -> None:
+def test_build_mixed_full_analysis_prompt_then_chart(tmp_path: Path) -> None:
     j = tmp_path / "stamp_tradingview_XAUUSD_1h.json"
     j.write_text('{"ohlc":[]}', encoding="utf-8")
     prompt = default_analysis_prompt("XAUUSD")
@@ -325,10 +308,8 @@ def test_build_mixed_full_analysis_includes_last_filter(tmp_path: Path) -> None:
         max_json_chars=100_000,
     )
     assert parts[0]["text"] == prompt
-    assert "last_filter.md" in parts[1]["text"]
-    assert "fresh" in parts[1]["text"].lower()
-    assert parts[2]["type"] == "input_text"
-    assert "TradingView" in parts[2]["text"]
+    assert parts[1]["type"] == "input_text"
+    assert "TradingView" in parts[1]["text"]
 
 
 def test_footprint_json_enriched_with_price_before_openai(tmp_path: Path) -> None:

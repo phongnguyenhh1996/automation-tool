@@ -24,7 +24,7 @@ from automation_tool.coinmap_openai_slim import (
     slim_coinmap_export_for_openai,
 )
 from automation_tool.chart_payload_validate import prepare_gocharting_csv_text
-from automation_tool.prompts import load_last_filter, responses_input_messages
+from automation_tool.prompts import responses_input_messages
 from automation_tool.images import (
     CHART_SLOT_COUNT,
     DEFAULT_MAIN_CHART_SYMBOL,
@@ -67,6 +67,13 @@ _GOCHARTING_CHART_READ_GUIDE = (
 _GOCHARTING_TRADE_MANAGEMENT_SUFFIX = (
     "Stacked BID/ASK, absorption, RL: đọc từ footprint_combined_5m.json (footprint[]), không từ CSV.\n"
     f"{_GOCHARTING_CHART_READ_GUIDE}"
+)
+
+_PHAN_TICH_CHAM_DIEM_FULL_HINT = (
+    "Trong `phan_tich_cham_diem` (Schema A): mỗi plan bắt buộc block `🏷️ Trạng thái vùng` "
+    "(fresh/used + đã chạm trước đó chưa, mô tả phản ứng lần trước nếu có); "
+    "nhóm Order Flow và Footprint phải có `→ Số liệu:` (con số CVD/delta, trap, stacked, "
+    "absorption, VWAP/POC) rồi `→ Phân tích chấm điểm:` — xem định dạng trong system-prompt.md.\n"
 )
 
 
@@ -112,12 +119,12 @@ class PromptTwoStepResult(NamedTuple):
 def default_analysis_prompt(
     main_symbol: str | None = None,
     *,
-    footprint_source: str = "coinmap",
+    footprint_source: str = "gocharting",
 ) -> str:
     """
-    Default user message for multimodal analysis.
+    Default user message for multimodal analysis (GoCharting footprint workflow).
 
-    ``main_symbol`` is the main pair (TradingView/Coinmap); invalid/empty →
+    ``main_symbol`` is the main pair (TradingView / MT5 spot); invalid/empty →
     ``DEFAULT_MAIN_CHART_SYMBOL``. Schema and rules are in ``system-prompt.md`` (``[FULL_ANALYSIS]`` → Schema A).
     """
     sym = DEFAULT_MAIN_CHART_SYMBOL
@@ -126,43 +133,31 @@ def default_analysis_prompt(
             sym = normalize_main_chart_symbol(str(main_symbol).strip())
         except ValueError:
             pass
-    fp = (footprint_source or "coinmap").strip().lower()
-    if fp == "gocharting":
-        footprint_desc = (
-            f"({CHART_SLOT_COUNT} slot chart; mỗi slot GoCharting: CSV orderflow + PNG overview):\n"
-            "TradingView DXY (H4, H1, M15) → "
-            f"TradingView {sym} (H4, H1, M15, M15 Session Liquidity Check / ICT Killzones, M5) "
-            "(snapshot URL/PNG hoặc JSON OHLC tvdatafeed) → "
-            "GoCharting DXY M15 (CSV; PNG overview) → "
-            f"GoCharting {_gocharting_main_footprint_label(sym)} M15 và M5 "
-            "(footprint hợp đồng tương lai vàng GC1! trên GoCharting; không phải spot XAUUSD; "
-            "mỗi khung: CSV + PNG overview) → "
-            f"MT5 spot {sym} OHLC (broker) nằm trong footprint_combined JSON "
-            "(mỗi nến: ``mt5_spot_ohlc``) → "
-            "footprint_combined_15m.json và footprint_combined_5m.json (WS: GC ohlc + footprint[] + spot OHLC, "
-            "N nến mới nhất).\n"
-            "Ưu tiên footprint_combined JSON cho stacked BID/ASK, absorption, RL theo price level; "
-            "GoCharting CSV cho CVD/delta/volume theo nến; OHLC tvdatafeed khi cần cấu trúc giá TV.\n"
-            f"{_GOCHARTING_CHART_READ_GUIDE}"
-        )
-    else:
-        footprint_desc = (
-            f"({CHART_SLOT_COUNT} slot chart; mỗi slot Coinmap có thể kèm JSON cm-api rồi ảnh fullscreen PNG ngay sau):\n"
-            "TradingView DXY (H4, H1, M15) → "
-            f"TradingView {sym} (H4, H1, M15, M15 Session Liquidity Check / ICT Killzones, M5) "
-            "(snapshot URL/PNG hoặc JSON OHLC tvdatafeed) → "
-            "Coinmap DXY M15 (JSON footprint; PNG fullscreen ngay sau nếu có) → "
-            f"Coinmap {sym} M15 và M5 (mỗi khung: JSON; PNG ngay sau nếu có; hoặc merged JSON thay M15+M5, PNG M5 vẫn riêng) → "
-            "footprint_bid_ask_15m.json và footprint_bid_ask_5m.json (nếu có — bid/ask GC1! theo price level).\n"
-            "Ưu tiên đọc ảnh chart (Coinmap PNG, TradingView snapshot); khi dữ liệu không rõ, "
-            "không đọc được trên chart, hoặc cần con số chính xác (order flow, CVD, VWAP, delta, OHLC) "
-            "thì tra JSON cm-api / tvdatafeed tương ứng.\n"
-        )
+    footprint_desc = (
+        f"({CHART_SLOT_COUNT} slot chart; mỗi slot GoCharting: CSV orderflow + PNG overview):\n"
+        "TradingView DXY (H4, H1, M15) → "
+        f"TradingView {sym} (H4, H1, M15, M15 Session Liquidity Check / ICT Killzones, M5) "
+        "(snapshot URL/PNG hoặc JSON OHLC tvdatafeed) → "
+        "GoCharting DXY M15 (CSV; PNG overview) → "
+        f"GoCharting {_gocharting_main_footprint_label(sym)} M15 và M5 "
+        "(footprint hợp đồng tương lai vàng GC1! trên GoCharting; không phải spot XAUUSD; "
+        "mỗi khung: CSV + PNG overview) → "
+        f"MT5 spot {sym} OHLC (broker) nằm trong footprint_combined JSON "
+        "(mỗi nến: ``mt5_spot_ohlc``) → "
+        "footprint_combined_15m.json và footprint_combined_5m.json (WS: GC ohlc + footprint[] + spot OHLC, "
+        "N nến mới nhất).\n"
+        "Ưu tiên footprint_combined JSON cho stacked BID/ASK, absorption, RL theo price level; "
+        "GoCharting CSV cho CVD/delta/volume theo nến; OHLC tvdatafeed khi cần cấu trúc giá TV.\n"
+        f"{_GOCHARTING_BID_ASK_HINT}"
+        f"{_GOCHARTING_CHART_READ_GUIDE}"
+    )
+    _ = footprint_source  # legacy callers may pass this; prompts are GoCharting-only
     return (
         "[FULL_ANALYSIS]\n"
         f"Cặp chính: {sym}.\n"
         f"Đính kèm theo thứ tự, tối đa {OPENAI_PAYLOAD_MAX} payload multimodal "
         f"{footprint_desc}"
+        f"{_PHAN_TICH_CHAM_DIEM_FULL_HINT}"
     )
 
 
@@ -445,41 +440,6 @@ def _coinmap_png_attachment_header(path: Path) -> Optional[str]:
     return f"[Coinmap fullscreen chart — file: {path.name}]\n"
 
 
-def _should_attach_last_filter(prompt: str) -> bool:
-    """Attach ``last_filter.md`` for modes that publish zone plans."""
-    p = (prompt or "").strip().upper()
-    return p.startswith("[FULL_ANALYSIS]") or "[INTRADAY_UPDATE]" in p
-
-
-def _last_filter_input_parts() -> list[dict[str, Any]]:
-    try:
-        body = load_last_filter()
-    except FileNotFoundError:
-        return []
-    text = (body or "").strip()
-    if not text:
-        return []
-    return [
-        {
-            "type": "input_text",
-            "text": f"[Zone filter rules — last_filter.md]\n{text}\n",
-        }
-    ]
-
-
-def _user_content_with_last_filter(prompt: str) -> str | list[dict[str, Any]]:
-    """Plain-text user turn, optionally expanded to multimodal parts with last_filter."""
-    text = (prompt or "").strip()
-    if not text:
-        return text
-    if not _should_attach_last_filter(text):
-        return text
-    parts = _last_filter_input_parts()
-    if not parts:
-        return text
-    return [{"type": "input_text", "text": text}, *parts]
-
-
 def _build_mixed_chart_user_content(
     prompt: str,
     payloads: list[ChartOpenAIPayload],
@@ -506,8 +466,6 @@ def _build_mixed_chart_user_content(
         ]
     )
     parts: list[dict[str, Any]] = [{"type": "input_text", "text": prompt}]
-    if _should_attach_last_filter(prompt):
-        parts.extend(_last_filter_input_parts())
     image_paths = [p for k, p in payloads if k == "image" and isinstance(p, Path)]
     data_urls = _image_paths_to_data_urls(image_paths)
     for kind, p in payloads:
@@ -730,7 +688,7 @@ def run_analysis_responses_flow(
             r = client.responses.create(
                 **common,
                 input=responses_input_messages(
-                    user_content=_user_content_with_last_filter(analysis_prompt.strip()),
+                    user_content=analysis_prompt.strip(),
                 ),
             )
         except Exception:
@@ -863,8 +821,8 @@ def run_prompt_two_step_flow(
 
 DEFAULT_UPDATE_PROMPT_TEMPLATE = (
     "[INTRADAY_UPDATE]\n"
-    "Cập nhật intraday: lần đầu sau [FULL_ANALYSIS] kèm morning_full_analysis.json + Coinmap M5 "
-    "(CLI ``update`` không đính kèm Coinmap M15; có thể kèm TradingView 15m ICT + TV M5).\n"
+    "Cập nhật intraday: lần đầu sau [FULL_ANALYSIS] kèm morning_full_analysis.json + GoCharting M5 "
+    "(CSV + footprint_combined_5m.json; có thể kèm TradingView 15m ICT + TV M5).\n"
 )
 
 _INTRADAY_UPDATE_PLAN_HINT = (
@@ -889,15 +847,6 @@ _SCALP_UPDATE_PLAN_HINT = (
     "Không dùng label `plan_chinh` hay `plan_phu` cho luồng scalp này.\n"
 )
 
-_COINMAP_LEGACY_PNG_HINT = (
-    " (mỗi khung: JSON footprint; ảnh PNG fullscreen Coinmap ngay sau JSON tương ứng nếu có)."
-)
-
-_INTRADAY_CHART_READ_PRIORITY_HINT = (
-    "Ưu tiên đọc ảnh chart (Coinmap PNG, TradingView snapshot nếu có); JSON Coinmap chỉ khi "
-    "trên chart không rõ, không đọc được, hoặc cần con số chính xác (order flow, CVD, VWAP, delta, OHLC).\n"
-)
-
 _GOCHARTING_INTRADAY_CHART_READ_PRIORITY_HINT = (
     "Ưu tiên footprint_combined JSON cho stacked BID/ASK, absorption, RL theo price level; "
     "CSV GoCharting chỉ có CVD/delta/volume theo nến — không có BID/ASK theo price level. "
@@ -905,11 +854,24 @@ _GOCHARTING_INTRADAY_CHART_READ_PRIORITY_HINT = (
     f"{_GOCHARTING_CHART_READ_GUIDE}"
 )
 
-_INTRADAY_UPDATE_SUFFIX = _INTRADAY_CHART_READ_PRIORITY_HINT + _INTRADAY_UPDATE_PLAN_HINT
-_SCALP_UPDATE_SUFFIX = _INTRADAY_CHART_READ_PRIORITY_HINT + _SCALP_UPDATE_PLAN_HINT
-_GOCHARTING_SCALP_UPDATE_SUFFIX = (
-    _GOCHARTING_INTRADAY_CHART_READ_PRIORITY_HINT + _SCALP_UPDATE_PLAN_HINT
-)
+_INTRADAY_UPDATE_SUFFIX = _GOCHARTING_INTRADAY_CHART_READ_PRIORITY_HINT + _INTRADAY_UPDATE_PLAN_HINT
+_SCALP_UPDATE_SUFFIX = _GOCHARTING_INTRADAY_CHART_READ_PRIORITY_HINT + _SCALP_UPDATE_PLAN_HINT
+_GOCHARTING_SCALP_UPDATE_SUFFIX = _SCALP_UPDATE_SUFFIX
+
+
+def _gocharting_intraday_attachment_line(*, m5_only: bool) -> str:
+    gc = (
+        f"footprint {GOCHARTING_GOLD_FUTURE_LABEL} trên GoCharting (GC1! COMEX; không phải spot XAUUSD); "
+        "CSV orderflow + PNG overview; footprint_combined_*.json (GC ohlc + footprint[] + mt5_spot_ohlc)."
+    )
+    if m5_only:
+        return (
+            f"GoCharting **M5** CSV + footprint_combined_5m.json ({gc} chỉ khung M5)."
+        )
+    return (
+        f"GoCharting **M15** và **M5** CSV (+ PNG overview sau mỗi CSV; "
+        f"footprint_combined_15m.json và footprint_combined_5m.json; {gc})"
+    )
 
 
 def is_first_intraday_update_after_all(
@@ -934,253 +896,113 @@ def build_intraday_update_user_text(
     coinmap_attachment_mode: str = "merged",
 ) -> str:
     """
-    User message for ``coinmap-automation update``: thời gian + nhiệm vụ (không nhúng baseline vùng chờ).
+    User message for intraday update (GoCharting footprint workflow).
 
-    * ``coinmap_attachment_mode="merged"`` (default): một file ``*_coinmap_<MAIN>_merged.json``
-      (schema ``coinmap_merged``: ``frames`` 15m + 5m, ``session_profile`` chung).
-    * ``coinmap_attachment_mode="merged_m5"``: file ``coinmap_merged`` chỉ có khung **5m** trong
-      ``frames`` (build từ raw M5 qua ``write_openai_coinmap_merged_from_raw_export``).
-    * ``coinmap_attachment_mode="legacy"``: như trước — file M15 và M5 tách riêng.
-    * ``coinmap_attachment_mode="m5_only"``: chỉ footprint Coinmap **M5** (không M15, không merged).
-
-    * ``first_after_all=True``: morning JSON + Coinmap (merged hoặc hai file raw).
-    * ``first_after_all=False``: chỉ Coinmap (merged hoặc M15+M5); nối chuỗi ``[INTRADAY_UPDATE]``.
+    ``coinmap_attachment_mode`` (legacy name): ``m5_only`` / ``merged_m5`` → chỉ M5;
+    ``merged`` / ``legacy`` (default) → M15 + M5.
     """
     time_line = format_intraday_update_time_line()
     mode = str(coinmap_attachment_mode or "merged").strip().lower()
-    m5_only = mode == "m5_only"
-    merged_m5 = mode in ("merged_m5", "merged_m5_only")
-    merged = not m5_only and not merged_m5 and mode != "legacy"
-
-    if merged_m5:
-        if first_after_all:
-            return (
-                "[INTRADAY_UPDATE]\n"
-                f"{time_line}"
-                "Phân tích buổi sáng (Schema A) nằm trong file **morning_full_analysis.json** đính kèm đầu tiên.\n"
-                "Đính kèm **hai** file JSON theo thứ tự: **(1)** morning_full_analysis.json, **(2)** một file "
-                "**Coinmap merged** cho cặp chính (cùng schema ``coinmap_merged`` nhưng ``frames`` chỉ có "
-                "khung **5m**; không đính kèm M15).\n"
-                f"{_MORNING_CONTEXT_HINT}"
-                f"{_INTRADAY_UPDATE_SUFFIX}"
-            )
-        return (
-            "[INTRADAY_UPDATE]\n"
-            f"{time_line}"
-            "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
-            "Đính kèm **một** file JSON: **Coinmap merged** cho cặp chính (schema ``coinmap_merged`` chỉ có "
-            "khung **5m**; không M15).\n"
-            f"{_INTRADAY_UPDATE_SUFFIX}"
-        )
-
-    if m5_only:
-        if first_after_all:
-            return (
-                "[INTRADAY_UPDATE]\n"
-                f"{time_line}"
-                "Phân tích buổi sáng (Schema A) nằm trong file **morning_full_analysis.json** đính kèm đầu tiên.\n"
-                "Đính kèm **hai** file JSON theo thứ tự: **(1)** morning_full_analysis.json, **(2)** một file "
-                "**Coinmap M5** (footprint cặp chính; không đính kèm M15).\n"
-                f"{_MORNING_CONTEXT_HINT}"
-                f"{_INTRADAY_UPDATE_SUFFIX}"
-            )
-        return (
-            "[INTRADAY_UPDATE]\n"
-            f"{time_line}"
-            "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
-            "Đính kèm **một** file JSON: **Coinmap M5** (footprint cặp chính; không M15).\n"
-            f"{_INTRADAY_UPDATE_SUFFIX}"
-        )
+    m5_only = mode in ("m5_only", "merged_m5", "merged_m5_only")
+    attach = _gocharting_intraday_attachment_line(m5_only=m5_only)
 
     if first_after_all:
-        if merged:
-            return (
-                "[INTRADAY_UPDATE]\n"
-                f"{time_line}"
-                "Phân tích buổi sáng (Schema A) nằm trong file **morning_full_analysis.json** đính kèm đầu tiên.\n"
-                "Đính kèm **hai** file JSON theo thứ tự: **(1)** morning_full_analysis.json, **(2)** một file "
-                "**Coinmap merged** cho cặp chính (cùng schema ``coinmap_merged``: khung 15m và 5m trong ``frames``, "
-                "footprint và summary theo từng khung).\n"
-                f"{_MORNING_CONTEXT_HINT}"
-                f"{_INTRADAY_UPDATE_SUFFIX}"
+        if m5_only:
+            files = (
+                "Đính kèm **hai** phần theo thứ tự: **(1)** morning_full_analysis.json, "
+                f"**(2)** {attach}\n"
+            )
+        else:
+            files = (
+                "Đính kèm **ba** phần theo thứ tự: **(1)** morning_full_analysis.json, "
+                f"**(2)** GoCharting M15 CSV, **(3)** M5 CSV + footprint_combined JSON "
+                f"({attach})\n"
             )
         return (
             "[INTRADAY_UPDATE]\n"
             f"{time_line}"
             "Phân tích buổi sáng (Schema A) nằm trong file **morning_full_analysis.json** đính kèm đầu tiên.\n"
-            "Đính kèm **ba** file JSON theo thứ tự: **(1)** morning_full_analysis.json, **(2)** M15, **(3)** M5 "
-            "(footprint cặp chính).\n"
+            f"{files}"
             f"{_MORNING_CONTEXT_HINT}"
             f"{_INTRADAY_UPDATE_SUFFIX}"
         )
 
-    if merged:
-        return (
-            "[INTRADAY_UPDATE]\n"
-            f"{time_line}"
-            "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
-            "Đính kèm **một** file JSON: **Coinmap merged** cho cặp chính (15m và 5m trong cùng file).\n"
-            f"{_INTRADAY_UPDATE_SUFFIX}"
-        )
     return (
         "[INTRADAY_UPDATE]\n"
         f"{time_line}"
         "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
-        "Đính kèm **hai** file JSON theo thứ tự: **(1) M15**, **(2) M5** (footprint cặp chính).\n"
+        f"Đính kèm {attach}\n"
         f"{_INTRADAY_UPDATE_SUFFIX}"
     )
+
 
 def build_scalp_update_user_text(
     *,
     first_after_all: bool = False,
     coinmap_attachment_mode: str = "merged",
-    footprint_source: str = "coinmap",
+    footprint_source: str = "gocharting",
 ) -> str:
     """
-    User message cho ``coinmap-automation update-scalp``: giống ``build_intraday_update_user_text``
-    nhưng yêu cầu tìm plan đẹp nhất và dùng label ``scalp_<timeframe>``.
+    User message cho ``update-scalp``: tìm plan đẹp nhất, label ``scalp_<id>`` (GoCharting footprint).
 
-    * ``footprint_source="gocharting"``: CSV + PNG overview GoCharting M15/M5 + footprint_combined JSON.
-    * ``coinmap_attachment_mode="merged"`` (default): file ``coinmap_merged`` đa khung (15m + 5m).
-    * ``coinmap_attachment_mode="merged_m5"``: file ``coinmap_merged`` chỉ có khung **5m** trong
-      ``frames`` (build từ raw M5 qua ``write_openai_coinmap_merged_from_raw_export``).
-    * ``coinmap_attachment_mode="m5_only"``: footprint Coinmap **M5** raw (không merged, không M15).
-    * ``coinmap_attachment_mode="legacy"``: file M15 và M5 tách riêng.
+    ``coinmap_attachment_mode``: ``m5_only`` / ``merged_m5`` → chỉ M5; mặc định M15 + M5.
     """
-    fp = (footprint_source or "coinmap").strip().lower()
-    if fp == "gocharting":
-        time_line = format_intraday_update_time_line()
-        gc_hint = (
-            f" (footprint {GOCHARTING_GOLD_FUTURE_LABEL} trên GoCharting — hợp đồng tương lai vàng GC1!, "
-            "không phải spot XAUUSD; mỗi khung: CSV orderflow; PNG overview; "
-            "cuối cùng footprint_combined_15m.json và footprint_combined_5m.json — "
-            "GC ohlc + footprint[] + mt5_spot_ohlc spot broker, N nến mới nhất)."
-        )
-        if first_after_all:
-            return (
-                "[INTRADAY_UPDATE]\n"
-                f"{time_line}"
-                "Phân tích buổi sáng (Schema A) nằm trong file **morning_full_analysis.json** đính kèm đầu tiên.\n"
-                "Đính kèm **ba** file theo thứ tự: **(1)** morning_full_analysis.json, **(2)** GoCharting M15 CSV, "
-                f"**(3)** M5 CSV{gc_hint}\n"
-                f"{_MORNING_CONTEXT_HINT}"
-                f"{_GOCHARTING_SCALP_UPDATE_SUFFIX}"
-            )
-        return (
-            "[INTRADAY_UPDATE]\n"
-            f"{time_line}"
-            "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
-            f"Đính kèm **hai** file: **(1)** GoCharting M15 CSV, **(2)** M5 CSV "
-            f"(footprint {GOCHARTING_GOLD_FUTURE_LABEL}; "
-            "PNG overview ngay sau mỗi CSV nếu có; "
-            "footprint_combined_15m.json và footprint_combined_5m.json gồm mt5_spot_ohlc).\n"
-            f"{_GOCHARTING_SCALP_UPDATE_SUFFIX}"
-        )
-
+    _ = footprint_source  # legacy; prompts are GoCharting-only
     time_line = format_intraday_update_time_line()
     mode = str(coinmap_attachment_mode or "merged").strip().lower()
-    m5_only = mode == "m5_only"
-    merged_m5 = mode in ("merged_m5", "merged_m5_only")
-    merged = not m5_only and not merged_m5 and mode != "legacy"
-
-    if merged_m5:
-        if first_after_all:
-            return (
-                "[INTRADAY_UPDATE]\n"
-                f"{time_line}"
-                "Phân tích buổi sáng (Schema A) nằm trong file **morning_full_analysis.json** đính kèm đầu tiên.\n"
-                "Đính kèm **hai** file JSON theo thứ tự: **(1)** morning_full_analysis.json, **(2)** một file "
-                "**Coinmap merged** cho cặp chính (cùng schema ``coinmap_merged`` nhưng ``frames`` chỉ có "
-                "khung **5m**; không đính kèm M15).\n"
-                f"{_MORNING_CONTEXT_HINT}"
-                f"{_SCALP_UPDATE_SUFFIX}"
-            )
-        return (
-            "[INTRADAY_UPDATE]\n"
-            f"{time_line}"
-            "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
-            "Đính kèm **một** file JSON: **Coinmap merged** cho cặp chính (schema ``coinmap_merged`` chỉ có "
-            "khung **5m**; không M15).\n"
-            f"{_SCALP_UPDATE_SUFFIX}"
-        )
-
-    if m5_only:
-        if first_after_all:
-            return (
-                "[INTRADAY_UPDATE]\n"
-                f"{time_line}"
-                "Phân tích buổi sáng (Schema A) nằm trong file **morning_full_analysis.json** đính kèm đầu tiên.\n"
-                "Đính kèm **hai** file JSON theo thứ tự: **(1)** morning_full_analysis.json, **(2)** một file "
-                "**Coinmap M5** (footprint cặp chính; không đính kèm M15).\n"
-                f"{_MORNING_CONTEXT_HINT}"
-                f"{_SCALP_UPDATE_SUFFIX}"
-            )
-        return (
-            "[INTRADAY_UPDATE]\n"
-            f"{time_line}"
-            "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
-            "Đính kèm **một** file JSON: **Coinmap M5** (footprint cặp chính; không M15).\n"
-            f"{_SCALP_UPDATE_SUFFIX}"
-        )
+    m5_only = mode in ("m5_only", "merged_m5", "merged_m5_only")
+    attach = _gocharting_intraday_attachment_line(m5_only=m5_only)
 
     if first_after_all:
-        if merged:
-            return (
-                "[INTRADAY_UPDATE]\n"
-                f"{time_line}"
-                "Phân tích buổi sáng (Schema A) nằm trong file **morning_full_analysis.json** đính kèm đầu tiên.\n"
-                "Đính kèm **hai** file JSON theo thứ tự: **(1)** morning_full_analysis.json, **(2)** một file "
-                "**Coinmap merged** cho cặp chính (cùng schema ``coinmap_merged``: khung 15m và 5m trong ``frames``, "
-                "footprint và summary theo từng khung).\n"
-                f"{_MORNING_CONTEXT_HINT}"
-                f"{_SCALP_UPDATE_SUFFIX}"
+        if m5_only:
+            files = (
+                "Đính kèm **hai** phần theo thứ tự: **(1)** morning_full_analysis.json, "
+                f"**(2)** {attach}\n"
+            )
+        else:
+            files = (
+                "Đính kèm **ba** phần theo thứ tự: **(1)** morning_full_analysis.json, "
+                f"**(2)** GoCharting M15 CSV, **(3)** M5 CSV + footprint_combined JSON "
+                f"({attach})\n"
             )
         return (
             "[INTRADAY_UPDATE]\n"
             f"{time_line}"
             "Phân tích buổi sáng (Schema A) nằm trong file **morning_full_analysis.json** đính kèm đầu tiên.\n"
-            "Đính kèm **ba** file JSON theo thứ tự: **(1)** morning_full_analysis.json, **(2)** M15, **(3)** M5 "
-            f"(footprint cặp chính{_COINMAP_LEGACY_PNG_HINT}\n"
+            f"{files}"
             f"{_MORNING_CONTEXT_HINT}"
             f"{_SCALP_UPDATE_SUFFIX}"
         )
 
-    if merged:
-        return (
-            "[INTRADAY_UPDATE]\n"
-            f"{time_line}"
-            "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
-            "Đính kèm **một** file JSON: **Coinmap merged** cho cặp chính (15m và 5m trong cùng file).\n"
-            f"{_SCALP_UPDATE_SUFFIX}"
-        )
     return (
         "[INTRADAY_UPDATE]\n"
         f"{time_line}"
         "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
-        "Đính kèm **hai** file JSON theo thứ tự: **(1) M15**, **(2) M5** "
-        f"(footprint cặp chính{_COINMAP_LEGACY_PNG_HINT}\n"
+        f"Đính kèm {attach}\n"
         f"{_SCALP_UPDATE_SUFFIX}"
     )
 
 
-# TradingView tab Nhật ký: giá chạm → Coinmap compact ``coinmap_merged`` (từ raw M5/M1) + OpenAI (intraday).
+# TradingView tab Nhật ký: giá chạm → footprint_combined JSON + OpenAI (intraday).
 # Trả về Schema E: chỉ ``phan_tich_alert`` + ``intraday_hanh_dong``; nếu VÀO LỆNH, dùng trade_line theo baseline vùng.
 JOURNAL_INTRADAY_FIRST_USER_TEMPLATE = (
     "[INTRADAY_ALERT]\n"
     "Cảnh báo TradingView đã kích hoạt tại mức giá {touched_price}.\n"
-    "Đính kèm một file JSON **coinmap_merged** (footprint/summary theo khung M5 hoặc M1).\n"
+    "Đính kèm **footprint_combined_5m.json** (GoCharting GC ohlc + footprint[] + mt5_spot_ohlc).\n"
 )
 
 JOURNAL_INTRADAY_RETRY_USER_TEMPLATE = (
     "[INTRADAY_ALERT]\n"
     "Tiếp tục đánh giá sau {wait_minutes} phút; vẫn theo dõi mức đã chạm {touched_price}.\n"
-    "Đính kèm bản **coinmap_merged** mới (cùng định dạng).\n"
+    "Đính kèm bản **footprint_combined_5m.json** mới.\n"
 )
 
 # Sau khi giá last realtime chạm TP1 (vùng đang ``cho_tp1``).
 TP1_POST_TOUCH_USER_TEMPLATE = (
     "[TRADE_MANAGEMENT]\n"
-    "Đánh giá Footprint M5 đính kèm (giữ hay thoát / chỉnh SL/TP).\n"
+    f"Đánh giá Footprint GoCharting M5 (footprint_combined_5m.json) đính kèm — {GOCHARTING_GOLD_FUTURE_LABEL} "
+    "(giữ hay thoát / chỉnh SL/TP).\n"
+    f"{_GOCHARTING_TRADE_MANAGEMENT_SUFFIX}"
     "Vùng (label): {plan_label}\n"
     "{entry_side} entry: {entry_price}\n"
     "SL hiện tại: {current_sl}\n"
@@ -1191,7 +1013,9 @@ TP1_POST_TOUCH_USER_TEMPLATE = (
 R1_POST_TOUCH_USER_TEMPLATE = (
     "[TRADE_MANAGEMENT]\n"
     "Giá đã đạt mức {r_level}R; "
-    "đánh giá Footprint M5 đính kèm (giữ hay thoát / chỉnh SL/TP).\n"
+    f"đánh giá Footprint GoCharting M5 (footprint_combined_5m.json) đính kèm — {GOCHARTING_GOLD_FUTURE_LABEL} "
+    "(giữ hay thoát / chỉnh SL/TP).\n"
+    f"{_GOCHARTING_TRADE_MANAGEMENT_SUFFIX}"
     "Vùng (label): {plan_label}\n"
     "{entry_side} entry: {entry_price}\n"
     "Entry tham chiếu: {entry_ref}\n"

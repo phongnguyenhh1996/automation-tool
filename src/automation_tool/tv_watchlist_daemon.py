@@ -1449,7 +1449,7 @@ def _touch_prompt(
         f"{lead}"
         f"Vùng chờ {side_s}{zone.vung_cho}.\n"
         f"Giá trigger realtime khi chạm vùng: {last_price:g}.\n"
-        f"Một file JSON **coinmap_merged** từ Coinmap {cm_tf} đính kèm (``frames['{iv_key}']``, ``session_profile`` chung).\n"
+        f"Một file **footprint_combined_{iv_key}.json** đính kèm (GoCharting GC ohlc + footprint[] + mt5_spot_ohlc; khung {cm_tf}).\n"
     )
 
 

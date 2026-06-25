@@ -334,10 +334,10 @@ def clear_main_chart_symbol_marker(charts_dir: Path) -> None:
 def footprint_source_for_stamp(charts_dir: Path, stamp: Optional[str] = None) -> str:
     """``gocharting`` when stamp has GoCharting CSV exports; else ``coinmap``."""
     if not charts_dir.is_dir():
-        return "coinmap"
+        return "gocharting"
     st = stamp or latest_chart_stamp(charts_dir)
     if not st:
-        return "coinmap"
+        return "gocharting"
     if any(charts_dir.glob(f"{st}_gocharting_*.csv")):
         return "gocharting"
     return "coinmap"

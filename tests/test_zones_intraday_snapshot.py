@@ -61,8 +61,8 @@ def test_build_intraday_update_user_text_followup_merged_mode() -> None:
     t = build_intraday_update_user_text(first_after_all=False, coinmap_attachment_mode="merged")
     assert "[INTRADAY_UPDATE]" in t
     assert "Thời gian hiện tại" in t
-    assert "một" in t
-    assert "merged" in t.lower()
+    assert "GoCharting" in t
+    assert "footprint_combined" in t
     assert "chuỗi phản hồi" in t
     assert "morning_full_analysis" not in t
     assert "Trạng thái các vùng" not in t
@@ -73,16 +73,16 @@ def test_build_intraday_update_user_text_followup_merged_mode() -> None:
 def test_build_intraday_update_user_text_followup_legacy_split_files() -> None:
     t = build_intraday_update_user_text(first_after_all=False, coinmap_attachment_mode="legacy")
     assert "[INTRADAY_UPDATE]" in t
-    assert "hai" in t and "M15" in t and "M5" in t
+    assert "GoCharting" in t
+    assert "M15" in t and "M5" in t
 
 
 def test_build_intraday_update_user_text_followup_m5_only() -> None:
     t = build_intraday_update_user_text(first_after_all=False, coinmap_attachment_mode="m5_only")
     assert "[INTRADAY_UPDATE]" in t
-    assert "một" in t
     assert "M5" in t
-    assert "không M15" in t
-    assert "merged" not in t.lower()
+    assert "footprint_combined_5m" in t
+    assert "không M15" in t or "chỉ khung M5" in t
 
 
 def test_build_intraday_update_user_text_first_after_all_m5_only() -> None:
@@ -91,15 +91,13 @@ def test_build_intraday_update_user_text_first_after_all_m5_only() -> None:
     assert "hai" in t
     assert "morning_full_analysis" in t
     assert "M5" in t
-    assert "không đính kèm M15" in t
 
 
 def test_build_intraday_update_user_text_first_after_all_merged() -> None:
     t = build_intraday_update_user_text(first_after_all=True, coinmap_attachment_mode="merged")
     assert "[INTRADAY_UPDATE]" in t
     assert "Thời gian hiện tại" in t
-    assert "hai" in t
-    assert "merged" in t.lower()
+    assert "GoCharting" in t
     assert "morning_full_analysis" in t
     assert "`context`" in t
     assert "DXY / macro bias" in t
@@ -119,10 +117,8 @@ def test_build_intraday_update_user_text_followup_merged_m5() -> None:
         first_after_all=False, coinmap_attachment_mode="merged_m5"
     )
     assert "[INTRADAY_UPDATE]" in t
-    assert "một" in t
-    assert "Coinmap merged" in t
-    assert "5m" in t
-    assert "không M15" in t
+    assert "footprint_combined_5m" in t
+    assert "M5" in t
     assert "morning_full_analysis" not in t
 
 
@@ -133,9 +129,7 @@ def test_build_intraday_update_user_text_first_after_all_merged_m5() -> None:
     assert "[INTRADAY_UPDATE]" in t
     assert "hai" in t
     assert "morning_full_analysis" in t
-    assert "Coinmap merged" in t
-    assert "5m" in t
-    assert "không đính kèm M15" in t
+    assert "M5" in t
 
 
 def test_build_intraday_update_user_text_merged_m5_only_alias() -> None:
@@ -155,9 +149,8 @@ def test_build_scalp_update_user_text_first_after_all_merged_m5() -> None:
     assert "[INTRADAY_UPDATE]" in t
     assert "hai" in t
     assert "morning_full_analysis" in t
-    assert "Coinmap merged" in t
-    assert "5m" in t
-    assert "không đính kèm M15" in t
+    assert "M5" in t
+    assert "GoCharting" in t
 
 
 def test_build_scalp_update_user_text_followup_merged_m5() -> None:
@@ -165,10 +158,8 @@ def test_build_scalp_update_user_text_followup_merged_m5() -> None:
         first_after_all=False, coinmap_attachment_mode="merged_m5"
     )
     assert "[INTRADAY_UPDATE]" in t
-    assert "một" in t
-    assert "Coinmap merged" in t
-    assert "5m" in t
-    assert "không M15" in t
+    assert "footprint_combined_5m" in t
+    assert "M5" in t
     assert "morning_full_analysis" not in t
 
 
@@ -188,31 +179,17 @@ def test_build_scalp_update_user_text_first_after_all_legacy_m15_m5() -> None:
     assert "ba" in t
     assert "morning_full_analysis" in t
     assert "M15" in t and "M5" in t
-    assert "PNG" in t
-    assert "Ưu tiên đọc ảnh chart (Coinmap PNG" in t
+    assert "footprint_combined" in t
     assert "scalp" in t.lower()
 
 
-def test_build_scalp_update_user_text_gocharting_mentions_detail_zoom() -> None:
-    t = build_scalp_update_user_text(
-        first_after_all=True,
-        footprint_source="gocharting",
-    )
-    assert "pan-back" not in t
-    assert "detail footprint zoom" in t
-    assert "MT5 spot XAUUSD M5" in t
-    assert "50 nến" in t
+def test_build_scalp_update_user_text_gocharting_footprint_hints() -> None:
+    t = build_scalp_update_user_text(first_after_all=True)
+    assert "GoCharting" in t
+    assert "footprint_combined" in t
     assert "stacked BID/ASK" in t
     assert "không có BID/ASK theo price level" in t
-    assert "#8FAF8E" in t
-    assert "stacked ASK (3 level imbalance, ratio 3.0x)" in t
-    assert "#FF6600" in t
-    assert "volume POC" in t
-    assert "#FA6578" in t
-    assert "#17CE1B" in t
-    assert "VAH" in t
-    assert "#5B2D1B" in t
-    assert "VAL" in t
+    assert "GC1!" in t
 
 
 def test_format_intraday_update_time_line() -> None:

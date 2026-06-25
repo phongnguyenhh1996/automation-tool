@@ -22,13 +22,6 @@ def default_system_prompt_path() -> Path:
     return _ROOT / "system-prompt.md"
 
 
-def default_last_filter_path() -> Path:
-    raw = (os.getenv("OPENAI_LAST_FILTER_PATH") or "").strip()
-    if raw:
-        return Path(raw).expanduser()
-    return _ROOT / "last_filter.md"
-
-
 @lru_cache(maxsize=4)
 def _read_system_prompt_cached(path_str: str) -> str:
     path = Path(path_str)
@@ -40,32 +33,14 @@ def _read_system_prompt_cached(path_str: str) -> str:
     return path.read_text(encoding="utf-8").strip()
 
 
-@lru_cache(maxsize=4)
-def _read_last_filter_cached(path_str: str) -> str:
-    path = Path(path_str)
-    if not path.is_file():
-        raise FileNotFoundError(
-            f"Last filter not found: {path}. "
-            "Expected last_filter.md at the repo root or set OPENAI_LAST_FILTER_PATH."
-        )
-    return path.read_text(encoding="utf-8").strip()
-
-
 def load_system_prompt(*, path: Path | None = None) -> str:
     """Load the trading advisor system prompt (cached by resolved path)."""
     p = path if path is not None else default_system_prompt_path()
     return _read_system_prompt_cached(str(p.resolve()))
 
 
-def load_last_filter(*, path: Path | None = None) -> str:
-    """Load zone last-filter rules (cached by resolved path)."""
-    p = path if path is not None else default_last_filter_path()
-    return _read_last_filter_cached(str(p.resolve()))
-
-
 def clear_system_prompt_cache() -> None:
     _read_system_prompt_cached.cache_clear()
-    _read_last_filter_cached.cache_clear()
 
 
 def responses_input_messages(
