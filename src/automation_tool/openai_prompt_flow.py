@@ -260,8 +260,10 @@ def _json_file_header_and_body(
                 charts_dir_from_footprint_json_path,
                 enrich_footprint_bid_ask_document,
                 resolve_gocharting_csv_for_footprint_json,
+                trim_footprint_bid_ask_document,
             )
 
+            data = trim_footprint_bid_ask_document(data)
             charts_dir = charts_dir_from_footprint_json_path(path)
             csv_path = resolve_gocharting_csv_for_footprint_json(
                 path,

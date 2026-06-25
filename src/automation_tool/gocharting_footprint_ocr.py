@@ -5,6 +5,7 @@ import io
 import json
 import logging
 import math
+import os
 import re
 import time
 from datetime import datetime
@@ -500,6 +501,33 @@ def compute_footprint_level_prices(
         return []
     top = snap_high_to_footprint_block(high, block_size)
     return [round(top - i * block_size, 1) for i in range(n)]
+
+
+DEFAULT_FOOTPRINT_OPENAI_MAX_CANDLES = 100
+
+
+def footprint_openai_max_candles() -> int:
+    raw = os.getenv("FOOTPRINT_OPENAI_MAX_CANDLES", "").strip()
+    if raw.isdigit():
+        return max(1, int(raw))
+    return DEFAULT_FOOTPRINT_OPENAI_MAX_CANDLES
+
+
+def trim_footprint_bid_ask_document(
+    doc: dict[str, Any],
+    *,
+    max_candles: int | None = None,
+) -> dict[str, Any]:
+    """Keep at most ``max_candles`` newest footprint candles (on-disk list is oldest-first)."""
+    mc = max_candles if max_candles is not None else footprint_openai_max_candles()
+    if mc <= 0:
+        return doc
+    candles_raw = doc.get("candles")
+    if not isinstance(candles_raw, list) or len(candles_raw) <= mc:
+        return doc
+    out = dict(doc)
+    out["candles"] = candles_raw[-mc:]
+    return out
 
 
 def enrich_footprint_bid_ask_document(

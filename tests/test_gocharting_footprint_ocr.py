@@ -389,6 +389,30 @@ def test_enrich_footprint_bid_ask_document(tmp_path: Path) -> None:
     assert doc["candles"][0]["price_levels"][0] == {"bid": 1, "ask": 2}
 
 
+def test_trim_footprint_bid_ask_document_keeps_newest() -> None:
+    from automation_tool.gocharting_footprint_ocr import trim_footprint_bid_ask_document
+
+    candles = [{"time": f"{h:02d}:00", "price_levels": []} for h in range(150)]
+    doc = {"symbol": "COMEX:GC1!", "timeframe": "5m", "candles": candles}
+    out = trim_footprint_bid_ask_document(doc, max_candles=100)
+    assert len(out["candles"]) == 100
+    assert out["candles"][0]["time"] == "50:00"
+    assert out["candles"][-1]["time"] == "149:00"
+    assert len(doc["candles"]) == 150
+
+
+def test_trim_footprint_bid_ask_document_noop_when_few_candles() -> None:
+    from automation_tool.gocharting_footprint_ocr import trim_footprint_bid_ask_document
+
+    doc = {
+        "symbol": "COMEX:GC1!",
+        "timeframe": "15m",
+        "candles": [{"time": "10:00", "price_levels": []}],
+    }
+    out = trim_footprint_bid_ask_document(doc, max_candles=100)
+    assert out is doc
+
+
 def test_parse_price_levels_from_parsed_text() -> None:
     text = "2 5\n0 4\n1 9\n@ @ @ @\n0\n8\n"
     assert parse_price_levels_from_parsed_text(text) == [

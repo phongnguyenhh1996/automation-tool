@@ -375,3 +375,27 @@ def test_footprint_json_enriched_with_price_before_openai(tmp_path: Path) -> Non
         4216.4,
     ]
     assert '"price":4220' in body or '"price": 4220' in body
+
+
+def test_footprint_json_trimmed_to_100_candles_before_openai(tmp_path: Path) -> None:
+    charts_dir = tmp_path / "charts"
+    fp_dir = charts_dir / "footprint_images"
+    fp_dir.mkdir(parents=True)
+    json_path = fp_dir / "footprint_bid_ask_15m.json"
+    candles = [{"time": f"{h:02d}:00", "price_levels": [{"bid": 1, "ask": 2}]} for h in range(120)]
+    json_path.write_text(
+        json.dumps(
+            {
+                "symbol": "COMEX:GC1!",
+                "timeframe": "15m",
+                "candles": candles,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    _header, body = _json_file_header_and_body(json_path, max_chars=100_000)
+    payload = json.loads(body)
+    assert len(payload["candles"]) == 100
+    assert payload["candles"][0]["time"] == "20:00"
+    assert payload["candles"][-1]["time"] == "119:00"
