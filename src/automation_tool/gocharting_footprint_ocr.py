@@ -64,6 +64,14 @@ _GOCHARTING_DATETIME_RE = re.compile(
     r"(\d{1,2}):(\d{2}):\d{2}",
     re.I,
 )
+_FOOTPRINT_CANONICAL_TIME_RE = re.compile(
+    r"^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+"
+    r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+"
+    r"(\d{1,2})\s+"
+    r"(\d{4})\s+"
+    r"(\d{1,2}):(\d{2}):(\d{2})\s+GMT\+0700$",
+    re.I,
+)
 _MONTH_ABBR = {
     "jan": 1,
     "feb": 2,
@@ -242,6 +250,56 @@ def canonical_footprint_time_key(time_key: str) -> str:
     return ""
 
 
+def parse_footprint_candle_datetime(time_key: str) -> Optional[datetime]:
+    """Parse canonical GMT+0700 or legacy ISO-minute footprint ``time`` keys."""
+    raw = (time_key or "").strip()
+    if not raw or _TIME_ONLY_RE.match(raw):
+        return None
+    canonical = _FOOTPRINT_CANONICAL_TIME_RE.match(raw)
+    if canonical:
+        return datetime(
+            int(canonical.group(3)),
+            _MONTH_ABBR[canonical.group(1).lower()[:3]],
+            int(canonical.group(2)),
+            int(canonical.group(4)),
+            int(canonical.group(5)),
+            int(canonical.group(6)),
+        )
+    iso = _LEGACY_ISO_MINUTE_RE.match(raw)
+    if iso:
+        year, month, day, hour, minute = map(int, iso.groups())
+        return datetime(year, month, day, hour, minute)
+    gmt = _GOCHARTING_DATETIME_RE.search(raw)
+    if gmt and FOOTPRINT_CANDLE_TZ_SUFFIX in raw:
+        return datetime(
+            int(gmt.group(4)),
+            _MONTH_ABBR[gmt.group(1).lower()[:3]],
+            int(gmt.group(2)),
+            int(gmt.group(5)),
+            int(gmt.group(6)),
+        )
+    return None
+
+
+def footprint_candle_sort_key(candle: dict[str, Any]) -> tuple[int, datetime | int, str]:
+    time_key = str(candle.get("time") or "").strip()
+    if _TIME_ONLY_RE.match(time_key):
+        hour, minute = map(int, time_key.split(":"))
+        return (1, hour * 60 + minute, time_key)
+    dt = parse_footprint_candle_datetime(time_key)
+    if dt is not None:
+        return (0, dt, time_key)
+    return (2, datetime.max, time_key)
+
+
+def sort_footprint_candles(candles: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Sort footprint candles oldest-first by parsed datetime (not string order)."""
+    return sorted(
+        [c for c in candles if isinstance(c, dict)],
+        key=footprint_candle_sort_key,
+    )
+
+
 def _footprint_time_already_in_set(closed_open: datetime, existing_times: set[str]) -> bool:
     canonical = format_footprint_candle_time(closed_open)
     if canonical in existing_times:
@@ -301,7 +359,7 @@ def merge_footprint_candles_by_time(
         existing_count = len(existing_levels) if isinstance(existing_levels, list) else 0
         if level_count > existing_count:
             by_time[time_key] = stored
-    return sorted(by_time.values(), key=lambda c: str(c.get("time") or ""))
+    return sort_footprint_candles(by_time.values())
 
 
 def footprint_candle_has_price_levels(candle: dict[str, Any]) -> bool:
@@ -446,8 +504,7 @@ def append_candle_to_footprint_document(
         if str(c.get("time") or "").strip() != time_key
     ]
     candles.append(candle)
-    candles.sort(key=lambda c: str(c.get("time") or ""))
-    doc["candles"] = candles
+    doc["candles"] = sort_footprint_candles(candles)
     write_footprint_document(path, doc)
     return doc
 

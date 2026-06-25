@@ -76,6 +76,30 @@ def test_merge_footprint_candles_by_time_keeps_more_levels() -> None:
     assert len(merged[1]["price_levels"]) == 2
 
 
+def test_merge_footprint_candles_sorts_chronologically_across_days() -> None:
+    merged = merge_footprint_candles_by_time(
+        [
+            {
+                "time": _fp_time(datetime(2026, 6, 25, 0, 0)),
+                "price_levels": [{"bid": 1, "ask": 2}],
+            },
+            {
+                "time": _fp_time(datetime(2026, 6, 24, 23, 50)),
+                "price_levels": [{"bid": 3, "ask": 4}],
+            },
+            {
+                "time": _fp_time(datetime(2026, 6, 24, 10, 0)),
+                "price_levels": [{"bid": 5, "ask": 6}],
+            },
+        ]
+    )
+    assert [c["time"] for c in merged] == [
+        _fp_time(datetime(2026, 6, 24, 10, 0)),
+        _fp_time(datetime(2026, 6, 24, 23, 50)),
+        _fp_time(datetime(2026, 6, 25, 0, 0)),
+    ]
+
+
 def test_batch_ocr_footprint_clip_images_writes_sorted_deduped_json(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
