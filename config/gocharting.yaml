@@ -84,6 +84,13 @@ footprint_ws:
   wait_ms: 30000
   export_format: combined
   mt5_spot: true
+  derived:
+    enabled: true
+    rl_min: 4.0
+    stacked_min_levels: 3
+    absorption_volume_pct: 0.25
+    absorption_extreme_ticks: 2
+    absorption_side_ratio: 1.5
 
 clear_charts_before_capture: false
 viewport_width: 1920

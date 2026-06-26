@@ -227,6 +227,7 @@ def test_default_analysis_prompt_gocharting_bid_ask_on_detail() -> None:
     p = default_analysis_prompt("XAUUSD", footprint_source="gocharting")
     assert "KHÔNG có BID/ASK theo từng price level" in p
     assert "footprint_combined" in p
+    assert "orderflow" in p
     assert "Coinmap" not in p
 
 

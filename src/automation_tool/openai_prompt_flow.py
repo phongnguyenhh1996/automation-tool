@@ -54,7 +54,8 @@ _GOCHARTING_BID_ASK_HINT = (
     "GoCharting CSV export chỉ có OHLC, Volume, Delta, CVD theo nến — "
     "KHÔNG có BID/ASK theo từng price level (stacked BID/ASK, volume bid/ask từng mức, RL). "
     "Stacked BID/ASK, absorption, RL: đọc từ footprint_combined_15m.json và footprint_combined_5m.json "
-    "(mỗi candle: ohlc + footprint[] với buy/sell volume theo price level), không suy từ CSV.\n"
+    "(mỗi candle: `orderflow` pre-computed — imbalance_levels, stacked_in_candle, absorption; "
+    "footprint[] giữ raw buy/sell volume), không suy từ CSV.\n"
 )
 
 _GOCHARTING_CHART_READ_GUIDE = (
@@ -67,7 +68,8 @@ _GOCHARTING_CHART_READ_GUIDE = (
 )
 
 _GOCHARTING_TRADE_MANAGEMENT_SUFFIX = (
-    "Stacked BID/ASK, absorption, RL: đọc từ footprint_combined_5m.json (footprint[]), không từ CSV.\n"
+    "Stacked BID/ASK, absorption, RL: đọc từ footprint_combined_5m.json "
+    "(candles[].orderflow; footprint[] chỉ khi cần chi tiết level), không từ CSV.\n"
     f"{_GOCHARTING_CHART_READ_GUIDE}"
 )
 
@@ -148,7 +150,7 @@ def default_analysis_prompt(
         "(mỗi nến: ``mt5_spot_ohlc``) → "
         "footprint_combined_15m.json và footprint_combined_5m.json (WS: GC ohlc + footprint[] + spot OHLC, "
         "N nến mới nhất).\n"
-        "Ưu tiên footprint_combined JSON cho stacked BID/ASK, absorption, RL theo price level; "
+        "Ưu tiên footprint_combined JSON: candles[].orderflow (RL, stacked_in_candle, absorption); "
         "GoCharting CSV cho CVD/delta/volume theo nến; OHLC tvdatafeed khi cần cấu trúc giá TV.\n"
         f"{_GOCHARTING_BID_ASK_HINT}"
         f"{_GOCHARTING_CHART_READ_GUIDE}"
@@ -255,6 +257,13 @@ def _json_file_header_and_body(
                 data,
                 max_candles=footprint_ws_max_candles_from_cfg(cfg),
             )
+            from automation_tool.gocharting_footprint_derived import (
+                enrich_footprint_combined_document,
+                footprint_derived_enabled,
+            )
+
+            if footprint_derived_enabled(cfg):
+                data = enrich_footprint_combined_document(data, cfg=cfg)
         if (
             isinstance(data, dict)
             and path.name.startswith("footprint_bid_ask_")
@@ -300,8 +309,9 @@ def _json_file_header_and_body(
         header = (
             f"[GoCharting footprint combined — {iv} — file: {path.name}]\n"
             "Instrument: COMEX:GC1! futures. Each candle: time_gmt7, ohlc (GC1!), "
-            "mt5_spot_ohlc (spot broker), footprint[] "
-            "with buy/sell volume per price level (latest N candles from WS capture).\n"
+            "mt5_spot_ohlc (spot broker), orderflow "
+            "(imbalance_levels, stacked_in_candle, absorption), footprint[] "
+            "with raw buy/sell volume per price level (latest N candles from WS capture).\n"
         )
     elif path.name.startswith("footprint_bid_ask_") and path.suffix.lower() == ".json":
         iv = path.stem.replace("footprint_bid_ask_", "")
@@ -850,7 +860,7 @@ _SCALP_UPDATE_PLAN_HINT = (
 )
 
 _GOCHARTING_INTRADAY_CHART_READ_PRIORITY_HINT = (
-    "Ưu tiên footprint_combined JSON cho stacked BID/ASK, absorption, RL theo price level; "
+    "Ưu tiên footprint_combined JSON: candles[].orderflow (RL, stacked_in_candle, absorption); "
     "CSV GoCharting chỉ có CVD/delta/volume theo nến — không có BID/ASK theo price level. "
     "TradingView snapshot khi cần cấu trúc giá / liquidity.\n"
     f"{_GOCHARTING_CHART_READ_GUIDE}"

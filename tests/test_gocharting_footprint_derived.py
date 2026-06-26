@@ -1,0 +1,164 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from automation_tool.gocharting_footprint_derived import (
+    DerivedConfig,
+    compute_absorption_for_candle,
+    compute_candle_orderflow,
+    compute_imbalance_levels,
+    compute_level_rl,
+    compute_stacked_in_candle,
+    enrich_footprint_combined_document,
+    footprint_derived_enabled,
+)
+from automation_tool.openai_prompt_flow import _json_file_header_and_body
+
+
+def _level(price: float, bid: int, ask: int) -> dict:
+    return {
+        "price": price,
+        "buy": {"volume": bid},
+        "sell": {"volume": ask},
+    }
+
+
+def test_compute_level_rl_bid_dominant() -> None:
+    rl, side = compute_level_rl(120, 25)
+    assert rl == 4.8
+    assert side == "BID"
+
+
+def test_compute_level_rl_zero_volumes() -> None:
+    rl, side = compute_level_rl(0, 0)
+    assert rl is None
+    assert side is None
+
+
+def test_compute_imbalance_levels_filters_below_rl_min() -> None:
+    levels = [
+        {"price": 100.0, "bid": 10, "ask": 2, "rl": 5.0, "side": "BID", "total_vol": 12},
+        {"price": 99.6, "bid": 2, "ask": 2, "rl": 1.0, "side": None, "total_vol": 4},
+    ]
+    out = compute_imbalance_levels(levels, rl_min=4.0)
+    assert len(out) == 1
+    assert out[0]["price"] == 100.0
+    assert out[0]["rl"] == 5.0
+
+
+def test_compute_stacked_in_candle_three_levels() -> None:
+    levels = [
+        {"price": 4024.8, "bid": 14, "ask": 0, "rl": 14.0, "side": "BID", "total_vol": 14},
+        {"price": 4024.7, "bid": 12, "ask": 1, "rl": 12.0, "side": "BID", "total_vol": 13},
+        {"price": 4024.6, "bid": 20, "ask": 4, "rl": 5.0, "side": "BID", "total_vol": 24},
+    ]
+    out = compute_stacked_in_candle(levels, rl_min=4.0, stacked_min_levels=3)
+    assert len(out) == 1
+    assert out[0]["side"] == "BID"
+    assert out[0]["level_count"] == 3
+    assert out[0]["prices"] == [4024.8, 4024.7, 4024.6]
+
+
+def test_compute_stacked_in_candle_not_enough_levels() -> None:
+    levels = [
+        {"price": 4024.8, "bid": 14, "ask": 0, "rl": 14.0, "side": "BID", "total_vol": 14},
+        {"price": 4024.7, "bid": 12, "ask": 1, "rl": 12.0, "side": "BID", "total_vol": 13},
+    ]
+    out = compute_stacked_in_candle(levels, rl_min=4.0, stacked_min_levels=3)
+    assert out == []
+
+
+def test_compute_absorption_bid_at_low() -> None:
+    candle = {"ohlc": {"low": 4707.0, "high": 4712.0, "close": 4709.2}}
+    levels = [
+        {"price": 4707.1, "bid": 120, "ask": 730, "rl": 6.08, "side": "ASK", "total_vol": 850},
+        {"price": 4708.0, "bid": 50, "ask": 60, "rl": 1.2, "side": "ASK", "total_vol": 110},
+    ]
+    cfg = DerivedConfig(
+        absorption_volume_pct=0.25,
+        absorption_extreme_ticks=2,
+        absorption_side_ratio=1.5,
+        tick_size=0.1,
+    )
+    out = compute_absorption_for_candle(candle, levels, cfg=cfg)
+    assert len(out) == 1
+    assert out[0]["side"] == "BID"
+    assert out[0]["price"] == 4707.1
+
+
+def test_compute_absorption_ask_at_high() -> None:
+    candle = {"ohlc": {"low": 4707.0, "high": 4712.0, "close": 4710.8}}
+    levels = [
+        {"price": 4711.9, "bid": 480, "ask": 140, "rl": 3.43, "side": "BID", "total_vol": 620},
+    ]
+    cfg = DerivedConfig(
+        absorption_volume_pct=0.0,
+        absorption_extreme_ticks=2,
+        absorption_side_ratio=1.5,
+        tick_size=0.1,
+    )
+    out = compute_absorption_for_candle(candle, levels, cfg=cfg)
+    assert len(out) == 1
+    assert out[0]["side"] == "ASK"
+
+
+def test_enrich_footprint_combined_document_adds_orderflow() -> None:
+    doc = {
+        "fp_day": {"tick_size": 1, "display_tick_size": 1, "price_precision": 1},
+        "candles": [
+            {
+                "time_gmt7": "Thu Jun 25 2026 10:05:00 GMT+0700",
+                "ohlc": {"low": 4707.0, "high": 4712.0, "close": 4709.2},
+                "footprint": [
+                    _level(4024.8, 14, 0),
+                    _level(4024.7, 12, 1),
+                    _level(4024.6, 20, 4),
+                ],
+            }
+        ],
+    }
+    out = enrich_footprint_combined_document(doc, cfg={"footprint_ws": {"derived": {"enabled": True}}})
+    candle = out["candles"][0]
+    assert "orderflow" in candle
+    assert candle["orderflow"]["stacked_in_candle"]
+    assert "derived_metrics" not in out
+
+
+def test_footprint_derived_enabled_env_override() -> None:
+    cfg = {"footprint_ws": {"derived": {"enabled": True}}}
+    assert footprint_derived_enabled(cfg) is True
+
+
+def test_json_file_header_and_body_enriches_combined(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fp_dir = tmp_path / "footprint_images"
+    fp_dir.mkdir(parents=True)
+    json_path = fp_dir / "footprint_combined_5m.json"
+    json_path.write_text(
+        json.dumps(
+            {
+                "fp_day": {"tick_size": 1, "display_tick_size": 1, "price_precision": 1},
+                "candles": [
+                    {
+                        "time_gmt7": "Thu Jun 25 2026 10:05:00 GMT+0700",
+                        "ohlc": {"low": 4024.6, "high": 4024.8, "close": 4024.7},
+                        "footprint": [
+                            _level(4024.8, 14, 0),
+                            _level(4024.7, 12, 1),
+                            _level(4024.6, 20, 4),
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("FOOTPRINT_WS_MAX_CANDLES", "50")
+
+    header, body = _json_file_header_and_body(json_path, max_chars=100_000)
+    payload = json.loads(body)
+    assert "orderflow" in payload["candles"][0]
+    assert "stacked_in_candle" in payload["candles"][0]["orderflow"]
+    assert "orderflow" in header
