@@ -77,6 +77,10 @@ def _int_param(raw: dict[str, Any], key: str, default: int) -> int:
         return default
 
 
+def tick_size_from_footprint_doc(doc: dict[str, Any]) -> float:
+    return _tick_size_from_doc(doc)
+
+
 def _tick_size_from_doc(doc: dict[str, Any]) -> float:
     fp_day = doc.get("fp_day")
     if isinstance(fp_day, dict):

@@ -708,24 +708,41 @@ def _lookup_ohlc_for_candle_time(
     return None
 
 
-DEFAULT_FOOTPRINT_BLOCK_SIZE = 0.4
+DEFAULT_FOOTPRINT_TICK_SIZE = 0.1
+DEFAULT_FOOTPRINT_BLOCK_MULTIPLIER = 3
+DEFAULT_FOOTPRINT_BLOCK_SIZE = DEFAULT_FOOTPRINT_TICK_SIZE * DEFAULT_FOOTPRINT_BLOCK_MULTIPLIER
+
+
+def _footprint_block_size_from_cfg_section(raw: dict[str, Any]) -> float | None:
+    """``tick_size × block_multiplier`` from one gocharting.yaml section."""
+    if raw.get("block_size") is not None:
+        return float(raw["block_size"])
+    tick_raw = raw.get("tick_size")
+    block_raw = raw.get("block_multiplier")
+    if tick_raw is None and block_raw is None:
+        return None
+    tick = float(tick_raw if tick_raw is not None else DEFAULT_FOOTPRINT_TICK_SIZE)
+    block = float(
+        block_raw if block_raw is not None else DEFAULT_FOOTPRINT_BLOCK_MULTIPLIER
+    )
+    return tick * block
 
 
 def footprint_block_size(*, gocharting_yaml: Optional[Path] = None) -> float:
-    """GoCharting Tick Manager cluster height: ``tick_size × block_multiplier`` (default 0.4)."""
+    """GoCharting Tick Manager cluster height: ``tick_size × block_multiplier`` (default 0.3)."""
     try:
         from automation_tool.config import default_gocharting_config_path
         from automation_tool.gocharting_capture import load_gocharting_yaml
 
         yaml_path = gocharting_yaml or default_gocharting_config_path()
         cfg = load_gocharting_yaml(yaml_path)
-        raw = cfg.get("footprint_screenshot")
-        if isinstance(raw, dict):
-            if raw.get("block_size") is not None:
-                return float(raw["block_size"])
-            tick = float(raw.get("tick_size", 0.1))
-            block = float(raw.get("block_multiplier", 4))
-            return tick * block
+        for section in ("footprint_screenshot", "footprint_ws"):
+            raw = cfg.get(section)
+            if not isinstance(raw, dict):
+                continue
+            bs = _footprint_block_size_from_cfg_section(raw)
+            if bs is not None:
+                return bs
     except Exception:
         pass
     return DEFAULT_FOOTPRINT_BLOCK_SIZE

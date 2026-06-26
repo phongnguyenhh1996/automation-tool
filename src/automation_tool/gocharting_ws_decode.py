@@ -11,7 +11,12 @@ from typing import Any, Optional
 from google.protobuf.json_format import MessageToDict
 
 from automation_tool.gocharting_footprint_extract import FOOTPRINT_CHART_TYPE
-from automation_tool.gocharting_footprint_ocr import format_footprint_candle_time
+from automation_tool.gocharting_footprint_ocr import (
+    DEFAULT_FOOTPRINT_BLOCK_MULTIPLIER,
+    DEFAULT_FOOTPRINT_TICK_SIZE,
+    format_footprint_candle_time,
+    snap_high_to_footprint_block,
+)
 from automation_tool.proto import footprint_pb2 as pb
 from automation_tool.proto import ohlc_bars_pb2 as ob
 
@@ -310,6 +315,155 @@ def merge_footprint_with_mt5_spot(
         "available": len(spot_index),
     }
     return merged
+
+
+def footprint_ws_block_multiplier(cfg: dict[str, Any]) -> int:
+    """GoCharting Tick Manager block multiplier (1 = per-tick WS data, unchanged)."""
+    ws = cfg.get("footprint_ws")
+    if not isinstance(ws, dict):
+        return 1
+    try:
+        return max(1, int(ws.get("block_multiplier", DEFAULT_FOOTPRINT_BLOCK_MULTIPLIER)))
+    except (TypeError, ValueError):
+        return DEFAULT_FOOTPRINT_BLOCK_MULTIPLIER
+
+
+def footprint_ws_block_size(cfg: dict[str, Any], doc: dict[str, Any]) -> float:
+    """Cluster height for WS footprint aggregation: ``tick_size × block_multiplier``."""
+    ws = cfg.get("footprint_ws") if isinstance(cfg.get("footprint_ws"), dict) else {}
+    if ws.get("block_size") is not None:
+        try:
+            return float(ws["block_size"])
+        except (TypeError, ValueError):
+            pass
+    multiplier = footprint_ws_block_multiplier(cfg)
+    if multiplier <= 1:
+        return 0.0
+    from automation_tool.gocharting_footprint_derived import tick_size_from_footprint_doc
+
+    tick_raw = ws.get("tick_size")
+    if tick_raw is not None:
+        try:
+            tick = float(tick_raw)
+        except (TypeError, ValueError):
+            tick = tick_size_from_footprint_doc(doc)
+    else:
+        tick = tick_size_from_footprint_doc(doc)
+    if tick <= 0:
+        tick = DEFAULT_FOOTPRINT_TICK_SIZE
+    return tick * multiplier
+
+
+def _price_precision_from_doc(doc: dict[str, Any]) -> int:
+    fp_day = doc.get("fp_day")
+    if not isinstance(fp_day, dict):
+        return 1
+    try:
+        return max(0, int(fp_day.get("price_precision") or 0))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _snap_footprint_price_to_block(
+    price: float,
+    block_size: float,
+    *,
+    price_precision: int,
+) -> float:
+    snapped = snap_high_to_footprint_block(price, block_size)
+    return round(snapped, max(0, price_precision))
+
+
+def _price_to_proto_level(price: float, price_precision: int) -> int:
+    precision = max(0, int(price_precision))
+    return round(price * (10**precision))
+
+
+def aggregate_footprint_levels(
+    levels: list[dict[str, Any]],
+    *,
+    block_size: float,
+    price_precision: int,
+) -> list[dict[str, Any]]:
+    """Merge per-tick WS levels into block clusters (sum buy/sell volume per block)."""
+    if block_size <= 0 or not levels:
+        return levels
+
+    buckets: dict[float, dict[str, Any]] = {}
+    for level in levels:
+        if not isinstance(level, dict):
+            continue
+        raw_price = level.get("price")
+        try:
+            price = float(raw_price)
+        except (TypeError, ValueError):
+            continue
+        if price <= 0:
+            continue
+        block_price = _snap_footprint_price_to_block(
+            price, block_size, price_precision=price_precision
+        )
+        bucket = buckets.get(block_price)
+        if bucket is None:
+            bucket = {
+                "price": block_price,
+                "buy": {"trades": 0, "volume": 0},
+                "sell": {"trades": 0, "volume": 0},
+            }
+            buckets[block_price] = bucket
+        for side in ("buy", "sell"):
+            src = level.get(side) if isinstance(level.get(side), dict) else {}
+            bucket[side]["trades"] += int(src.get("trades") or 0)
+            bucket[side]["volume"] += int(src.get("volume") or 0)
+
+    if not buckets:
+        return levels
+
+    out: list[dict[str, Any]] = []
+    for block_price in sorted(buckets, reverse=True):
+        row = buckets[block_price]
+        out.append(
+            {
+                "level": _price_to_proto_level(block_price, price_precision),
+                "price": block_price,
+                "buy": dict(row["buy"]),
+                "sell": dict(row["sell"]),
+            }
+        )
+    return out
+
+
+def aggregate_footprint_combined_document(
+    doc: dict[str, Any],
+    *,
+    cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Re-bucket WS ``footprint[]`` by block size before OpenAI upload (on-disk file unchanged)."""
+    if not isinstance(doc, dict):
+        return doc
+    cfg_raw = cfg if isinstance(cfg, dict) else {}
+    block_size = footprint_ws_block_size(cfg_raw, doc)
+    if block_size <= 0:
+        return doc
+
+    price_precision = _price_precision_from_doc(doc)
+    out = dict(doc)
+    candles_out: list[Any] = []
+    for candle in doc.get("candles") or []:
+        if not isinstance(candle, dict):
+            candles_out.append(candle)
+            continue
+        block = dict(candle)
+        footprint = block.get("footprint")
+        if isinstance(footprint, list):
+            block["footprint"] = aggregate_footprint_levels(
+                footprint,
+                block_size=block_size,
+                price_precision=price_precision,
+            )
+        candles_out.append(block)
+    out["candles"] = candles_out
+    return out
 
 
 def footprint_ws_mt5_spot_enabled(cfg: dict[str, Any]) -> bool:

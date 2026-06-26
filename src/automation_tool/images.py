@@ -259,12 +259,20 @@ def _detail_back_step_from_stem(stem: str) -> Optional[int]:
     return int(m.group(1))
 
 
-def _gocharting_detail_png_per_slot(sym: str, *, gocharting_cfg: dict | None = None) -> int:
+def _gocharting_detail_png_per_slot(
+    sym: str,
+    *,
+    gocharting_cfg: dict | None = None,
+    gocharting_detail_max_back_steps: int | None = None,
+) -> int:
     """DXY GoCharting uses overview only (no detail footprint tab)."""
-    if _footprint_ws_active(gocharting_cfg):
-        return 0
     if sym.strip().upper() == "DXY":
         return 0
+    if _footprint_ws_active(gocharting_cfg):
+        if gocharting_detail_max_back_steps is None or gocharting_detail_max_back_steps <= 0:
+            return 0
+        source_count = 1 + int(gocharting_detail_max_back_steps)
+        return source_count * 3
     return GOCHARTING_DETAIL_PNG_PER_SLOT
 
 
@@ -272,11 +280,17 @@ def openai_payload_max_for_order(
     order: tuple[tuple[str, str, str], ...],
     *,
     gocharting_cfg: dict | None = None,
+    gocharting_detail_max_back_steps: int | None = None,
 ) -> int:
     """Upper bound when each footprint slot sends data file + PNG alongside other slot payloads."""
     return len(order) + sum(
         (
-            1 + _gocharting_detail_png_per_slot(sym, gocharting_cfg=gocharting_cfg)
+            1
+            + _gocharting_detail_png_per_slot(
+                sym,
+                gocharting_cfg=gocharting_cfg,
+                gocharting_detail_max_back_steps=gocharting_detail_max_back_steps,
+            )
             if src == "gocharting"
             else 1
             if src == "coinmap"
@@ -491,7 +505,7 @@ def coinmap_merged_openai_files(
 
 
 def gocharting_detail_png_paths(
-    charts_dir: Path, stamp: str, sym: str, iv: str
+    charts_dir: Path, stamp: str, sym: str, iv: str, *, max_back_steps: int | None = None
 ) -> list[Path]:
     """``detail_zoom`` then ``detail_back_*`` PNGs for one GoCharting slot, if on disk."""
     iv_slug = re.sub(r"[^\w]+", "_", iv).strip("_")[:20] or "iv"
@@ -507,7 +521,19 @@ def gocharting_detail_png_paths(
             return (1, back_step)
         return (2, stem)
 
-    return sorted(paths, key=_sort_key)
+    ordered = sorted(paths, key=_sort_key)
+    if max_back_steps is None:
+        return ordered
+    filtered: list[Path] = []
+    for p in ordered:
+        stem = p.stem
+        if stem.endswith("_detail_zoom"):
+            filtered.append(p)
+            continue
+        back_step = _detail_back_step_from_stem(stem)
+        if back_step is not None and back_step <= max_back_steps:
+            filtered.append(p)
+    return filtered
 
 
 def gocharting_detail_openai_png_paths(
@@ -517,12 +543,15 @@ def gocharting_detail_openai_png_paths(
     iv: str,
     *,
     crop_width_thirds: bool | None = None,
+    max_back_steps: int | None = None,
 ) -> list[Path]:
     """Detail footprint crop panels for one GoCharting slot (for OpenAI payloads)."""
     if crop_width_thirds is None:
         crop_width_thirds = resolve_gocharting_detail_crop_width_thirds()
     out: list[Path] = []
-    for dp in gocharting_detail_png_paths(charts_dir, stamp, sym, iv):
+    for dp in gocharting_detail_png_paths(
+        charts_dir, stamp, sym, iv, max_back_steps=max_back_steps
+    ):
         out.extend(
             gocharting_detail_openai_image_paths(dp, crop_width_thirds=crop_width_thirds)
         )
@@ -560,6 +589,7 @@ def _append_gocharting_openai_payloads(
     iv: str,
     crop_width_thirds: bool | None = None,
     gocharting_cfg: dict | None = None,
+    gocharting_detail_max_back_steps: int | None = None,
 ) -> None:
     iv_slug = re.sub(r"[^\w]+", "_", iv).strip("_")[:20] or "iv"
     cp = charts_dir / f"{stamp}_gocharting_{sym}_{iv_slug}.csv"
@@ -568,10 +598,17 @@ def _append_gocharting_openai_payloads(
         out.append(("csv", cp))
     if pp.is_file():
         out.append(("image", pp))
-    if _footprint_ws_active(gocharting_cfg):
+    ws_active = _footprint_ws_active(gocharting_cfg)
+    if ws_active and gocharting_detail_max_back_steps is None:
         return
+    max_back = gocharting_detail_max_back_steps if ws_active else None
     for dp in gocharting_detail_openai_png_paths(
-        charts_dir, stamp, sym, iv, crop_width_thirds=crop_width_thirds
+        charts_dir,
+        stamp,
+        sym,
+        iv,
+        crop_width_thirds=crop_width_thirds,
+        max_back_steps=max_back,
     ):
         out.append(("image", dp))
 
@@ -675,6 +712,7 @@ def ordered_chart_openai_payloads(
     *,
     stamp: Optional[str] = None,
     gocharting_cfg: dict | None = None,
+    gocharting_detail_max_back_steps: int | None = None,
 ) -> list[ChartOpenAIPayload]:
     """
     Same slot order as ``effective_chart_image_order(charts_dir)`` (for OpenAI step 2).
@@ -735,6 +773,7 @@ def ordered_chart_openai_payloads(
                 iv=iv,
                 crop_width_thirds=crop_width_thirds,
                 gocharting_cfg=gocharting_cfg,
+                gocharting_detail_max_back_steps=gocharting_detail_max_back_steps,
             )
         else:
             jp = charts_dir / f"{st}_tradingview_{sym}_{iv}.json"
@@ -800,6 +839,7 @@ def ordered_chart_images(
     *,
     stamp: Optional[str] = None,
     gocharting_cfg: dict | None = None,
+    gocharting_detail_max_back_steps: int | None = None,
 ) -> list[Path]:
     """
     Return chart PNG paths in analysis order (same slot order as OpenAI payloads).
@@ -819,10 +859,19 @@ def ordered_chart_images(
         p = charts_dir / f"{st}_{src}_{sym}_{iv}.png"
         if p.is_file():
             out.append(p)
-        if src == "gocharting" and not _footprint_ws_active(gocharting_cfg):
+        if src == "gocharting":
+            ws_active = _footprint_ws_active(gocharting_cfg)
+            if ws_active and gocharting_detail_max_back_steps is None:
+                continue
+            max_back = gocharting_detail_max_back_steps if ws_active else None
             out.extend(
                 gocharting_detail_openai_png_paths(
-                    charts_dir, st, sym, iv, crop_width_thirds=crop_width_thirds
+                    charts_dir,
+                    st,
+                    sym,
+                    iv,
+                    crop_width_thirds=crop_width_thirds,
+                    max_back_steps=max_back,
                 )
             )
     return out

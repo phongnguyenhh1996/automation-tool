@@ -41,8 +41,10 @@ from automation_tool.tv_watchlist_daemon import (
     _tp1_followup_job,
     _third_future_m5_analysis_capture_slot,
     _wait_for_m5_analysis_capture_slot,
+    _zone_first_ticket_still_open,
     _zone_touch_retry_at_iso,
 )
+from automation_tool.mt5_accounts import LotRuleFromTrade, MT5AccountEntry
 from automation_tool.zones_state import Zone, ZonesState, read_zones_state_from_shard, write_zones_state_to_shard
 
 
@@ -610,6 +612,73 @@ def test_tp1_followup_scalp_calls_openai_instead_of_auto_cancel(monkeypatch, tmp
     assert openai_calls
     assert notices and notices[0][2] == "scalp"
     assert any("OpenAI TRADE_MANAGEMENT" in line for line in logs)
+
+
+def test_zone_first_ticket_still_open_checks_first_map_account(monkeypatch) -> None:
+    calls: list[dict] = []
+
+    def spy_still_open(
+        ticket,
+        *,
+        dry_run=False,
+        terminal_path=None,
+        login=None,
+        password=None,
+        server=None,
+    ):
+        calls.append(
+            {
+                "ticket": ticket,
+                "login": login,
+                "terminal_path": terminal_path,
+            }
+        )
+        return True, f"ticket={ticket} còn (position mở)"
+
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon.mt5_ticket_still_open", spy_still_open)
+
+    acc_a = MT5AccountEntry(
+        id="acc-a",
+        terminal_path="/tmp/mt5-a.exe",
+        login=111001,
+        password="p",
+        server="srv",
+        primary=True,
+        lot=LotRuleFromTrade(),
+    )
+    acc_b = MT5AccountEntry(
+        id="acc-b",
+        terminal_path="/tmp/mt5-b.exe",
+        login=222002,
+        password="p",
+        server="srv",
+        primary=False,
+        lot=LotRuleFromTrade(),
+    )
+    monkeypatch.setattr(
+        "automation_tool.tv_watchlist_daemon.load_mt5_accounts_for_cli",
+        lambda *_a, **_k: [acc_a, acc_b],
+    )
+
+    zone = Zone(
+        id="z1",
+        label="plan_chinh",
+        vung_cho="100-101",
+        side="BUY",
+        trade_line="BUY LIMIT 100 | SL 99 | TP1 101 | Lot 0.01",
+        mt5_ticket=2139615656,
+        mt5_tickets_by_account={"acc-b": 2139615656, "acc-a": 999},
+    )
+
+    still_open, msg, ticket = _zone_first_ticket_still_open(zone, dry_run=False, accounts_json=None)
+
+    assert still_open is True
+    assert ticket == 2139615656
+    assert "acc=acc-b" in msg
+    assert len(calls) == 1
+    assert calls[0]["ticket"] == 2139615656
+    assert calls[0]["login"] == 222002
+    assert calls[0]["terminal_path"] == "/tmp/mt5-b.exe"
 
 
 def test_tp1_followup_with_tp2_skips_partial_close_when_no_open_position(monkeypatch, tmp_path) -> None:

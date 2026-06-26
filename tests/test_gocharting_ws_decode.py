@@ -267,3 +267,66 @@ def test_merge_footprint_with_mt5_spot() -> None:
     assert merged["candles"][0]["mt5_spot_ohlc"]["open"] == 4020.1
     assert merged["candles"][1]["mt5_spot_ohlc"] is None
     assert merged["mt5_spot"]["matched"] == 1
+
+
+def test_aggregate_footprint_levels_block_multiplier_3() -> None:
+    from automation_tool.gocharting_ws_decode import aggregate_footprint_levels
+
+    levels = [
+        {"price": 4046.7, "buy": {"trades": 1, "volume": 1}, "sell": {"trades": 0, "volume": 0}},
+        {"price": 4046.6, "buy": {"trades": 3, "volume": 3}, "sell": {"trades": 0, "volume": 0}},
+        {"price": 4046.5, "buy": {"trades": 1, "volume": 3}, "sell": {"trades": 0, "volume": 0}},
+        {"price": 4046.3, "buy": {"trades": 1, "volume": 1}, "sell": {"trades": 0, "volume": 0}},
+    ]
+    out = aggregate_footprint_levels(levels, block_size=0.3, price_precision=1)
+    assert [row["price"] for row in out] == [4046.7, 4046.4, 4046.1]
+    assert out[0]["buy"]["volume"] == 1
+    assert out[1]["buy"]["volume"] == 6
+    assert out[1]["buy"]["trades"] == 4
+    assert out[2]["buy"]["volume"] == 1
+
+
+def test_aggregate_footprint_levels_multiplier_1_unchanged() -> None:
+    from automation_tool.gocharting_ws_decode import aggregate_footprint_combined_document
+
+    doc = {
+        "fp_day": {"tick_size": 1, "display_tick_size": 1, "price_precision": 1},
+        "candles": [
+            {
+                "footprint": [
+                    {"price": 4046.7, "buy": {"volume": 1}, "sell": {"volume": 0}},
+                    {"price": 4046.6, "buy": {"volume": 3}, "sell": {"volume": 0}},
+                ]
+            }
+        ],
+    }
+    out = aggregate_footprint_combined_document(
+        doc, cfg={"footprint_ws": {"block_multiplier": 1}}
+    )
+    assert out["candles"][0]["footprint"] == doc["candles"][0]["footprint"]
+
+
+def test_aggregate_footprint_combined_document() -> None:
+    from automation_tool.gocharting_ws_decode import aggregate_footprint_combined_document
+
+    doc = {
+        "fp_day": {"tick_size": 1, "display_tick_size": 1, "price_precision": 1},
+        "candles": [
+            {
+                "time_gmt7": "Thu Jun 25 2026 10:05:00 GMT+0700",
+                "footprint": [
+                    {"price": 4024.8, "buy": {"trades": 1, "volume": 14}, "sell": {"volume": 0}},
+                    {"price": 4024.7, "buy": {"trades": 2, "volume": 12}, "sell": {"volume": 1}},
+                    {"price": 4024.6, "buy": {"trades": 3, "volume": 20}, "sell": {"volume": 4}},
+                ],
+            }
+        ],
+    }
+    out = aggregate_footprint_combined_document(
+        doc, cfg={"footprint_ws": {"tick_size": 0.1, "block_multiplier": 3}}
+    )
+    fp = out["candles"][0]["footprint"]
+    assert [row["price"] for row in fp] == [4024.8, 4024.5]
+    assert fp[0]["buy"]["volume"] == 14
+    assert fp[1]["buy"]["volume"] == 32
+    assert fp[1]["sell"]["volume"] == 5

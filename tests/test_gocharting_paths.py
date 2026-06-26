@@ -5,6 +5,7 @@ from pathlib import Path
 from PIL import Image
 
 from automation_tool.gocharting_capture import (
+    GOCHARTING_ALL_FLOW_WS_DETAIL_BACK_STEPS,
     GOCHARTING_UPDATE_SCALP_DETAIL_HISTORY_STEPS,
     gocharting_export_stem,
 )
@@ -42,6 +43,7 @@ def test_gocharting_export_stem() -> None:
 
 def test_update_scalp_gocharting_detail_history_steps() -> None:
     assert GOCHARTING_UPDATE_SCALP_DETAIL_HISTORY_STEPS == 0
+    assert GOCHARTING_ALL_FLOW_WS_DETAIL_BACK_STEPS == 1
 
 
 def test_gocharting_footprint_export_label() -> None:
@@ -134,12 +136,52 @@ def test_ordered_chart_openai_payloads_gocharting_ws_skips_detail(tmp_path: Path
     assert all("_detail_" not in p.name for k, p in payloads if k == "image")
 
 
+def test_ordered_chart_openai_payloads_gocharting_ws_includes_zoom_and_one_back(
+    tmp_path: Path,
+) -> None:
+    charts = tmp_path / "charts"
+    charts.mkdir()
+    (charts / ".main_chart_symbol").write_text("XAUUSD\n", encoding="utf-8")
+    stamp = "20260616_120000"
+    ws_cfg = {"footprint_ws": {"enabled": True}}
+    sym = GOCHARTING_GOLD_EXPORT_LABEL
+    for slot_sym, iv in (("DXY", "15m"), (sym, "15m"), (sym, "5m")):
+        csv_p = charts / f"{stamp}_gocharting_{slot_sym}_{iv}.csv"
+        png_p = charts / f"{stamp}_gocharting_{slot_sym}_{iv}.png"
+        csv_p.write_text("Time,Open\n1,2\n", encoding="utf-8")
+        png_p.write_bytes(b"x")
+    for iv in ("15m", "5m"):
+        _write_rgb_png(charts / f"{stamp}_gocharting_{sym}_{iv}_detail_zoom.png")
+        _write_rgb_png(charts / f"{stamp}_gocharting_{sym}_{iv}_detail_back_1.png")
+        _write_rgb_png(charts / f"{stamp}_gocharting_{sym}_{iv}_detail_back_2.png")
+
+    payloads = ordered_chart_openai_payloads(
+        charts,
+        stamp=stamp,
+        gocharting_cfg=ws_cfg,
+        gocharting_detail_max_back_steps=GOCHARTING_ALL_FLOW_WS_DETAIL_BACK_STEPS,
+    )
+    image_names = [p.name for k, p in payloads if k == "image"]
+    for iv in ("15m", "5m"):
+        assert f"{stamp}_gocharting_{sym}_{iv}_detail_zoom_part1.png" in image_names
+        assert f"{stamp}_gocharting_{sym}_{iv}_detail_back_1_part1.png" in image_names
+        assert f"{stamp}_gocharting_{sym}_{iv}_detail_back_2_part1.png" not in image_names
+
+
 def test_openai_payload_max_gocharting_order() -> None:
     order = chart_image_order_for_main_symbol("XAUUSD", footprint_source="gocharting")
     detail_cfg = {"footprint_ws": {"enabled": False}}
     assert openai_payload_max_for_order(order, gocharting_cfg=detail_cfg) == 38
     ws_cfg = {"footprint_ws": {"enabled": True}}
     assert openai_payload_max_for_order(order, gocharting_cfg=ws_cfg) == 14
+    assert (
+        openai_payload_max_for_order(
+            order,
+            gocharting_cfg=ws_cfg,
+            gocharting_detail_max_back_steps=GOCHARTING_ALL_FLOW_WS_DETAIL_BACK_STEPS,
+        )
+        == 26
+    )
 
 
 def test_ordered_chart_images_gocharting_includes_detail_crop_panels(tmp_path: Path) -> None:

@@ -17,8 +17,10 @@ from typing import Optional, Sequence, TypeVar
 
 from automation_tool.coinmap import capture_charts, load_coinmap_yaml
 from automation_tool.gocharting_capture import (
+    GOCHARTING_ALL_FLOW_WS_DETAIL_BACK_STEPS,
     GOCHARTING_UPDATE_SCALP_DETAIL_HISTORY_STEPS,
     capture_gocharting,
+    load_gocharting_yaml,
 )
 from automation_tool.gocharting_footprint_extract import (
     DEFAULT_FOOTPRINT_EXTRACT_MODEL,
@@ -2388,6 +2390,25 @@ def _extend_payloads_with_footprint_json(
     return extended
 
 
+def _all_flow_gocharting_openai_kw(
+    *,
+    use_gocharting: bool,
+    gocharting_yaml: Path,
+    charts_dir: Path,
+    stamp: str | None = None,
+) -> dict[str, object]:
+    """When ``all`` uses GoCharting + footprint_ws, attach detail_zoom + one pan-back per slot."""
+    if not use_gocharting and footprint_source_for_stamp(charts_dir, stamp=stamp) != "gocharting":
+        return {}
+    gc_cfg = load_gocharting_yaml(gocharting_yaml)
+    from automation_tool.images import _footprint_ws_active
+
+    kw: dict[str, object] = {"gocharting_cfg": gc_cfg}
+    if _footprint_ws_active(gc_cfg):
+        kw["gocharting_detail_max_back_steps"] = GOCHARTING_ALL_FLOW_WS_DETAIL_BACK_STEPS
+    return kw
+
+
 def _append_footprint_json_paths(paths: list[Path], charts_dir: Path) -> list[Path]:
     before = len(paths)
     append_footprint_json_paths(paths, charts_dir)
@@ -3199,7 +3220,14 @@ def cmd_all_2(args: argparse.Namespace) -> None:
     _log.info("all-2: bắt đầu | charts=%s stamp=%s no_telegram=%s", charts_dir, stamp, args.no_telegram)
     require_valid_coinmap_exports_for_stamp(charts_dir, stamp)
     require_openai(s)
-    payloads = ordered_chart_openai_payloads(charts_dir, stamp=stamp)
+    gc_yaml = getattr(args, "gocharting_config", None) or default_gocharting_config_path()
+    gc_openai_kw = _all_flow_gocharting_openai_kw(
+        use_gocharting=False,
+        gocharting_yaml=gc_yaml,
+        charts_dir=charts_dir,
+        stamp=stamp,
+    )
+    payloads = ordered_chart_openai_payloads(charts_dir, stamp=stamp, **gc_openai_kw)
     payloads = _extend_payloads_with_footprint_json(payloads, charts_dir)
     _warn_if_incomplete_chart_payloads(charts_dir, payloads)
     if not payloads:
@@ -3413,9 +3441,15 @@ def cmd_all(args: argparse.Namespace) -> None:
     else:
         require_valid_coinmap_exports_for_stamp(charts_dir, stamp)
 
-    capture_pngs = ordered_chart_images(charts_dir, stamp=stamp)
+    gc_openai_kw = _all_flow_gocharting_openai_kw(
+        use_gocharting=use_gc,
+        gocharting_yaml=gc_yaml,
+        charts_dir=charts_dir,
+        stamp=stamp,
+    )
+    capture_pngs = ordered_chart_images(charts_dir, stamp=stamp, **gc_openai_kw)
     require_openai(s)
-    payloads = ordered_chart_openai_payloads(charts_dir)
+    payloads = ordered_chart_openai_payloads(charts_dir, stamp=stamp, **gc_openai_kw)
     payloads = _extend_payloads_with_footprint_json(payloads, charts_dir)
     _warn_if_incomplete_chart_payloads(charts_dir, payloads)
     if not payloads:

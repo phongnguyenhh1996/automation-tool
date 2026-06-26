@@ -423,7 +423,7 @@ def test_compute_footprint_level_prices() -> None:
 def test_footprint_block_size_from_yaml() -> None:
     from automation_tool.gocharting_footprint_ocr import footprint_block_size
 
-    assert footprint_block_size() == 0.4
+    assert footprint_block_size() == pytest.approx(0.3)
 
 
 def test_parse_gocharting_csv_ohlc_by_hhmm() -> None:
@@ -451,7 +451,7 @@ def test_enrich_footprint_bid_ask_document_legacy_hhmm_time(tmp_path: Path) -> N
         ],
     }
     out = enrich_footprint_bid_ask_document(doc, csv_path)
-    assert out["candles"][0]["price_levels"][0]["price"] == 4220
+    assert out["candles"][0]["price_levels"][0]["price"] == 4219.8
 
 
 def test_enrich_footprint_bid_ask_document(tmp_path: Path) -> None:
@@ -476,8 +476,8 @@ def test_enrich_footprint_bid_ask_document(tmp_path: Path) -> None:
     }
     out = enrich_footprint_bid_ask_document(doc, csv_path)
     levels = out["candles"][0]["price_levels"]
-    assert levels[0]["price"] == 4220
-    assert levels[1]["price"] == 4219.6
+    assert levels[0]["price"] == 4219.8
+    assert levels[1]["price"] == 4219.5
     assert doc["candles"][0]["price_levels"][0] == {"bid": 1, "ask": 2}
 
 

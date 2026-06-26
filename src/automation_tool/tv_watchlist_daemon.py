@@ -644,6 +644,57 @@ def _daemon_plan_cutoff_resolve_mt5_account(
     return "api", acc
 
 
+def _zone_first_ticket_still_open(
+    zone: Zone,
+    *,
+    dry_run: bool,
+    accounts_json: Optional[Path],
+) -> tuple[bool, str, int]:
+    """
+    Kiểm tra ticket còn mở trên MT5.
+
+    Ưu tiên acc/ticket **đầu tiên** trong ``mt5_tickets_by_account``; legacy chỉ ``mt5_ticket``
+    thì dùng primary hoặc phiên terminal đang mở.
+    """
+    pairs = _daemon_plan_collect_ticket_account_pairs(zone)
+    if not pairs:
+        return False, "zone không có mt5_ticket", 0
+    acc_id, ticket = pairs[0]
+    accounts = load_mt5_accounts_for_cli(accounts_json)
+    mode, acc = _daemon_plan_cutoff_resolve_mt5_account(acc_id, accounts)
+    if mode == "api":
+        assert acc is not None
+        still_open, msg = mt5_ticket_still_open(
+            ticket,
+            dry_run=dry_run,
+            terminal_path=acc.terminal_path,
+            login=acc.login,
+            password=acc.password,
+            server=acc.server,
+        )
+        if acc_id and f"acc={acc_id}" not in msg:
+            msg = f"acc={acc_id} {msg}"
+        return still_open, msg, ticket
+    if mode == "missing":
+        return (
+            True,
+            f"account id={acc_id!r} không có trong accounts.json — tiếp tục follow-up",
+            ticket,
+        )
+    if mode == "no_accounts_file":
+        return True, "không có accounts.json — tiếp tục follow-up", ticket
+    prim = primary_account(accounts) if accounts else None
+    still_open, msg = mt5_ticket_still_open(
+        ticket,
+        dry_run=dry_run,
+        terminal_path=prim.terminal_path if prim else None,
+        login=prim.login if prim else None,
+        password=prim.password if prim else None,
+        server=prim.server if prim else None,
+    )
+    return still_open, msg, ticket
+
+
 def daemon_plan_resolve_cutoff_mt5(
     zones: list[Zone],
     *,
@@ -1944,21 +1995,19 @@ def _tp1_followup_job(
             _state_write(params, st0)
             return
 
-        tk_check = int(z0.mt5_ticket or 0)
         dry = bool(params.mt5_dry_run)
         exe = bool(params.mt5_execute)
-        if exe and tk_check > 0:
-            accs_chk = load_mt5_accounts_for_cli(params.mt5_accounts_json)
-            prim_chk = primary_account(accs_chk) if accs_chk else None
-            still_open, ticket_msg = mt5_ticket_still_open(
-                tk_check,
+        still_open = True
+        ticket_msg = ""
+        tk_check = 0
+        if exe:
+            still_open, ticket_msg, tk_check = _zone_first_ticket_still_open(
+                z0,
                 dry_run=dry,
-                terminal_path=prim_chk.terminal_path if prim_chk else None,
-                login=prim_chk.login if prim_chk else None,
-                password=prim_chk.password if prim_chk else None,
-                server=prim_chk.server if prim_chk else None,
+                accounts_json=params.mt5_accounts_json,
             )
-            _send_log(settings, f"[tp1] kiểm tra ticket | {ticket_msg}")
+            if tk_check > 0:
+                _send_log(settings, f"[tp1] kiểm tra ticket | {ticket_msg}")
             if not still_open:
                 st_done = _state_read(params)
                 if st_done is not None:

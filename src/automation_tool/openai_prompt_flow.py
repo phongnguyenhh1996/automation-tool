@@ -247,6 +247,7 @@ def _json_file_header_and_body(
             and path.suffix.lower() == ".json"
         ):
             from automation_tool.gocharting_ws_decode import (
+                aggregate_footprint_combined_document,
                 drop_forming_footprint_candle,
                 footprint_ws_max_candles_from_cfg,
                 trim_footprint_document,
@@ -260,6 +261,7 @@ def _json_file_header_and_body(
                 data,
                 max_candles=footprint_ws_max_candles_from_cfg(cfg),
             )
+            data = aggregate_footprint_combined_document(data, cfg=cfg)
             from automation_tool.gocharting_footprint_derived import (
                 enrich_footprint_combined_document,
                 footprint_derived_enabled,
@@ -314,7 +316,8 @@ def _json_file_header_and_body(
             "Instrument: COMEX:GC1! futures. Each candle: time_gmt7, ohlc (GC1!), "
             "mt5_spot_ohlc (spot broker), orderflow "
             "(imbalance_levels, stacked_in_candle, absorption), footprint[] "
-            "with raw buy/sell volume per price level (latest N candles from WS capture).\n"
+            "with buy/sell volume per price block (tick_size × block_multiplier from config; "
+            "latest N candles from WS capture).\n"
         )
     elif path.name.startswith("footprint_bid_ask_") and path.suffix.lower() == ".json":
         iv = path.stem.replace("footprint_bid_ask_", "")
