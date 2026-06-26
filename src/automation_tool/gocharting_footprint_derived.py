@@ -10,7 +10,6 @@ DEFAULT_ABSORPTION_VOLUME_PCT = 0.25
 DEFAULT_ABSORPTION_EXTREME_TICKS = 2
 DEFAULT_ABSORPTION_SIDE_RATIO = 1.5
 DEFAULT_TICK_SIZE = 0.1
-DEFAULT_VALUE_AREA_FRACTION = 0.70
 
 
 @dataclass(frozen=True)
@@ -320,99 +319,6 @@ def compute_candle_orderflow(
         "stacked_in_candle": stacked,
         "absorption": absorption,
     }
-
-
-def value_area_fraction_from_cfg(cfg: dict[str, Any]) -> float:
-    ws = cfg.get("footprint_ws")
-    if not isinstance(ws, dict):
-        return DEFAULT_VALUE_AREA_FRACTION
-    return _float_param(ws, "value_area_fraction", DEFAULT_VALUE_AREA_FRACTION)
-
-
-def _normalized_footprint_level(level: dict[str, Any]) -> Optional[dict[str, Any]]:
-    if not isinstance(level, dict):
-        return None
-    price = level.get("price")
-    if price is None:
-        return None
-    try:
-        p = float(price)
-    except (TypeError, ValueError):
-        return None
-    buy = level.get("buy") if isinstance(level.get("buy"), dict) else {}
-    sell = level.get("sell") if isinstance(level.get("sell"), dict) else {}
-    bv = float(buy.get("volume") or 0)
-    sv = float(sell.get("volume") or 0)
-    vol = bv + sv
-    return {
-        "price": p,
-        "volume": int(vol) if vol == int(vol) else vol,
-        "buy_volume": int(bv) if bv == int(bv) else bv,
-        "sell_volume": int(sv) if sv == int(sv) else sv,
-    }
-
-
-def combined_candles_for_session_profile(
-    candles: list[Any],
-) -> list[dict[str, Any]]:
-    """Map footprint_combined candles to the shape expected by ``_session_profile_for_tf``."""
-    out: list[dict[str, Any]] = []
-    for candle in candles:
-        if not isinstance(candle, dict):
-            continue
-        fp: list[dict[str, Any]] = []
-        for level in candle.get("footprint") or []:
-            row = _normalized_footprint_level(level)
-            if row is not None:
-                fp.append(row)
-        if fp:
-            out.append({"footprint": fp})
-    return out
-
-
-def session_profile_from_combined_document(
-    doc: dict[str, Any],
-    *,
-    interval: Optional[str] = None,
-    value_area_fraction: float = DEFAULT_VALUE_AREA_FRACTION,
-) -> dict[str, Any]:
-    """Session POC/VAH/VAL from aggregated footprint (max-volume POC + 70% value area)."""
-    from automation_tool.gocharting_ws_decode import document_timeframe
-    from automation_tool.market_merge_single import _session_profile_for_tf
-
-    iv = (interval or document_timeframe(doc) or "?").strip().lower()
-    candles_raw = doc.get("candles")
-    if not isinstance(candles_raw, list):
-        candles_raw = []
-    profile_candles = combined_candles_for_session_profile(candles_raw)
-    sp = _session_profile_for_tf(iv, profile_candles, target_frac=value_area_fraction)
-    return {
-        "poc": sp.get("poc"),
-        "vah": sp.get("vah"),
-        "val": sp.get("val"),
-        "total_volume": sp.get("total_volume"),
-        "price_levels": sp.get("price_levels"),
-        "interval": iv,
-        "value_area_fraction": value_area_fraction,
-        "candles_used": len(profile_candles),
-    }
-
-
-def attach_session_profile_to_combined_document(
-    doc: dict[str, Any],
-    *,
-    cfg: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Attach top-level ``session_profile`` for on-disk ``footprint_combined_*.json``."""
-    if not isinstance(doc, dict):
-        return doc
-    cfg_raw = cfg if isinstance(cfg, dict) else {}
-    out = dict(doc)
-    out["session_profile"] = session_profile_from_combined_document(
-        out,
-        value_area_fraction=value_area_fraction_from_cfg(cfg_raw),
-    )
-    return out
 
 
 def enrich_footprint_combined_document(

@@ -219,7 +219,8 @@ def test_default_analysis_prompt_describes_json_and_png() -> None:
     assert "GoCharting DXY M15" in p
     assert "footprint_combined_15m.json" in p
     assert "Coinmap" not in p
-    assert "session_profile" in p
+    assert "#FF6600" in p
+    assert "#FA6578" in p
 
 
 def test_default_analysis_prompt_gocharting_bid_ask_on_detail() -> None:
@@ -360,7 +361,7 @@ def test_footprint_json_enriched_with_price_before_openai(tmp_path: Path) -> Non
     assert '"price":4220' in body or '"price": 4220' in body
 
 
-def test_footprint_json_trimmed_to_50_candles_before_openai(tmp_path: Path) -> None:
+def test_footprint_json_trimmed_to_100_candles_before_openai(tmp_path: Path) -> None:
     charts_dir = tmp_path / "charts"
     fp_dir = charts_dir / "footprint_images"
     fp_dir.mkdir(parents=True)
@@ -379,50 +380,6 @@ def test_footprint_json_trimmed_to_50_candles_before_openai(tmp_path: Path) -> N
 
     _header, body = _json_file_header_and_body(json_path, max_chars=100_000)
     payload = json.loads(body)
-    assert len(payload["candles"]) == 50
-    assert payload["candles"][0]["time"] == "70:00"
+    assert len(payload["candles"]) == 100
+    assert payload["candles"][0]["time"] == "20:00"
     assert payload["candles"][-1]["time"] == "119:00"
-
-
-def test_footprint_combined_trimmed_by_openai_max_not_capture_max(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from automation_tool.gocharting_capture import load_gocharting_yaml
-
-    cfg_path = tmp_path / "gocharting.yaml"
-    cfg_path.write_text(
-        "footprint_ws:\n  max_candles: 200\n  openai_max_candles: 50\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(
-        "automation_tool.images._default_gocharting_cfg",
-        lambda: load_gocharting_yaml(cfg_path),
-    )
-
-    charts_dir = tmp_path / "charts"
-    fp_dir = charts_dir / "footprint_images"
-    fp_dir.mkdir(parents=True)
-    json_path = fp_dir / "footprint_combined_5m.json"
-    candles = [
-        {
-            "time_gmt7": f"Fri Jun 26 2026 {h:02d}:00:00 GMT+0700",
-            "footprint": [{"price": 4000.0 + h, "buy": {"volume": 1}, "sell": {"volume": 0}}],
-        }
-        for h in range(120)
-    ]
-    json_path.write_text(
-        json.dumps(
-            {
-                "request": {"interval": "5m"},
-                "session_profile": {"poc": 4050.0, "vah": 4060.0, "val": 3990.0},
-                "candles": candles,
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    _header, body = _json_file_header_and_body(json_path, max_chars=500_000)
-    payload = json.loads(body)
-    assert len(payload["candles"]) == 50
-    assert payload["candles"][0]["time_gmt7"].startswith("Fri Jun 26 2026 70:")
-    assert payload["session_profile"]["poc"] == 4050.0

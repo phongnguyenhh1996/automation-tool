@@ -495,7 +495,6 @@ def write_footprint_document(path: Path, doc: dict[str, Any]) -> None:
 
 
 DEFAULT_FOOTPRINT_WS_MAX_CANDLES = 50
-DEFAULT_FOOTPRINT_OPENAI_MAX_CANDLES = 50
 DEFAULT_FOOTPRINT_WS_WAIT_MS = 30_000
 
 
@@ -567,22 +566,6 @@ def footprint_ws_max_candles_from_cfg(cfg: dict[str, Any]) -> int:
             except (TypeError, ValueError):
                 pass
     return DEFAULT_FOOTPRINT_WS_MAX_CANDLES
-
-
-def footprint_ws_openai_max_candles_from_cfg(cfg: dict[str, Any]) -> int:
-    """Candles per TF when uploading footprint JSON to OpenAI (independent of WS capture ``max_candles``)."""
-    raw_env = os.getenv("FOOTPRINT_OPENAI_MAX_CANDLES", "").strip()
-    if raw_env.isdigit():
-        return max(1, int(raw_env))
-    ws = cfg.get("footprint_ws")
-    if isinstance(ws, dict):
-        raw = ws.get("openai_max_candles")
-        if raw is not None:
-            try:
-                return max(1, int(raw))
-            except (TypeError, ValueError):
-                pass
-    return DEFAULT_FOOTPRINT_OPENAI_MAX_CANDLES
 
 
 def _interval_minutes_from_str(interval: str) -> int:

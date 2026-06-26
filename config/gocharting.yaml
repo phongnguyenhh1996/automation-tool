@@ -81,7 +81,6 @@ footprint_screenshot:
 footprint_ws:
   enabled: true
   max_candles: 200
-  openai_max_candles: 50
   wait_ms: 45000
   export_format: combined
   mt5_spot: true
