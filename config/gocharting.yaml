@@ -61,7 +61,7 @@ footprint_screenshot:
   symbol: "COMEX:GC1!"
   # Tick Manager: cluster height = tick_size × block_multiplier (0.1 × 3 = 0.3).
   tick_size: 0.1
-  block_multiplier: 3
+  block_multiplier: 2
   ocr_split_ratio: 0.5
   delete_screenshot_after_ocr: false
   refresh_before_capture: true
@@ -83,13 +83,16 @@ footprint_ws:
   # WS data is per-tick (0.1); aggregate to block clusters before OpenAI upload.
   # block_size = tick_size × block_multiplier (must match GoCharting Tick Manager Block setting).
   tick_size: 0.1
-  block_multiplier: 3
+  block_multiplier: 2
   max_candles: 200
   wait_ms: 45000
   export_format: combined
   mt5_spot: true
   derived:
     enabled: true
+    imbalance_enabled: true
+    stacked_enabled: false
+    absorption_enabled: false
     rl_min: 4.0
     stacked_min_levels: 3
     absorption_volume_pct: 0.25

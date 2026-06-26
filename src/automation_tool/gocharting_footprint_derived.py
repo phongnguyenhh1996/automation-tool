@@ -14,6 +14,9 @@ DEFAULT_TICK_SIZE = 0.1
 
 @dataclass(frozen=True)
 class DerivedConfig:
+    imbalance_enabled: bool = True
+    stacked_enabled: bool = True
+    absorption_enabled: bool = True
     rl_min: float = DEFAULT_RL_MIN
     stacked_min_levels: int = DEFAULT_STACKED_MIN_LEVELS
     absorption_volume_pct: float = DEFAULT_ABSORPTION_VOLUME_PCT
@@ -42,6 +45,9 @@ def derived_config_from_cfg(cfg: dict[str, Any], doc: dict[str, Any] | None = No
     derived = ws.get("derived") if isinstance(ws.get("derived"), dict) else {}
     tick_size = _tick_size_from_doc(doc) if doc else DEFAULT_TICK_SIZE
     return DerivedConfig(
+        imbalance_enabled=_bool_param(derived, "imbalance_enabled", True),
+        stacked_enabled=_bool_param(derived, "stacked_enabled", True),
+        absorption_enabled=_bool_param(derived, "absorption_enabled", True),
         rl_min=_float_param(derived, "rl_min", DEFAULT_RL_MIN),
         stacked_min_levels=_int_param(derived, "stacked_min_levels", DEFAULT_STACKED_MIN_LEVELS),
         absorption_volume_pct=_float_param(
@@ -55,6 +61,21 @@ def derived_config_from_cfg(cfg: dict[str, Any], doc: dict[str, Any] | None = No
         ),
         tick_size=tick_size,
     )
+
+
+def _bool_param(raw: dict[str, Any], key: str, default: bool) -> bool:
+    value = raw.get(key)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in ("0", "false", "no", "off"):
+            return False
+        if normalized in ("1", "true", "yes", "on"):
+            return True
+    return bool(value)
 
 
 def _float_param(raw: dict[str, Any], key: str, default: float) -> float:
@@ -305,24 +326,62 @@ def _absorption_entry(level: dict[str, Any], *, side: str) -> dict[str, Any]:
     }
 
 
+def level_imbalance_tag(
+    rl: float | None,
+    side: str | None,
+    *,
+    rl_min: float,
+) -> str:
+    """Return ``bid``, ``ask``, or ``""`` for footprint level export."""
+    if rl is None or side is None or float(rl) < rl_min:
+        return ""
+    if side == "BID":
+        return "bid"
+    if side == "ASK":
+        return "ask"
+    return ""
+
+
+def enrich_footprint_levels_in_candle(
+    candle: dict[str, Any],
+    *,
+    cfg: DerivedConfig,
+) -> list[Any]:
+    """Attach ``rl`` and optional ``imbalance`` (``bid``/``ask``/``""``) to each ``footprint[]`` level."""
+    footprint = candle.get("footprint")
+    if not isinstance(footprint, list):
+        return []
+    enriched: list[Any] = []
+    for level in footprint:
+        if not isinstance(level, dict):
+            enriched.append(level)
+            continue
+        _, bid, ask = _level_volumes(level)
+        rl, side = compute_level_rl(bid, ask)
+        block = dict(level)
+        block["rl"] = rl
+        if cfg.imbalance_enabled:
+            block["imbalance"] = level_imbalance_tag(rl, side, rl_min=cfg.rl_min)
+        enriched.append(block)
+    return enriched
+
+
 def compute_candle_orderflow(
     candle: dict[str, Any],
     *,
     cfg: DerivedConfig,
 ) -> dict[str, Any]:
     levels = _parse_footprint_levels(candle)
-    imbalance = compute_imbalance_levels(levels, rl_min=cfg.rl_min)
-    stacked = compute_stacked_in_candle(
-        levels,
-        rl_min=cfg.rl_min,
-        stacked_min_levels=cfg.stacked_min_levels,
-    )
-    absorption = compute_absorption_for_candle(candle, levels, cfg=cfg)
-    return {
-        "imbalance_levels": imbalance,
-        "stacked_in_candle": stacked,
-        "absorption": absorption,
-    }
+    out: dict[str, Any] = {}
+    if cfg.stacked_enabled:
+        out["stacked_in_candle"] = compute_stacked_in_candle(
+            levels,
+            rl_min=cfg.rl_min,
+            stacked_min_levels=cfg.stacked_min_levels,
+        )
+    if cfg.absorption_enabled:
+        out["absorption"] = compute_absorption_for_candle(candle, levels, cfg=cfg)
+    return out
 
 
 def enrich_footprint_combined_document(
@@ -346,7 +405,10 @@ def enrich_footprint_combined_document(
             enriched.append(candle)
             continue
         block = dict(candle)
-        block["orderflow"] = compute_candle_orderflow(block, cfg=derived_cfg)
+        block["footprint"] = enrich_footprint_levels_in_candle(block, cfg=derived_cfg)
+        orderflow = compute_candle_orderflow(block, cfg=derived_cfg)
+        if orderflow:
+            block["orderflow"] = orderflow
         enriched.append(block)
     out["candles"] = enriched
     return out

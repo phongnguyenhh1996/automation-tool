@@ -88,7 +88,7 @@ Không được dùng logic của mode khác để trả output cho mode hiện 
   + Footprint DXY (GoCharting): M15 — CSV orderflow + PNG overview
   + Footprint cặp chính (GoCharting GC1! futures): M15 và M5 — mỗi khung CSV orderflow + PNG overview
   + `footprint_combined_15m.json` và `footprint_combined_5m.json` — WS: GC ohlc + `footprint[]` (buy/sell volume theo price level) + `mt5_spot_ohlc` (spot broker)
-  + **Đọc dữ liệu:** `footprint_combined` JSON — ưu tiên `candles[].orderflow` (imbalance_levels, stacked_in_candle, absorption, RL); GoCharting CSV cho CVD/delta/volume theo nến (CSV **không** có BID/ASK từng mức); TradingView cho cấu trúc giá và session liquidity
+  + **Đọc dữ liệu:** `footprint_combined` JSON; GoCharting CSV cho CVD/delta/volume theo nến (CSV **không** có BID/ASK từng mức); TradingView cho cấu trúc giá và session liquidity
 - [INTRADAY_UPDATE] file đính kèm:
   + Lần đầu sau [FULL_ANALYSIS]: `morning_full_analysis.json` + GoCharting M15/M5 (CSV + `footprint_combined` JSON) + TradingView 15m Session Liquidity Check / ICT Killzones khi có
   + Các lần sau: GoCharting M15/M5 + TradingView 15m Session Liquidity Check / ICT Killzones khi có; tiếp nối chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước
@@ -166,7 +166,7 @@ Quy tắc áp dụng:
   - Với **Cấu trúc giá** và **Quản lý & Thực thi**: sau điểm có dòng `→ Phân tích:` giải thích ngắn gọn.
   - Với **Order Flow – CVD** và **Footprint**: sau điểm **bắt buộc hai dòng** — `→ Số liệu:` (con số / mức giá cụ thể từ JSON footprint / CSV / chart) rồi `→ Phân tích chấm điểm:` (map vào thang 0.3, nêu đạt/mất từng tiểu mục).
     - **Order Flow – CVD — `→ Số liệu:`** phải có tối thiểu: hướng CVD M15/M5; số nến đồng thuận bias (≥3 hay chưa); giá trị delta/CVD tại POI hoặc delta shift (âm→dương / ngược lại); phân kỳ giá–CVD (có/không, tại khung nào); follow-through sau entry (số nến, mức delta).
-    - **Footprint — `→ Số liệu:`** phải có tối thiểu: trap (loại BUY/SELL trap, volume spike); stacked BID/ASK (từ `orderflow.stacked_in_candle` và `orderflow.imbalance_levels`: RL, price level); absorption (từ `orderflow.absorption` tại vùng `vung_cho`); vị trí giá vs VWAP / POC / VAH / VAL (trên/dưới/reclaim); nến/khung tham chiếu (M15/M5, `time_gmt7` từ JSON).
+    - **Footprint — `→ Số liệu:`** phải có tối thiểu: trap (loại BUY/SELL trap, volume spike); stacked BID/ASK; absorption; vị trí giá vs VWAP / POC / VAH / VAL (trên/dưới/reclaim); nến/khung tham chiếu (M15/M5, `time_gmt7` từ JSON).
   - Cuối mỗi plan: `✅ Tổng <label>: X/100`. Dùng dòng trống giữa các plan; không nhồi một đoạn dài.
   - Ghi rõ zone candidate bị loại (mitigated / invalid / used thiếu 4/5) và lý do — có thể sau block plan cuối hoặc trong `🏷️ Trạng thái vùng` của plan không publish.
 - `output_ngan_gon` (string): tóm tắt cực ngắn (hành động + vùng chờ chính).

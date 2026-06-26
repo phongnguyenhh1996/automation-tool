@@ -14,6 +14,7 @@ from automation_tool.gocharting_footprint_derived import (
     compute_level_rl,
     compute_stacked_in_candle,
     enrich_footprint_combined_document,
+    enrich_footprint_levels_in_candle,
     footprint_derived_enabled,
 )
 from automation_tool.openai_prompt_flow import _json_file_header_and_body
@@ -125,7 +126,82 @@ def test_enrich_footprint_combined_document_adds_orderflow() -> None:
     candle = out["candles"][0]
     assert "orderflow" in candle
     assert candle["orderflow"]["stacked_in_candle"]
+    level = candle["footprint"][0]
+    assert level["rl"] == 14.0
+    assert level["side"] == "BID"
+    assert level["imbalance"] is True
+    assert candle["footprint"][1]["imbalance"] is True
+    assert candle["footprint"][2]["imbalance"] is True
     assert "derived_metrics" not in out
+    assert "imbalance_levels" not in candle["orderflow"]
+
+
+def test_enrich_footprint_levels_omits_imbalance_when_disabled() -> None:
+    candle = {
+        "footprint": [
+            _level(4024.8, 14, 0),
+            _level(4024.7, 2, 2),
+        ],
+    }
+    out = enrich_footprint_levels_in_candle(
+        candle,
+        cfg=DerivedConfig(imbalance_enabled=False),
+    )
+    assert out[0]["rl"] == 14.0
+    assert out[0]["side"] == "BID"
+    assert "imbalance" not in out[0]
+    assert out[1]["rl"] == 1.0
+    assert out[1]["side"] is None
+    assert "imbalance" not in out[1]
+
+
+def test_compute_candle_orderflow_respects_feature_toggles() -> None:
+    candle = {
+        "ohlc": {"low": 4707.0, "high": 4712.0, "close": 4709.2},
+        "footprint": [
+            _level(4024.8, 14, 0),
+            _level(4024.7, 12, 1),
+            _level(4024.6, 20, 4),
+        ],
+    }
+    cfg = DerivedConfig(
+        imbalance_enabled=False,
+        stacked_enabled=False,
+        absorption_enabled=False,
+    )
+    out = compute_candle_orderflow(candle, cfg=cfg)
+    assert out == {}
+    assert "stacked_in_candle" not in out
+    assert "absorption" not in out
+
+
+def test_enrich_footprint_combined_document_omits_orderflow_when_all_disabled() -> None:
+    doc = {
+        "fp_day": {"tick_size": 1, "display_tick_size": 1, "price_precision": 1},
+        "candles": [
+            {
+                "time_gmt7": "Thu Jun 25 2026 10:05:00 GMT+0700",
+                "footprint": [_level(4024.8, 14, 0)],
+            }
+        ],
+    }
+    out = enrich_footprint_combined_document(
+        doc,
+        cfg={
+            "footprint_ws": {
+                "derived": {
+                    "enabled": True,
+                    "imbalance_enabled": False,
+                    "stacked_enabled": False,
+                    "absorption_enabled": False,
+                }
+            }
+        },
+    )
+    candle = out["candles"][0]
+    assert "orderflow" not in candle
+    assert candle["footprint"][0]["rl"] == 14.0
+    assert "imbalance" not in candle["footprint"][0]
 
 
 def test_footprint_derived_enabled_env_override() -> None:
@@ -162,6 +238,8 @@ def test_json_file_header_and_body_enriches_combined(tmp_path: Path, monkeypatch
     payload = json.loads(body)
     assert "orderflow" in payload["candles"][0]
     assert "stacked_in_candle" in payload["candles"][0]["orderflow"]
+    assert payload["candles"][0]["footprint"][0]["rl"] == 14.0
+    assert "imbalance" in payload["candles"][0]["footprint"][0]
     assert "orderflow" in header
 
 
