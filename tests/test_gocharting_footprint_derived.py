@@ -8,6 +8,7 @@ import pytest
 
 from automation_tool.gocharting_footprint_derived import (
     DerivedConfig,
+    attach_session_profile_to_combined_document,
     compute_absorption_for_candle,
     compute_candle_orderflow,
     compute_imbalance_levels,
@@ -15,6 +16,7 @@ from automation_tool.gocharting_footprint_derived import (
     compute_stacked_in_candle,
     enrich_footprint_combined_document,
     footprint_derived_enabled,
+    session_profile_from_combined_document,
 )
 from automation_tool.openai_prompt_flow import _json_file_header_and_body
 
@@ -70,6 +72,36 @@ def test_compute_stacked_in_candle_not_enough_levels() -> None:
     ]
     out = compute_stacked_in_candle(levels, rl_min=4.0, stacked_min_levels=3)
     assert out == []
+
+
+def test_session_profile_from_combined_document_max_volume_poc() -> None:
+    doc = {
+        "request": {"interval": "5m"},
+        "candles": [
+            {
+                "footprint": [
+                    {"price": 100.0, "buy": {"volume": 30}, "sell": {"volume": 10}},
+                    {"price": 101.0, "buy": {"volume": 5}, "sell": {"volume": 5}},
+                ]
+            },
+            {
+                "footprint": [
+                    {"price": 100.0, "buy": {"volume": 20}, "sell": {"volume": 0}},
+                    {"price": 99.0, "buy": {"volume": 8}, "sell": {"volume": 2}},
+                ]
+            },
+        ],
+    }
+    sp = session_profile_from_combined_document(doc)
+    assert sp["poc"] == 100.0
+    assert sp["interval"] == "5m"
+    assert sp["candles_used"] == 2
+    assert sp["total_volume"] == 80
+    assert sp["value_area_fraction"] == 0.70
+
+    attached = attach_session_profile_to_combined_document(doc)
+    assert attached["session_profile"]["poc"] == 100.0
+    assert "histogram" not in attached["session_profile"]
 
 
 def test_compute_absorption_bid_at_low() -> None:

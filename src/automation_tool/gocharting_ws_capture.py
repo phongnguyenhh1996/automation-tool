@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 from playwright.sync_api import BrowserContext, Page
 
+from automation_tool.gocharting_footprint_derived import attach_session_profile_to_combined_document
 from automation_tool.gocharting_footprint_ocr import footprint_images_dir, footprint_interval_json_path
 from automation_tool.gocharting_ws_decode import (
     FOOTPRINT_EXPORT_FORMAT_BID_ASK,
@@ -227,6 +228,8 @@ def capture_footprint_ws_on_page(
         main_symbol=main_symbol,
         mt5_accounts_json=mt5_accounts_json,
     )
+    if fmt == FOOTPRINT_EXPORT_FORMAT_COMBINED:
+        output_doc = attach_session_profile_to_combined_document(output_doc, cfg=cfg)
     write_footprint_document(dest, output_doc)
 
     matched = output_doc.get("ohlc_matched")

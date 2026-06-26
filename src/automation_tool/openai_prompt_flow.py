@@ -58,19 +58,9 @@ _GOCHARTING_BID_ASK_HINT = (
     "footprint[] giữ raw buy/sell volume), không suy từ CSV.\n"
 )
 
-_GOCHARTING_CHART_READ_GUIDE = (
-    "Hướng dẫn đọc footprint GoCharting (JSON combined + overview PNG):\n"
-    "PNG overview/detail (xác nhận visual hoặc khi JSON chưa đủ):\n"
-    "- Box có border #FF6600 ở detail view = volume POC.\n"
-    "- Line ngang màu #FA6578 = POC.\n"
-    "- Line ngang màu #17CE1B = VAH.\n"
-    "- Line ngang màu #5B2D1B = VAL.\n"
-)
-
 _GOCHARTING_TRADE_MANAGEMENT_SUFFIX = (
     "Stacked BID/ASK, absorption, RL: đọc từ footprint_combined_5m.json "
     "(candles[].orderflow; footprint[] chỉ khi cần chi tiết level), không từ CSV.\n"
-    f"{_GOCHARTING_CHART_READ_GUIDE}"
 )
 
 _PHAN_TICH_CHAM_DIEM_FULL_HINT = (
@@ -151,9 +141,9 @@ def default_analysis_prompt(
         "footprint_combined_15m.json và footprint_combined_5m.json (WS: GC ohlc + footprint[] + spot OHLC, "
         "N nến mới nhất).\n"
         "Ưu tiên footprint_combined JSON: candles[].orderflow (RL, stacked_in_candle, absorption); "
+        "POC/VAH/VAL từ `session_profile` trong footprint_combined JSON; "
         "GoCharting CSV cho CVD/delta/volume theo nến; OHLC tvdatafeed khi cần cấu trúc giá TV.\n"
         f"{_GOCHARTING_BID_ASK_HINT}"
-        f"{_GOCHARTING_CHART_READ_GUIDE}"
     )
     _ = footprint_source  # legacy callers may pass this; prompts are GoCharting-only
     return (
@@ -311,7 +301,8 @@ def _json_file_header_and_body(
         iv = path.stem.replace("footprint_combined_", "")
         header = (
             f"[GoCharting footprint combined — {iv} — file: {path.name}]\n"
-            "Instrument: COMEX:GC1! futures. Each candle: time_gmt7, ohlc (GC1!), "
+            "Instrument: COMEX:GC1! futures. Top-level session_profile: poc, vah, val "
+            "(session value area from aggregated footprint). Each candle: time_gmt7, ohlc (GC1!), "
             "mt5_spot_ohlc (spot broker), orderflow "
             "(imbalance_levels, stacked_in_candle, absorption), footprint[] "
             "with raw buy/sell volume per price level (latest N candles from WS capture).\n"
@@ -864,9 +855,9 @@ _SCALP_UPDATE_PLAN_HINT = (
 
 _GOCHARTING_INTRADAY_CHART_READ_PRIORITY_HINT = (
     "Ưu tiên footprint_combined JSON: candles[].orderflow (RL, stacked_in_candle, absorption); "
+    "POC/VAH/VAL từ `session_profile` trong footprint_combined JSON; "
     "CSV GoCharting chỉ có CVD/delta/volume theo nến — không có BID/ASK theo price level. "
     "TradingView snapshot khi cần cấu trúc giá / liquidity.\n"
-    f"{_GOCHARTING_CHART_READ_GUIDE}"
 )
 
 _INTRADAY_UPDATE_SUFFIX = _GOCHARTING_INTRADAY_CHART_READ_PRIORITY_HINT + _INTRADAY_UPDATE_PLAN_HINT

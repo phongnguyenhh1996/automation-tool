@@ -219,8 +219,7 @@ def test_default_analysis_prompt_describes_json_and_png() -> None:
     assert "GoCharting DXY M15" in p
     assert "footprint_combined_15m.json" in p
     assert "Coinmap" not in p
-    assert "#FF6600" in p
-    assert "#FA6578" in p
+    assert "session_profile" in p
 
 
 def test_default_analysis_prompt_gocharting_bid_ask_on_detail() -> None:
