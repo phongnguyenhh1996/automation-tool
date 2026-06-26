@@ -1922,19 +1922,6 @@ def _tp1_followup_job(
     - act on MT5 and update zones_state
     """
     try:
-        if _settings_skip_trade_management(settings):
-            st_skip = _state_read(params)
-            if st_skip is not None:
-                z_skip = next((z for z in st_skip.zones if z.id == zone_id), None)
-                if z_skip is not None and z_skip.status not in ("done", "loai"):
-                    z_skip.status = "cho_tp1"
-                    z_skip.tp1_followup_done = True
-                    _state_write(params, st_skip)
-            _send_log(
-                settings,
-                f"[tp1] skip TRADE_MANAGEMENT (SKIP_TRADE_MANAGEMENT) | zone_id={zone_id}",
-            )
-            return
         st0 = _state_read(params)
         if st0 is None:
             return
@@ -2021,6 +2008,16 @@ def _tp1_followup_job(
                 f"Đã huỷ pending ticket(s) của zone trước khi loại. {cancel_msg}",
                 zone=z0,
                 params=params,
+            )
+            return
+
+        if _settings_skip_trade_management(settings):
+            z0.status = "cho_tp1"
+            z0.tp1_followup_done = True
+            _state_write(params, st0)
+            _send_log(
+                settings,
+                f"[tp1] skip TRADE_MANAGEMENT (SKIP_TRADE_MANAGEMENT) | zone_id={zone_id}",
             )
             return
 
@@ -4203,15 +4200,6 @@ def _daemon_plan_main_loop(
                                     )
                                     continue
                             if not _tp1_touched(parsed, float(p_last)):
-                                continue
-                            if _settings_skip_trade_management(settings):
-                                z.tp1_followup_done = True
-                                _state_write(params, st_tp1b)
-                                _send_log(
-                                    settings,
-                                    f"[tp1] skip TRADE_MANAGEMENT (SKIP_TRADE_MANAGEMENT) | zone_id={z.id} "
-                                    f"chạm TP1 last={p_last}",
-                                )
                                 continue
                             z.status = "dang_thuc_thi"
                             z.tp1_followup_done = True

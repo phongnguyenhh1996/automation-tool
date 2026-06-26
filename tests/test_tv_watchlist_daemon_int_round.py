@@ -586,16 +586,17 @@ def test_tp1_followup_scalp_calls_openai_instead_of_auto_cancel(monkeypatch, tmp
         ZonesState(
             symbol="XAUUSD",
             zones=[
-                Zone(
-                    id="s1",
-                    label="scalp",
-                    vung_cho="100–101",
-                    side="BUY",
-                    status="dang_thuc_thi",
-                    trade_line="BUY LIMIT 100 | SL 99 | TP1 101 | Lot 0.01",
-                    mt5_ticket=123,
-                    tp1_followup_done=True,
-                )
+                    Zone(
+                        id="s1",
+                        label="scalp",
+                        vung_cho="100–101",
+                        side="BUY",
+                        status="dang_thuc_thi",
+                        trade_line="BUY LIMIT 100 | SL 99 | TP1 101 | Lot 0.01",
+                        mt5_ticket=123,
+                        tp1_followup_done=True,
+                        has_position=True,
+                    )
             ],
         ),
     )
@@ -611,7 +612,7 @@ def test_tp1_followup_scalp_calls_openai_instead_of_auto_cancel(monkeypatch, tmp
     assert any("OpenAI TRADE_MANAGEMENT" in line for line in logs)
 
 
-def test_tp1_followup_with_tp2_skips_partial_close_when_has_position_false(monkeypatch, tmp_path) -> None:
+def test_tp1_followup_with_tp2_skips_partial_close_when_no_open_position(monkeypatch, tmp_path) -> None:
     openai_calls: list[dict] = []
 
     monkeypatch.setattr("automation_tool.tv_watchlist_daemon._send_user_notice", lambda *a, **k: None)
@@ -640,16 +641,22 @@ def test_tp1_followup_with_tp2_skips_partial_close_when_has_position_false(monke
         lambda *_a, **_k: (True, "ticket=123 open"),
     )
     monkeypatch.setattr(
+        "automation_tool.tv_watchlist_daemon.mt5_ticket_is_open_position",
+        lambda *_a, **_k: (False, "still pending"),
+    )
+    monkeypatch.setattr(
         "automation_tool.tv_watchlist_daemon.mt5_close_position_partial",
         lambda *_a, **_k: (_ for _ in ()).throw(
-            AssertionError("partial close must not run when has_position=false")
+            AssertionError("partial close must not run when MT5 has no open position")
         ),
     )
     monkeypatch.setattr(
         "automation_tool.tv_watchlist_daemon.mt5_ticket_current_sltp",
         lambda *_a, **_k: (99.0, 102.0, "ok"),
     )
-    monkeypatch.setattr("automation_tool.tv_watchlist_daemon.load_mt5_accounts_for_cli", lambda *_a, **_k: [])
+    acc = MagicMock(terminal_path="/tmp/mt5-primary/terminal64.exe", login=111001, password="p", server="srv")
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon.load_mt5_accounts_for_cli", lambda *_a, **_k: [acc])
+    monkeypatch.setattr("automation_tool.tv_watchlist_daemon.primary_account", lambda accs: accs[0])
 
     settings = MagicMock()
     params = WatchlistDaemonParams(
@@ -677,7 +684,7 @@ def test_tp1_followup_with_tp2_skips_partial_close_when_has_position_false(monke
                     trade_line="BUY LIMIT 100 | SL 99 | TP1 101 | TP2 102 | Lot 0.01",
                     mt5_ticket=123,
                     tp1_followup_done=True,
-                    has_position=False,
+                    has_position=True,
                 )
             ],
         ),

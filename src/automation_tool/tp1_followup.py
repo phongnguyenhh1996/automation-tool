@@ -768,13 +768,6 @@ def maybe_post_entry_tp1_tick(
             )
             if not touched:
                 continue
-            if getattr(settings, "skip_trade_management", False) is True:
-                update_plan_tp1_followup_done(lab, True, path=last_alert_path)
-                _log_tp1.info(
-                    "tp1 TP1: bỏ qua TRADE_MANAGEMENT (SKIP_TRADE_MANAGEMENT) | label=%s",
-                    lab,
-                )
-                continue
             # Scalp: chạm TP1 → kiểm tra has_position.
             # Nếu chưa có position (lệnh pending) → huỷ lệnh ngay, không gọi OpenAI.
             # Nếu đã có position → fall through xuống partial-close + OpenAI như các label khác.
@@ -864,6 +857,13 @@ def maybe_post_entry_tp1_tick(
                     lab,
                 )
                 return None
+            if getattr(settings, "skip_trade_management", False) is True:
+                update_plan_tp1_followup_done(lab, True, path=last_alert_path)
+                _log_tp1.info(
+                    "tp1 TP1: bỏ qua TRADE_MANAGEMENT (SKIP_TRADE_MANAGEMENT) | label=%s",
+                    lab,
+                )
+                continue
             tmap_tp1 = (st.mt5_tickets_by_label.get(lab) or {}) if st else {}
             ok_partial = _partial_close_tp1_runner_before_openai(
                 settings=settings,
