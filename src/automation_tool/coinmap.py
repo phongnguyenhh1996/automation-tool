@@ -25,7 +25,11 @@ from automation_tool.coinmap_openai_slim import (
     trim_coinmap_export_arrays,
 )
 from automation_tool.config import default_coinmap_bearer_cache_path
-from automation_tool.browser_client import browser_service_state_path, try_attach_playwright_via_service
+from automation_tool.browser_client import (
+    browser_service_state_path,
+    is_service_responding,
+    try_attach_playwright_via_service,
+)
 from automation_tool.playwright_browser import close_browser_and_context, launch_chrome_context
 
 
@@ -3069,8 +3073,12 @@ def _tv_apply_indicator_profile(tv: dict[str, Any], profile: str) -> dict[str, A
     return merged
 
 
+def _tradingview_legend_item_selector(tv: dict[str, Any]) -> str:
+    return (tv.get("legend_item_selector") or '[data-qa-id="legend-source-item"]').strip()
+
+
 def _tradingview_list_legend_item_texts(page, tv: dict[str, Any]) -> list[str]:
-    sel = (tv.get("legend_item_selector") or '[data-qa-id="legend-source-item"]').strip()
+    sel = _tradingview_legend_item_selector(tv)
     loc = page.locator(sel)
     n = loc.count()
     out: list[str] = []
@@ -3081,6 +3089,21 @@ def _tradingview_list_legend_item_texts(page, tv: dict[str, Any]) -> list[str]:
             t = ""
         if t:
             out.append(t)
+    return out
+
+
+def _tradingview_list_legend_item_statuses(page, tv: dict[str, Any]) -> list[str]:
+    """``data-status`` on each legend row (e.g. ``undefined`` → ``loading`` → ``undefined``)."""
+    sel = _tradingview_legend_item_selector(tv)
+    loc = page.locator(sel)
+    n = loc.count()
+    out: list[str] = []
+    for i in range(int(n or 0)):
+        try:
+            st = (loc.nth(i).get_attribute("data-status") or "").strip()
+        except Exception:
+            st = ""
+        out.append(st)
     return out
 
 
@@ -3478,6 +3501,54 @@ def _tradingview_texts_have_indicator_loading(texts: list[str], tv: dict[str, An
     return False
 
 
+def _tradingview_legend_items_have_loading_status(statuses: list[str], tv: dict[str, Any]) -> bool:
+    if not statuses:
+        return False
+    loading_val = str(tv.get("indicator_loading_status_value", "loading")).strip().lower()
+    return any((st or "").strip().lower() == loading_val for st in statuses)
+
+
+def _tradingview_legend_is_still_loading(
+    texts: list[str],
+    statuses: list[str],
+    tv: dict[str, Any],
+) -> bool:
+    use_data_status = bool(tv.get("indicator_loading_use_data_status", True))
+    if use_data_status and statuses:
+        if _tradingview_legend_items_have_loading_status(statuses, tv):
+            return True
+        if bool(tv.get("indicator_loading_data_status_only", True)):
+            return False
+    return _tradingview_texts_have_indicator_loading(texts, tv)
+
+
+def _tradingview_poll_legend_loading_state(
+    texts: list[str],
+    statuses: list[str],
+    tv: dict[str, Any],
+    *,
+    saw_loading: bool,
+    elapsed_ms: float,
+) -> tuple[bool, bool]:
+    """
+    Return ``(ready_for_screenshot, saw_loading)``.
+
+    When ``indicator_loading_use_data_status`` is on, wait for legend
+    ``data-status`` cycle: ``undefined`` → ``loading`` → ``undefined``.
+    """
+    still_loading = _tradingview_legend_is_still_loading(texts, statuses, tv)
+    if still_loading:
+        return False, True
+    if saw_loading:
+        return True, saw_loading
+    if not bool(tv.get("indicator_loading_require_loading_cycle", True)):
+        return True, saw_loading
+    grace_ms = int(tv.get("indicator_loading_skip_cycle_grace_ms", 3000))
+    if elapsed_ms >= grace_ms and (statuses or texts):
+        return True, saw_loading
+    return False, saw_loading
+
+
 def _tradingview_recover_stuck_indicators(page, tv: dict[str, Any]) -> None:
     """Clear and re-add favorites when LuxAlgo SMC (etc.) stays in ``đang tải...`` state."""
     log = logging.getLogger("automation_tool")
@@ -3497,30 +3568,46 @@ def _tradingview_wait_indicators_loaded_once(
     attempt: int,
     max_attempts: int,
 ) -> bool:
-    """Poll legend until loading markers disappear. Returns True when ready."""
+    """Poll legend until ``data-status`` leaves ``loading`` after a load cycle."""
     timeout_ms = int(tv.get("indicator_loading_timeout_ms", 45_000))
     poll_ms = int(tv.get("indicator_loading_poll_ms", 500))
     settle_ms = int(tv.get("indicator_loading_settle_ms", 300))
     log = logging.getLogger("automation_tool")
     deadline = time.monotonic() + max(0, timeout_ms) / 1000.0
+    cycle_start = time.monotonic()
     saw_loading = False
+    logged_wait = False
     while time.monotonic() < deadline:
         texts = _tradingview_list_legend_item_texts(page, tv)
-        if not _tradingview_texts_have_indicator_loading(texts, tv):
+        statuses = _tradingview_list_legend_item_statuses(page, tv)
+        elapsed_ms = (time.monotonic() - cycle_start) * 1000.0
+        ready, saw_loading = _tradingview_poll_legend_loading_state(
+            texts,
+            statuses,
+            tv,
+            saw_loading=saw_loading,
+            elapsed_ms=elapsed_ms,
+        )
+        if ready:
             if saw_loading:
-                log.info("tv: indicators loaded | legend ready for screenshot")
+                log.info("tv: indicators loaded | legend data-status ready for screenshot")
             if settle_ms > 0:
                 page.wait_for_timeout(settle_ms)
             return True
-        if not saw_loading:
+        if not logged_wait and (
+            _tradingview_legend_is_still_loading(texts, statuses, tv)
+            or bool(tv.get("indicator_loading_require_loading_cycle", True))
+        ):
             log.info(
-                "tv: indicators loading | attempt %s/%s | waiting up to %sms (markers=%s)",
+                "tv: indicators loading | attempt %s/%s | waiting up to %sms "
+                "(data-status=%s, text_markers=%s)",
                 attempt,
                 max_attempts,
                 timeout_ms,
+                tv.get("indicator_loading_status_value", "loading"),
                 _tradingview_indicator_loading_markers(tv),
             )
-            saw_loading = True
+            logged_wait = True
         page.wait_for_timeout(poll_ms)
     return False
 
@@ -3580,6 +3667,16 @@ def _tradingview_snapshot_download_capture(
     after_ms = int(tv.get("after_tradingview_snapshot_download_ms", 300))
     dest = dest_path or (charts_dir / f"{stamp}_tradingview_{symbol_key}_{interval_slug}.png")
     dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        page.bring_to_front()
+    except Exception:
+        pass
+    try:
+        cx, cy = _tradingview_chart_center_xy(page, tv)
+        page.mouse.click(cx, cy)
+        page.wait_for_timeout(80)
+    except Exception:
+        pass
     with page.expect_download(timeout=timeout_ms) as dl_info:
         page.keyboard.press(shortcut)
     download = dl_info.value
@@ -3791,26 +3888,31 @@ def _run_tradingview_via_browser_service(
     charts_dir: Path,
     stamp: str,
     settle_ms: int,
-) -> Optional[list[Path]]:
+) -> tuple[Optional[list[Path]], Optional[str]]:
     """
     Fast path: long-lived browser_service warm tabs + ``tv_capture_plan`` RPC.
-    Returns ``None`` when service is down, plan is legacy-only, or RPC fails (caller uses sync flow).
+
+    Returns ``(paths, None)`` on success, ``(None, None)`` when the service is
+    unavailable or the plan is legacy-only (caller may use sync flow), and
+    ``(None, error)`` when the service is up but warm-tab capture failed — caller
+    must **not** open a new TradingView tab in that case.
     """
     plan_v2 = _tradingview_resolve_capture_plan_v2(tv)
     if not plan_v2:
-        return None
+        return None, None
     try:
-        from automation_tool.browser_client import BrowserClient, is_service_responding
+        from automation_tool.browser_client import BrowserClient
         from automation_tool.browser_protocol import METHOD_TV_CAPTURE_PLAN
         from automation_tool.images import get_active_main_symbol
     except Exception:
-        return None
+        return None, None
     if not is_service_responding():
-        return None
+        return None, None
     c = BrowserClient.from_state_file()
     if not c:
-        return None
+        return None, "browser_service state file missing (warm tabs unavailable)"
     main_sym = get_active_main_symbol()
+    log = logging.getLogger("automation_tool")
     try:
         resp = c.request(
             METHOD_TV_CAPTURE_PLAN,
@@ -3824,17 +3926,23 @@ def _run_tradingview_via_browser_service(
             },
             timeout_s=900.0,
         )
-    except OSError:
-        return None
+    except OSError as e:
+        return None, f"tv_capture_plan RPC transport error: {e}"
     if not resp.get("ok"):
-        return None
+        err = resp.get("error")
+        msg = err.get("message") if isinstance(err, dict) else str(err or "unknown RPC error")
+        log.warning("tv_capture_plan RPC failed: %s", msg)
+        return None, f"tv_capture_plan RPC failed: {msg}"
     result = resp.get("result") or {}
     paths_raw = result.get("paths") or []
     out: list[Path] = []
     for p in paths_raw:
         if isinstance(p, str) and p.strip():
             out.append(Path(p))
-    return out if out else None
+    if out:
+        log.info("tv_capture_plan RPC ok | files=%d", len(out))
+        return out, None
+    return None, "tv_capture_plan RPC returned no chart files (warm-tab capture produced nothing)"
 
 
 def _wait_tradingview_fullscreen_notice_gone(page, tv: dict[str, Any]) -> None:
@@ -4151,7 +4259,7 @@ def _capture_charts_in_context(
                         f"tradingview_capture.tvdatafeed (exchange, symbol_exchanges, interval_map). Error: {e}"
                     ) from e
             else:
-                svc_paths = _run_tradingview_via_browser_service(
+                svc_paths, svc_err = _run_tradingview_via_browser_service(
                     tv=tv_cfg,
                     charts_dir=charts_dir,
                     stamp=stamp,
@@ -4163,6 +4271,14 @@ def _capture_charts_in_context(
                     written.extend(svc_paths)
                     if progress_hook is not None:
                         progress_hook()
+                elif svc_err is not None:
+                    raise SystemExit(
+                        "tradingview_capture via browser_service warm tabs failed. "
+                        f"{svc_err} "
+                        "Do not fall back to a new tab when browser service is running — "
+                        "check TV prewarm (coinmap-automation browser up) and "
+                        "tradingview_snapshot_download_shortcut in config/coinmap.yaml."
+                    )
                 else:
                     tv_page = context.new_page()
                     try:
@@ -4405,7 +4521,10 @@ def capture_charts(
     vh = int(cfg.get("viewport_height", 1080))
 
     with sync_playwright() as p:
-        attached = try_attach_playwright_via_service(p, force=require_browser_service)
+        service_up = is_service_responding()
+        attached = try_attach_playwright_via_service(
+            p, force=require_browser_service or service_up
+        )
         if attached is not None:
             browser, context = attached
             use_browser_service = True

@@ -354,7 +354,14 @@ tradingview_capture:
     - "Smart Money Concepts (SMC) [LuxAlgo]"
     - "VSA Volume"
   after_indicator_add_ms: 500
-  # Chờ legend hết "đang tải..." / loading trước khi chụp screenshot (LuxAlgo SMC, v.v.).
+  # Chờ legend hết loading trước khi chụp screenshot.
+  # DOM: [data-qa-id="legend-source-item"] có data-status: undefined → loading → undefined.
+  indicator_loading_use_data_status: true
+  indicator_loading_status_value: "loading"
+  indicator_loading_require_loading_cycle: true
+  # Nếu không thấy loading (chart cache nhanh), chờ tối đa N ms rồi chụp.
+  indicator_loading_skip_cycle_grace_ms: 3000
+  indicator_loading_data_status_only: true
   indicator_loading_timeout_ms: 90000
   indicator_loading_poll_ms: 500
   indicator_loading_settle_ms: 500

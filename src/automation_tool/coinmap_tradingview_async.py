@@ -18,8 +18,10 @@ from automation_tool.coinmap import (
     _tradingview_indicator_loading_markers,
     _tradingview_interval_slug,
     _tradingview_is_delete_indicator_label,
+    _tradingview_legend_item_selector,
+    _tradingview_legend_is_still_loading,
+    _tradingview_poll_legend_loading_state,
     _tradingview_symbol_locator,
-    _tradingview_texts_have_indicator_loading,
     _tv_apply_indicator_profile,
     _tv_forbidden_indicator_groups,
     _tv_required_indicator_groups,
@@ -352,7 +354,7 @@ async def tv_reset_chart_position_async(page: Page, tv: dict[str, Any]) -> None:
 
 
 async def tv_list_legend_item_texts_async(page: Page, tv: dict[str, Any]) -> list[str]:
-    sel = (tv.get("legend_item_selector") or '[data-qa-id="legend-source-item"]').strip()
+    sel = _tradingview_legend_item_selector(tv)
     loc = page.locator(sel)
     n = await loc.count()
     out: list[str] = []
@@ -363,6 +365,20 @@ async def tv_list_legend_item_texts_async(page: Page, tv: dict[str, Any]) -> lis
             t = ""
         if t:
             out.append(t)
+    return out
+
+
+async def tv_list_legend_item_statuses_async(page: Page, tv: dict[str, Any]) -> list[str]:
+    sel = _tradingview_legend_item_selector(tv)
+    loc = page.locator(sel)
+    n = await loc.count()
+    out: list[str] = []
+    for i in range(int(n or 0)):
+        try:
+            st = (await loc.nth(i).get_attribute("data-status") or "").strip()
+        except Exception:
+            st = ""
+        out.append(st)
     return out
 
 
@@ -721,24 +737,40 @@ async def tv_wait_indicators_loaded_once_async(
     poll_ms = int(tv.get("indicator_loading_poll_ms", 500))
     settle_ms = int(tv.get("indicator_loading_settle_ms", 300))
     deadline = time.monotonic() + max(0, timeout_ms) / 1000.0
+    cycle_start = time.monotonic()
     saw_loading = False
+    logged_wait = False
     while time.monotonic() < deadline:
         texts = await tv_list_legend_item_texts_async(page, tv)
-        if not _tradingview_texts_have_indicator_loading(texts, tv):
+        statuses = await tv_list_legend_item_statuses_async(page, tv)
+        elapsed_ms = (time.monotonic() - cycle_start) * 1000.0
+        ready, saw_loading = _tradingview_poll_legend_loading_state(
+            texts,
+            statuses,
+            tv,
+            saw_loading=saw_loading,
+            elapsed_ms=elapsed_ms,
+        )
+        if ready:
             if saw_loading:
-                _log_tv.info("tv: indicators loaded | legend ready for screenshot")
+                _log_tv.info("tv: indicators loaded | legend data-status ready for screenshot")
             if settle_ms > 0:
                 await page.wait_for_timeout(settle_ms)
             return True
-        if not saw_loading:
+        if not logged_wait and (
+            _tradingview_legend_is_still_loading(texts, statuses, tv)
+            or bool(tv.get("indicator_loading_require_loading_cycle", True))
+        ):
             _log_tv.info(
-                "tv: indicators loading | attempt %s/%s | waiting up to %sms (markers=%s)",
+                "tv: indicators loading | attempt %s/%s | waiting up to %sms "
+                "(data-status=%s, text_markers=%s)",
                 attempt,
                 max_attempts,
                 timeout_ms,
+                tv.get("indicator_loading_status_value", "loading"),
                 _tradingview_indicator_loading_markers(tv),
             )
-            saw_loading = True
+            logged_wait = True
         await page.wait_for_timeout(poll_ms)
     return False
 
@@ -793,6 +825,16 @@ async def tv_snapshot_download_capture_async(
     after_ms = int(tv.get("after_tradingview_snapshot_download_ms", 300))
     dest = dest_path or (charts_dir / f"{stamp}_tradingview_{symbol_key}_{interval_slug}.png")
     dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        await page.bring_to_front()
+    except Exception:
+        pass
+    try:
+        cx, cy = await tv_chart_center_xy_async(page, tv)
+        await page.mouse.click(cx, cy)
+        await page.wait_for_timeout(80)
+    except Exception:
+        pass
     async with page.expect_download(timeout=timeout_ms) as dl_info:
         await page.keyboard.press(shortcut)
     download = await dl_info.value

@@ -4,6 +4,8 @@ import pytest
 
 from automation_tool.coinmap import (
     _tradingview_indicator_loading_markers,
+    _tradingview_legend_items_have_loading_status,
+    _tradingview_poll_legend_loading_state,
     _tradingview_texts_have_indicator_loading,
     _wait_tradingview_indicators_loaded,
 )
@@ -19,7 +21,7 @@ def test_indicator_loading_markers_custom_from_config() -> None:
 
 
 def test_texts_have_indicator_loading_detects_vietnamese_legend() -> None:
-    tv: dict = {}
+    tv: dict = {"indicator_loading_data_status_only": False}
     texts = [
         "LuxAlgo - Smart Money Concepts (Historical, Colored, All, All, tiny, All, All, small, 50, 5, 5, Atr, High/Low, 3, 0.1, tiny, , 1, —, —, —) đang tải..."
     ]
@@ -32,6 +34,50 @@ def test_texts_have_indicator_loading_false_when_ready() -> None:
     assert _tradingview_texts_have_indicator_loading(texts, tv) is False
 
 
+def test_legend_items_have_loading_status() -> None:
+    tv: dict = {}
+    assert _tradingview_legend_items_have_loading_status(["undefined", "loading"], tv) is True
+    assert _tradingview_legend_items_have_loading_status(["undefined", "undefined"], tv) is False
+
+
+def test_poll_legend_loading_waits_for_loading_cycle() -> None:
+    tv: dict = {
+        "indicator_loading_require_loading_cycle": True,
+        "indicator_loading_skip_cycle_grace_ms": 5000,
+    }
+    texts = ["LuxAlgo - Smart Money Concepts"]
+    ready, saw = _tradingview_poll_legend_loading_state(
+        texts, ["undefined"], tv, saw_loading=False, elapsed_ms=100
+    )
+    assert ready is False
+    assert saw is False
+
+    ready, saw = _tradingview_poll_legend_loading_state(
+        texts, ["loading"], tv, saw_loading=False, elapsed_ms=200
+    )
+    assert ready is False
+    assert saw is True
+
+    ready, saw = _tradingview_poll_legend_loading_state(
+        texts, ["undefined"], tv, saw_loading=True, elapsed_ms=300
+    )
+    assert ready is True
+    assert saw is True
+
+
+def test_poll_legend_loading_grace_when_no_loading_cycle() -> None:
+    tv: dict = {
+        "indicator_loading_require_loading_cycle": True,
+        "indicator_loading_skip_cycle_grace_ms": 1000,
+    }
+    texts = ["LuxAlgo - Smart Money Concepts"]
+    ready, saw = _tradingview_poll_legend_loading_state(
+        texts, ["undefined"], tv, saw_loading=False, elapsed_ms=1500
+    )
+    assert ready is True
+    assert saw is False
+
+
 class _FakePage:
     def __init__(self, legend_texts: list[list[str]]) -> None:
         self._legend_texts = legend_texts
@@ -41,24 +87,35 @@ class _FakePage:
         self.timeouts.append(ms)
 
 
-def test_wait_for_indicators_loaded_polls_until_loading_gone(monkeypatch) -> None:
+def test_wait_for_indicators_loaded_polls_until_data_status_cycle_done(monkeypatch) -> None:
     calls = {"n": 0}
 
     def fake_legend(_page, _tv):
         calls["n"] += 1
-        if calls["n"] < 3:
-            return ["LuxAlgo đang tải..."]
         return ["LuxAlgo - Smart Money Concepts"]
+
+    def fake_statuses(_page, _tv):
+        if calls["n"] < 2:
+            return ["loading"]
+        return ["undefined"]
 
     monkeypatch.setattr(
         "automation_tool.coinmap._tradingview_list_legend_item_texts",
         fake_legend,
     )
+    monkeypatch.setattr(
+        "automation_tool.coinmap._tradingview_list_legend_item_statuses",
+        fake_statuses,
+    )
     page = _FakePage([])
-    tv = {"indicator_loading_poll_ms": 10, "indicator_loading_settle_ms": 20}
+    tv = {
+        "indicator_loading_poll_ms": 10,
+        "indicator_loading_settle_ms": 20,
+        "indicator_loading_skip_cycle_grace_ms": 5000,
+    }
     _wait_tradingview_indicators_loaded(page, tv)
-    assert calls["n"] == 3
-    assert page.timeouts == [10, 10, 20]
+    assert calls["n"] == 2
+    assert page.timeouts == [10, 20]
 
 
 def test_wait_for_indicators_loaded_skipped_when_disabled() -> None:
@@ -77,6 +134,11 @@ def test_wait_for_indicators_loaded_retries_with_recovery(monkeypatch) -> None:
             return ["LuxAlgo - Smart Money Concepts"]
         return ["LuxAlgo đang tải..."]
 
+    def fake_statuses(_page, _tv):
+        if calls["ready_after_recover"]:
+            return ["undefined"]
+        return ["loading"]
+
     def fake_recover(_page, _tv):
         calls["recover"] += 1
         calls["ready_after_recover"] = True
@@ -84,6 +146,10 @@ def test_wait_for_indicators_loaded_retries_with_recovery(monkeypatch) -> None:
     monkeypatch.setattr(
         "automation_tool.coinmap._tradingview_list_legend_item_texts",
         fake_legend,
+    )
+    monkeypatch.setattr(
+        "automation_tool.coinmap._tradingview_list_legend_item_statuses",
+        fake_statuses,
     )
     monkeypatch.setattr(
         "automation_tool.coinmap._tradingview_recover_stuck_indicators",
@@ -95,6 +161,7 @@ def test_wait_for_indicators_loaded_retries_with_recovery(monkeypatch) -> None:
         "indicator_loading_settle_ms": 20,
         "indicator_loading_timeout_ms": 25,
         "indicator_loading_retry_attempts": 2,
+        "indicator_loading_skip_cycle_grace_ms": 5,
     }
     _wait_tradingview_indicators_loaded(page, tv)
     assert calls["recover"] == 1
@@ -107,6 +174,10 @@ def test_wait_for_indicators_loaded_fails_when_still_loading(monkeypatch) -> Non
         lambda _page, _tv: ["LuxAlgo đang tải..."],
     )
     monkeypatch.setattr(
+        "automation_tool.coinmap._tradingview_list_legend_item_statuses",
+        lambda _page, _tv: ["loading"],
+    )
+    monkeypatch.setattr(
         "automation_tool.coinmap._tradingview_recover_stuck_indicators",
         lambda _page, _tv: None,
     )
@@ -117,6 +188,7 @@ def test_wait_for_indicators_loaded_fails_when_still_loading(monkeypatch) -> Non
         "indicator_loading_timeout_ms": 30,
         "indicator_loading_retry_attempts": 1,
         "indicator_loading_fail_on_timeout": True,
+        "indicator_loading_skip_cycle_grace_ms": 5000,
     }
     with pytest.raises(SystemExit, match="still loading"):
         _wait_tradingview_indicators_loaded(page, tv)
