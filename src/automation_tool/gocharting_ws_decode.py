@@ -568,6 +568,95 @@ def footprint_ws_max_candles_from_cfg(cfg: dict[str, Any]) -> int:
     return DEFAULT_FOOTPRINT_WS_MAX_CANDLES
 
 
+def _interval_minutes_from_str(interval: str) -> int:
+    iv = (interval or "").strip().lower()
+    if iv.endswith("m"):
+        return max(1, int(iv[:-1]))
+    raise ValueError(f"unsupported interval {interval!r}")
+
+
+def _forming_candle_open(now: datetime, interval_min: int) -> datetime:
+    """Floor naive GMT+7 ``now`` to the open of the current forming candle."""
+    floored_minute = (now.minute // interval_min) * interval_min
+    return now.replace(minute=floored_minute, second=0, microsecond=0)
+
+
+def _last_candle_time_key(candle: dict[str, Any]) -> str:
+    for key in ("time_gmt7", "time"):
+        raw = candle.get(key)
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
+    return ""
+
+
+def _is_forming_footprint_candle(
+    last_time_key: str,
+    *,
+    forming_open: datetime,
+) -> bool | None:
+    """Return True if forming, False if closed, None if unparsable."""
+    from automation_tool.gocharting_footprint_ocr import parse_footprint_candle_datetime
+
+    if re.match(r"^\d{1,2}:\d{2}$", last_time_key):
+        hour, minute = map(int, last_time_key.split(":"))
+        last_open = forming_open.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        return last_open >= forming_open
+
+    dt = parse_footprint_candle_datetime(last_time_key)
+    if dt is None:
+        return None
+    last_open = dt.replace(second=0, microsecond=0)
+    return last_open >= forming_open
+
+
+def drop_forming_footprint_candle(
+    doc: dict[str, Any],
+    *,
+    interval: str | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Remove the trailing candle if it is still forming (not yet closed)."""
+    candles_raw = doc.get("candles")
+    if not isinstance(candles_raw, list) or len(candles_raw) <= 1:
+        return doc
+
+    iv = (interval or document_timeframe(doc) or "").strip().lower()
+    if not iv:
+        if doc.get("is_complete") is False:
+            out = dict(doc)
+            out["candles"] = candles_raw[:-1]
+            return out
+        return doc
+
+    try:
+        interval_min = _interval_minutes_from_str(iv)
+    except ValueError:
+        if doc.get("is_complete") is False:
+            out = dict(doc)
+            out["candles"] = candles_raw[:-1]
+            return out
+        return doc
+
+    ref = now if now is not None else datetime.now(_TZ_GMT7)
+    if ref.tzinfo is not None:
+        ref = ref.astimezone(_TZ_GMT7).replace(tzinfo=None)
+    forming_open = _forming_candle_open(ref, interval_min)
+
+    last = candles_raw[-1]
+    if not isinstance(last, dict):
+        return doc
+
+    forming = _is_forming_footprint_candle(
+        _last_candle_time_key(last),
+        forming_open=forming_open,
+    )
+    if forming is True or (forming is None and doc.get("is_complete") is False):
+        out = dict(doc)
+        out["candles"] = candles_raw[:-1]
+        return out
+    return doc
+
+
 def trim_footprint_document(
     doc: dict[str, Any],
     *,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import math
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal, Optional
 
 import automation_tool.config  # noqa: F401 — load .env
@@ -854,6 +855,176 @@ def mt5_chinh_trade_line_inplace(
         )
     finally:
         pass
+
+
+def _zone_ticket_account_pairs(
+    mt5_ticket: Optional[int],
+    mt5_tickets_by_account: Optional[dict[str, int]],
+) -> list[tuple[Optional[str], int]]:
+    """``(account_id | None, ticket)`` — ưu tiên map đa tài khoản."""
+    out: list[tuple[Optional[str], int]] = []
+    tmap = mt5_tickets_by_account or {}
+    if tmap:
+        for aid, tk in tmap.items():
+            try:
+                tki = int(tk)
+            except (TypeError, ValueError):
+                continue
+            if tki > 0:
+                out.append((str(aid).strip() or None, tki))
+        return out
+    try:
+        tk = int(mt5_ticket or 0)
+    except (TypeError, ValueError):
+        tk = 0
+    if tk > 0:
+        out.append((None, tk))
+    return out
+
+
+def _resolve_mt5_account_for_ticket(
+    acc_id: Optional[str],
+    accounts: Optional[list],
+) -> tuple[Literal["terminal", "api", "missing", "no_accounts_file"], Optional[object]]:
+    if acc_id is None:
+        return "terminal", None
+    if not accounts:
+        return "no_accounts_file", None
+    by_id = {a.id: a for a in accounts}
+    acc = by_id.get(acc_id)
+    if acc is None:
+        return "missing", None
+    return "api", acc
+
+
+def zone_has_open_position_on_mt5(
+    *,
+    has_position: bool,
+    mt5_ticket: Optional[int],
+    mt5_tickets_by_account: Optional[dict[str, int]],
+    zone_source: str,
+    accounts_json: Optional[Path] = None,
+    dry_run: bool = False,
+) -> bool:
+    """True nếu zone đang giữ position trên MT5 (hoặc ``has_position`` trên shard)."""
+    from automation_tool.mt5_accounts import load_mt5_accounts_for_zone_entry
+
+    if has_position:
+        return True
+    pairs = _zone_ticket_account_pairs(mt5_ticket, mt5_tickets_by_account)
+    if not pairs:
+        return False
+    accounts = load_mt5_accounts_for_zone_entry(zone_source=zone_source, cli_path=accounts_json)
+    for acc_id, ticket in pairs:
+        mode, acc = _resolve_mt5_account_for_ticket(acc_id, accounts)
+        if mode == "api":
+            st, _ = mt5_ticket_status_for_cutoff(
+                ticket,
+                dry_run=dry_run,
+                terminal_path=acc.terminal_path,  # type: ignore[union-attr]
+                login=acc.login,  # type: ignore[union-attr]
+                password=acc.password,  # type: ignore[union-attr]
+                server=acc.server,  # type: ignore[union-attr]
+            )
+        else:
+            st, _ = mt5_ticket_status_for_cutoff(ticket, dry_run=dry_run)
+        if st == "position":
+            return True
+    return False
+
+
+def cancel_zone_pending_tickets(
+    zone: object,
+    *,
+    accounts_json: Optional[Path] = None,
+    dry_run: bool = False,
+) -> tuple[bool, str, int]:
+    """
+    Huỷ các lệnh chờ (pending) của zone; không đóng position.
+
+    Dùng ``load_mt5_accounts_for_zone_entry`` theo ``zone.source`` để chọn đúng accounts file.
+
+    Returns:
+        ``(ok_all, message, n_cancelled)``
+    """
+    from automation_tool.mt5_accounts import load_mt5_accounts_for_zone_entry
+
+    zone_source = str(getattr(zone, "source", "") or "")
+    mt5_ticket = getattr(zone, "mt5_ticket", None)
+    tmap = getattr(zone, "mt5_tickets_by_account", None)
+    pairs = _zone_ticket_account_pairs(mt5_ticket, tmap)
+    if not pairs:
+        return True, "zone không có mt5_ticket", 0
+
+    accounts = load_mt5_accounts_for_zone_entry(zone_source=zone_source, cli_path=accounts_json)
+    messages: list[str] = []
+    ok_all = True
+    cancelled = 0
+
+    for acc_id, ticket in pairs:
+        mode, acc = _resolve_mt5_account_for_ticket(acc_id, accounts)
+        if mode == "no_accounts_file":
+            ok_all = False
+            messages.append(
+                "state có mt5_tickets_by_account nhưng không tìm thấy accounts.json"
+            )
+            continue
+        if mode == "missing":
+            ok_all = False
+            messages.append(f"account id={acc_id!r} không có trong accounts.json")
+            continue
+
+        if mode == "api":
+            assert acc is not None
+            st, st_msg = mt5_ticket_status_for_cutoff(
+                ticket,
+                dry_run=dry_run,
+                terminal_path=acc.terminal_path,
+                login=acc.login,
+                password=acc.password,
+                server=acc.server,
+            )
+        else:
+            st, st_msg = mt5_ticket_status_for_cutoff(ticket, dry_run=dry_run)
+
+        if st == "error":
+            ok_all = False
+            messages.append(f"ticket={ticket}: {st_msg}")
+            continue
+        if st != "pending":
+            messages.append(f"ticket={ticket}: bỏ qua ({st_msg})")
+            continue
+
+        if mode == "api":
+            assert acc is not None
+            r = mt5_cancel_pending_order(
+                ticket,
+                dry_run=dry_run,
+                terminal_path=acc.terminal_path,
+                login=acc.login,
+                password=acc.password,
+                server=acc.server,
+                terminal_session_only=False,
+                shutdown_after=True,
+            )
+            log_extra = f"acc={acc_id} | {r.message}"
+        else:
+            r = mt5_cancel_pending_order(
+                ticket,
+                dry_run=dry_run,
+                terminal_session_only=True,
+                shutdown_after=False,
+            )
+            log_extra = r.message
+        ok_all = ok_all and bool(r.ok)
+        if r.ok:
+            cancelled += 1
+        messages.append(f"ticket={ticket}: {log_extra}")
+
+    msg = " | ".join(messages)
+    if cancelled:
+        return ok_all, f"đã huỷ {cancelled} pending | {msg}", cancelled
+    return ok_all, msg, cancelled
 
 
 def mt5_cancel_all_pending_orders(

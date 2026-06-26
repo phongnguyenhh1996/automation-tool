@@ -124,6 +124,12 @@ def session_slot_now_hcm(
     return "toi"
 
 
+def prior_session_slots(current: SessionSlot) -> tuple[SessionSlot, ...]:
+    """Các slot trong ngày trước ``current`` (vd. ``chieu`` → ``(\"sang\",)``)."""
+    idx = SLOTS_ORDER.index(current)
+    return SLOTS_ORDER[:idx]
+
+
 def iter_shard_paths(zones_dir: Path) -> list[Path]:
     """All expected shard paths (27); file may be missing."""
     out: list[Path] = []

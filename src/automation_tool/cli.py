@@ -131,7 +131,9 @@ from automation_tool.daemon_launcher import (
 from automation_tool.tv_watchlist_daemon import WatchlistDaemonParams, run_daemon_plan, run_tv_watchlist_daemon
 from automation_tool.zones_paths import SessionSlot, session_slot_now_hcm, shard_path
 from automation_tool.zones_state import (
+    cancel_all_zone_pending_before_clear,
     clear_zones_directory,
+    invalidate_prior_session_slot_zones,
     migrate_legacy_zones_state_if_needed,
     remap_scalp_zones_avoiding_shard_collision,
     write_zones_for_slot,
@@ -3232,15 +3234,37 @@ def cmd_all(args: argparse.Namespace) -> None:
 
     zones_dir = zones_dir_from_cli_path(args.zones_json)
     run_slot: SessionSlot = session_slot_now_hcm()
-    if not args.no_clear_zones_state and run_slot == "sang":
-        stop_daemon_plans_in_zones(zones_dir)
-        n_rm = clear_zones_directory(zones_dir)
-        _log.info("all: cleared zones | slot=%s removed=%s dir=%s", run_slot, n_rm, zones_dir)
-        print(f"Đã dừng daemon-plan (nếu có) và xóa zones/: {zones_dir} ({n_rm} file)", flush=True)
-    elif args.no_clear_zones_state:
-        _log.info("all: skip clearing zones | --no-clear-zones-state | slot=%s dir=%s", run_slot, zones_dir)
+    if not args.no_clear_zones_state:
+        accts = _resolved_mt5_accounts_json(args)
+        if run_slot == "sang":
+            prior_cancel = cancel_all_zone_pending_before_clear(
+                zones_dir, mt5_accounts_json=accts
+            )
+            if prior_cancel.shards_processed:
+                _log.info(
+                    "all: huỷ pending trước clear zones | slot=%s %s",
+                    run_slot,
+                    prior_cancel.summary_vn(),
+                )
+            stop_daemon_plans_in_zones(zones_dir)
+            n_rm = clear_zones_directory(zones_dir)
+            _log.info("all: cleared zones | slot=%s removed=%s dir=%s", run_slot, n_rm, zones_dir)
+            print(f"Đã dừng daemon-plan (nếu có) và xóa zones/: {zones_dir} ({n_rm} file)", flush=True)
+        else:
+            prior_result = invalidate_prior_session_slot_zones(
+                zones_dir,
+                current_slot=run_slot,
+                mt5_accounts_json=accts,
+            )
+            _log.info(
+                "all: prior-slot cleanup | slot=%s %s",
+                run_slot,
+                prior_result.summary_vn(),
+            )
+            if prior_result.shards_processed or prior_result.skipped_position:
+                print(f"Đã dọn slot cũ: {prior_result.summary_vn()}", flush=True)
     else:
-        _log.info("all: skip clearing zones | slot=%s dir=%s", run_slot, zones_dir)
+        _log.info("all: skip clearing zones | --no-clear-zones-state | slot=%s dir=%s", run_slot, zones_dir)
 
     cfg = args.config or default_coinmap_config_path()
     storage = args.storage_state or default_storage_state_path()

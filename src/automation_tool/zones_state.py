@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import threading
 from dataclasses import dataclass, field, replace
@@ -30,6 +31,7 @@ from automation_tool.zones_paths import (
     iter_shard_paths,
     label_from_shard_stem,
     manifest_path,
+    prior_session_slots,
     resolve_zones_directory,
     session_slot_from_shard_path,
     session_slot_now_hcm,
@@ -58,6 +60,8 @@ def can_apply_old_price_loai(status: ZoneStatus) -> bool:
 _VUNG_CHO_SEP = "–"
 
 _zones_io_lock = threading.RLock()
+
+_log = logging.getLogger("automation_tool.zones_state")
 
 _SCHEMA_MANIFEST = 1
 
@@ -1245,4 +1249,165 @@ def zones_from_analysis_payload_merged(
             zone_from_price_entry(lab=lab, pe=pe, source=source, session_slot=merge_slot)
         )
     return zones
+
+
+@dataclass(frozen=True)
+class PriorSlotCleanupResult:
+    shards_processed: int = 0
+    skipped_terminal: int = 0
+    skipped_position: int = 0
+    cancelled_pending: int = 0
+    marked_loai: int = 0
+
+    def summary_vn(self) -> str:
+        return (
+            f"xử lý {self.shards_processed} shard | "
+            f"bỏ qua terminal={self.skipped_terminal} position={self.skipped_position} | "
+            f"huỷ pending={self.cancelled_pending} | loại={self.marked_loai}"
+        )
+
+
+def _invalidate_zone_shard(
+    shard_path: Path,
+    *,
+    mt5_accounts_json: Optional[Path] = None,
+) -> tuple[Literal["skipped_terminal", "skipped_position", "marked_loai"], int]:
+    """
+    Dừng daemon, huỷ pending, đánh ``loai`` cho một shard.
+
+    Returns:
+        ``(outcome, n_cancelled_pending)``
+    """
+    from automation_tool.daemon_launcher import stop_daemon_plan_for_shard
+    from automation_tool.mt5_manage import (
+        cancel_zone_pending_tickets,
+        zone_has_open_position_on_mt5,
+    )
+
+    st = read_zones_state_from_shard(shard_path)
+    if st is None or not st.zones:
+        return "skipped_terminal", 0
+    z = st.zones[0]
+    if z.status in ("done", "loai"):
+        return "skipped_terminal", 0
+    if zone_has_open_position_on_mt5(
+        has_position=bool(getattr(z, "has_position", False)),
+        mt5_ticket=z.mt5_ticket,
+        mt5_tickets_by_account=z.mt5_tickets_by_account,
+        zone_source=z.source,
+        accounts_json=mt5_accounts_json,
+    ):
+        return "skipped_position", 0
+
+    stop_daemon_plan_for_shard(shard_path)
+    ok_cancel, cancel_msg, n_cancelled = cancel_zone_pending_tickets(
+        z, accounts_json=mt5_accounts_json
+    )
+
+    z2 = replace(
+        z,
+        status="loai",  # type: ignore[arg-type]
+        loai_streak=0,
+        retry_at="",
+        mt5_ticket=None,
+        mt5_tickets_by_account=None,
+    )
+    st2 = ZonesState(symbol=st.symbol, zones=[z2], updated_at=st.updated_at)
+    write_zones_state_to_shard(shard_path, st2)
+    if not ok_cancel:
+        _log.warning(
+            "invalidate shard: cancel pending chưa hoàn toàn | shard=%s | %s",
+            shard_path.name,
+            cancel_msg,
+        )
+    return "marked_loai", n_cancelled
+
+
+def invalidate_prior_session_slot_zones(
+    zones_dir: Path,
+    *,
+    current_slot: SessionSlot,
+    mt5_accounts_json: Optional[Path] = None,
+) -> PriorSlotCleanupResult:
+    """
+    Dọn zone + huỷ lệnh chờ của các slot trước ``current_slot`` trong ngày.
+
+    Zone ``done``/``loai`` hoặc còn position trên MT5 được bỏ qua.
+    """
+    prior = prior_session_slots(current_slot)
+    if not prior:
+        return PriorSlotCleanupResult()
+    prior_set = set(prior)
+    result = PriorSlotCleanupResult()
+    if not zones_dir.is_dir():
+        return result
+
+    for sp in sorted(zones_dir.glob("vung_*.json")):
+        slot = session_slot_from_shard_path(sp)
+        if slot is None or slot not in prior_set:
+            continue
+        outcome, n_cancelled = _invalidate_zone_shard(
+            sp, mt5_accounts_json=mt5_accounts_json
+        )
+        if outcome == "skipped_terminal":
+            result = replace(result, skipped_terminal=result.skipped_terminal + 1)
+            continue
+        if outcome == "skipped_position":
+            result = replace(result, skipped_position=result.skipped_position + 1)
+            continue
+        result = replace(
+            result,
+            shards_processed=result.shards_processed + 1,
+            cancelled_pending=result.cancelled_pending + n_cancelled,
+            marked_loai=result.marked_loai + 1,
+        )
+    return result
+
+
+def cancel_all_zone_pending_before_clear(
+    zones_dir: Path,
+    *,
+    mt5_accounts_json: Optional[Path] = None,
+) -> PriorSlotCleanupResult:
+    """
+    Huỷ lệnh chờ trên mọi shard trước khi ``clear_zones_directory`` (slot sáng).
+
+    Zone còn position được bỏ qua; không ghi ``loai`` (file sẽ bị xóa ngay sau).
+    """
+    from automation_tool.daemon_launcher import stop_daemon_plan_for_shard
+    from automation_tool.mt5_manage import (
+        cancel_zone_pending_tickets,
+        zone_has_open_position_on_mt5,
+    )
+
+    result = PriorSlotCleanupResult()
+    if not zones_dir.is_dir():
+        return result
+
+    for sp in sorted(zones_dir.glob("vung_*.json")):
+        st = read_zones_state_from_shard(sp)
+        if st is None or not st.zones:
+            continue
+        z = st.zones[0]
+        if zone_has_open_position_on_mt5(
+            has_position=bool(getattr(z, "has_position", False)),
+            mt5_ticket=z.mt5_ticket,
+            mt5_tickets_by_account=z.mt5_tickets_by_account,
+            zone_source=z.source,
+            accounts_json=mt5_accounts_json,
+        ):
+            result = replace(result, skipped_position=result.skipped_position + 1)
+            continue
+        if not (z.mt5_ticket or z.mt5_tickets_by_account):
+            continue
+        stop_daemon_plan_for_shard(sp)
+        ok_cancel, cancel_msg, n_cancelled = cancel_zone_pending_tickets(
+            z, accounts_json=mt5_accounts_json
+        )
+        result = replace(
+            result,
+            shards_processed=result.shards_processed + 1,
+            cancelled_pending=result.cancelled_pending + n_cancelled,
+        )
+    return result
 

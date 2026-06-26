@@ -274,6 +274,47 @@ SHORT"""
     assert calls[1]["html_ready"] is True
 
 
+def test_send_openai_json_with_context_splits_without_summary_chat(monkeypatch):
+    """all-2 and similar: no summary channel — still omit morning ``context`` JSON."""
+    calls: list[dict] = []
+
+    def fake_send(**kwargs):
+        calls.append(kwargs)
+        return 1
+
+    monkeypatch.setattr(
+        "automation_tool.telegram_bot.send_message",
+        fake_send,
+    )
+    raw = """```json
+{
+  "context": {
+    "DXY": {"H4": "Bullish", "H1": "Trên POC", "M15": "Sideway", "Footprint_M15": "CVD"},
+    "XAUUSD": {"H4": "Premium", "H1": "CHoCH giảm"}
+  },
+  "phan_tich_cham_diem": "SCORE DETAIL",
+  "output_ngan_gon": "SHORT",
+  "prices": [
+    {"label": "plan_chinh", "value": 4709.0, "hop_luu": 78, "trade_line": "BUY LIMIT 4709.0 | SL 4699.0 | TP1 4740.0 | Lot 0.04"}
+  ]
+}
+```"""
+    send_openai_output_to_telegram(
+        bot_token="t",
+        chat_id="-1003996623506",
+        raw=raw,
+        default_parse_mode="HTML",
+        summary_chat_id=None,
+    )
+    assert len(calls) == 2
+    assert calls[0]["text"] == "SCORE DETAIL"
+    assert calls[1]["text"].startswith("SHORT")
+    assert "plan_chinh (hợp lưu: 78)" in calls[1]["text"]
+    sent = "\n".join(c["text"] for c in calls)
+    assert "DXY" not in sent
+    assert "Footprint_M15" not in sent
+
+
 def test_send_openai_json_phan_tich_cham_diem_routes(monkeypatch):
     calls: list[dict] = []
 
@@ -290,7 +331,10 @@ def test_send_openai_json_phan_tich_cham_diem_routes(monkeypatch):
     raw = """```json
 {
   "phan_tich_cham_diem": "SCORE DETAIL",
-  "output_ngan_gon": "SHORT"
+  "output_ngan_gon": "SHORT",
+  "prices": [
+    {"label": "plan_chinh", "value": 4709.0, "hop_luu": 82, "trade_line": "BUY LIMIT 4709.0 | SL 4699.0 | TP1 4740.0 | Lot 0.04"}
+  ]
 }
 ```"""
     send_openai_output_to_telegram(
@@ -305,6 +349,7 @@ def test_send_openai_json_phan_tich_cham_diem_routes(monkeypatch):
     assert calls[0]["text"] == "SCORE DETAIL"
     assert calls[1]["chat_id"] == "sum"
     assert "SHORT" in calls[1]["text"]
+    assert "plan_chinh (hợp lưu: 82)" in calls[1]["text"]
     assert "https://t.me/c/1234567890/42" in calls[1]["text"]
 
 

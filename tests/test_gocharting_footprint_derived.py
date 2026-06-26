@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -162,3 +163,52 @@ def test_json_file_header_and_body_enriches_combined(tmp_path: Path, monkeypatch
     assert "orderflow" in payload["candles"][0]
     assert "stacked_in_candle" in payload["candles"][0]["orderflow"]
     assert "orderflow" in header
+
+
+def test_json_file_header_and_body_drops_forming_candle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from automation_tool import gocharting_ws_decode as ws_decode
+
+    fp_dir = tmp_path / "footprint_images"
+    fp_dir.mkdir(parents=True)
+    json_path = fp_dir / "footprint_combined_5m.json"
+    closed_time = "Thu Jun 25 2026 11:25:00 GMT+0700"
+    forming_time = "Thu Jun 25 2026 11:30:00 GMT+0700"
+    json_path.write_text(
+        json.dumps(
+            {
+                "is_complete": False,
+                "fp_day": {"tick_size": 1, "display_tick_size": 1, "price_precision": 1},
+                "candles": [
+                    {
+                        "time_gmt7": closed_time,
+                        "ohlc": {"low": 4024.6, "high": 4024.8, "close": 4024.7},
+                        "footprint": [_level(4024.8, 14, 0)],
+                    },
+                    {
+                        "time_gmt7": forming_time,
+                        "ohlc": {"low": 4025.0, "high": 4025.2, "close": 4025.1},
+                        "footprint": [_level(4025.2, 10, 2)],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("FOOTPRINT_WS_MAX_CANDLES", "50")
+    fixed_now = datetime(2026, 6, 25, 11, 32)
+    original_drop = ws_decode.drop_forming_footprint_candle
+
+    def drop_with_fixed_now(doc: dict, **kwargs):
+        kwargs.setdefault("now", fixed_now)
+        return original_drop(doc, **kwargs)
+
+    monkeypatch.setattr(ws_decode, "drop_forming_footprint_candle", drop_with_fixed_now)
+
+    _header, body = _json_file_header_and_body(json_path, max_chars=100_000)
+    payload = json.loads(body)
+    assert len(payload["candles"]) == 1
+    assert payload["candles"][0]["time_gmt7"] == closed_time
+    assert forming_time not in body

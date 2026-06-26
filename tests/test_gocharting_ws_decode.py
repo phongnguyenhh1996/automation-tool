@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ from automation_tool.gocharting_ws_decode import (
     decode_ws_frames_dir,
     decode_ws_frames_merged,
     decode_ws_ohlc_frame,
+    drop_forming_footprint_candle,
     parse_proto_candle_datetime,
     parse_ws_binary_envelope,
     pick_best_footprint_document,
@@ -152,6 +154,56 @@ def test_trim_footprint_document_keeps_newest_candles() -> None:
     assert len(trimmed["candles"]) == 3
     assert trimmed["candles"][0]["time_gmt7"] == "t7"
     assert trimmed["candles"][-1]["time_gmt7"] == "t9"
+
+
+def test_drop_forming_footprint_candle_removes_current_bar() -> None:
+    doc = {
+        "is_complete": False,
+        "candles": [
+            {"time_gmt7": "Thu Jun 25 2026 11:25:00 GMT+0700"},
+            {"time_gmt7": "Thu Jun 25 2026 11:30:00 GMT+0700"},
+        ],
+    }
+    now = datetime(2026, 6, 25, 11, 32)
+    out = drop_forming_footprint_candle(doc, interval="5m", now=now)
+    assert len(out["candles"]) == 1
+    assert out["candles"][-1]["time_gmt7"] == "Thu Jun 25 2026 11:25:00 GMT+0700"
+
+
+def test_drop_forming_footprint_candle_keeps_when_closed() -> None:
+    doc = {
+        "is_complete": False,
+        "candles": [
+            {"time_gmt7": "Thu Jun 25 2026 11:25:00 GMT+0700"},
+            {"time_gmt7": "Thu Jun 25 2026 11:30:00 GMT+0700"},
+        ],
+    }
+    now = datetime(2026, 6, 25, 11, 36)
+    out = drop_forming_footprint_candle(doc, interval="5m", now=now)
+    assert len(out["candles"]) == 2
+    assert out["candles"][-1]["time_gmt7"] == "Thu Jun 25 2026 11:30:00 GMT+0700"
+
+
+def test_drop_forming_footprint_candle_fallback_is_complete() -> None:
+    doc = {
+        "is_complete": False,
+        "candles": [
+            {"time_gmt7": "closed"},
+            {"time_gmt7": "unparsable"},
+        ],
+    }
+    out = drop_forming_footprint_candle(doc, interval="5m", now=datetime(2026, 6, 25, 11, 32))
+    assert len(out["candles"]) == 1
+    assert out["candles"][-1]["time_gmt7"] == "closed"
+
+
+def test_drop_forming_footprint_candle_noop_single_candle() -> None:
+    doc = {
+        "is_complete": False,
+        "candles": [{"time_gmt7": "Thu Jun 25 2026 11:30:00 GMT+0700"}],
+    }
+    out = drop_forming_footprint_candle(doc, interval="5m", now=datetime(2026, 6, 25, 11, 32))
+    assert out is doc
 
 
 def test_slim_footprint_combined_document() -> None:

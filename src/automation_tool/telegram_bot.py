@@ -15,7 +15,10 @@ import httpx
 
 _log = logging.getLogger(__name__)
 
-from automation_tool.openai_analysis_json import parse_analysis_from_openai_text
+from automation_tool.openai_analysis_json import (
+    format_plan_lines_for_telegram,
+    parse_analysis_from_openai_text,
+)
 from automation_tool.zones_paths import resolve_second_flow, session_slot_display_vn
 
 TELEGRAM_MAX_MESSAGE = 4096
@@ -516,16 +519,30 @@ def parse_openai_telegram_payload(
     return merged if merged else None
 
 
+def _append_plan_lines_to_ngan_gon(ngan_gon: str, raw: str) -> str:
+    """Gắn plan lines từ ``prices`` (nếu có trong ``raw``) vào tin tóm tắt."""
+    payload = parse_analysis_from_openai_text(raw)
+    if payload is None:
+        return ngan_gon
+    plan_lines = format_plan_lines_for_telegram(payload)
+    if not plan_lines:
+        return ngan_gon
+    return "\n\n".join(part for part in ((ngan_gon or "").strip(), plan_lines) if part)
+
+
 def split_analysis_json_chi_tiet_ngan_gon(raw: str) -> tuple[str, str] | None:
     """
     Khi model trả JSON phân tích có ``phan_tich_cham_diem`` / ``output_ngan_gon`` (không dùng marker).
     Trả ``(chi_tiet, ngan_gon)`` nếu có ít nhất một chuỗi không rỗng; ngược lại ``None``.
+
+    ``context`` (morning snapshot) không được đưa vào output; ``prices`` được gắn vào
+    ``ngan_gon`` dưới dạng plan lines (giống luồng ``update``).
     """
     p = parse_analysis_from_openai_text(raw)
     if p is None:
         return None
     ct = (p.phan_tich_cham_diem or p.out_chi_tiet or "").strip()
-    ng = (p.output_ngan_gon or "").strip()
+    ng = _append_plan_lines_to_ngan_gon((p.output_ngan_gon or "").strip(), raw)
     if not ct and not ng:
         return None
     return (ct, ng)
@@ -554,7 +571,7 @@ def split_output_chi_tiet_ngan_gon(raw: str) -> tuple[str, str] | None:
     if not m2:
         return None
     chi_tiet = after_first[: m2.start()].strip()
-    ngan_gon = after_first[m2.end() :].strip()
+    ngan_gon = _append_plan_lines_to_ngan_gon(after_first[m2.end() :].strip(), raw)
     if not chi_tiet and not ngan_gon:
         return None
     return (chi_tiet, ngan_gon)
@@ -1244,22 +1261,21 @@ def send_openai_output_to_telegram(
     :func:`parse_openai_telegram_payload`) or legacy free-form text using
     ``default_parse_mode`` (same behavior as before JSON contract).
 
-    If the text contains both detailed and short parts (markers or JSON) and at
-    least one of ``detail_chat_id`` or ``summary_chat_id`` is set, the detailed
-    block goes to ``detail_chat_id`` if set, else ``chat_id``; the short block
-    goes to ``summary_chat_id`` if set, else ``chat_id``. The short message can
-    include a link to the detailed message (``t.me/c/...``).
+    When the text contains both detailed and short parts (Schema A JSON fields or
+    ``[OUTPUT_*]`` markers), only those blocks are sent — not the full JSON shell
+    (e.g. ``context`` from morning analysis). The detailed block goes to
+    ``detail_chat_id`` if set, else ``chat_id``; the short block goes to
+    ``summary_chat_id`` if set, else ``chat_id``. The short message includes ``prices``
+    as plan lines when present. It can also include a link to the detailed message
+    (``t.me/c/...``).
     """
     parsed = parse_openai_telegram_payload(raw)
     if parsed is None:
         d_opt = (detail_chat_id or "").strip()
         s_opt = (summary_chat_id or "").strip()
-        want_split = bool(d_opt or s_opt)
-        dual: tuple[str, str] | None = None
-        if want_split:
-            dual = split_analysis_json_chi_tiet_ngan_gon(raw)
-            if dual is None:
-                dual = split_output_chi_tiet_ngan_gon(raw)
+        dual = split_analysis_json_chi_tiet_ngan_gon(raw)
+        if dual is None:
+            dual = split_output_chi_tiet_ngan_gon(raw)
         if dual is not None:
             chi_tiet, ngan_gon = dual
             detail_target = d_opt or chat_id

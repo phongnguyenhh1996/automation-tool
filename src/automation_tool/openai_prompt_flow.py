@@ -247,12 +247,15 @@ def _json_file_header_and_body(
             and path.suffix.lower() == ".json"
         ):
             from automation_tool.gocharting_ws_decode import (
+                drop_forming_footprint_candle,
                 footprint_ws_max_candles_from_cfg,
                 trim_footprint_document,
             )
             from automation_tool.images import _default_gocharting_cfg
 
             cfg = _default_gocharting_cfg()
+            iv = path.stem.replace("footprint_combined_", "")
+            data = drop_forming_footprint_candle(data, interval=iv)
             data = trim_footprint_document(
                 data,
                 max_candles=footprint_ws_max_candles_from_cfg(cfg),

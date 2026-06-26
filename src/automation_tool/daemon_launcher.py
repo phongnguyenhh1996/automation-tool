@@ -187,6 +187,44 @@ def _signal_daemon_plan_stop(pid: int) -> None:
         os.kill(pid, signal.SIGTERM)
 
 
+def stop_daemon_plan_for_shard(shard_path: Path) -> bool:
+    """
+    Dừng ``daemon-plan`` gắn với một shard (nếu PID còn sống).
+
+    Returns:
+        ``True`` nếu đã gửi tín hiệu dừng tới một process đang chạy.
+    """
+    shard_path = shard_path.resolve()
+    zones_dir = shard_path.parent.resolve()
+    pid_file = _pid_path(zones_dir, shard_path)
+    if not pid_file.is_file():
+        return False
+    pid = _read_pid(pid_file)
+    if pid is None:
+        try:
+            pid_file.unlink()
+        except OSError:
+            pass
+        return False
+    if not _pid_alive(pid):
+        try:
+            pid_file.unlink()
+        except OSError:
+            pass
+        return False
+    try:
+        _signal_daemon_plan_stop(pid)
+        _log.info("[launcher] stop daemon-plan pid=%s shard=%s", pid, shard_path.name)
+    except OSError as e:
+        _log.warning("stop daemon-plan pid %s: %s", pid, e)
+        return False
+    try:
+        pid_file.unlink()
+    except OSError:
+        pass
+    return True
+
+
 def stop_daemon_plans_in_zones(
     zones_dir: Path,
     *,
