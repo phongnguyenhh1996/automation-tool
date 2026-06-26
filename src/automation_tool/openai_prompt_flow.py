@@ -59,9 +59,11 @@ _GOCHARTING_BID_ASK_HINT = (
 
 _GOCHARTING_CHART_READ_GUIDE = (
     "Hướng dẫn đọc footprint GoCharting (JSON combined + overview PNG):\n"
-    "- footprint[].buy.volume / footprint[].sell.volume = BID/ASK volume theo price level.\n"
-    "- totals / ending_summary: delta, CVD, high/low theo nến.\n"
-    "- ohlc trên mỗi candle khớp TS/V2; CSV GoCharting bổ sung CVD/delta khi cần.\n"
+    "PNG overview/detail (xác nhận visual hoặc khi JSON chưa đủ):\n"
+    "- Box có border #FF6600 ở detail view = volume POC.\n"
+    "- Line ngang màu #FA6578 = POC.\n"
+    "- Line ngang màu #17CE1B = VAH.\n"
+    "- Line ngang màu #5B2D1B = VAL.\n"
 )
 
 _GOCHARTING_TRADE_MANAGEMENT_SUFFIX = (
