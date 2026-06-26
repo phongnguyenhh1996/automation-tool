@@ -778,6 +778,30 @@ async def tv_wait_for_indicators_loaded_async(page: Page, tv: dict[str, Any]) ->
     )
 
 
+async def tv_snapshot_download_capture_async(
+    page: Page,
+    tv: dict[str, Any],
+    charts_dir: Path,
+    stamp: str,
+    symbol_key: str,
+    interval_slug: str,
+    *,
+    dest_path: Optional[Path] = None,
+) -> Path:
+    shortcut = (tv.get("tradingview_snapshot_download_shortcut") or "Control+Alt+S").strip()
+    timeout_ms = int(tv.get("tradingview_snapshot_download_timeout_ms", 15_000))
+    after_ms = int(tv.get("after_tradingview_snapshot_download_ms", 300))
+    dest = dest_path or (charts_dir / f"{stamp}_tradingview_{symbol_key}_{interval_slug}.png")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    async with page.expect_download(timeout=timeout_ms) as dl_info:
+        await page.keyboard.press(shortcut)
+    download = await dl_info.value
+    await download.save_as(dest)
+    if after_ms > 0:
+        await page.wait_for_timeout(after_ms)
+    return dest
+
+
 async def tv_snapshot_url_capture_async(
     page: Page,
     tv: dict[str, Any],
@@ -842,7 +866,7 @@ async def tv_capture_one_chart_frame_async(
     dest_url_path: Optional[Path] = None,
 ) -> Path:
     await tv_wait_for_indicators_loaded_async(page, tv)
-    if bool(tv.get("tradingview_snapshot_url_flow", True)):
+    if bool(tv.get("tradingview_snapshot_url_flow", False)):
         return await tv_snapshot_url_capture_async(
             page,
             tv,
@@ -851,6 +875,15 @@ async def tv_capture_one_chart_frame_async(
             symbol_key,
             interval_slug,
             dest_url_path=dest_url_path,
+        )
+    if bool(tv.get("tradingview_snapshot_download_flow", True)):
+        return await tv_snapshot_download_capture_async(
+            page,
+            tv,
+            charts_dir,
+            stamp,
+            symbol_key,
+            interval_slug,
         )
     fs_sel = (tv.get("fullscreen_button_selector") or "#header-toolbar-fullscreen").strip()
     await page.locator(fs_sel).first.wait_for(state="visible", timeout=45_000)

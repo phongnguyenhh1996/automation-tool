@@ -3562,6 +3562,33 @@ def _wait_tradingview_indicators_loaded(page, tv: dict[str, Any]) -> None:
     )
 
 
+def _tradingview_snapshot_download_capture(
+    page,
+    tv: dict[str, Any],
+    charts_dir: Path,
+    stamp: str,
+    symbol_key: str,
+    interval_slug: str,
+    *,
+    dest_path: Optional[Path] = None,
+) -> Path:
+    """
+    Chart ready → ``Control+Alt+S`` (configurable) → save browser download as PNG for OpenAI.
+    """
+    shortcut = (tv.get("tradingview_snapshot_download_shortcut") or "Control+Alt+S").strip()
+    timeout_ms = int(tv.get("tradingview_snapshot_download_timeout_ms", 15_000))
+    after_ms = int(tv.get("after_tradingview_snapshot_download_ms", 300))
+    dest = dest_path or (charts_dir / f"{stamp}_tradingview_{symbol_key}_{interval_slug}.png")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with page.expect_download(timeout=timeout_ms) as dl_info:
+        page.keyboard.press(shortcut)
+    download = dl_info.value
+    download.save_as(dest)
+    if after_ms > 0:
+        page.wait_for_timeout(after_ms)
+    return dest
+
+
 def _tradingview_snapshot_url_capture(
     page,
     tv: dict[str, Any],
@@ -3632,9 +3659,9 @@ def _tradingview_capture_one_chart_frame(
     dest_path: Optional[Path] = None,
     dest_url_path: Optional[Path] = None,
 ) -> Path:
-    """One TradingView frame: snapshot-URL flow (default) or legacy fullscreen PNG."""
+    """One TradingView frame: download shortcut (default), snapshot URL, or legacy fullscreen PNG."""
     _wait_tradingview_indicators_loaded(page, tv)
-    if bool(tv.get("tradingview_snapshot_url_flow", True)):
+    if bool(tv.get("tradingview_snapshot_url_flow", False)):
         return _tradingview_snapshot_url_capture(
             page,
             tv,
@@ -3643,6 +3670,16 @@ def _tradingview_capture_one_chart_frame(
             symbol_key,
             interval_slug,
             dest_url_path=dest_url_path,
+        )
+    if bool(tv.get("tradingview_snapshot_download_flow", True)):
+        return _tradingview_snapshot_download_capture(
+            page,
+            tv,
+            charts_dir,
+            stamp,
+            symbol_key,
+            interval_slug,
+            dest_path=dest_path,
         )
     return _tradingview_fullscreen_screenshot_then_escape(
         page,
@@ -3832,9 +3869,9 @@ def _run_tradingview_screenshot_flow(
 ) -> list[Path]:
     """
     Open TradingView: optional login, dark mode, then either multi-shot (watchlist →
-    symbol → interval → snapshot toolbar → open image in new tab → save ``.url``, per
-    capture_plan) or legacy single frame. Set ``tradingview_snapshot_url_flow: false``
-    for fullscreen + Playwright PNG instead.
+    symbol → interval → ``Control+Alt+S`` download PNG (default), per capture_plan) or
+    legacy single frame. Set ``tradingview_snapshot_url_flow: true`` for snapshot URL;
+    set ``tradingview_snapshot_download_flow: false`` for fullscreen + Playwright PNG.
     """
     tw = int(tv.get("viewport_width", 0) or 0)
     th = int(tv.get("viewport_height", 0) or 0)
@@ -3875,9 +3912,9 @@ def _run_tradingview_screenshot_flow(
 
     legacy_png = charts_dir / f"{stamp}_tradingview_fullscreen.png"
     legacy_url = charts_dir / f"{stamp}_tradingview_fullscreen.url"
-    if bool(tv.get("tradingview_snapshot_url_flow", True)):
-        _tradingview_reset_chart_position(page, tv)
-        _tradingview_ensure_required_indicators(page, tv)
+    _tradingview_reset_chart_position(page, tv)
+    _tradingview_ensure_required_indicators(page, tv)
+    if bool(tv.get("tradingview_snapshot_url_flow", False)):
         dest = _tradingview_capture_one_chart_frame(
             page,
             tv,
@@ -3888,8 +3925,6 @@ def _run_tradingview_screenshot_flow(
             dest_url_path=legacy_url,
         )
     else:
-        _tradingview_reset_chart_position(page, tv)
-        _tradingview_ensure_required_indicators(page, tv)
         dest = _tradingview_capture_one_chart_frame(
             page,
             tv,

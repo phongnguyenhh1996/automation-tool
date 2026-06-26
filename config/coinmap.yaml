@@ -253,9 +253,14 @@ tradingview_capture:
   dark_mode_menu_open_ms: 500
   dark_mode_after_theme_click_ms: 600
   intervals_toolbar_id: "header-toolbar-intervals"
-  # Multi-shot: watchlist → symbol → each interval → toolbar screenshot → open image in new tab → save .url (default).
-  # Set tradingview_snapshot_url_flow: false to use legacy fullscreen + Playwright PNG.
-  tradingview_snapshot_url_flow: true
+  # Multi-shot: watchlist → symbol → interval → Ctrl+Alt+S download PNG (default).
+  # Set tradingview_snapshot_url_flow: true for legacy snapshot URL (.url for OpenAI).
+  # Set tradingview_snapshot_download_flow: false for legacy fullscreen + Playwright PNG.
+  tradingview_snapshot_url_flow: false
+  tradingview_snapshot_download_flow: true
+  tradingview_snapshot_download_shortcut: "Control+Alt+S"
+  tradingview_snapshot_download_timeout_ms: 15000
+  after_tradingview_snapshot_download_ms: 300
   screenshot_button_selector: "#header-toolbar-screenshot"
   snapshot_open_in_new_tab_selector: '[data-qa-id="open-image-in-new-tab"]'
   snapshot_image_selector: "img.tv-snapshot-image"
