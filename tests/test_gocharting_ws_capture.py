@@ -4,6 +4,7 @@ from automation_tool.gocharting_ws_decode import (
     footprint_ws_enabled,
     footprint_ws_interval_specs,
     footprint_ws_max_candles,
+    footprint_ws_openai_max_candles_from_cfg,
 )
 
 
@@ -16,6 +17,12 @@ def test_footprint_ws_enabled() -> None:
 def test_footprint_ws_max_candles_from_cfg() -> None:
     cfg = {"footprint_ws": {"max_candles": 50}}
     assert footprint_ws_max_candles(cfg) == 50
+
+
+def test_footprint_ws_openai_max_candles_independent_of_capture() -> None:
+    cfg = {"footprint_ws": {"max_candles": 200, "openai_max_candles": 50}}
+    assert footprint_ws_max_candles(cfg) == 200
+    assert footprint_ws_openai_max_candles_from_cfg(cfg) == 50
 
 
 def test_footprint_ws_interval_specs() -> None:

@@ -752,14 +752,14 @@ def compute_footprint_level_prices(
     return [round(top - i * block_size, 1) for i in range(n)]
 
 
-DEFAULT_FOOTPRINT_OPENAI_MAX_CANDLES = 100
+DEFAULT_FOOTPRINT_OPENAI_MAX_CANDLES = 50
 
 
 def footprint_openai_max_candles() -> int:
-    raw = os.getenv("FOOTPRINT_OPENAI_MAX_CANDLES", "").strip()
-    if raw.isdigit():
-        return max(1, int(raw))
-    return DEFAULT_FOOTPRINT_OPENAI_MAX_CANDLES
+    from automation_tool.gocharting_ws_decode import footprint_ws_openai_max_candles_from_cfg
+    from automation_tool.images import _default_gocharting_cfg
+
+    return footprint_ws_openai_max_candles_from_cfg(_default_gocharting_cfg())
 
 
 def trim_footprint_bid_ask_document(

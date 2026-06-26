@@ -238,7 +238,7 @@ def _json_file_header_and_body(
         ):
             from automation_tool.gocharting_ws_decode import (
                 drop_forming_footprint_candle,
-                footprint_ws_max_candles_from_cfg,
+                footprint_ws_openai_max_candles_from_cfg,
                 trim_footprint_document,
             )
             from automation_tool.images import _default_gocharting_cfg
@@ -248,7 +248,7 @@ def _json_file_header_and_body(
             data = drop_forming_footprint_candle(data, interval=iv)
             data = trim_footprint_document(
                 data,
-                max_candles=footprint_ws_max_candles_from_cfg(cfg),
+                max_candles=footprint_ws_openai_max_candles_from_cfg(cfg),
             )
             from automation_tool.gocharting_footprint_derived import (
                 enrich_footprint_combined_document,
