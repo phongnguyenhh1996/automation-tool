@@ -17,22 +17,18 @@ import httpx
 
 from automation_tool.config import Settings, resolved_openai_model
 from automation_tool.openai_prompt_flow import run_text_followup_responses
-from automation_tool.state_files import get_tim_scalp_success_count, increment_tim_scalp_success
 from automation_tool.telegram_bot import (
     download_telegram_images,
     image_file_ids_from_message,
     send_message,
     send_openai_output_to_telegram,
 )
-from automation_tool.zones_paths import session_slot_display_vn, session_slot_now_hcm
 from automation_tool.zones_state import mark_zone_status_loai_by_id
 
 _log = logging.getLogger("automation_tool.telegram_listen")
 
 _EXPLAIN_FOLLOWUP_MODEL = "gpt-5.4-mini"
 _ASK_HIGH_FOLLOWUP_MODEL = "gpt-5.4"
-_TIM_SCALP_MAX_SUCCESS_SANG_CHIEU = 2
-_TIM_SCALP_HCM_TZ = "Asia/Ho_Chi_Minh"
 
 
 @dataclass(frozen=True)
@@ -185,35 +181,6 @@ def _parse_symbols_from_args_text(args_text: str) -> Optional[str]:
         seen.add(p)
         out.append(p)
     return ",".join(out)
-
-
-def _tim_scalp_slot_context() -> tuple[str, str]:
-    """Return ``(slot, slot_key)`` for the current VN session (fixed at command start)."""
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-
-    slot = session_slot_now_hcm(tz_name=_TIM_SCALP_HCM_TZ)
-    try:
-        tz = ZoneInfo(_TIM_SCALP_HCM_TZ)
-    except Exception:
-        tz = ZoneInfo("UTC")
-    now = datetime.now(tz)
-    return slot, f"{now.date().isoformat()}-{slot}"
-
-
-def _tim_scalp_run_allowed(slot: str, slot_key: str) -> tuple[bool, str]:
-    """Slot ``toi`` không giới hạn; ``sang``/``chieu`` tối đa 2 lần thành công."""
-    if slot == "toi":
-        return True, ""
-    count = get_tim_scalp_success_count(slot_key=slot_key)
-    if count < _TIM_SCALP_MAX_SUCCESS_SANG_CHIEU:
-        return True, ""
-    label = session_slot_display_vn(slot) or slot
-    return (
-        False,
-        f"⛔ /tim-scalp bị giới hạn: slot {label} đã chạy thành công "
-        f"{count}/{_TIM_SCALP_MAX_SUCCESS_SANG_CHIEU} lần.",
-    )
 
 
 def _send_status(settings: Settings, chat_id: str, text: str) -> None:
@@ -491,70 +458,6 @@ def _run_update_pipeline_in_thread(
             _PROCS[:] = [p for p in _PROCS if p.popen.poll() is None]
 
 
-def _run_update_scalp_pipeline_in_thread(
-    *,
-    settings: Settings,
-    reply_chat_id: str,
-    update_main_symbol: str,
-    trigger_message_id: Optional[int],
-    slot: str,
-    slot_key: str,
-) -> None:
-    root = _project_root()
-    stamp = time.strftime("%Y-%m-%d %H:%M:%S")
-    ref = f"(msg_id={trigger_message_id})" if trigger_message_id else ""
-    _send_status(
-        settings,
-        reply_chat_id,
-        f"▶️ /tim-scalp received {ref}\nStarting update-scalp pipeline ({update_main_symbol}) at {stamp}.",
-    )
-
-    if sys.platform == "win32":
-        cmd = ["cmd", "/c", "run_update_scalp.bat"]
-    else:
-        cmd = [
-            sys.executable,
-            "-m",
-            "automation_tool.cli",
-            "update-scalp",
-            "--main-symbol",
-            update_main_symbol,
-        ]
-
-    try:
-        mp = _spawn_managed_process(name="update-scalp", cmd=cmd, cwd=root)
-        out, _ = mp.popen.communicate()
-        code = int(mp.popen.returncode or 0)
-        if code == 0:
-            new_count = increment_tim_scalp_success(slot=slot, slot_key=slot_key)
-            extra = ""
-            if slot in ("sang", "chieu"):
-                label = session_slot_display_vn(slot) or slot
-                extra = (
-                    f" ({new_count}/{_TIM_SCALP_MAX_SUCCESS_SANG_CHIEU} lần thành công "
-                    f"trong slot {label})"
-                )
-            _send_status(
-                settings,
-                reply_chat_id,
-                f"✅ /tim-scalp finished successfully (exit code 0).{extra}",
-            )
-        else:
-            tail = (out or "").strip()
-            if len(tail) > 1500:
-                tail = tail[-1500:]
-            msg = f"❌ /tim-scalp failed (exit code {code})."
-            if tail:
-                msg += "\n\nLast output:\n" + tail
-            _send_status(settings, reply_chat_id, msg)
-    except Exception:
-        # Do not post crash details to TELEGRAM_CHAT_ID (noise / sensitive); see local logs.
-        _log.exception("tim-scalp pipeline crashed")
-    finally:
-        with _PROC_LOCK:
-            _PROCS[:] = [p for p in _PROCS if p.popen.poll() is None]
-
-
 def _run_analyze_many_pipeline_in_thread(
     *,
     settings: Settings,
@@ -762,30 +665,6 @@ def run_telegram_listener(
                             },
                             daemon=True,
                             name="telegram-update-runner",
-                        )
-                        t.start()
-                    elif cmd == "tim-scalp":
-                        scalp_slot, scalp_slot_key = _tim_scalp_slot_context()
-                        allowed, deny_msg = _tim_scalp_run_allowed(scalp_slot, scalp_slot_key)
-                        if not allowed:
-                            _send_status(settings, listen_chat_id, deny_msg)
-                            continue
-                        mid = _message_id_from_envelope(env)
-                        thread_id = _message_thread_id_from_envelope(env)
-                        t = threading.Thread(
-                            target=_run_update_scalp_pipeline_in_thread,
-                            kwargs={
-                                "settings": settings,
-                                "reply_chat_id": listen_chat_id,
-                                "update_main_symbol": (params.update_main_symbol or "XAUUSD")
-                                .strip()
-                                .upper(),
-                                "trigger_message_id": mid,
-                                "slot": scalp_slot,
-                                "slot_key": scalp_slot_key,
-                            },
-                            daemon=True,
-                            name="telegram-update-scalp-runner",
                         )
                         t.start()
                     elif cmd == "full":
