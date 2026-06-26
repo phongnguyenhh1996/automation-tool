@@ -42,7 +42,7 @@ def test_gocharting_export_stem() -> None:
 
 
 def test_update_scalp_gocharting_detail_history_steps() -> None:
-    assert GOCHARTING_UPDATE_SCALP_DETAIL_HISTORY_STEPS == 0
+    assert GOCHARTING_UPDATE_SCALP_DETAIL_HISTORY_STEPS == 1
     assert GOCHARTING_ALL_FLOW_WS_DETAIL_BACK_STEPS == 1
 
 

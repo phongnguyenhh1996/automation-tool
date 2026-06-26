@@ -3347,6 +3347,7 @@ def cmd_all(args: argparse.Namespace) -> None:
             stamp_override=stamp_pre,
             clear_charts_before_capture=True,
             capture_symbols=("DXY", main_sym),
+            detail_history_steps=GOCHARTING_ALL_FLOW_WS_DETAIL_BACK_STEPS,
             mt5_accounts_json=_resolved_mt5_accounts_json(args),
         )
         paths.extend(gc_paths)
@@ -4173,6 +4174,17 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
     )
     scalp_openai_model = resolved_openai_model(s, getattr(args, "model", None))
 
+    scalp_gocharting_openai_kw: dict[str, object] = {}
+    if use_gc:
+        gc_cfg = load_gocharting_yaml(gc_yaml)
+        from automation_tool.images import _footprint_ws_active
+
+        scalp_gocharting_openai_kw["gocharting_cfg"] = gc_cfg
+        if _footprint_ws_active(gc_cfg):
+            scalp_gocharting_openai_kw["gocharting_detail_max_back_steps"] = (
+                GOCHARTING_UPDATE_SCALP_DETAIL_HISTORY_STEPS
+            )
+
     def _openai_scalp_work() -> tuple[str, str]:
         return run_single_followup_responses(
             api_key=s.openai_api_key,
@@ -4186,6 +4198,7 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
             include=s.openai_responses_include,
             model=scalp_openai_model,
             chart_stamp=stamp,
+            **scalp_gocharting_openai_kw,
         )
 
     try:

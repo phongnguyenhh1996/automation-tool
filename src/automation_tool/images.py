@@ -563,6 +563,7 @@ def gocharting_detail_openai_png_paths_for_csv(
     *,
     crop_width_thirds: bool | None = None,
     zoom_only: bool = False,
+    max_back_steps: int | None = None,
 ) -> list[Path]:
     """Crop panels for detail PNG siblings of a GoCharting CSV export."""
     if crop_width_thirds is None:
@@ -571,7 +572,14 @@ def gocharting_detail_openai_png_paths_for_csv(
         zoom = gocharting_detail_zoom_png_path_for_csv(csv_path)
         detail_paths = [zoom] if zoom is not None else []
     else:
-        detail_paths = gocharting_detail_png_paths_for_csv(csv_path)
+        slot = _gocharting_slot_parts_from_csv(csv_path)
+        if slot is None:
+            detail_paths = []
+        else:
+            charts_dir, stamp, sym, iv = slot
+            detail_paths = gocharting_detail_png_paths(
+                charts_dir, stamp, sym, iv, max_back_steps=max_back_steps
+            )
     out: list[Path] = []
     for dp in detail_paths:
         out.extend(
@@ -672,11 +680,13 @@ def openai_payloads_for_attachment_paths(
     crop_width_thirds: bool | None = None,
     gocharting_cfg: dict | None = None,
     gocharting_detail_zoom_only: bool = False,
+    gocharting_detail_max_back_steps: int | None = None,
 ) -> list[ChartOpenAIPayload]:
     """
     Build OpenAI payloads from JSON/CSV attachment paths; for each Coinmap JSON, append
     sibling PNG immediately after (per-interval or M15+M5 for merged). For GoCharting CSV,
-    append overview PNG then detail-zoom PNGs unless ``footprint_ws.enabled``.
+    append overview PNG then detail-zoom PNGs unless ``footprint_ws.enabled`` (unless
+    ``gocharting_detail_max_back_steps`` is set while WS is active).
     """
     ws_active = _footprint_ws_active(gocharting_cfg)
     out: list[ChartOpenAIPayload] = []
@@ -691,6 +701,16 @@ def openai_payloads_for_attachment_paths(
                     p,
                     crop_width_thirds=crop_width_thirds,
                     zoom_only=gocharting_detail_zoom_only,
+                ):
+                    out.append(("image", dp))
+            elif (
+                gocharting_detail_max_back_steps is not None
+                and gocharting_detail_max_back_steps > 0
+            ):
+                for dp in gocharting_detail_openai_png_paths_for_csv(
+                    p,
+                    crop_width_thirds=crop_width_thirds,
+                    max_back_steps=gocharting_detail_max_back_steps,
                 ):
                     out.append(("image", dp))
             continue

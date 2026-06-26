@@ -1073,6 +1073,8 @@ def run_single_followup_responses(
     model: str | None = None,
     chart_stamp: str | None = None,
     gocharting_detail_zoom_only: bool = False,
+    gocharting_detail_max_back_steps: int | None = None,
+    gocharting_cfg: dict | None = None,
 ) -> tuple[str, str]:
     """
     One multimodal user turn: optional ``morning_snapshot_path`` + Coinmap JSON paths,
@@ -1136,10 +1138,12 @@ def run_single_followup_responses(
 
     from automation_tool.images import _default_gocharting_cfg
 
+    gc_cfg = gocharting_cfg if gocharting_cfg is not None else _default_gocharting_cfg()
     json_payloads = openai_payloads_for_attachment_paths(
         paths,
-        gocharting_cfg=_default_gocharting_cfg(),
+        gocharting_cfg=gc_cfg,
         gocharting_detail_zoom_only=gocharting_detail_zoom_only,
+        gocharting_detail_max_back_steps=gocharting_detail_max_back_steps,
     )
     content = _build_mixed_chart_user_content(
         user_text,

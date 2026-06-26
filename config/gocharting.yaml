@@ -50,6 +50,34 @@ overview:
   zoom_out_clicks: 2
   zoom_click_delay_ms: 500
 
+detail_chart:
+  page_url: "https://gocharting.com/terminal/chart/orlk0N-Da"
+  # CSS page zoom on the detail tab only (100 = no zoom).
+  browser_zoom_percent: 100
+  # Split each detail PNG into 3 horizontal panels for OpenAI (left / center / right).
+  crop_width_thirds: false
+  # Detail tab only — omit viewport_width to use 2× session viewport_width (1440 → 2880).
+  viewport_width: 1920
+  viewport_height: 1920
+  refresh_button_id: "refresh-button"
+  zoom_in_button_id: "zoomIn-button"
+  zoom_clicks: 4
+  zoom_click_delay_ms: 500
+  chart_root_id: "chart-root-0"
+  pan_start_x_ratio: 0.2
+  pan_end_x_ratio: 0.9
+  pan_y_ratio: 0.5
+  pan_drag_steps: 12
+  history_steps: 1
+  # Per-interval overrides (merged on top of keys above).
+  by_interval:
+    15m:
+      zoom_clicks: 4
+      history_steps: 1
+    5m:
+      zoom_clicks: 4
+      history_steps: 1
+
 capture_plan:
   - symbol: DXY
     intervals: ["15m"]
@@ -84,10 +112,10 @@ footprint_ws:
   # block_size = tick_size × block_multiplier (must match GoCharting Tick Manager Block setting).
   tick_size: 0.1
   block_multiplier: 2
-  max_candles: 200
+  max_candles: 50
   wait_ms: 45000
-  export_format: combined
-  mt5_spot: true
+  export_format: raw
+  mt5_spot: false
   derived:
     enabled: true
     imbalance_enabled: true
