@@ -24,9 +24,11 @@ from automation_tool.images import (
     gocharting_main_interval_csv_path,
     gocharting_png_path_for_csv,
     latest_chart_stamp,
+    openai_footprint_debug_json_path,
     openai_payload_max_for_order,
     ordered_chart_images,
     ordered_chart_openai_payloads,
+    persist_openai_footprint_json_debug,
 )
 
 
@@ -274,6 +276,30 @@ def test_append_footprint_json_paths_prefers_combined(tmp_path: Path) -> None:
     )
     assert combined in paths
     assert bid_ask not in paths
+
+
+def test_persist_openai_footprint_json_debug_writes_stamp_files(tmp_path: Path) -> None:
+    charts = tmp_path / "charts"
+    fp_dir = charts / "footprint_images"
+    fp_dir.mkdir(parents=True)
+    stamp = "20260616_120000"
+    src = fp_dir / "footprint_bid_ask_5m.json"
+    src.write_text(
+        '{"symbol":"COMEX:GC1!","timeframe":"5m","candles":[{"time":"10:05","price_levels":[{"bid":1,"ask":2}]}]}\n',
+        encoding="utf-8",
+    )
+    ocr_cfg = {"footprint_ws": {"enabled": False}}
+    written = persist_openai_footprint_json_debug(
+        charts,
+        stamp=stamp,
+        chart_stamp=stamp,
+        gocharting_cfg=ocr_cfg,
+    )
+    assert len(written) == 1
+    dest = openai_footprint_debug_json_path(charts, stamp, "footprint_bid_ask_5m")
+    assert written[0] == dest
+    assert dest.is_file()
+    assert dest.parent == charts
 
 
 def test_gocharting_detail_png_paths_order(tmp_path: Path) -> None:

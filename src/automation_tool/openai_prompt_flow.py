@@ -221,6 +221,63 @@ def _csv_file_header_and_body(path: Path, *, max_chars: int) -> tuple[str, str]:
     return header, body
 
 
+def prepare_footprint_json_for_openai(
+    path: Path,
+    data: dict[str, Any],
+    *,
+    chart_stamp: str | None = None,
+    gocharting_cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """
+    GoCharting footprint JSON after trim / aggregate / enrich — same document sent to OpenAI.
+    Non-footprint paths are returned unchanged.
+    """
+    name = path.name
+    if name.startswith("footprint_combined_") and path.suffix.lower() == ".json":
+        from automation_tool.gocharting_ws_decode import (
+            aggregate_footprint_combined_document,
+            drop_forming_footprint_candle,
+            footprint_ws_max_candles_from_cfg,
+            trim_footprint_document,
+        )
+        from automation_tool.gocharting_footprint_derived import (
+            enrich_footprint_combined_document,
+            footprint_derived_enabled,
+        )
+        from automation_tool.images import _default_gocharting_cfg
+
+        cfg = gocharting_cfg if gocharting_cfg is not None else _default_gocharting_cfg()
+        iv = path.stem.replace("footprint_combined_", "")
+        out = drop_forming_footprint_candle(data, interval=iv)
+        out = trim_footprint_document(
+            out,
+            max_candles=footprint_ws_max_candles_from_cfg(cfg),
+        )
+        out = aggregate_footprint_combined_document(out, cfg=cfg)
+        if footprint_derived_enabled(cfg):
+            out = enrich_footprint_combined_document(out, cfg=cfg)
+        return out
+    if name.startswith("footprint_bid_ask_") and path.suffix.lower() == ".json":
+        from automation_tool.gocharting_footprint_ocr import (
+            charts_dir_from_footprint_json_path,
+            enrich_footprint_bid_ask_document,
+            resolve_gocharting_csv_for_footprint_json,
+            trim_footprint_bid_ask_document,
+        )
+
+        out = trim_footprint_bid_ask_document(data)
+        charts_dir = charts_dir_from_footprint_json_path(path)
+        csv_path = resolve_gocharting_csv_for_footprint_json(
+            path,
+            charts_dir=charts_dir,
+            stamp=chart_stamp,
+        )
+        if csv_path is not None:
+            out = enrich_footprint_bid_ask_document(out, csv_path)
+        return out
+    return data
+
+
 def _json_file_header_and_body(
     path: Path,
     *,
@@ -240,55 +297,15 @@ def _json_file_header_and_body(
             and should_slim_coinmap_json_path(path)
         ):
             data = slim_coinmap_export_for_openai(data, path=path)
-        if (
-            isinstance(data, dict)
-            and path.name.startswith("footprint_combined_")
-            and path.suffix.lower() == ".json"
+        if isinstance(data, dict) and (
+            path.name.startswith("footprint_combined_")
+            or path.name.startswith("footprint_bid_ask_")
         ):
-            from automation_tool.gocharting_ws_decode import (
-                aggregate_footprint_combined_document,
-                drop_forming_footprint_candle,
-                footprint_ws_max_candles_from_cfg,
-                trim_footprint_document,
-            )
-            from automation_tool.images import _default_gocharting_cfg
-
-            cfg = _default_gocharting_cfg()
-            iv = path.stem.replace("footprint_combined_", "")
-            data = drop_forming_footprint_candle(data, interval=iv)
-            data = trim_footprint_document(
-                data,
-                max_candles=footprint_ws_max_candles_from_cfg(cfg),
-            )
-            data = aggregate_footprint_combined_document(data, cfg=cfg)
-            from automation_tool.gocharting_footprint_derived import (
-                enrich_footprint_combined_document,
-                footprint_derived_enabled,
-            )
-
-            if footprint_derived_enabled(cfg):
-                data = enrich_footprint_combined_document(data, cfg=cfg)
-        if (
-            isinstance(data, dict)
-            and path.name.startswith("footprint_bid_ask_")
-            and path.suffix.lower() == ".json"
-        ):
-            from automation_tool.gocharting_footprint_ocr import (
-                charts_dir_from_footprint_json_path,
-                enrich_footprint_bid_ask_document,
-                resolve_gocharting_csv_for_footprint_json,
-                trim_footprint_bid_ask_document,
-            )
-
-            data = trim_footprint_bid_ask_document(data)
-            charts_dir = charts_dir_from_footprint_json_path(path)
-            csv_path = resolve_gocharting_csv_for_footprint_json(
+            data = prepare_footprint_json_for_openai(
                 path,
-                charts_dir=charts_dir,
-                stamp=chart_stamp,
+                data,
+                chart_stamp=chart_stamp,
             )
-            if csv_path is not None:
-                data = enrich_footprint_bid_ask_document(data, csv_path)
         compact = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     except json.JSONDecodeError:
         compact = raw

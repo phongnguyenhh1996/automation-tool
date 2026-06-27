@@ -78,6 +78,7 @@ from automation_tool.images import (
     gocharting_main_interval_csv_path,
     gocharting_png_path_for_csv,
     latest_chart_stamp,
+    persist_openai_footprint_json_debug,
     ordered_chart_images,
     ordered_chart_openai_payloads,
     read_main_chart_symbol,
@@ -2422,6 +2423,35 @@ def _append_footprint_json_paths(paths: list[Path], charts_dir: Path) -> list[Pa
     return paths
 
 
+def _persist_openai_footprint_json_debug(
+    charts_dir: Path,
+    *,
+    stamp: str,
+    gocharting_yaml: Path | None = None,
+    flow_label: str,
+) -> None:
+    """Save enriched GoCharting footprint JSON to charts_dir for debugging."""
+    gc_yaml = gocharting_yaml or default_gocharting_config_path()
+    gc_cfg = load_gocharting_yaml(gc_yaml)
+    written = persist_openai_footprint_json_debug(
+        charts_dir,
+        stamp=stamp,
+        chart_stamp=stamp,
+        gocharting_cfg=gc_cfg,
+    )
+    if written:
+        _log.info(
+            "%s: đã ghi footprint JSON (OpenAI enrich) | %s",
+            flow_label,
+            ", ".join(p.name for p in written),
+        )
+    else:
+        _log.info(
+            "%s: không có footprint JSON trên disk — bỏ qua ghi debug",
+            flow_label,
+        )
+
+
 def _warn_if_incomplete_chart_payloads(
     charts_dir: Path, payloads: list[ChartOpenAIPayload]
 ) -> None:
@@ -3452,6 +3482,13 @@ def cmd_all(args: argparse.Namespace) -> None:
     require_openai(s)
     payloads = ordered_chart_openai_payloads(charts_dir, stamp=stamp, **gc_openai_kw)
     payloads = _extend_payloads_with_footprint_json(payloads, charts_dir)
+    if use_gc:
+        _persist_openai_footprint_json_debug(
+            charts_dir,
+            stamp=stamp,
+            gocharting_yaml=gc_yaml,
+            flow_label="all",
+        )
     _warn_if_incomplete_chart_payloads(charts_dir, payloads)
     if not payloads:
         raise SystemExit(
@@ -4097,6 +4134,12 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
         require_valid_gocharting_exports_for_stamp(charts_dir, stamp or "")
         footprint_paths = [m15, m5]
         footprint_paths = _append_footprint_json_paths(footprint_paths, charts_dir)
+        _persist_openai_footprint_json_debug(
+            charts_dir,
+            stamp=stamp or "",
+            gocharting_yaml=gc_yaml,
+            flow_label="update-scalp",
+        )
         m15_png = gocharting_png_path_for_csv(m15)
         m5_png = gocharting_png_path_for_csv(m5)
         _log.info(

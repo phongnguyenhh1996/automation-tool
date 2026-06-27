@@ -96,10 +96,11 @@ def _default_gocharting_cfg() -> dict:
 
 
 def _footprint_ws_active(gocharting_cfg: dict | None = None) -> bool:
-    from automation_tool.gocharting_ws_decode import footprint_ws_enabled
-
     cfg = gocharting_cfg if gocharting_cfg is not None else _default_gocharting_cfg()
-    return footprint_ws_enabled(cfg)
+    ws = cfg.get("footprint_ws")
+    if not isinstance(ws, dict):
+        return False
+    return bool(ws.get("enabled"))
 
 
 def append_footprint_json_paths(
@@ -119,6 +120,57 @@ def append_footprint_json_paths(
         if path not in paths:
             paths.append(path)
     return paths
+
+
+def openai_footprint_debug_json_path(charts_dir: Path, stamp: str, source_stem: str) -> Path:
+    """Enriched GoCharting footprint snapshot for debug under ``charts_dir``."""
+    return charts_dir / f"{stamp}_{source_stem}.json"
+
+
+def persist_openai_footprint_json_debug(
+    charts_dir: Path,
+    *,
+    stamp: str,
+    chart_stamp: str | None = None,
+    gocharting_cfg: dict | None = None,
+) -> list[Path]:
+    """
+    Write footprint JSON after OpenAI prep (trim/aggregate/enrich) to ``charts_dir``.
+
+    Source files live under ``footprint_images/``; output is ``{stamp}_footprint_*_{iv}.json``
+    in ``charts_dir`` for debugging ``all`` / ``update-scalp`` runs.
+    """
+    import json
+
+    from automation_tool.openai_prompt_flow import prepare_footprint_json_for_openai
+
+    cfg = gocharting_cfg if gocharting_cfg is not None else _default_gocharting_cfg()
+    if _footprint_ws_active(cfg):
+        sources = existing_footprint_combined_json_paths(charts_dir)
+    else:
+        from automation_tool.gocharting_footprint_ocr import existing_footprint_bid_ask_json_paths
+
+        sources = existing_footprint_bid_ask_json_paths(charts_dir)
+    stamp_for_csv = (chart_stamp or stamp).strip()
+    written: list[Path] = []
+    for src in sources:
+        try:
+            raw = json.loads(src.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(raw, dict):
+            continue
+        prepared = prepare_footprint_json_for_openai(
+            src,
+            raw,
+            chart_stamp=stamp_for_csv or None,
+            gocharting_cfg=cfg,
+        )
+        dest = openai_footprint_debug_json_path(charts_dir, stamp, src.stem)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(json.dumps(prepared, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        written.append(dest)
+    return written
 
 
 def normalize_main_chart_symbol(s: str) -> str:

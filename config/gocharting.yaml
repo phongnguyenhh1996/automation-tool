@@ -111,7 +111,7 @@ footprint_ws:
   # WS data is per-tick (0.1); aggregate to block clusters before OpenAI upload.
   # block_size = tick_size × block_multiplier (must match GoCharting Tick Manager Block setting).
   tick_size: 0.1
-  block_multiplier: 2
+  block_multiplier: 4
   max_candles: 50
   wait_ms: 45000
   export_format: raw
