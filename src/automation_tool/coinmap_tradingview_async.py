@@ -926,7 +926,7 @@ async def tv_snapshot_download_capture_async(
                 await page.wait_for_timeout(after_ms)
             return dest
         if attempt < max_retries:
-            _log.warning(
+            _log_tv.warning(
                 "tv: PNG empty after download (%s) — retry %d/%d (%s)",
                 reason,
                 attempt + 1,
@@ -936,7 +936,7 @@ async def tv_snapshot_download_capture_async(
             if retry_delay_ms > 0:
                 await page.wait_for_timeout(retry_delay_ms)
         else:
-            _log.warning(
+            _log_tv.warning(
                 "tv: PNG still empty after %d retries (%s); Chrome may have saved to Downloads only",
                 max_retries,
                 dest.name,
