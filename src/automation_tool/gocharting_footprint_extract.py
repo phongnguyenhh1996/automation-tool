@@ -138,7 +138,7 @@ def _single_interval_schema_block(chart_info: dict[str, str]) -> str:
         "        {\n"
         '          "time": "HH:MM",\n'
         '          "price_levels": [\n'
-        '            { "bid": 0, "ask": 0, "attributes": [] }\n'
+        '            { "bid": 0, "ask": 0 }\n'
         "          ]\n"
         "        }\n"
         "      ]\n"
@@ -200,7 +200,6 @@ def _footprint_extract_rules_text(*, crop_width_thirds: bool = True) -> str:
         "Rules:\n"
         "- ``bid`` and ``ask`` are non-negative integers read from each price level cell.\n"
         "- ``price_levels`` ordered from highest price to lowest price (top to bottom on chart).\n"
-        '- ``attributes`` is a list of strings; use ``["imbalance"]`` when the cell is marked as imbalance.\n'
         + panel_rule
         + "- If multiple source images are attached for the same timeframe, merge all visible candles by ``time``, "
         "deduplicate, and sort ``candles`` chronologically.\n"

@@ -137,7 +137,7 @@ def test_build_footprint_extract_user_prompt_includes_schema() -> None:
     )
     assert "COMEX:GC1!" in prompt
     assert "price_levels" in prompt
-    assert "imbalance" in prompt
+    assert "imbalance" not in prompt
     assert "horizontal panels" in prompt
     assert "Hướng dẫn đọc chart" not in prompt
     assert "#8FAF8E" not in prompt

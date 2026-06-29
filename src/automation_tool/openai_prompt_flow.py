@@ -52,9 +52,9 @@ GOCHARTING_GOLD_FUTURE_LABEL = "Gold Future (GC1!)"
 
 _GOCHARTING_BID_ASK_HINT = (
     "GoCharting CSV export chỉ có OHLC, Volume, Delta, CVD theo nến — "
-    "KHÔNG có BID/ASK theo từng price level (stacked BID/ASK, volume bid/ask từng mức, RL). "
-    "Stacked BID/ASK, absorption, RL: đọc từ footprint_combined_15m.json và footprint_combined_5m.json "
-    "footprint[] mỗi level có rl, imbalance bid/ask/\"\"), không suy từ CSV.\n"
+    "KHÔNG có BID/ASK theo từng price level (stacked BID/ASK, volume bid/ask từng mức). "
+    "Stacked BID/ASK, absorption: đọc từ footprint_combined_15m.json và footprint_combined_5m.json "
+    "(footprint[] buy/sell volume từng level), không suy từ CSV.\n"
 )
 
 _GOCHARTING_CHART_READ_GUIDE = (
@@ -67,8 +67,8 @@ _GOCHARTING_CHART_READ_GUIDE = (
 )
 
 _GOCHARTING_TRADE_MANAGEMENT_SUFFIX = (
-    "Stacked BID/ASK, absorption, RL: đọc từ footprint_combined_5m.json "
-    "(candles[].orderflow; footprint[] có rl và imbalance bid/ask/\"\" từng level), không từ CSV.\n"
+    "Stacked BID/ASK, absorption: đọc từ footprint_combined_5m.json "
+    "(candles[].orderflow; footprint[] buy/sell volume từng level), không từ CSV.\n"
     f"{_GOCHARTING_CHART_READ_GUIDE}"
 )
 
@@ -149,7 +149,7 @@ def default_analysis_prompt(
         "(mỗi nến: ``mt5_spot_ohlc``) → "
         "footprint_combined_15m.json và footprint_combined_5m.json (WS: GC ohlc + footprint[] + spot OHLC, "
         "N nến mới nhất).\n"
-        "Ưu tiên footprint_combined JSON: footprint[] (rl, imbalance bid/ask/\"\" từng level); "
+        "Ưu tiên footprint_combined JSON: footprint[] (buy/sell volume từng level); "
         "GoCharting CSV cho CVD/delta/volume theo nến; OHLC tvdatafeed khi cần cấu trúc giá TV.\n"
         f"{_GOCHARTING_BID_ASK_HINT}"
         f"{_GOCHARTING_CHART_READ_GUIDE}"
@@ -332,7 +332,7 @@ def _json_file_header_and_body(
             f"[GoCharting footprint combined — {iv} — file: {path.name}]\n"
             "Instrument: COMEX:GC1! futures. Each candle: time_gmt7, ohlc (GC1!), "
             "mt5_spot_ohlc (spot broker), footprint[] "
-            "with buy/sell volume, rl, imbalance (bid/ask/\"\") per price block (GoCharting chart row labels; "
+            "with buy/sell volume per price block (GoCharting chart row labels; "
             "tick_size × block_multiplier from config; latest N candles from WS capture).\n"
         )
     elif path.name.startswith("footprint_bid_ask_") and path.suffix.lower() == ".json":
@@ -882,7 +882,7 @@ _SCALP_UPDATE_PLAN_HINT = (
 )
 
 _GOCHARTING_INTRADAY_CHART_READ_PRIORITY_HINT = (
-    "Ưu tiên footprint_combined JSON: footprint[] (rl, side, imbalance từng level); "
+    "Ưu tiên footprint_combined JSON: footprint[] (buy/sell volume từng level); "
     "CSV GoCharting chỉ có CVD/delta/volume theo nến — không có BID/ASK theo price level. "
     "TradingView snapshot khi cần cấu trúc giá / liquidity.\n"
     f"{_GOCHARTING_CHART_READ_GUIDE}"
