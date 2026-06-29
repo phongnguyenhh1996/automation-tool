@@ -118,8 +118,8 @@ footprint_ws:
   export_format: combined
   mt5_spot: false
   derived:
-    enabled: false
-    imbalance_enabled: false
+    enabled: true
+    imbalance_enabled: true
     stacked_enabled: false
     absorption_enabled: false
     rl_min: 4.0

@@ -99,6 +99,15 @@ def default_data_dir() -> Path:
     return _root() / "data"
 
 
+def default_vector_store_knowledge_dir() -> Path:
+    """Local mirror of ``OPENAI_VECTOR_STORE_IDS`` files for FULL_ANALYSIS legacy."""
+    raw = (os.getenv("OPENAI_VECTOR_STORE_KNOWLEDGE_DIR") or "").strip()
+    if raw:
+        p = Path(raw).expanduser()
+        return p if p.is_absolute() else (_root() / p)
+    return default_data_dir() / "vector_store_knowledge"
+
+
 def symbol_data_dir(symbol: Optional[str] = None) -> Path:
     """
     Per-instrument data root: ``data/{{SYMBOL}}/`` (e.g. ``data/XAUUSD``, ``data/USDJPY``).

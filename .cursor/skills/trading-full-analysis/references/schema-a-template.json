@@ -1,0 +1,41 @@
+{
+  "context": {
+    "DXY": {
+      "H4": "HH/HL, bias USD còn ủng hộ phe mua DXY.",
+      "H1": "Giá trên POC/VWAP; chưa CHoCH giảm rõ.",
+      "M15": "Sideway hẹp; chờ break hoặc sweep rõ hơn.",
+      "Footprint_M15": "CVD chưa đảo chiều bền; absorption chưa đủ xác nhận USD yếu."
+    },
+    "XAUUSD": {
+      "H4": "Premium range lớn; chưa break tăng sạch sau cung gần nhất.",
+      "H1": "CHoCH giảm, pullback FVG/OB 4707–4709; sell-on-rally nếu giữ dưới 4720; bias vô hiệu nếu đóng trên POI hoặc DXY đảo bearish."
+    }
+  },
+  "phan_tich_cham_diem": "📍 PLAN CHÍNH — 78/100\n🏷️ Trạng thái vùng: fresh | vùng 4707.0–4709.0\nĐã chạm trước đó: Chưa — giá chưa test POI.\n🧭 Cấu trúc giá: 25/30\n→ Phân tích: H1/M15 đồng thuận, vùng chờ nằm trong discount/OB hợp lệ; trừ điểm vì sweep liquidity chưa thật sạch.\n💧 Order Flow – CVD: 20/25\n→ Số liệu: CVD M15 tăng 4/5 nến gần nhất; delta shift +180 tại 4708; không phân kỳ; follow-through M5 chỉ 2 nến (+95 delta).\n→ Phân tích chấm điểm: đồng thuận bias (+7), có delta shift (+4); trừ vì follow-through <3 nến.\n👣 Footprint: 20/25\n→ Số liệu: absorption BID tại 4707.5–4708.5 (M15); POC 4709; giá đóng trên VWAP 4706; chưa có stacked ≥2 nến RL≥4x; không trap rõ.\n→ Phân tích chấm điểm: POC/VWAP hỗ trợ (+7); thiếu trap/stacked mạnh nên không tối đa.\n🛡️ Quản lý & Thực thi: 13/20\n→ Phân tích: RR 1:1.8, SL sau EQL 4699; plan cần theo dõi reclaim VWAP intraday.\n✅ Tổng plan_chinh: 78/100",
+  "output_ngan_gon": "Tóm tắt... | Hành động: chờ",
+  "prices": [
+    {
+      "label": "plan_chinh",
+      "value": 4709.0,
+      "vung_cho": "4707.0–4709.0",
+      "hop_luu": 78,
+      "trade_line": "BUY LIMIT 4709.0 | SL 4699.0 | TP1 4740.0 | Lot 0.04"
+    },
+    {
+      "label": "plan_phu",
+      "value": 4688.0,
+      "vung_cho": "4686.0–4688.0",
+      "hop_luu": 66,
+      "trade_line": "BUY LIMIT 4688.0 | SL 4678.0 | TP1 4710.0 | Lot 0.04"
+    },
+    {
+      "label": "scalp",
+      "value": 4718.0,
+      "vung_cho": "4716.0–4718.0",
+      "hop_luu": 63,
+      "trade_line": "SELL LIMIT 4718.0 | SL 4724.0 | TP1 4708.0 | Lot 0.04"
+    }
+  ],
+  "intraday_hanh_dong": "chờ",
+  "trade_line_chinh": ""
+}

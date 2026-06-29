@@ -45,7 +45,14 @@ from automation_tool.zones_state import format_intraday_update_time_line
 _log = logging.getLogger(__name__)
 
 DEFAULT_REASONING_EFFORT = "medium"
+ALL_FLOW_MODEL = "gpt-5.5"
 ALL_FLOW_REASONING_EFFORT = "medium"
+
+
+def resolved_all_flow_openai_model(override: Optional[str] = None) -> str:
+    """Model for ``all`` / ``all-2``: CLI ``--model`` wins, else :data:`ALL_FLOW_MODEL`."""
+    o = (override or "").strip()
+    return o or ALL_FLOW_MODEL
 
 # GoCharting footprint for main gold pair: COMEX GC1! future, not spot XAUUSD.
 GOCHARTING_GOLD_FUTURE_LABEL = "Gold Future (GC1!)"

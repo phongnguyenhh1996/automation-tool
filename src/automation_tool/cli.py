@@ -55,8 +55,10 @@ from automation_tool.openai_analysis_json import (
 )
 from automation_tool.openai_errors import re_raise_unless_openai
 from automation_tool.openai_prompt_flow import (
+    ALL_FLOW_MODEL,
     ALL_FLOW_REASONING_EFFORT,
     DEFAULT_REASONING_EFFORT,
+    resolved_all_flow_openai_model,
     PromptTwoStepResult,
     build_intraday_update_user_text,
     build_scalp_update_user_text,
@@ -219,6 +221,9 @@ def _telegram_log_technical(settings, text: str) -> None:
 _OPENAI_MODEL_HELP = (
     "OpenAI Responses API model id (e.g. gpt-5.2). Overrides OPENAI_MODEL env."
 )
+_ALL_FLOW_MODEL_HELP = (
+    f"OpenAI model for all/all-2 (default: {ALL_FLOW_MODEL}). CLI --model overrides."
+)
 
 _MT5_ACCOUNTS_JSON_HELP = (
     "File accounts.json: nhiều tài khoản MT5 (đăng nhập tuần tự). "
@@ -295,6 +300,54 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     c.set_defaults(func=cmd_capture)
+
+    cfa = sub.add_parser(
+        "capture-full-analysis",
+        help=(
+            "Capture TradingView + GoCharting cho FULL_ANALYSIS (không gọi OpenAI). "
+            "Cặp chính từ data/.main_chart_symbol."
+        ),
+    )
+    cfa.add_argument("--config", type=Path, default=None, help="Path to coinmap.yaml")
+    cfa.add_argument("--charts-dir", type=Path, default=None)
+    cfa.add_argument("--storage-state", type=Path, default=None, help="Playwright storage state JSON")
+    cfa.add_argument("--no-save-storage", action="store_true", help="Do not write storage state after run")
+    cfa.add_argument("--headed", action="store_true", help="Show browser window")
+    cfa.add_argument(
+        "--gocharting",
+        action="store_true",
+        required=True,
+        help="Bắt buộc: dùng GoCharting (PNG+CSV+footprint WS) thay Coinmap footprint",
+    )
+    cfa.add_argument(
+        "--gocharting-config",
+        type=Path,
+        default=None,
+        help="YAML GoCharting (default: config/gocharting.yaml)",
+    )
+    cfa.set_defaults(func=cmd_capture_full_analysis)
+
+    svs = sub.add_parser(
+        "sync-vector-store-knowledge",
+        help=(
+            "Tải file từ OPENAI_VECTOR_STORE_IDS về data/vector_store_knowledge/ "
+            "cho FULL_ANALYSIS legacy."
+        ),
+    )
+    svs.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Thư mục đích (default: OPENAI_VECTOR_STORE_KNOWLEDGE_DIR hoặc data/vector_store_knowledge)",
+    )
+    svs.add_argument(
+        "--vector-store-id",
+        action="append",
+        dest="vector_store_ids",
+        default=None,
+        help="Override vector store id (lặp được). Mặc định: OPENAI_VECTOR_STORE_IDS",
+    )
+    svs.set_defaults(func=cmd_sync_vector_store_knowledge)
 
     cm5 = sub.add_parser(
         "capture-m5-footprint",
@@ -785,7 +838,7 @@ def _parser() -> argparse.ArgumentParser:
         metavar="FILE",
         help="accounts.json nguồn để tạo accounts-all2.json sau luồng 2 (mặc định MT5_ACCOUNTS_JSON)",
     )
-    al.add_argument("--model", default=None, metavar="ID", help=_OPENAI_MODEL_HELP)
+    al.add_argument("--model", default=None, metavar="ID", help=_ALL_FLOW_MODEL_HELP)
     al.set_defaults(func=cmd_all)
 
     al2 = sub.add_parser(
@@ -835,7 +888,7 @@ def _parser() -> argparse.ArgumentParser:
         metavar="FILE",
         help="accounts.json nguồn để tạo accounts-all2.json (mặc định MT5_ACCOUNTS_JSON)",
     )
-    al2.add_argument("--model", default=None, metavar="ID", help=_OPENAI_MODEL_HELP)
+    al2.add_argument("--model", default=None, metavar="ID", help=_ALL_FLOW_MODEL_HELP)
     al2.set_defaults(func=cmd_all_2)
 
     tl = sub.add_parser(
@@ -3202,7 +3255,7 @@ def _run_all_second_flow(
             max_images_per_call,
             chart_payloads=chart_payloads,
             on_first_model_text=None,
-            model=resolved_openai_model(s, model),
+            model=resolved_all_flow_openai_model(model),
             vector_store_ids=[_ALL_SECOND_FLOW_VECTOR_STORE_ID],
             reasoning_effort=ALL_FLOW_REASONING_EFFORT,
             chart_stamp=chart_stamp,
@@ -3281,6 +3334,192 @@ def cmd_all_2(args: argparse.Namespace) -> None:
         mt5_accounts_json=getattr(args, "mt5_accounts_json", None),
         chart_stamp=stamp,
     )
+
+
+_CHART_JSON_VALIDATE_MAX_ROUNDS = 3
+
+
+def _validate_chart_slots_with_recapture(
+    *,
+    charts_dir: Path,
+    stamp: str,
+    use_gc: bool,
+    gc_yaml: Path,
+    cfg: Path,
+    storage: Path | None,
+    settings: object,
+    args: argparse.Namespace,
+) -> None:
+    """Validate chart slots; recapture invalid slots up to ``_CHART_JSON_VALIDATE_MAX_ROUNDS`` times."""
+    for attempt in range(_CHART_JSON_VALIDATE_MAX_ROUNDS + 1):
+        bad = list_invalid_chart_slots_for_stamp(charts_dir, stamp)
+        stale_fn = is_gocharting_stale_chart_issue if use_gc else is_coinmap_stale_chart_issue
+        stale = [x for x in bad if stale_fn(x)]
+        if stale:
+            detail = "; ".join(f"{x.expected_path.name}: {x.reason}" for x in stale)
+            label = "GoCharting" if use_gc else "Coinmap"
+            raise SystemExit(f"{label} data stale (aborting, no recapture): {detail}")
+        if not bad:
+            break
+        if attempt >= _CHART_JSON_VALIDATE_MAX_ROUNDS:
+            detail = "; ".join(f"{x.expected_path.name}: {x.reason}" for x in bad)
+            raise SystemExit(
+                f"Chart JSON validation failed after {_CHART_JSON_VALIDATE_MAX_ROUNDS} recapture attempt(s): {detail}"
+            )
+        print(
+            f"Chart JSON validation: {len(bad)} slot(s) invalid — recapturing (attempt {attempt + 1}/{_CHART_JSON_VALIDATE_MAX_ROUNDS})...",
+            flush=True,
+        )
+        _log.warning(
+            "capture-full-analysis: chart validation failed | attempt=%s | issues=%s",
+            attempt + 1,
+            [(x.expected_path.name, x.reason) for x in bad],
+        )
+        try:
+            if use_gc:
+                recapture_failed_gocharting_slots(
+                    gocharting_yaml=gc_yaml,
+                    charts_dir=charts_dir,
+                    stamp=stamp,
+                    issues=bad,
+                    storage_state_path=storage,
+                    email=settings.gocharting_email,
+                    password=settings.gocharting_password,
+                    save_storage_state=not args.no_save_storage,
+                    headless=not args.headed,
+                    main_chart_symbol=None,
+                )
+            tv_cm_issues = [i for i in bad if i.source in ("coinmap", "tradingview")]
+            if tv_cm_issues:
+                recapture_failed_chart_slots(
+                    coinmap_yaml=cfg,
+                    charts_dir=charts_dir,
+                    stamp=stamp,
+                    issues=tv_cm_issues,
+                    storage_state_path=storage,
+                    email=settings.coinmap_email,
+                    password=settings.coinmap_password,
+                    tradingview_password=settings.tradingview_password,
+                    save_storage_state=not args.no_save_storage,
+                    headless=not args.headed,
+                    main_chart_symbol=None,
+                )
+        except SystemExit:
+            raise
+        except Exception as e:
+            raise SystemExit(f"Recapture after validation failed: {e}") from e
+
+
+def cmd_capture_full_analysis(args: argparse.Namespace) -> None:
+    """Capture TV + GoCharting for agent self-analysis; no OpenAI/Telegram."""
+    from automation_tool.full_analysis_manifest import build_full_analysis_manifest, manifest_to_json
+    from automation_tool.images import get_active_main_symbol
+
+    s = load_settings()
+    if not args.gocharting:
+        raise SystemExit("capture-full-analysis requires --gocharting")
+
+    cfg = args.config or default_coinmap_config_path()
+    storage = args.storage_state or default_storage_state_path()
+    gc_yaml = args.gocharting_config or default_gocharting_config_path()
+    charts_dir = args.charts_dir or default_charts_dir()
+
+    _log.info(
+        "capture-full-analysis: bắt đầu | tv_yaml=%s charts=%s gocharting_yaml=%s",
+        cfg,
+        charts_dir,
+        gc_yaml,
+    )
+
+    paths = capture_charts(
+        coinmap_yaml=cfg,
+        charts_dir=args.charts_dir,
+        storage_state_path=storage,
+        email=s.coinmap_email,
+        password=s.coinmap_password,
+        tradingview_password=s.tradingview_password,
+        save_storage_state=not args.no_save_storage,
+        headless=not args.headed,
+        reuse_browser_context=None,
+        main_chart_symbol=None,
+        enable_coinmap=False,
+        enable_tradingview=True,
+        clear_charts_before_capture=True,
+        tradingview_force_screenshot=True,
+        write_coinmap_merged_after_capture=False,
+    )
+    stamp_pre = stamp_from_capture_paths(paths)
+    main_sym = get_active_main_symbol()
+    gc_paths = capture_gocharting(
+        gocharting_yaml=gc_yaml,
+        charts_dir=charts_dir,
+        email=s.gocharting_email or "",
+        password=s.gocharting_password or "",
+        storage_state_path=storage,
+        save_storage_state=not args.no_save_storage,
+        headless=not args.headed,
+        main_chart_symbol=None,
+        stamp_override=stamp_pre,
+        clear_charts_before_capture=True,
+        capture_symbols=("DXY", main_sym),
+        detail_history_steps=GOCHARTING_ALL_FLOW_WS_DETAIL_BACK_STEPS,
+        mt5_accounts_json=None,
+    )
+    paths.extend(gc_paths)
+
+    print(f"Captured {len(paths)} file(s) under {charts_dir}.", flush=True)
+    _log.info("capture-full-analysis: capture xong | %s artifact(s)", len(paths))
+    if not paths:
+        raise SystemExit("No chart artifacts captured.")
+
+    stamp = stamp_from_capture_paths(paths) or latest_chart_stamp(charts_dir)
+    if not stamp:
+        raise SystemExit("Could not determine capture stamp from chart artifacts.")
+
+    _validate_chart_slots_with_recapture(
+        charts_dir=charts_dir,
+        stamp=stamp,
+        use_gc=True,
+        gc_yaml=gc_yaml,
+        cfg=cfg,
+        storage=storage,
+        settings=s,
+        args=args,
+    )
+    require_valid_gocharting_exports_for_stamp(charts_dir, stamp)
+
+    manifest = build_full_analysis_manifest(charts_dir, stamp=stamp, gocharting_yaml=gc_yaml)
+    print(f"main_symbol={manifest['main_symbol']} stamp={stamp}", flush=True)
+    print(manifest_to_json(manifest), flush=True)
+    if not manifest.get("ready_for_analysis"):
+        raise SystemExit(
+            "Capture finished but manifest reports not ready_for_analysis. "
+            "Check slots and footprint_combined JSON."
+        )
+
+
+def cmd_sync_vector_store_knowledge(args: argparse.Namespace) -> None:
+    from automation_tool.config import default_vector_store_knowledge_dir
+    from automation_tool.vector_store_sync import manifest_to_json, sync_vector_store_knowledge
+
+    s = load_settings()
+    vs_ids = args.vector_store_ids or list(s.openai_vector_store_ids)
+    if not vs_ids:
+        raise SystemExit(
+            "No vector store ids. Set OPENAI_VECTOR_STORE_IDS in .env or pass --vector-store-id."
+        )
+    if not s.openai_api_key:
+        raise SystemExit("OPENAI_API_KEY is required.")
+
+    out_dir = args.output_dir or default_vector_store_knowledge_dir()
+    manifest = sync_vector_store_knowledge(
+        vector_store_ids=vs_ids,
+        output_dir=out_dir,
+        api_key=s.openai_api_key,
+    )
+    print(manifest_to_json(manifest), flush=True)
+    if not manifest.get("ready"):
+        raise SystemExit("Vector store sync finished with errors or no downloadable files.")
 
 
 def cmd_all(args: argparse.Namespace) -> None:
@@ -3498,7 +3737,7 @@ def cmd_all(args: argparse.Namespace) -> None:
 
     prompt_all = _resolved_analysis_prompt(args, charts_dir)
     max_images = args.max_images_per_call
-    openai_model = resolved_openai_model(s, getattr(args, "model", None))
+    openai_model = resolved_all_flow_openai_model(getattr(args, "model", None))
 
     def _openai_all_work() -> PromptTwoStepResult:
         return _run_openai_flow(

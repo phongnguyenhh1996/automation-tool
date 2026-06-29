@@ -175,7 +175,7 @@ def test_handle_telegram_ask_followup_downloads_images(monkeypatch, tmp_path: Pa
 
     settings = SimpleNamespace(
         openai_api_key="key",
-        openai_vector_store_ids=[],
+        openai_vector_store_ids=["vs_should_not_be_used"],
         openai_responses_store=True,
         openai_responses_include=[],
         telegram_bot_token="token",
@@ -200,4 +200,5 @@ def test_handle_telegram_ask_followup_downloads_images(monkeypatch, tmp_path: Pa
     assert downloaded == [["photo_1"]]
     assert len(followup_kwargs["image_paths"]) == 1
     assert followup_kwargs["model"] == "gpt-5.4"
+    assert followup_kwargs["vector_store_ids"] == []
     assert sent[0].startswith("(openai_response_id=resp_new)")

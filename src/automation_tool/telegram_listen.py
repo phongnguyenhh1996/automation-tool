@@ -233,7 +233,7 @@ def _handle_telegram_ask_followup(
                 api_key=settings.openai_api_key,
                 user_text=ask_body,
                 previous_response_id=openai_response_id,
-                vector_store_ids=settings.openai_vector_store_ids,
+                vector_store_ids=[],
                 store=settings.openai_responses_store,
                 include=settings.openai_responses_include,
                 model=model,

@@ -32,3 +32,12 @@ def test_default_system_prompt_path_is_repo_file() -> None:
     p = default_system_prompt_path()
     assert p.name == "system-prompt.md"
     assert p.is_file()
+
+
+def test_resolved_all_flow_openai_model() -> None:
+    from automation_tool.openai_prompt_flow import ALL_FLOW_MODEL, resolved_all_flow_openai_model
+
+    assert ALL_FLOW_MODEL == "gpt-5.5"
+    assert resolved_all_flow_openai_model(None) == "gpt-5.5"
+    assert resolved_all_flow_openai_model("") == "gpt-5.5"
+    assert resolved_all_flow_openai_model("gpt-custom") == "gpt-custom"

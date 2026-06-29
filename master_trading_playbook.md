@@ -356,7 +356,6 @@ Khi trả kết quả phải có đủ:
   - sideway > 8h không có volume spike.
   - TP ngay HVN/POC.
 - Ưu tiên phiên Âu–Mỹ.
-- buffer 0.5 - 1 giá cho Entry, TP. Mục tiêu để tránh hụt Entry và đảm bảo khớp TP sớm hơn 0.5 giá để phòng trường hợp giá đảo chiều sát nút.
 #### EURUSD
 - Chỉ 1 plan chính, không ép plan phụ nếu setup chưa đủ đẹp.
 - Bias H1 phải đi cùng DXY.
