@@ -1029,7 +1029,7 @@ async def tv_capture_one_chart_frame_async(
     dest_url_path: Optional[Path] = None,
 ) -> Path:
     await tv_wait_for_indicators_loaded_async(page, tv)
-    if bool(tv.get("tradingview_snapshot_url_flow", False)):
+    if bool(tv.get("tradingview_snapshot_url_flow", True)):
         return await tv_snapshot_url_capture_async(
             page,
             tv,
@@ -1039,7 +1039,7 @@ async def tv_capture_one_chart_frame_async(
             interval_slug,
             dest_url_path=dest_url_path,
         )
-    if bool(tv.get("tradingview_snapshot_download_flow", True)):
+    if bool(tv.get("tradingview_snapshot_download_flow", False)):
         return await tv_snapshot_download_capture_async(
             page,
             tv,

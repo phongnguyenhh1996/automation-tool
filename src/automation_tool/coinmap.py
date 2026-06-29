@@ -4006,9 +4006,9 @@ def _tradingview_capture_one_chart_frame(
     dest_path: Optional[Path] = None,
     dest_url_path: Optional[Path] = None,
 ) -> Path:
-    """One TradingView frame: download shortcut (default), snapshot URL, or legacy fullscreen PNG."""
+    """One TradingView frame: snapshot URL (default), download shortcut, or legacy fullscreen PNG."""
     _wait_tradingview_indicators_loaded(page, tv)
-    if bool(tv.get("tradingview_snapshot_url_flow", False)):
+    if bool(tv.get("tradingview_snapshot_url_flow", True)):
         return _tradingview_snapshot_url_capture(
             page,
             tv,
@@ -4018,7 +4018,7 @@ def _tradingview_capture_one_chart_frame(
             interval_slug,
             dest_url_path=dest_url_path,
         )
-    if bool(tv.get("tradingview_snapshot_download_flow", True)):
+    if bool(tv.get("tradingview_snapshot_download_flow", False)):
         return _tradingview_snapshot_download_capture(
             page,
             tv,
@@ -4227,9 +4227,10 @@ def _run_tradingview_screenshot_flow(
 ) -> list[Path]:
     """
     Open TradingView: optional login, dark mode, then either multi-shot (watchlist →
-    symbol → interval → ``Control+Alt+S`` download PNG (default), per capture_plan) or
-    legacy single frame. Set ``tradingview_snapshot_url_flow: true`` for snapshot URL;
-    set ``tradingview_snapshot_download_flow: false`` for fullscreen + Playwright PNG.
+    symbol → interval → snapshot toolbar → open image in new tab → save ``.url`` (default),
+    per capture_plan) or legacy single frame. Set ``tradingview_snapshot_download_flow: true``
+    for Ctrl+Alt+S PNG download; set ``tradingview_snapshot_url_flow: false`` and
+    ``tradingview_snapshot_download_flow: false`` for fullscreen + Playwright PNG.
     """
     tw = int(tv.get("viewport_width", 0) or 0)
     th = int(tv.get("viewport_height", 0) or 0)
@@ -4272,7 +4273,7 @@ def _run_tradingview_screenshot_flow(
     legacy_url = charts_dir / f"{stamp}_tradingview_fullscreen.url"
     _tradingview_reset_chart_position(page, tv)
     _tradingview_ensure_required_indicators(page, tv)
-    if bool(tv.get("tradingview_snapshot_url_flow", False)):
+    if bool(tv.get("tradingview_snapshot_url_flow", True)):
         dest = _tradingview_capture_one_chart_frame(
             page,
             tv,
