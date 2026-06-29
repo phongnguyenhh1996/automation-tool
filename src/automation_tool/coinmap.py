@@ -3692,6 +3692,41 @@ def _tradingview_native_downloads_dir() -> Optional[Path]:
     return None
 
 
+def _tradingview_chrome_profile_downloads_dir() -> Optional[Path]:
+    """Persistent Playwright profile may save downloads here instead of ~/Downloads."""
+    raw = (os.getenv("PLAYWRIGHT_CHROME_USER_DATA_DIR") or "").strip()
+    if not raw:
+        return None
+    base = Path(raw).expanduser()
+    for rel in ("Default/Downloads", "Downloads"):
+        cand = base / rel
+        if cand.is_dir():
+            return cand
+    default_dl = base / "Default" / "Downloads"
+    if (base / "Default").is_dir():
+        return default_dl
+    return None
+
+
+def _tradingview_download_scan_dirs(download_dir: Path) -> list[Path]:
+    seen: set[str] = set()
+    out: list[Path] = []
+    for cand in (
+        download_dir,
+        _tradingview_native_downloads_dir(),
+        _tradingview_chrome_profile_downloads_dir(),
+    ):
+        if cand is None:
+            continue
+        key = str(cand.resolve())
+        if key in seen:
+            continue
+        seen.add(key)
+        if cand.is_dir():
+            out.append(cand)
+    return out
+
+
 def _tradingview_cdp_set_download_path(page, download_dir: Path, tv: dict[str, Any]) -> None:
     """Chrome may save natively while Playwright ``save_as`` is empty on persistent/CDP contexts."""
     if not bool(tv.get("tradingview_snapshot_download_cdp_dir_enabled", True)):
@@ -3713,8 +3748,9 @@ def _tradingview_cdp_set_download_path(page, download_dir: Path, tv: dict[str, A
 def _tradingview_newest_png_since(
     directory: Path,
     *,
-    since_monotonic: float,
+    since_epoch: float,
     name_hint: str = "",
+    require_name_hint: bool = True,
 ) -> Optional[Path]:
     if not directory.is_dir():
         return None
@@ -3726,7 +3762,7 @@ def _tradingview_newest_png_since(
             continue
         if entry.suffix.lower() != ".png":
             continue
-        if hint and hint not in entry.name.lower():
+        if require_name_hint and hint and hint not in entry.name.lower():
             continue
         try:
             st = entry.stat()
@@ -3734,12 +3770,34 @@ def _tradingview_newest_png_since(
             continue
         if st.st_size <= 0:
             continue
-        if st.st_mtime < since_monotonic:
+        if st.st_mtime < since_epoch:
             continue
         if st.st_mtime >= best_mtime:
             best_mtime = st.st_mtime
             best = entry
     return best
+
+
+def _tradingview_pickup_newest_png(
+    directory: Path,
+    *,
+    since_epoch: float,
+    name_hint: str = "",
+) -> Optional[Path]:
+    found = _tradingview_newest_png_since(
+        directory,
+        since_epoch=since_epoch,
+        name_hint=name_hint,
+        require_name_hint=True,
+    )
+    if found is not None or not (name_hint or "").strip():
+        return found
+    return _tradingview_newest_png_since(
+        directory,
+        since_epoch=since_epoch,
+        name_hint="",
+        require_name_hint=False,
+    )
 
 
 def _tradingview_materialize_browser_download(
@@ -3749,7 +3807,7 @@ def _tradingview_materialize_browser_download(
     tv: dict[str, Any],
     *,
     download_dir: Path,
-    since_monotonic: float,
+    since_epoch: float,
     wait_ms: int,
 ) -> bool:
     """
@@ -3766,34 +3824,31 @@ def _tradingview_materialize_browser_download(
     if not _tradingview_download_png_is_empty(dest)[0]:
         return True
 
-    try:
-        tmp = download.path()
-        if tmp:
-            src = Path(tmp)
-            if src.is_file() and src.stat().st_size > 0:
-                shutil.copy2(src, dest)
-                return not _tradingview_download_png_is_empty(dest)[0]
-    except Exception:
-        pass
-
     suggested = (download.suggested_filename or "").strip()
-    scan_dirs: list[Path] = [download_dir]
-    native = _tradingview_native_downloads_dir()
-    if native is not None:
-        scan_dirs.append(native)
-
+    scan_dirs = _tradingview_download_scan_dirs(download_dir)
     deadline = time.monotonic() + max(0, wait_ms) / 1000.0
     poll_ms = 200
     while time.monotonic() < deadline:
+        try:
+            tmp = download.path()
+            if tmp:
+                src = Path(tmp)
+                if src.is_file() and src.stat().st_size > 0:
+                    shutil.copy2(src, dest)
+                    if not _tradingview_download_png_is_empty(dest)[0]:
+                        return True
+        except Exception:
+            pass
+
         for directory in scan_dirs:
             if suggested:
                 cand = directory / suggested
                 if cand.is_file() and cand.stat().st_size > 0:
                     shutil.copy2(cand, dest)
                     return True
-            newest = _tradingview_newest_png_since(
+            newest = _tradingview_pickup_newest_png(
                 directory,
-                since_monotonic=since_monotonic,
+                since_epoch=since_epoch,
                 name_hint=suggested,
             )
             if newest is not None:
@@ -3840,7 +3895,7 @@ def _tradingview_snapshot_download_capture(
         pass
 
     for attempt in range(max_retries + 1):
-        since = time.monotonic()
+        since = time.time()
         _tradingview_cdp_set_download_path(page, download_dir, tv)
         with page.expect_download(timeout=timeout_ms) as dl_info:
             page.keyboard.press(shortcut)
@@ -3851,7 +3906,7 @@ def _tradingview_snapshot_download_capture(
             dest,
             tv,
             download_dir=download_dir,
-            since_monotonic=since,
+            since_epoch=since,
             wait_ms=pickup_ms,
         )
         empty, reason = _tradingview_download_png_is_empty(dest)

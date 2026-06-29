@@ -16,18 +16,17 @@ from typing import Any, Optional
 from playwright.async_api import Locator, Page
 
 from automation_tool.coinmap import (
-    _tradingview_cdp_set_download_path,
     _tradingview_download_empty_max_retries,
     _tradingview_download_empty_retry_delay_ms,
     _tradingview_download_pickup_timeout_ms,
     _tradingview_download_png_is_empty,
+    _tradingview_download_scan_dirs,
     _tradingview_indicator_loading_markers,
     _tradingview_interval_slug,
     _tradingview_is_delete_indicator_label,
     _tradingview_legend_item_selector,
     _tradingview_legend_is_still_loading,
-    _tradingview_native_downloads_dir,
-    _tradingview_newest_png_since,
+    _tradingview_pickup_newest_png,
     _tradingview_poll_legend_loading_state,
     _tradingview_symbol_locator,
     _tv_apply_indicator_profile,
@@ -818,6 +817,28 @@ async def tv_wait_for_indicators_loaded_async(page: Page, tv: dict[str, Any]) ->
     )
 
 
+async def _tradingview_cdp_set_download_path_async(
+    page: Page,
+    download_dir: Path,
+    tv: dict[str, Any],
+) -> None:
+    """Async Playwright: CDP must be awaited or Chrome keeps saving outside ``download_dir``."""
+    if not bool(tv.get("tradingview_snapshot_download_cdp_dir_enabled", True)):
+        return
+    try:
+        session = await page.context.new_cdp_session(page)
+        await session.send(
+            "Browser.setDownloadBehavior",
+            {
+                "behavior": "allowAndName",
+                "downloadPath": str(download_dir.resolve()),
+                "eventsEnabled": True,
+            },
+        )
+    except Exception:
+        pass
+
+
 async def _tradingview_materialize_browser_download_async(
     page: Page,
     download,
@@ -825,7 +846,7 @@ async def _tradingview_materialize_browser_download_async(
     tv: dict[str, Any],
     *,
     download_dir: Path,
-    since_monotonic: float,
+    since_epoch: float,
     wait_ms: int,
 ) -> bool:
     """Async Playwright download → ``dest`` (see coinmap._tradingview_materialize_browser_download)."""
@@ -837,34 +858,31 @@ async def _tradingview_materialize_browser_download_async(
     if not _tradingview_download_png_is_empty(dest)[0]:
         return True
 
-    try:
-        tmp = await download.path()
-        if tmp:
-            src = Path(tmp)
-            if src.is_file() and src.stat().st_size > 0:
-                shutil.copy2(src, dest)
-                return not _tradingview_download_png_is_empty(dest)[0]
-    except Exception:
-        pass
-
     suggested = (download.suggested_filename or "").strip()
-    scan_dirs: list[Path] = [download_dir]
-    native = _tradingview_native_downloads_dir()
-    if native is not None:
-        scan_dirs.append(native)
-
+    scan_dirs = _tradingview_download_scan_dirs(download_dir)
     deadline = time.monotonic() + max(0, wait_ms) / 1000.0
     poll_ms = 200
     while time.monotonic() < deadline:
+        try:
+            tmp = await download.path()
+            if tmp:
+                src = Path(tmp)
+                if src.is_file() and src.stat().st_size > 0:
+                    shutil.copy2(src, dest)
+                    if not _tradingview_download_png_is_empty(dest)[0]:
+                        return True
+        except Exception:
+            pass
+
         for directory in scan_dirs:
             if suggested:
                 cand = directory / suggested
                 if cand.is_file() and cand.stat().st_size > 0:
                     shutil.copy2(cand, dest)
                     return True
-            newest = _tradingview_newest_png_since(
+            newest = _tradingview_pickup_newest_png(
                 directory,
-                since_monotonic=since_monotonic,
+                since_epoch=since_epoch,
                 name_hint=suggested,
             )
             if newest is not None:
@@ -906,8 +924,8 @@ async def tv_snapshot_download_capture_async(
         pass
 
     for attempt in range(max_retries + 1):
-        since = time.monotonic()
-        _tradingview_cdp_set_download_path(page, download_dir, tv)
+        since = time.time()
+        await _tradingview_cdp_set_download_path_async(page, download_dir, tv)
         async with page.expect_download(timeout=timeout_ms) as dl_info:
             await page.keyboard.press(shortcut)
         download = await dl_info.value
@@ -917,7 +935,7 @@ async def tv_snapshot_download_capture_async(
             dest,
             tv,
             download_dir=download_dir,
-            since_monotonic=since,
+            since_epoch=since,
             wait_ms=pickup_ms,
         )
         empty, reason = _tradingview_download_png_is_empty(dest)

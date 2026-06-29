@@ -8,6 +8,7 @@ from automation_tool.coinmap import (
     _tradingview_download_png_is_empty,
     _tradingview_materialize_browser_download,
     _tradingview_newest_png_since,
+    _tradingview_pickup_newest_png,
 )
 
 
@@ -25,14 +26,26 @@ def test_tradingview_download_png_is_empty(tmp_path: Path) -> None:
 
 
 def test_tradingview_newest_png_since(tmp_path: Path) -> None:
-    since = time.monotonic()
+    since = time.time()
     old = tmp_path / "old.png"
     old.write_bytes(b"\x89PNG")
     time.sleep(0.02)
     new = tmp_path / "chart.png"
     new.write_bytes(b"\x89PNG\x00")
-    found = _tradingview_newest_png_since(tmp_path, since_monotonic=since)
+    found = _tradingview_newest_png_since(tmp_path, since_epoch=since)
     assert found == new
+
+
+def test_tradingview_pickup_newest_png_falls_back_without_hint(tmp_path: Path) -> None:
+    since = time.time()
+    path = tmp_path / "actual_name.png"
+    path.write_bytes(b"\x89PNG\r\n")
+    found = _tradingview_pickup_newest_png(
+        tmp_path,
+        since_epoch=since - 1,
+        name_hint="different_hint.png",
+    )
+    assert found == path
 
 
 def test_tradingview_materialize_picks_native_download(tmp_path: Path) -> None:
@@ -58,7 +71,7 @@ def test_tradingview_materialize_picks_native_download(tmp_path: Path) -> None:
         dest,
         {},
         download_dir=download_dir,
-        since_monotonic=time.monotonic() - 1,
+        since_epoch=time.time() - 1,
         wait_ms=500,
     )
     assert ok is True
