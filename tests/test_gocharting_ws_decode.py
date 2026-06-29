@@ -231,6 +231,42 @@ def test_slim_footprint_combined_document() -> None:
     assert "totals" in c0
 
 
+def test_slim_footprint_combined_for_openai() -> None:
+    from automation_tool.gocharting_ws_decode import slim_footprint_combined_for_openai
+
+    doc = {
+        "ws_type": "FOOTPRINT/V2",
+        "version": 1,
+        "fp_day": {"tick_size": 1},
+        "symbol": "COMEX:GC1!",
+        "candles": [
+            {
+                "time_gmt7": "Thu Jun 25 2026 05:00:00 GMT+0700",
+                "totals": {"buy": {"volume": "10"}},
+                "footprint": [
+                    {
+                        "level": 40414,
+                        "price": 4041.4,
+                        "buy": {"trades": 5, "volume": 6},
+                        "sell": {"trades": 6, "volume": 8},
+                        "rl": 1.33,
+                        "imbalance": "ASK",
+                    }
+                ],
+            }
+        ],
+    }
+    slim = slim_footprint_combined_for_openai(doc)
+    assert "ws_type" not in slim
+    assert "version" not in slim
+    assert "fp_day" not in slim
+    c0 = slim["candles"][0]
+    assert "totals" not in c0
+    lvl = c0["footprint"][0]
+    assert lvl == {"price": 4041.4, "buy": 6, "sell": 8, "rl": 1.33, "imbalance": "ASK"}
+    assert "level" not in lvl
+
+
 def test_mt5_bar_time_to_footprint_key() -> None:
     from automation_tool.gocharting_ws_decode import mt5_bar_time_to_footprint_key
 
@@ -278,12 +314,13 @@ def test_aggregate_footprint_levels_block_multiplier_3() -> None:
         {"price": 4046.5, "buy": {"trades": 1, "volume": 3}, "sell": {"trades": 0, "volume": 0}},
         {"price": 4046.3, "buy": {"trades": 1, "volume": 1}, "sell": {"trades": 0, "volume": 0}},
     ]
-    out = aggregate_footprint_levels(levels, block_size=0.3, price_precision=1)
-    assert [row["price"] for row in out] == [4046.7, 4046.4, 4046.1]
-    assert out[0]["buy"]["volume"] == 1
-    assert out[1]["buy"]["volume"] == 6
-    assert out[1]["buy"]["trades"] == 4
-    assert out[2]["buy"]["volume"] == 1
+    out = aggregate_footprint_levels(
+        levels, block_size=0.3, price_precision=1, tick_size=0.1, block_multiplier=3
+    )
+    assert [row["price"] for row in out] == [4046.6, 4046.3]
+    assert out[0]["buy"]["volume"] == 7
+    assert out[0]["buy"]["trades"] == 5
+    assert out[1]["buy"]["volume"] == 1
 
 
 def test_aggregate_footprint_levels_multiplier_1_unchanged() -> None:
@@ -326,7 +363,120 @@ def test_aggregate_footprint_combined_document() -> None:
         doc, cfg={"footprint_ws": {"tick_size": 0.1, "block_multiplier": 3}}
     )
     fp = out["candles"][0]["footprint"]
-    assert [row["price"] for row in fp] == [4024.8, 4024.5]
-    assert fp[0]["buy"]["volume"] == 14
-    assert fp[1]["buy"]["volume"] == 32
-    assert fp[1]["sell"]["volume"] == 5
+    assert [row["price"] for row in fp] == [4024.7]
+    assert fp[0]["buy"]["volume"] == 46
+    assert fp[0]["sell"]["volume"] == 5
+
+
+def test_aggregate_footprint_levels_block_multiplier_2() -> None:
+    from automation_tool.gocharting_ws_decode import aggregate_footprint_levels
+
+    levels = [
+        {"price": 4061.0, "buy": {"volume": 2}, "sell": {"volume": 0}},
+        {"price": 4060.9, "buy": {"volume": 0}, "sell": {"volume": 0}},
+        {"price": 4060.8, "buy": {"volume": 5}, "sell": {"volume": 0}},
+        {"price": 4060.7, "buy": {"volume": 3}, "sell": {"volume": 1}},
+    ]
+    out = aggregate_footprint_levels(
+        levels,
+        block_size=0.2,
+        price_precision=1,
+        tick_size=0.1,
+        block_multiplier=2,
+    )
+    by_price = {row["price"]: row for row in out}
+    assert by_price[4060.9]["buy"]["volume"] == 2
+    assert by_price[4060.9]["sell"]["volume"] == 0
+    assert by_price[4060.7]["buy"]["volume"] == 8
+    assert by_price[4060.7]["sell"]["volume"] == 1
+
+
+def test_aggregate_footprint_combined_document_block_multiplier_4() -> None:
+    from automation_tool.gocharting_ws_decode import aggregate_footprint_combined_document
+
+    doc = {
+        "fp_day": {"tick_size": 1, "display_tick_size": 1, "price_precision": 1},
+        "candles": [
+            {
+                "time_gmt7": "Thu Jun 25 2026 10:05:00 GMT+0700",
+                "footprint": [
+                    {"price": 4060.8, "buy": {"volume": 1}, "sell": {"volume": 0}},
+                    {"price": 4060.7, "buy": {"volume": 2}, "sell": {"volume": 0}},
+                    {"price": 4060.6, "buy": {"volume": 3}, "sell": {"volume": 0}},
+                    {"price": 4060.5, "buy": {"volume": 4}, "sell": {"volume": 0}},
+                    {"price": 4060.4, "buy": {"volume": 10}, "sell": {"volume": 0}},
+                ],
+            }
+        ],
+    }
+    out = aggregate_footprint_combined_document(
+        doc, cfg={"footprint_ws": {"tick_size": 0.1, "block_multiplier": 4}}
+    )
+    fp = out["candles"][0]["footprint"]
+    assert [row["price"] for row in fp] == [4060.6, 4060.2]
+    assert fp[0]["buy"]["volume"] == 10
+    assert fp[1]["buy"]["volume"] == 10
+
+
+def test_snap_to_gocharting_chart_block_multiplier_4() -> None:
+    from automation_tool.gocharting_footprint_ocr import snap_to_gocharting_chart_block
+
+    snap = lambda p: snap_to_gocharting_chart_block(p, 0.4, tick_size=0.1, block_multiplier=4)
+    assert snap(0.1) == 0.2
+    assert snap(0.4) == 0.2
+    assert snap(0.5) == 0.6
+    assert snap(0.8) == 0.6
+    assert snap(0.9) == 1.0
+    assert snap(1.2) == 1.0
+    assert snap(4060.8) == 4060.6
+    assert snap(4060.9) == 4061.0
+
+
+def test_aggregate_footprint_levels_block_multiplier_4() -> None:
+    from automation_tool.gocharting_ws_decode import aggregate_footprint_levels
+
+    levels = [
+        {"price": 4060.8, "buy": {"volume": 1}, "sell": {"volume": 0}},
+        {"price": 4060.7, "buy": {"volume": 2}, "sell": {"volume": 0}},
+        {"price": 4060.6, "buy": {"volume": 3}, "sell": {"volume": 0}},
+        {"price": 4060.5, "buy": {"volume": 4}, "sell": {"volume": 0}},
+        {"price": 4060.4, "buy": {"volume": 10}, "sell": {"volume": 0}},
+    ]
+    out = aggregate_footprint_levels(
+        levels,
+        block_size=0.4,
+        price_precision=1,
+        tick_size=0.1,
+        block_multiplier=4,
+    )
+    assert [row["price"] for row in out] == [4060.6, 4060.2]
+    assert out[0]["buy"]["volume"] == 10
+    assert out[1]["buy"]["volume"] == 10
+
+
+def test_footprint_raw_document_to_bid_ask_block_multiplier(tmp_path: Path) -> None:
+    from automation_tool.gocharting_ws_decode import footprint_raw_document_to_bid_ask
+
+    raw = {
+        "symbol": "COMEX:GC1!",
+        "request": {"interval": "5m"},
+        "fp_day": {"price_precision": 1},
+        "candles": [
+            {
+                "time_gmt7": "Thu Jun 25 2026 05:00:00 GMT+0700",
+                "footprint": [
+                    {"price": 4060.8, "buy": {"volume": 1}, "sell": {"volume": 0}},
+                    {"price": 4060.7, "buy": {"volume": 2}, "sell": {"volume": 0}},
+                    {"price": 4060.6, "buy": {"volume": 3}, "sell": {"volume": 0}},
+                    {"price": 4060.5, "buy": {"volume": 4}, "sell": {"volume": 0}},
+                ],
+            }
+        ],
+    }
+    out = footprint_raw_document_to_bid_ask(
+        raw, block_multiplier=4, tick_size=0.1, include_price=True
+    )
+    assert out["block_multiplier"] == 4
+    levels = out["candles"][0]["price_levels"]
+    assert len(levels) == 1
+    assert levels[0] == {"bid": 10, "ask": 0, "price": 4060.6}

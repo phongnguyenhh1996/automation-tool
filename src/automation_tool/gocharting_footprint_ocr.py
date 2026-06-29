@@ -749,11 +749,46 @@ def footprint_block_size(*, gocharting_yaml: Optional[Path] = None) -> float:
 
 
 def snap_high_to_footprint_block(high: float, block_size: float) -> float:
-    """Snap CSV high down to the top footprint cluster boundary."""
+    """Snap CSV high down to the top footprint cluster boundary (legacy floor grid)."""
     if block_size <= 0:
         return round(high, 1)
     top = math.floor((high + 1e-9) / block_size) * block_size
     return round(top, 1)
+
+
+def snap_to_gocharting_chart_block(
+    price: float,
+    block_size: float,
+    *,
+    tick_size: float = DEFAULT_FOOTPRINT_TICK_SIZE,
+    block_multiplier: int | None = None,
+) -> float:
+    """Snap per-tick price to the GoCharting footprint chart row label.
+
+    Groups ``block_multiplier`` consecutive ticks (anchors at ``…1, …5, …9`` per dollar)
+    and labels at tick ``ceil(block_multiplier / 2)`` within each group, e.g. tick 0.1:
+    mult 2 → ``0.1–0.2→0.1``, ``0.3–0.4→0.3``; mult 4 → ``0.1–0.4→0.2``, ``0.5–0.8→0.6``.
+    """
+    if block_size <= 0:
+        return round(price, 1)
+    tick = tick_size if tick_size > 0 else block_size
+    mult = (
+        max(1, int(block_multiplier))
+        if block_multiplier is not None
+        else max(1, round(block_size / tick))
+    )
+    label_tick = math.ceil(mult / 2)
+    anchor = math.floor((price - tick + 1e-9) / block_size) * block_size
+    return round(anchor + label_tick * tick, 1)
+
+
+def footprint_block_multiplier_from_size(
+    block_size: float,
+    *,
+    tick_size: float = DEFAULT_FOOTPRINT_TICK_SIZE,
+) -> int:
+    tick = tick_size if tick_size > 0 else block_size
+    return max(1, round(block_size / tick))
 
 
 def compute_footprint_level_prices(
@@ -761,11 +796,18 @@ def compute_footprint_level_prices(
     n: int,
     *,
     block_size: float = DEFAULT_FOOTPRINT_BLOCK_SIZE,
+    tick_size: float = DEFAULT_FOOTPRINT_TICK_SIZE,
+    block_multiplier: int | None = None,
 ) -> list[float]:
-    """Top→bottom prices: CSV high snapped to block grid, then ``- i × block_size``."""
+    """Top→bottom chart row labels from CSV high, then ``- i × block_size``."""
     if n <= 0:
         return []
-    top = snap_high_to_footprint_block(high, block_size)
+    mult = block_multiplier
+    if mult is None:
+        mult = footprint_block_multiplier_from_size(block_size, tick_size=tick_size)
+    top = snap_to_gocharting_chart_block(
+        high, block_size, tick_size=tick_size, block_multiplier=mult
+    )
     return [round(top - i * block_size, 1) for i in range(n)]
 
 

@@ -108,17 +108,18 @@ footprint_screenshot:
 
 footprint_ws:
   enabled: true
-  # WS data is per-tick (0.1); aggregate to block clusters before OpenAI upload.
+  # WS data is per-tick (0.1); aggregate to GoCharting chart row labels before OpenAI upload.
   # block_size = tick_size × block_multiplier (must match GoCharting Tick Manager Block setting).
+  # Row label = anchor + ceil(block_multiplier/2)×tick (mult 2: 0.1–0.2→0.1; mult 4: 0.1–0.4→0.2).
   tick_size: 0.1
   block_multiplier: 4
   max_candles: 50
   wait_ms: 45000
-  export_format: raw
+  export_format: combined
   mt5_spot: false
   derived:
-    enabled: true
-    imbalance_enabled: true
+    enabled: false
+    imbalance_enabled: false
     stacked_enabled: false
     absorption_enabled: false
     rl_min: 4.0

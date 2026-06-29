@@ -261,6 +261,11 @@ tradingview_capture:
   tradingview_snapshot_download_shortcut: "Control+Alt+S"
   tradingview_snapshot_download_timeout_ms: 15000
   after_tradingview_snapshot_download_ms: 300
+  # Persistent Chrome / browser_service: save_as can be 0 KB while Chrome saves to Downloads.
+  tradingview_snapshot_download_cdp_dir_enabled: true
+  tradingview_snapshot_download_pickup_timeout_ms: 10000
+  tradingview_snapshot_download_empty_max_retries: 2
+  tradingview_snapshot_download_empty_retry_delay_ms: 500
   screenshot_button_selector: "#header-toolbar-screenshot"
   snapshot_open_in_new_tab_selector: '[data-qa-id="open-image-in-new-tab"]'
   snapshot_image_selector: "img.tv-snapshot-image"

@@ -15,11 +15,17 @@ from typing import Any, Optional
 from playwright.async_api import Locator, Page
 
 from automation_tool.coinmap import (
+    _tradingview_cdp_set_download_path,
+    _tradingview_download_empty_max_retries,
+    _tradingview_download_empty_retry_delay_ms,
+    _tradingview_download_pickup_timeout_ms,
+    _tradingview_download_png_is_empty,
     _tradingview_indicator_loading_markers,
     _tradingview_interval_slug,
     _tradingview_is_delete_indicator_label,
     _tradingview_legend_item_selector,
     _tradingview_legend_is_still_loading,
+    _tradingview_materialize_browser_download,
     _tradingview_poll_legend_loading_state,
     _tradingview_symbol_locator,
     _tv_apply_indicator_profile,
@@ -825,6 +831,11 @@ async def tv_snapshot_download_capture_async(
     after_ms = int(tv.get("after_tradingview_snapshot_download_ms", 300))
     dest = dest_path or (charts_dir / f"{stamp}_tradingview_{symbol_key}_{interval_slug}.png")
     dest.parent.mkdir(parents=True, exist_ok=True)
+    download_dir = dest.parent / ".tv_downloads"
+    download_dir.mkdir(parents=True, exist_ok=True)
+    max_retries = _tradingview_download_empty_max_retries(tv)
+    retry_delay_ms = _tradingview_download_empty_retry_delay_ms(tv)
+    pickup_ms = _tradingview_download_pickup_timeout_ms(tv)
     try:
         await page.bring_to_front()
     except Exception:
@@ -835,10 +846,44 @@ async def tv_snapshot_download_capture_async(
         await page.wait_for_timeout(80)
     except Exception:
         pass
-    async with page.expect_download(timeout=timeout_ms) as dl_info:
-        await page.keyboard.press(shortcut)
-    download = await dl_info.value
-    await download.save_as(dest)
+
+    for attempt in range(max_retries + 1):
+        since = time.monotonic()
+        _tradingview_cdp_set_download_path(page, download_dir, tv)
+        async with page.expect_download(timeout=timeout_ms) as dl_info:
+            await page.keyboard.press(shortcut)
+        download = await dl_info.value
+        ok = _tradingview_materialize_browser_download(
+            page,
+            download,
+            dest,
+            tv,
+            download_dir=download_dir,
+            since_monotonic=since,
+            wait_ms=pickup_ms,
+        )
+        empty, reason = _tradingview_download_png_is_empty(dest)
+        if ok and not empty:
+            if after_ms > 0:
+                await page.wait_for_timeout(after_ms)
+            return dest
+        if attempt < max_retries:
+            _log.warning(
+                "tv: PNG empty after download (%s) — retry %d/%d (%s)",
+                reason,
+                attempt + 1,
+                max_retries,
+                dest.name,
+            )
+            if retry_delay_ms > 0:
+                await page.wait_for_timeout(retry_delay_ms)
+        else:
+            _log.warning(
+                "tv: PNG still empty after %d retries (%s); Chrome may have saved to Downloads only",
+                max_retries,
+                dest.name,
+            )
+
     if after_ms > 0:
         await page.wait_for_timeout(after_ms)
     return dest

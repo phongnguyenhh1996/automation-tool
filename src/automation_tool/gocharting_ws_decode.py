@@ -15,7 +15,7 @@ from automation_tool.gocharting_footprint_ocr import (
     DEFAULT_FOOTPRINT_BLOCK_MULTIPLIER,
     DEFAULT_FOOTPRINT_TICK_SIZE,
     format_footprint_candle_time,
-    snap_high_to_footprint_block,
+    snap_to_gocharting_chart_block,
 )
 from automation_tool.proto import footprint_pb2 as pb
 from automation_tool.proto import ohlc_bars_pb2 as ob
@@ -205,6 +205,64 @@ def build_ohlc_index(docs: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
 
 _COMBINED_DOC_DROP_KEYS = ("is_complete",)
 _COMBINED_CANDLE_DROP_KEYS = ("ending_summary", "max", "min")
+_OPENAI_DOC_DROP_KEYS = ("fp_day", "ws_type", "version")
+_OPENAI_CANDLE_DROP_KEYS = ("totals",)
+
+
+def _footprint_side_volume(side: Any) -> int:
+    if isinstance(side, dict):
+        try:
+            return int(side.get("volume") or 0)
+        except (TypeError, ValueError):
+            return 0
+    try:
+        return int(side or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def slim_footprint_level_for_openai(level: dict[str, Any]) -> dict[str, Any]:
+    """Compact one ``footprint[]`` row: drop ``level``, buy/sell → volume ints."""
+    row: dict[str, Any] = {}
+    if level.get("price") is not None:
+        row["price"] = level["price"]
+    row["buy"] = _footprint_side_volume(level.get("buy"))
+    row["sell"] = _footprint_side_volume(level.get("sell"))
+    for key in ("rl", "imbalance", "side", "total_vol", "bid", "ask"):
+        if key in level:
+            row[key] = level[key]
+    return row
+
+
+def slim_footprint_combined_for_openai(doc: dict[str, Any]) -> dict[str, Any]:
+    """Token-efficient footprint combined JSON for OpenAI upload."""
+    if not isinstance(doc, dict):
+        return doc
+    out = dict(doc)
+    for key in _OPENAI_DOC_DROP_KEYS:
+        out.pop(key, None)
+    candles_raw = out.get("candles")
+    if not isinstance(candles_raw, list):
+        return out
+    slim_candles: list[Any] = []
+    for candle in candles_raw:
+        if not isinstance(candle, dict):
+            slim_candles.append(candle)
+            continue
+        block = dict(candle)
+        for key in _OPENAI_CANDLE_DROP_KEYS:
+            block.pop(key, None)
+        footprint = block.get("footprint")
+        if isinstance(footprint, list):
+            block["footprint"] = [
+                slim_footprint_level_for_openai(lvl)
+                if isinstance(lvl, dict)
+                else lvl
+                for lvl in footprint
+            ]
+        slim_candles.append(block)
+    out["candles"] = slim_candles
+    return out
 
 
 def slim_footprint_combined_document(doc: dict[str, Any]) -> dict[str, Any]:
@@ -364,13 +422,38 @@ def _price_precision_from_doc(doc: dict[str, Any]) -> int:
         return 1
 
 
+def _footprint_ws_tick_size(cfg: dict[str, Any], doc: dict[str, Any]) -> float:
+    ws = cfg.get("footprint_ws") if isinstance(cfg.get("footprint_ws"), dict) else {}
+    tick_raw = ws.get("tick_size")
+    if tick_raw is not None:
+        try:
+            tick = float(tick_raw)
+            if tick > 0:
+                return tick
+        except (TypeError, ValueError):
+            pass
+    from automation_tool.gocharting_footprint_derived import tick_size_from_footprint_doc
+
+    tick = tick_size_from_footprint_doc(doc)
+    if tick > 0:
+        return tick
+    return DEFAULT_FOOTPRINT_TICK_SIZE
+
+
 def _snap_footprint_price_to_block(
     price: float,
     block_size: float,
     *,
     price_precision: int,
+    tick_size: float = DEFAULT_FOOTPRINT_TICK_SIZE,
+    block_multiplier: int = DEFAULT_FOOTPRINT_BLOCK_MULTIPLIER,
 ) -> float:
-    snapped = snap_high_to_footprint_block(price, block_size)
+    snapped = snap_to_gocharting_chart_block(
+        price,
+        block_size,
+        tick_size=tick_size,
+        block_multiplier=block_multiplier,
+    )
     return round(snapped, max(0, price_precision))
 
 
@@ -384,8 +467,10 @@ def aggregate_footprint_levels(
     *,
     block_size: float,
     price_precision: int,
+    tick_size: float = DEFAULT_FOOTPRINT_TICK_SIZE,
+    block_multiplier: int = DEFAULT_FOOTPRINT_BLOCK_MULTIPLIER,
 ) -> list[dict[str, Any]]:
-    """Merge per-tick WS levels into block clusters (sum buy/sell volume per block)."""
+    """Merge per-tick WS levels into GoCharting chart block clusters (sum buy/sell per row)."""
     if block_size <= 0 or not levels:
         return levels
 
@@ -401,7 +486,11 @@ def aggregate_footprint_levels(
         if price <= 0:
             continue
         block_price = _snap_footprint_price_to_block(
-            price, block_size, price_precision=price_precision
+            price,
+            block_size,
+            price_precision=price_precision,
+            tick_size=tick_size,
+            block_multiplier=block_multiplier,
         )
         bucket = buckets.get(block_price)
         if bucket is None:
@@ -447,6 +536,8 @@ def aggregate_footprint_combined_document(
         return doc
 
     price_precision = _price_precision_from_doc(doc)
+    tick_size = _footprint_ws_tick_size(cfg_raw, doc)
+    block_multiplier = footprint_ws_block_multiplier(cfg_raw)
     out = dict(doc)
     candles_out: list[Any] = []
     for candle in doc.get("candles") or []:
@@ -460,6 +551,8 @@ def aggregate_footprint_combined_document(
                 footprint,
                 block_size=block_size,
                 price_precision=price_precision,
+                tick_size=tick_size,
+                block_multiplier=block_multiplier,
             )
         candles_out.append(block)
     out["candles"] = candles_out
@@ -587,6 +680,61 @@ def footprint_response_to_document(
         "timeframe": doc_timeframe,
         "type": FOOTPRINT_CHART_TYPE,
         "candles": candles,
+    }
+
+
+def footprint_raw_document_to_bid_ask(
+    raw_doc: dict[str, Any],
+    *,
+    block_multiplier: int = 1,
+    tick_size: float = DEFAULT_FOOTPRINT_TICK_SIZE,
+    include_price: bool = False,
+) -> dict[str, Any]:
+    """Convert on-disk ``footprint_raw_*.json`` to flat bid/ask JSON."""
+    req = raw_doc.get("request") if isinstance(raw_doc.get("request"), dict) else {}
+    price_precision = _price_precision_from_doc(raw_doc)
+    block_size = tick_size * block_multiplier if block_multiplier > 1 else 0.0
+
+    candles_out: list[dict[str, Any]] = []
+    for candle in raw_doc.get("candles") or []:
+        if not isinstance(candle, dict):
+            continue
+        footprint = candle.get("footprint")
+        if not isinstance(footprint, list):
+            continue
+        levels = [lvl for lvl in footprint if isinstance(lvl, dict)]
+        if block_multiplier > 1:
+            levels = aggregate_footprint_levels(
+                levels,
+                block_size=block_size,
+                price_precision=price_precision,
+                tick_size=tick_size,
+                block_multiplier=block_multiplier,
+            )
+        price_levels: list[dict[str, Any]] = []
+        for fp in sorted(levels, key=lambda f: float(f.get("price") or 0), reverse=True):
+            buy = fp.get("buy") if isinstance(fp.get("buy"), dict) else {}
+            sell = fp.get("sell") if isinstance(fp.get("sell"), dict) else {}
+            row: dict[str, Any] = {
+                "bid": int(buy.get("volume") or 0),
+                "ask": int(sell.get("volume") or 0),
+            }
+            if include_price and fp.get("price") is not None:
+                row["price"] = fp.get("price")
+            price_levels.append(row)
+        candles_out.append(
+            {
+                "time": str(candle.get("time_gmt7") or "").strip(),
+                "price_levels": price_levels,
+            }
+        )
+
+    return {
+        "symbol": str(raw_doc.get("symbol") or "").strip(),
+        "timeframe": str(req.get("interval") or "").strip(),
+        "type": FOOTPRINT_CHART_TYPE,
+        "block_multiplier": block_multiplier,
+        "candles": candles_out,
     }
 
 

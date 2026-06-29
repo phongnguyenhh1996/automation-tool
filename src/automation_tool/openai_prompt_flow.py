@@ -238,6 +238,7 @@ def prepare_footprint_json_for_openai(
             aggregate_footprint_combined_document,
             drop_forming_footprint_candle,
             footprint_ws_max_candles_from_cfg,
+            slim_footprint_combined_for_openai,
             trim_footprint_document,
         )
         from automation_tool.gocharting_footprint_derived import (
@@ -256,7 +257,7 @@ def prepare_footprint_json_for_openai(
         out = aggregate_footprint_combined_document(out, cfg=cfg)
         if footprint_derived_enabled(cfg):
             out = enrich_footprint_combined_document(out, cfg=cfg)
-        return out
+        return slim_footprint_combined_for_openai(out)
     if name.startswith("footprint_bid_ask_") and path.suffix.lower() == ".json":
         from automation_tool.gocharting_footprint_ocr import (
             charts_dir_from_footprint_json_path,
@@ -331,8 +332,8 @@ def _json_file_header_and_body(
             f"[GoCharting footprint combined — {iv} — file: {path.name}]\n"
             "Instrument: COMEX:GC1! futures. Each candle: time_gmt7, ohlc (GC1!), "
             "mt5_spot_ohlc (spot broker), footprint[] "
-            "with buy/sell volume, rl, imbalance (bid/ask/\"\") per price block (tick_size × block_multiplier from config; "
-            "latest N candles from WS capture).\n"
+            "with buy/sell volume, rl, imbalance (bid/ask/\"\") per price block (GoCharting chart row labels; "
+            "tick_size × block_multiplier from config; latest N candles from WS capture).\n"
         )
     elif path.name.startswith("footprint_bid_ask_") and path.suffix.lower() == ".json":
         iv = path.stem.replace("footprint_bid_ask_", "")
@@ -340,7 +341,7 @@ def _json_file_header_and_body(
             f"[GoCharting Bid/Ask footprint — {iv} — file: {path.name}]\n"
             "Instrument: COMEX:GC1! futures. Each candle: time (HH:MM) + price_levels "
             "[{bid, ask, price}, ...] top→bottom per closed bar "
-            "(price from CSV High snapped to GoCharting Tick Manager block cluster, default 0.4).\n"
+            "(price from CSV High aligned to GoCharting chart row labels, default block 0.3).\n"
         )
     elif "_openai_coinmap_merged" in path.name or path.name.endswith("_merged.json"):
         header = f"[Coinmap merged analysis — file: {path.name}]\n"

@@ -347,18 +347,18 @@ def test_footprint_json_enriched_with_price_before_openai(tmp_path: Path) -> Non
     payload = json.loads(body)
     prices = [lv["price"] for lv in payload["candles"][0]["price_levels"]]
     assert prices == [
-        4219.8,
+        4219.9,
+        4219.7,
         4219.5,
-        4219.2,
+        4219.3,
+        4219.1,
         4218.9,
-        4218.6,
+        4218.7,
+        4218.5,
         4218.3,
-        4218.0,
-        4217.7,
-        4217.4,
-        4217.1,
+        4218.1,
     ]
-    assert '"price":4219.8' in body or '"price": 4219.8' in body
+    assert '"price":4219.9' in body or '"price": 4219.9' in body
 
 
 def test_footprint_json_trimmed_to_100_candles_before_openai(tmp_path: Path) -> None:

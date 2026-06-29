@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import time
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -3649,6 +3650,159 @@ def _wait_tradingview_indicators_loaded(page, tv: dict[str, Any]) -> None:
     )
 
 
+def _tradingview_download_png_is_empty(path: Path) -> tuple[bool, str]:
+    try:
+        if path.stat().st_size == 0:
+            return True, "empty PNG"
+    except OSError as e:
+        return True, f"read error: {e}"
+    return False, ""
+
+
+def _tradingview_download_empty_max_retries(tv: dict[str, Any]) -> int:
+    try:
+        return max(0, int(tv.get("tradingview_snapshot_download_empty_max_retries", 2)))
+    except (TypeError, ValueError):
+        return 2
+
+
+def _tradingview_download_empty_retry_delay_ms(tv: dict[str, Any]) -> int:
+    try:
+        return max(0, int(tv.get("tradingview_snapshot_download_empty_retry_delay_ms", 500)))
+    except (TypeError, ValueError):
+        return 500
+
+
+def _tradingview_download_pickup_timeout_ms(tv: dict[str, Any]) -> int:
+    try:
+        return max(500, int(tv.get("tradingview_snapshot_download_pickup_timeout_ms", 10_000)))
+    except (TypeError, ValueError):
+        return 10_000
+
+
+def _tradingview_native_downloads_dir() -> Optional[Path]:
+    for env_key in ("USERPROFILE", "HOME"):
+        base = (os.getenv(env_key) or "").strip()
+        if not base:
+            continue
+        for name in ("Downloads", "downloads"):
+            cand = Path(base).expanduser() / name
+            if cand.is_dir():
+                return cand
+    return None
+
+
+def _tradingview_cdp_set_download_path(page, download_dir: Path, tv: dict[str, Any]) -> None:
+    """Chrome may save natively while Playwright ``save_as`` is empty on persistent/CDP contexts."""
+    if not bool(tv.get("tradingview_snapshot_download_cdp_dir_enabled", True)):
+        return
+    try:
+        session = page.context.new_cdp_session(page)
+        session.send(
+            "Browser.setDownloadBehavior",
+            {
+                "behavior": "allowAndName",
+                "downloadPath": str(download_dir.resolve()),
+                "eventsEnabled": True,
+            },
+        )
+    except Exception:
+        pass
+
+
+def _tradingview_newest_png_since(
+    directory: Path,
+    *,
+    since_monotonic: float,
+    name_hint: str = "",
+) -> Optional[Path]:
+    if not directory.is_dir():
+        return None
+    best: Optional[Path] = None
+    best_mtime = 0.0
+    hint = (name_hint or "").strip().lower()
+    for entry in directory.iterdir():
+        if not entry.is_file():
+            continue
+        if entry.suffix.lower() != ".png":
+            continue
+        if hint and hint not in entry.name.lower():
+            continue
+        try:
+            st = entry.stat()
+        except OSError:
+            continue
+        if st.st_size <= 0:
+            continue
+        if st.st_mtime < since_monotonic:
+            continue
+        if st.st_mtime >= best_mtime:
+            best_mtime = st.st_mtime
+            best = entry
+    return best
+
+
+def _tradingview_materialize_browser_download(
+    page,
+    download,
+    dest: Path,
+    tv: dict[str, Any],
+    *,
+    download_dir: Path,
+    since_monotonic: float,
+    wait_ms: int,
+) -> bool:
+    """
+    Persist a Playwright download to ``dest``.
+
+    With ``launch_persistent_context`` / CDP attach, ``save_as`` can write 0 bytes while
+    Chrome still saves the PNG to its native download folder — scan those paths as fallback.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        download.save_as(dest)
+    except Exception:
+        pass
+    if not _tradingview_download_png_is_empty(dest)[0]:
+        return True
+
+    try:
+        tmp = download.path()
+        if tmp:
+            src = Path(tmp)
+            if src.is_file() and src.stat().st_size > 0:
+                shutil.copy2(src, dest)
+                return not _tradingview_download_png_is_empty(dest)[0]
+    except Exception:
+        pass
+
+    suggested = (download.suggested_filename() or "").strip()
+    scan_dirs: list[Path] = [download_dir]
+    native = _tradingview_native_downloads_dir()
+    if native is not None:
+        scan_dirs.append(native)
+
+    deadline = time.monotonic() + max(0, wait_ms) / 1000.0
+    poll_ms = 200
+    while time.monotonic() < deadline:
+        for directory in scan_dirs:
+            if suggested:
+                cand = directory / suggested
+                if cand.is_file() and cand.stat().st_size > 0:
+                    shutil.copy2(cand, dest)
+                    return True
+            newest = _tradingview_newest_png_since(
+                directory,
+                since_monotonic=since_monotonic,
+                name_hint=suggested,
+            )
+            if newest is not None:
+                shutil.copy2(newest, dest)
+                return True
+        page.wait_for_timeout(poll_ms)
+    return not _tradingview_download_png_is_empty(dest)[0]
+
+
 def _tradingview_snapshot_download_capture(
     page,
     tv: dict[str, Any],
@@ -3662,11 +3816,18 @@ def _tradingview_snapshot_download_capture(
     """
     Chart ready → ``Control+Alt+S`` (configurable) → save browser download as PNG for OpenAI.
     """
+    log = logging.getLogger("automation_tool")
     shortcut = (tv.get("tradingview_snapshot_download_shortcut") or "Control+Alt+S").strip()
     timeout_ms = int(tv.get("tradingview_snapshot_download_timeout_ms", 15_000))
     after_ms = int(tv.get("after_tradingview_snapshot_download_ms", 300))
     dest = dest_path or (charts_dir / f"{stamp}_tradingview_{symbol_key}_{interval_slug}.png")
     dest.parent.mkdir(parents=True, exist_ok=True)
+    download_dir = dest.parent / ".tv_downloads"
+    download_dir.mkdir(parents=True, exist_ok=True)
+    max_retries = _tradingview_download_empty_max_retries(tv)
+    retry_delay_ms = _tradingview_download_empty_retry_delay_ms(tv)
+    pickup_ms = _tradingview_download_pickup_timeout_ms(tv)
+
     try:
         page.bring_to_front()
     except Exception:
@@ -3677,10 +3838,44 @@ def _tradingview_snapshot_download_capture(
         page.wait_for_timeout(80)
     except Exception:
         pass
-    with page.expect_download(timeout=timeout_ms) as dl_info:
-        page.keyboard.press(shortcut)
-    download = dl_info.value
-    download.save_as(dest)
+
+    for attempt in range(max_retries + 1):
+        since = time.monotonic()
+        _tradingview_cdp_set_download_path(page, download_dir, tv)
+        with page.expect_download(timeout=timeout_ms) as dl_info:
+            page.keyboard.press(shortcut)
+        download = dl_info.value
+        ok = _tradingview_materialize_browser_download(
+            page,
+            download,
+            dest,
+            tv,
+            download_dir=download_dir,
+            since_monotonic=since,
+            wait_ms=pickup_ms,
+        )
+        empty, reason = _tradingview_download_png_is_empty(dest)
+        if ok and not empty:
+            if after_ms > 0:
+                page.wait_for_timeout(after_ms)
+            return dest
+        if attempt < max_retries:
+            log.warning(
+                "tv: PNG empty after download (%s) — retry %d/%d (%s)",
+                reason,
+                attempt + 1,
+                max_retries,
+                dest.name,
+            )
+            if retry_delay_ms > 0:
+                page.wait_for_timeout(retry_delay_ms)
+        else:
+            log.warning(
+                "tv: PNG still empty after %d retries (%s); Chrome may have saved to Downloads only",
+                max_retries,
+                dest.name,
+            )
+
     if after_ms > 0:
         page.wait_for_timeout(after_ms)
     return dest

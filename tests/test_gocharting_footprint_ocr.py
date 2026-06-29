@@ -393,37 +393,67 @@ def test_enrich_footprint_with_gocharting_gmt_csv_time(tmp_path: Path) -> None:
     }
     out = enrich_footprint_bid_ask_document(doc, csv_path, block_size=0.4)
     levels = out["candles"][0]["price_levels"]
-    assert levels[0]["price"] == 4167.6
-    assert levels[1]["price"] == 4167.2
+    assert levels[0]["price"] == 4167.4
+    assert levels[1]["price"] == 4167.0
 
 
 def test_compute_footprint_level_prices() -> None:
-    assert compute_footprint_level_prices(4091.6, 5, block_size=0.4) == [
-        4091.6,
-        4091.2,
-        4090.8,
-        4090.4,
-        4090.0,
+    assert compute_footprint_level_prices(4091.6, 5, block_size=0.4, block_multiplier=4) == [
+        4091.4,
+        4091.0,
+        4090.6,
+        4090.2,
+        4089.8,
     ]
-    assert compute_footprint_level_prices(4220, 10, block_size=0.4) == [
-        4220.0,
-        4219.6,
-        4219.2,
-        4218.8,
-        4218.4,
-        4218.0,
-        4217.6,
-        4217.2,
-        4216.8,
-        4216.4,
+    assert compute_footprint_level_prices(4220, 10, block_size=0.4, block_multiplier=4) == [
+        4219.8,
+        4219.4,
+        4219.0,
+        4218.6,
+        4218.2,
+        4217.8,
+        4217.4,
+        4217.0,
+        4216.6,
+        4216.2,
     ]
-    assert compute_footprint_level_prices(4091.25, 3, block_size=0.4) == [4091.2, 4090.8, 4090.4]
+    assert compute_footprint_level_prices(4091.25, 3, block_size=0.4, block_multiplier=4) == [
+        4091.0,
+        4090.6,
+        4090.2,
+    ]
+    assert compute_footprint_level_prices(4061.0, 4, block_size=0.2, block_multiplier=2) == [
+        4060.9,
+        4060.7,
+        4060.5,
+        4060.3,
+    ]
+
+
+def test_snap_to_gocharting_chart_block() -> None:
+    from automation_tool.gocharting_footprint_ocr import snap_to_gocharting_chart_block
+
+    snap2 = lambda p: snap_to_gocharting_chart_block(p, 0.2, block_multiplier=2)
+    assert snap2(4061.0) == 4060.9
+    assert snap2(4060.9) == 4060.9
+    assert snap2(4060.8) == 4060.7
+    assert snap2(4060.7) == 4060.7
+    assert snap2(0.1) == 0.1
+    assert snap2(0.2) == 0.1
+    assert snap2(0.3) == 0.3
+    assert snap2(0.4) == 0.3
+
+    snap4 = lambda p: snap_to_gocharting_chart_block(p, 0.4, block_multiplier=4)
+    assert snap4(0.1) == 0.2
+    assert snap4(0.4) == 0.2
+    assert snap4(0.5) == 0.6
+    assert snap4(0.8) == 0.6
 
 
 def test_footprint_block_size_from_yaml() -> None:
     from automation_tool.gocharting_footprint_ocr import footprint_block_size
 
-    assert footprint_block_size() == pytest.approx(0.3)
+    assert footprint_block_size() == pytest.approx(0.2)
 
 
 def test_parse_gocharting_csv_ohlc_by_hhmm() -> None:
@@ -451,7 +481,7 @@ def test_enrich_footprint_bid_ask_document_legacy_hhmm_time(tmp_path: Path) -> N
         ],
     }
     out = enrich_footprint_bid_ask_document(doc, csv_path)
-    assert out["candles"][0]["price_levels"][0]["price"] == 4219.8
+    assert out["candles"][0]["price_levels"][0]["price"] == 4219.9
 
 
 def test_enrich_footprint_bid_ask_document(tmp_path: Path) -> None:
@@ -476,8 +506,8 @@ def test_enrich_footprint_bid_ask_document(tmp_path: Path) -> None:
     }
     out = enrich_footprint_bid_ask_document(doc, csv_path)
     levels = out["candles"][0]["price_levels"]
-    assert levels[0]["price"] == 4219.8
-    assert levels[1]["price"] == 4219.5
+    assert levels[0]["price"] == 4219.9
+    assert levels[1]["price"] == 4219.7
     assert doc["candles"][0]["price_levels"][0] == {"bid": 1, "ask": 2}
 
 
