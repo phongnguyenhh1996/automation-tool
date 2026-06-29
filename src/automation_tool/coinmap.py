@@ -3776,7 +3776,7 @@ def _tradingview_materialize_browser_download(
     except Exception:
         pass
 
-    suggested = (download.suggested_filename() or "").strip()
+    suggested = (download.suggested_filename or "").strip()
     scan_dirs: list[Path] = [download_dir]
     native = _tradingview_native_downloads_dir()
     if native is not None:

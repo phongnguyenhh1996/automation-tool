@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shutil
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -25,7 +26,8 @@ from automation_tool.coinmap import (
     _tradingview_is_delete_indicator_label,
     _tradingview_legend_item_selector,
     _tradingview_legend_is_still_loading,
-    _tradingview_materialize_browser_download,
+    _tradingview_native_downloads_dir,
+    _tradingview_newest_png_since,
     _tradingview_poll_legend_loading_state,
     _tradingview_symbol_locator,
     _tv_apply_indicator_profile,
@@ -816,6 +818,62 @@ async def tv_wait_for_indicators_loaded_async(page: Page, tv: dict[str, Any]) ->
     )
 
 
+async def _tradingview_materialize_browser_download_async(
+    page: Page,
+    download,
+    dest: Path,
+    tv: dict[str, Any],
+    *,
+    download_dir: Path,
+    since_monotonic: float,
+    wait_ms: int,
+) -> bool:
+    """Async Playwright download → ``dest`` (see coinmap._tradingview_materialize_browser_download)."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        await download.save_as(dest)
+    except Exception:
+        pass
+    if not _tradingview_download_png_is_empty(dest)[0]:
+        return True
+
+    try:
+        tmp = await download.path()
+        if tmp:
+            src = Path(tmp)
+            if src.is_file() and src.stat().st_size > 0:
+                shutil.copy2(src, dest)
+                return not _tradingview_download_png_is_empty(dest)[0]
+    except Exception:
+        pass
+
+    suggested = (download.suggested_filename or "").strip()
+    scan_dirs: list[Path] = [download_dir]
+    native = _tradingview_native_downloads_dir()
+    if native is not None:
+        scan_dirs.append(native)
+
+    deadline = time.monotonic() + max(0, wait_ms) / 1000.0
+    poll_ms = 200
+    while time.monotonic() < deadline:
+        for directory in scan_dirs:
+            if suggested:
+                cand = directory / suggested
+                if cand.is_file() and cand.stat().st_size > 0:
+                    shutil.copy2(cand, dest)
+                    return True
+            newest = _tradingview_newest_png_since(
+                directory,
+                since_monotonic=since_monotonic,
+                name_hint=suggested,
+            )
+            if newest is not None:
+                shutil.copy2(newest, dest)
+                return True
+        await page.wait_for_timeout(poll_ms)
+    return not _tradingview_download_png_is_empty(dest)[0]
+
+
 async def tv_snapshot_download_capture_async(
     page: Page,
     tv: dict[str, Any],
@@ -853,7 +911,7 @@ async def tv_snapshot_download_capture_async(
         async with page.expect_download(timeout=timeout_ms) as dl_info:
             await page.keyboard.press(shortcut)
         download = await dl_info.value
-        ok = _tradingview_materialize_browser_download(
+        ok = await _tradingview_materialize_browser_download_async(
             page,
             download,
             dest,

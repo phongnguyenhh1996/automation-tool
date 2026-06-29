@@ -44,7 +44,7 @@ def test_tradingview_materialize_picks_native_download(tmp_path: Path) -> None:
 
     page = MagicMock()
     download = MagicMock()
-    download.suggested_filename.return_value = "OANDA_XAUUSD_15.png"
+    download.suggested_filename = "OANDA_XAUUSD_15.png"
     download.path.side_effect = RuntimeError("no artifact")
 
     def _save_as(path: str) -> None:
