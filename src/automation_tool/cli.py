@@ -1958,10 +1958,22 @@ def _run_openai_flow(
     if two_phase:
         if not (structure_prompt or "").strip() or not (footprint_prompt or "").strip():
             raise ValueError("two_phase requires structure_prompt and footprint_prompt")
+        if chart_payloads is None:
+            raise ValueError("two_phase requires chart_payloads")
         return run_full_analysis_two_phase_flow(
             structure_prompt=str(structure_prompt),
             footprint_prompt=str(footprint_prompt),
-            **common_kw,  # type: ignore[arg-type]
+            api_key=s.openai_api_key,
+            charts_dir=charts_dir,
+            max_images_per_call=max_images,
+            vector_store_ids=vs_ids,
+            store=s.openai_responses_store,
+            include=s.openai_responses_include,
+            chart_payloads=chart_payloads,
+            on_first_model_text=on_first_model_text,
+            model=model,
+            reasoning_effort=reasoning_effort,
+            chart_stamp=chart_stamp,
         )
     return run_analysis_responses_flow(
         analysis_prompt=analysis_prompt,
