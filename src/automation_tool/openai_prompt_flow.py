@@ -304,7 +304,7 @@ def prepare_footprint_json_for_openai(
     """
     GoCharting footprint JSON after trim / aggregate / enrich — same document sent to OpenAI.
     Non-footprint paths are returned unchanged.
-    Prepared ``footprint_{SYMBOL}_{iv}.json`` files are returned as-is.
+    Converted ``footprint_{SYMBOL}_{iv}.json`` (with ``gc_to_spot`` metadata) are returned as-is.
     """
     from automation_tool.gocharting_gc_spot_convert import (
         build_basis_index,
@@ -312,15 +312,20 @@ def prepare_footprint_json_for_openai(
         enrich_prepared_footprint_from_gc_csv,
         gc_to_spot_enabled,
         is_prepared_footprint_path,
+        parse_prepared_footprint_path,
         resolve_gc_csv_for_interval,
         resolve_mt5_spot_payload,
     )
 
-    if is_prepared_footprint_path(path):
+    if is_prepared_footprint_path(path) and isinstance(data.get("gc_to_spot"), dict):
         return data
 
     name = path.name
-    if name.startswith("footprint_combined_") and path.suffix.lower() == ".json":
+    is_combined_source = name.startswith("footprint_combined_") and path.suffix.lower() == ".json"
+    is_stale_prepared = is_prepared_footprint_path(path) and not isinstance(
+        data.get("gc_to_spot"), dict
+    )
+    if is_combined_source or is_stale_prepared:
         from automation_tool.gocharting_ws_decode import (
             aggregate_footprint_combined_document,
             drop_forming_footprint_candle,
@@ -335,7 +340,13 @@ def prepare_footprint_json_for_openai(
         from automation_tool.images import _default_gocharting_cfg, read_main_chart_symbol
 
         cfg = gocharting_cfg if gocharting_cfg is not None else _default_gocharting_cfg()
-        iv = path.stem.replace("footprint_combined_", "")
+        if is_combined_source:
+            iv = path.stem.replace("footprint_combined_", "")
+        else:
+            parsed = parse_prepared_footprint_path(path)
+            if parsed is None:
+                return data
+            iv = parsed[1]
         out = drop_forming_footprint_candle(data, interval=iv)
         out = trim_footprint_document(
             out,

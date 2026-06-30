@@ -50,6 +50,9 @@ def test_prepared_footprint_path_helpers() -> None:
     assert p.name == "footprint_XAUUSD_5m.json"
     assert is_prepared_footprint_path(p)
     assert parse_prepared_footprint_path(p) == ("XAUUSD", "5m")
+    assert not is_prepared_footprint_path(Path("footprint_combined_5m.json"))
+    assert not is_prepared_footprint_path(Path("footprint_combined_15m.json"))
+    assert parse_prepared_footprint_path(Path("footprint_combined_5m.json")) is None
 
 
 def test_is_gocharting_main_pair_path() -> None:

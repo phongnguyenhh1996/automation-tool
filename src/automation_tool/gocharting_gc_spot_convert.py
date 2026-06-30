@@ -26,6 +26,8 @@ _PREPARED_FOOTPRINT_RE = re.compile(
     r"^footprint_([A-Z0-9]{4,16})_(\d+m)\.json$",
     re.IGNORECASE,
 )
+# WS export stems that also match the pattern above (e.g. footprint_combined_5m.json).
+_PREPARED_FOOTPRINT_EXCLUDED_STEMS = frozenset({"COMBINED", "RAW"})
 
 _CSV_PRICE_COLUMNS = (
     "Open",
@@ -117,7 +119,10 @@ def parse_prepared_footprint_path(path: Path) -> Optional[tuple[str, str]]:
     m = _PREPARED_FOOTPRINT_RE.match(path.name)
     if not m:
         return None
-    return m.group(1).upper(), m.group(2).lower()
+    sym = m.group(1).upper()
+    if sym in _PREPARED_FOOTPRINT_EXCLUDED_STEMS:
+        return None
+    return sym, m.group(2).lower()
 
 
 def is_prepared_footprint_path(path: Path) -> bool:
