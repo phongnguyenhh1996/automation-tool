@@ -255,6 +255,10 @@ def _detail_chart_enabled(cfg: dict[str, Any]) -> bool:
 
 
 def _symbol_detail_chart_enabled(cfg: dict[str, Any], entry: dict[str, Any]) -> bool:
+    from automation_tool.gocharting_ws_decode import footprint_ws_enabled
+
+    if footprint_ws_enabled(cfg):
+        return False
     if not _detail_chart_enabled(cfg):
         return False
     if entry.get("detail_chart") is False:
@@ -945,12 +949,10 @@ def capture_gocharting(
     """
     Capture GoCharting footprint charts: PNG screenshot + CSV export per (symbol, interval).
 
-    When ``footprint_ws.enabled`` is true, also captures combined footprint JSON via WebSocket
-    (``footprint_screenshot.intervals.*.page_url``) after overview slots; detail-chart PNGs are
-    still captured per slot when ``detail_chart.page_url`` is set (unless the symbol sets
-    ``detail_chart: false``).
+    When ``footprint_ws.enabled`` is true, captures combined footprint JSON via WebSocket
+    (``footprint_screenshot.intervals.*.page_url``) instead of detail-chart PNGs.
 
-    ``overview_capture=False`` — chỉ capture detail footprint (no overview PNG/CSV).
+    ``overview_capture=False`` — chỉ capture detail footprint (legacy; no-op when WS enabled).
 
     Attaches to the long-lived browser service when ``data/browser_service_state.json`` is
     present (same as Coinmap/TV ``capture_charts``). Otherwise launches a standalone Chrome.
