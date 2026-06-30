@@ -304,26 +304,32 @@ def prepare_footprint_json_for_openai(
     """
     GoCharting footprint JSON after trim / aggregate / enrich — same document sent to OpenAI.
     Non-footprint paths are returned unchanged.
-    Converted ``footprint_{SYMBOL}_{iv}.json`` (with ``gc_to_spot`` metadata) are returned as-is.
+    Converted ``footprint_{SYMBOL}_{iv}.json`` that are already finalized are returned as-is.
     """
     from automation_tool.gocharting_gc_spot_convert import (
         build_basis_index,
         convert_footprint_combined_to_spot,
         enrich_prepared_footprint_from_gc_csv,
+        finalize_prepared_spot_footprint,
         gc_to_spot_enabled,
+        is_finalized_spot_footprint,
         is_prepared_footprint_path,
         parse_prepared_footprint_path,
         resolve_gc_csv_for_interval,
         resolve_mt5_spot_payload,
     )
 
-    if is_prepared_footprint_path(path) and isinstance(data.get("gc_to_spot"), dict):
-        return data
+    parsed_prepared = parse_prepared_footprint_path(path) if is_prepared_footprint_path(path) else None
+    if parsed_prepared is not None:
+        sym_early, _iv_early = parsed_prepared
+        if is_finalized_spot_footprint(data, logic_symbol=sym_early):
+            return data
 
     name = path.name
     is_combined_source = name.startswith("footprint_combined_") and path.suffix.lower() == ".json"
-    is_stale_prepared = is_prepared_footprint_path(path) and not isinstance(
-        data.get("gc_to_spot"), dict
+    is_stale_prepared = (
+        parsed_prepared is not None
+        and not is_finalized_spot_footprint(data, logic_symbol=parsed_prepared[0])
     )
     if is_combined_source or is_stale_prepared:
         from automation_tool.gocharting_ws_decode import (
@@ -387,13 +393,11 @@ def prepare_footprint_json_for_openai(
                 cfg=cfg,
                 basis_index=basis_index,
             )
-            source = out.get("source")
-            if not isinstance(source, dict):
-                source = {}
-            else:
-                source = dict(source)
-            source["footprint_ws"] = path.name
-            out["source"] = source
+            out = finalize_prepared_spot_footprint(
+                out,
+                logic_symbol=sym,
+                interval=iv,
+            )
         return slim_footprint_combined_for_openai(out)
     if name.startswith("footprint_bid_ask_") and path.suffix.lower() == ".json":
         from automation_tool.gocharting_footprint_ocr import (

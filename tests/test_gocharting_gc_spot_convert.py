@@ -12,12 +12,15 @@ from automation_tool.gocharting_gc_spot_convert import (
     build_basis_index,
     convert_footprint_combined_to_spot,
     enrich_prepared_footprint_from_gc_csv,
+    finalize_prepared_spot_footprint,
+    is_finalized_spot_footprint,
     is_gocharting_main_pair_path,
     is_prepared_footprint_path,
     parse_prepared_footprint_path,
     prepared_footprint_json_path,
     validate_match_ratio,
     _parse_gc_csv_bar_flow_rows,
+    _shift_bar_flow_prices,
 )
 from automation_tool.images import (
     existing_prepared_footprint_json_paths,
@@ -110,8 +113,10 @@ def test_validate_match_ratio_raises() -> None:
 def test_parse_gc_csv_and_enrich_bar_flow(tmp_path: Path) -> None:
     time_key = "Thu Jun 25 2026 05:00:00 GMT+0700"
     csv_text = (
-        "Date,Open,High,Low,Close,Volume,Delta,MaxDelta,MinDelta,CumDelta,BuyVolume,SellVolume,Vwap\n"
-        f'"{time_key}","4019.0","4020.0","4018.0","4019.0","100","-5","1","-6","-10","40","45","4019.5"\n'
+        "Date,Open,High,Low,Close,Volume,Delta,MaxDelta,MinDelta,CumDelta,"
+        "BuyVolume,SellVolume,Vwap,BuyVwap,SellVwap\n"
+        f'"{time_key}","4019.0","4020.0","4018.0","4019.0","100","-5","1","-6","-10",'
+        f'"40","45","4019.5","4020.0","4018.0"\n'
     )
     csv_path = tmp_path / "20260101_gocharting_GC_5m.csv"
     csv_path.write_text(csv_text, encoding="utf-8")
@@ -135,7 +140,90 @@ def test_parse_gc_csv_and_enrich_bar_flow(tmp_path: Path) -> None:
     bar_flow = out["candles"][0]["bar_flow"]
     assert bar_flow["delta"] == -5
     assert bar_flow["close"] == pytest.approx(4023.5)
-    assert out["source"]["csv"] == csv_path.name
+    assert bar_flow["buyvwap"] == pytest.approx(4024.5)
+    assert bar_flow["sellvwap"] == pytest.approx(4022.5)
+    assert "source" not in out
+
+
+def test_shift_bar_flow_prices_includes_buyvwap_sellvwap() -> None:
+    basis = -13.7261
+    bar = {
+        "vwap": 4017.04,
+        "buyvwap": 4031.0,
+        "sellvwap": 4030.0,
+        "buy_vwap": 4031.5,
+        "sell_vwap": 4029.5,
+    }
+    out = _shift_bar_flow_prices(bar, basis, spot_tick=0.01)
+    assert out["vwap"] == pytest.approx(4003.31)
+    assert out["buyvwap"] == pytest.approx(4017.27)
+    assert out["sellvwap"] == pytest.approx(4016.27)
+    assert out["buy_vwap"] == pytest.approx(4017.77)
+    assert out["sell_vwap"] == pytest.approx(4015.77)
+
+
+def test_convert_footprint_drops_unmatched_candles() -> None:
+    matched_key = "Thu Jun 25 2026 05:00:00 GMT+0700"
+    unmatched_key = "Thu Jun 25 2026 05:05:00 GMT+0700"
+    doc = {
+        "symbol": "COMEX:GC1!",
+        "candles": [
+            {
+                "time_gmt7": matched_key,
+                "ohlc": {"close": 4019.0},
+                "footprint": [{"price": 4019.0, "buy": 1, "sell": 1}],
+            },
+            {
+                "time_gmt7": unmatched_key,
+                "ohlc": {"close": 4020.0},
+                "footprint": [{"price": 4020.0, "buy": 2, "sell": 2}],
+                "mt5_spot_ohlc": {"close": 4006.0},
+            },
+        ],
+    }
+    mt5 = _mt5_payload(matched_key, 4023.5)
+    cfg = {"footprint_ws": {"gc_to_spot": {"enabled": True, "min_matched_ratio": 0.5}}}
+    out = convert_footprint_combined_to_spot(
+        doc,
+        mt5_payload=mt5,
+        cfg=cfg,
+        logic_symbol="XAUUSD",
+        interval="5m",
+    )
+    assert len(out["candles"]) == 1
+    assert out["candles"][0]["time_gmt7"] == matched_key
+    assert "mt5_spot_ohlc" not in out["candles"][0]
+    assert "gc_to_spot" not in out
+
+
+def test_finalize_prepared_spot_footprint_strips_gc_metadata() -> None:
+    raw = {
+        "symbol": "XAUUSD",
+        "interval": "5m",
+        "ohlc_matched": 48,
+        "ohlc_available": 686,
+        "gc_to_spot": {"matched": 48, "total": 49, "avg_basis": -13.7},
+        "source": {"csv": "gc.csv", "footprint_ws": "footprint_combined_5m.json"},
+        "request": {
+            "exchange": "COMEX",
+            "segment": "FUTURE",
+            "symbol": "GC1!",
+            "interval": "5m",
+            "session": "ETH",
+            "date": "2026-06-30",
+        },
+        "candles": [],
+    }
+    out = finalize_prepared_spot_footprint(raw, logic_symbol="XAUUSD", interval="5m")
+    assert out["symbol"] == "XAUUSD"
+    assert out["request"] == {
+        "symbol": "XAUUSD",
+        "interval": "5m",
+        "date": "2026-06-30",
+    }
+    assert is_finalized_spot_footprint(out, logic_symbol="XAUUSD")
+    for key in ("source", "gc_to_spot", "ohlc_matched", "ohlc_available"):
+        assert key not in out
 
 
 def test_ordered_payloads_skip_gc_csv_when_gc_to_spot(tmp_path: Path) -> None:

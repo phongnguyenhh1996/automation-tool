@@ -351,7 +351,6 @@ def convert_footprint_combined_to_spot(
         basis = basis_index.get(time_key)
         spot_ohlc = spot_index.get(time_key)
         if basis is None or spot_ohlc is None:
-            candles_out.append(block)
             continue
         matched_basis += 1
         basis_values.append(basis)
@@ -380,12 +379,79 @@ def convert_footprint_combined_to_spot(
     out["symbol"] = sym
     out["interval"] = (interval or "").strip().lower()
     out.pop("mt5_spot", None)
-    avg_basis = sum(basis_values) / len(basis_values) if basis_values else 0.0
-    out["gc_to_spot"] = {
-        "matched": matched_basis,
-        "total": len(candles_raw),
-        "avg_basis": round(avg_basis, 4),
-    }
+    out.pop("ohlc_matched", None)
+    out.pop("ohlc_available", None)
+    return out
+
+
+def _spot_footprint_request(
+    logic_symbol: str,
+    interval: str,
+    *,
+    doc: dict[str, Any],
+) -> dict[str, Any]:
+    from automation_tool.images import normalize_main_chart_symbol
+
+    sym = normalize_main_chart_symbol(logic_symbol)
+    iv = (interval or "").strip().lower()
+    req = doc.get("request") if isinstance(doc.get("request"), dict) else {}
+    out: dict[str, Any] = {"symbol": sym, "interval": iv}
+    date = req.get("date")
+    if date:
+        out["date"] = date
+    return out
+
+
+def is_finalized_spot_footprint(
+    doc: dict[str, Any],
+    *,
+    logic_symbol: str | None = None,
+) -> bool:
+    """True when prepared footprint JSON is spot-only (no GC audit / merge metadata)."""
+    if not isinstance(doc, dict):
+        return False
+    from automation_tool.images import normalize_main_chart_symbol
+
+    sym = str(doc.get("symbol") or "").strip().upper()
+    if logic_symbol:
+        try:
+            expected = normalize_main_chart_symbol(logic_symbol)
+        except ValueError:
+            return False
+        if sym != expected:
+            return False
+    elif not sym or not re.match(r"^[A-Z0-9]{4,16}$", sym):
+        return False
+    for key in ("gc_to_spot", "source", "ohlc_matched", "ohlc_available", "mt5_spot"):
+        if key in doc:
+            return False
+    req = doc.get("request")
+    if not isinstance(req, dict):
+        return True
+    for key in ("exchange", "segment", "session"):
+        if req.get(key):
+            return False
+    req_sym = str(req.get("symbol") or "").strip().upper()
+    return not req_sym or req_sym == sym
+
+
+def finalize_prepared_spot_footprint(
+    doc: dict[str, Any],
+    *,
+    logic_symbol: str,
+    interval: str,
+) -> dict[str, Any]:
+    """Strip GC provenance and normalize ``request`` for OpenAI / disk prepared export."""
+    from automation_tool.images import normalize_main_chart_symbol
+
+    out = dict(doc)
+    sym = normalize_main_chart_symbol(logic_symbol)
+    iv = (interval or "").strip().lower()
+    out["symbol"] = sym
+    out["interval"] = iv
+    out["request"] = _spot_footprint_request(sym, iv, doc=doc)
+    for key in ("source", "gc_to_spot", "ohlc_available", "ohlc_matched", "mt5_spot"):
+        out.pop(key, None)
     return out
 
 
@@ -417,9 +483,22 @@ def _parse_gc_csv_bar_flow_rows(text: str) -> dict[str, dict[str, Any]]:
     return by_time
 
 
+_BAR_FLOW_PRICE_KEYS = (
+    "open",
+    "high",
+    "low",
+    "close",
+    "vwap",
+    "buy_vwap",
+    "sell_vwap",
+    "buyvwap",
+    "sellvwap",
+)
+
+
 def _shift_bar_flow_prices(bar: dict[str, Any], basis: float, *, spot_tick: float) -> dict[str, Any]:
     out = dict(bar)
-    for key in ("open", "high", "low", "close", "vwap", "buy_vwap", "sell_vwap"):
+    for key in _BAR_FLOW_PRICE_KEYS:
         val = _float_or_none(out.get(key))
         if val is not None:
             out[key] = _shift_price(val, basis, spot_tick=spot_tick)
@@ -468,13 +547,6 @@ def enrich_prepared_footprint_from_gc_csv(
 
     out = dict(doc)
     out["candles"] = candles_out
-    source = out.get("source")
-    if not isinstance(source, dict):
-        source = {}
-    else:
-        source = dict(source)
-    source["csv"] = csv_path.name
-    out["source"] = source
     return out
 
 

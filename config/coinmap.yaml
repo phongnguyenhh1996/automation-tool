@@ -357,7 +357,6 @@ tradingview_capture:
   favorite_indicator_item_selector_template: 'div[data-role="menuitem"][aria-label="{name}"]'
   favorite_indicator_names:
     - "Smart Money Concepts (SMC) [LuxAlgo]"
-    - "VSA Volume"
   after_indicator_add_ms: 500
   # Chờ legend hết loading trước khi chụp screenshot.
   # DOM: [data-qa-id="legend-source-item"] có data-status: undefined → loading → undefined.
@@ -385,10 +384,6 @@ tradingview_capture:
       aliases:
         - "LuxAlgo - Smart Money Concepts"
         - "Smart Money Concepts (SMC) [LuxAlgo]"
-    - favorite_name: "VSA Volume"
-      aliases:
-        - "VSA Wyckoff Volume"
-        - "VSA Volume"
 
   # Optional: per-shot indicator profiles (used by capture_plan interval entries).
   indicator_profiles:
