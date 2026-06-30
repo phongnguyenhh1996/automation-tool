@@ -126,7 +126,7 @@ def _tick_size_from_doc(doc: dict[str, Any]) -> float:
 
 
 def compute_level_rl(bid: int, ask: int) -> tuple[float | None, str | None]:
-    """Return ``(RL, side)`` for one price level; ``(None, None)`` when both volumes are zero."""
+    """Same-row RL (bid vs ask at one price); kept for tests and absorption side checks."""
     if bid == 0 and ask == 0:
         return None, None
     if bid == ask:
@@ -135,6 +135,48 @@ def compute_level_rl(bid: int, ask: int) -> tuple[float | None, str | None]:
     weaker = max(1, min(bid, ask))
     side = "BID" if bid > ask else "ASK"
     return round(dominant / weaker, 2), side
+
+
+def _diagonal_ratio(dominant: int, weaker: int) -> float:
+    if dominant <= 0:
+        return 0.0
+    return round(dominant / max(1, weaker), 2)
+
+
+def compute_diagonal_level_rl_at_index(
+    levels: list[dict[str, Any]],
+    index: int,
+) -> tuple[float | None, str | None]:
+    """Diagonal footprint RL at ``levels[index]`` (high→low).
+
+    - BID: ``bid[i] / ask[i+1]`` (ask on the row below)
+    - ASK: ``ask[i] / bid[i-1]`` (bid on the row above)
+    """
+    level = levels[index]
+    bid = int(level.get("bid") or 0)
+    ask = int(level.get("ask") or 0)
+    if bid == 0 and ask == 0:
+        return None, None
+
+    candidates: list[tuple[float, str]] = []
+
+    if index + 1 < len(levels):
+        ask_below = int(levels[index + 1].get("ask") or 0)
+        if bid > 0:
+            candidates.append((_diagonal_ratio(bid, ask_below), "BID"))
+
+    if index > 0:
+        bid_above = int(levels[index - 1].get("bid") or 0)
+        if ask > 0:
+            candidates.append((_diagonal_ratio(ask, bid_above), "ASK"))
+
+    if not candidates:
+        return None, None
+
+    best_rl, best_side = max(candidates, key=lambda item: item[0])
+    if best_rl <= 0:
+        return None, None
+    return best_rl, best_side
 
 
 def _level_volumes(level: dict[str, Any]) -> tuple[float, int, int]:
@@ -154,24 +196,51 @@ def _parse_footprint_levels(candle: dict[str, Any]) -> list[dict[str, Any]]:
     footprint = candle.get("footprint")
     if not isinstance(footprint, list):
         return []
-    out: list[dict[str, Any]] = []
+    parsed: list[dict[str, Any]] = []
     for level in footprint:
         if not isinstance(level, dict):
             continue
         price, bid, ask = _level_volumes(level)
         if price <= 0:
             continue
-        rl, side = compute_level_rl(bid, ask)
-        out.append(
+        parsed.append(
             {
                 "price": price,
                 "bid": bid,
                 "ask": ask,
-                "rl": rl,
-                "side": side,
                 "total_vol": bid + ask,
             }
         )
+    parsed.sort(key=lambda item: float(item["price"]), reverse=True)
+    out: list[dict[str, Any]] = []
+    for index, level in enumerate(parsed):
+        rl, side = compute_diagonal_level_rl_at_index(parsed, index)
+        out.append({**level, "rl": rl, "side": side})
+    return out
+
+
+def _diagonal_metrics_by_price(
+    footprint: list[Any],
+    *,
+    cfg: DerivedConfig,
+) -> dict[float, tuple[float | None, str | None, Optional[str]]]:
+    parsed: list[dict[str, Any]] = []
+    for level in footprint:
+        if not isinstance(level, dict):
+            continue
+        price, bid, ask = _level_volumes(level)
+        if price <= 0:
+            continue
+        parsed.append({"price": price, "bid": bid, "ask": ask})
+    parsed.sort(key=lambda item: float(item["price"]), reverse=True)
+
+    out: dict[float, tuple[float | None, str | None, Optional[str]]] = {}
+    for index, level in enumerate(parsed):
+        rl, side = compute_diagonal_level_rl_at_index(parsed, index)
+        imbalance: Optional[str] = None
+        if cfg.imbalance_enabled:
+            imbalance = level_imbalance_tag(rl, side, rl_min=cfg.rl_min)
+        out[float(level["price"])] = (rl, side, imbalance)
     return out
 
 
@@ -347,21 +416,22 @@ def enrich_footprint_levels_in_candle(
     *,
     cfg: DerivedConfig,
 ) -> list[Any]:
-    """Attach ``rl`` and optional ``imbalance`` (``bid``/``ask``/``""``) to each ``footprint[]`` level."""
+    """Attach diagonal ``rl`` and optional ``imbalance`` (``bid``/``ask``/``""``) per ``footprint[]`` row."""
     footprint = candle.get("footprint")
     if not isinstance(footprint, list):
         return []
+    metrics = _diagonal_metrics_by_price(footprint, cfg=cfg)
     enriched: list[Any] = []
     for level in footprint:
         if not isinstance(level, dict):
             enriched.append(level)
             continue
-        _, bid, ask = _level_volumes(level)
-        rl, side = compute_level_rl(bid, ask)
+        price, _, _ = _level_volumes(level)
+        rl, side, imbalance = metrics.get(price, (None, None, None))
         block = dict(level)
         block["rl"] = rl
-        if cfg.imbalance_enabled:
-            block["imbalance"] = level_imbalance_tag(rl, side, rl_min=cfg.rl_min)
+        if cfg.imbalance_enabled and imbalance is not None:
+            block["imbalance"] = imbalance
         enriched.append(block)
     return enriched
 

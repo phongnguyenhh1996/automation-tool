@@ -10,6 +10,7 @@ from automation_tool.gocharting_footprint_derived import (
     DerivedConfig,
     compute_absorption_for_candle,
     compute_candle_orderflow,
+    compute_diagonal_level_rl_at_index,
     compute_imbalance_levels,
     compute_level_rl,
     compute_stacked_in_candle,
@@ -40,6 +41,39 @@ def test_compute_level_rl_zero_volumes() -> None:
     assert side is None
 
 
+def test_compute_diagonal_level_rl_bid_vs_ask_below() -> None:
+    levels = [
+        {"price": 4024.8, "bid": 40, "ask": 0},
+        {"price": 4024.7, "bid": 5, "ask": 5},
+    ]
+    rl, side = compute_diagonal_level_rl_at_index(levels, 0)
+    assert rl == 8.0
+    assert side == "BID"
+
+
+def test_compute_diagonal_level_rl_ask_vs_bid_above() -> None:
+    levels = [
+        {"price": 4024.8, "bid": 10, "ask": 0},
+        {"price": 4024.7, "bid": 5, "ask": 40},
+    ]
+    rl, side = compute_diagonal_level_rl_at_index(levels, 1)
+    assert rl == 4.0
+    assert side == "ASK"
+
+
+def test_compute_diagonal_level_rl_bottom_row_no_bid_signal() -> None:
+    levels = [
+        {"price": 4024.8, "bid": 40, "ask": 0},
+        {"price": 4024.7, "bid": 5, "ask": 20},
+    ]
+    rl, side = compute_diagonal_level_rl_at_index(levels, 1)
+    assert rl == 0.5
+    assert side == "ASK"
+    rl_top, side_top = compute_diagonal_level_rl_at_index(levels, 0)
+    assert rl_top == 2.0
+    assert side_top == "BID"
+
+
 def test_compute_imbalance_levels_filters_below_rl_min() -> None:
     levels = [
         {"price": 100.0, "bid": 10, "ask": 2, "rl": 5.0, "side": "BID", "total_vol": 12},
@@ -53,15 +87,15 @@ def test_compute_imbalance_levels_filters_below_rl_min() -> None:
 
 def test_compute_stacked_in_candle_three_levels() -> None:
     levels = [
-        {"price": 4024.8, "bid": 14, "ask": 0, "rl": 14.0, "side": "BID", "total_vol": 14},
-        {"price": 4024.7, "bid": 12, "ask": 1, "rl": 12.0, "side": "BID", "total_vol": 13},
-        {"price": 4024.6, "bid": 20, "ask": 4, "rl": 5.0, "side": "BID", "total_vol": 24},
+        {"price": 4025.0, "bid": 50, "ask": 0, "rl": 10.0, "side": "BID", "total_vol": 50},
+        {"price": 4024.8, "bid": 40, "ask": 5, "rl": 10.0, "side": "BID", "total_vol": 45},
+        {"price": 4024.7, "bid": 36, "ask": 4, "rl": 9.0, "side": "BID", "total_vol": 40},
     ]
     out = compute_stacked_in_candle(levels, rl_min=4.0, stacked_min_levels=3)
     assert len(out) == 1
     assert out[0]["side"] == "BID"
     assert out[0]["level_count"] == 3
-    assert out[0]["prices"] == [4024.8, 4024.7, 4024.6]
+    assert out[0]["prices"] == [4025.0, 4024.8, 4024.7]
 
 
 def test_compute_stacked_in_candle_not_enough_levels() -> None:
@@ -115,9 +149,10 @@ def test_enrich_footprint_combined_document_adds_orderflow() -> None:
                 "time_gmt7": "Thu Jun 25 2026 10:05:00 GMT+0700",
                 "ohlc": {"low": 4707.0, "high": 4712.0, "close": 4709.2},
                 "footprint": [
-                    _level(4024.8, 14, 0),
-                    _level(4024.7, 12, 1),
-                    _level(4024.6, 20, 4),
+                    _level(4025.0, 50, 0),
+                    _level(4024.8, 40, 5),
+                    _level(4024.7, 36, 4),
+                    _level(4024.6, 1, 1),
                 ],
             }
         ],
@@ -127,11 +162,11 @@ def test_enrich_footprint_combined_document_adds_orderflow() -> None:
     assert "orderflow" in candle
     assert candle["orderflow"]["stacked_in_candle"]
     level = candle["footprint"][0]
-    assert level["rl"] == 14.0
-    assert level["side"] == "BID"
-    assert level["imbalance"] is True
-    assert candle["footprint"][1]["imbalance"] is True
-    assert candle["footprint"][2]["imbalance"] is True
+    assert level["rl"] == 10.0
+    assert level["imbalance"] == "bid"
+    assert candle["footprint"][1]["imbalance"] == "bid"
+    assert candle["footprint"][2]["imbalance"] == "bid"
+    assert candle["footprint"][3]["imbalance"] == ""
     assert "derived_metrics" not in out
     assert "imbalance_levels" not in candle["orderflow"]
 
@@ -139,19 +174,17 @@ def test_enrich_footprint_combined_document_adds_orderflow() -> None:
 def test_enrich_footprint_levels_omits_imbalance_when_disabled() -> None:
     candle = {
         "footprint": [
-            _level(4024.8, 14, 0),
-            _level(4024.7, 2, 2),
+            _level(4024.8, 40, 0),
+            _level(4024.7, 2, 10),
         ],
     }
     out = enrich_footprint_levels_in_candle(
         candle,
         cfg=DerivedConfig(imbalance_enabled=False),
     )
-    assert out[0]["rl"] == 14.0
-    assert out[0]["side"] == "BID"
+    assert out[0]["rl"] == 4.0
     assert "imbalance" not in out[0]
-    assert out[1]["rl"] == 1.0
-    assert out[1]["side"] is None
+    assert out[1]["rl"] == 0.25
     assert "imbalance" not in out[1]
 
 
@@ -181,7 +214,7 @@ def test_enrich_footprint_combined_document_omits_orderflow_when_all_disabled() 
         "candles": [
             {
                 "time_gmt7": "Thu Jun 25 2026 10:05:00 GMT+0700",
-                "footprint": [_level(4024.8, 14, 0)],
+                "footprint": [_level(4024.8, 40, 0), _level(4024.7, 5, 5)],
             }
         ],
     }
@@ -200,7 +233,7 @@ def test_enrich_footprint_combined_document_omits_orderflow_when_all_disabled() 
     )
     candle = out["candles"][0]
     assert "orderflow" not in candle
-    assert candle["footprint"][0]["rl"] == 14.0
+    assert candle["footprint"][0]["rl"] == 8.0
     assert "imbalance" not in candle["footprint"][0]
 
 
@@ -220,11 +253,12 @@ def test_json_file_header_and_body_enriches_combined(tmp_path: Path, monkeypatch
                 "candles": [
                     {
                         "time_gmt7": "Thu Jun 25 2026 10:05:00 GMT+0700",
-                        "ohlc": {"low": 4024.6, "high": 4024.8, "close": 4024.7},
+                        "ohlc": {"low": 4024.6, "high": 4025.0, "close": 4024.7},
                         "footprint": [
-                            _level(4024.8, 14, 0),
-                            _level(4024.7, 12, 1),
-                            _level(4024.6, 20, 4),
+                            _level(4025.0, 50, 0),
+                            _level(4024.8, 40, 5),
+                            _level(4024.7, 36, 4),
+                            _level(4024.6, 1, 1),
                         ],
                     }
                 ],
@@ -238,8 +272,8 @@ def test_json_file_header_and_body_enriches_combined(tmp_path: Path, monkeypatch
     payload = json.loads(body)
     assert "orderflow" in payload["candles"][0]
     assert "stacked_in_candle" in payload["candles"][0]["orderflow"]
-    assert payload["candles"][0]["footprint"][0]["rl"] == 14.0
-    assert "imbalance" in payload["candles"][0]["footprint"][0]
+    assert payload["candles"][0]["footprint"][0]["rl"] == 10.0
+    assert payload["candles"][0]["footprint"][0]["imbalance"] == "bid"
     assert "orderflow" in header
 
 
