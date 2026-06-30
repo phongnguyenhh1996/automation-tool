@@ -61,8 +61,11 @@ from automation_tool.openai_prompt_flow import (
     build_intraday_update_user_text,
     build_scalp_update_user_text,
     default_analysis_prompt,
+    full_analysis_footprint_prompt,
+    full_analysis_structure_prompt,
     is_first_intraday_update_after_all,
     run_analysis_responses_flow,
+    run_full_analysis_two_phase_flow,
     run_single_followup_responses,
 )
 from automation_tool.images import (
@@ -834,6 +837,14 @@ def _parser() -> argparse.ArgumentParser:
         help="accounts.json nguồn để tạo accounts-all2.json sau luồng 2 (mặc định MT5_ACCOUNTS_JSON)",
     )
     al.add_argument("--model", default=None, metavar="ID", help=_OPENAI_MODEL_HELP)
+    al.add_argument(
+        "--no-all-two-phase",
+        action="store_true",
+        help=(
+            "Tắt luồng 2-batch chained (TV cấu trúc → GoCharting footprint); "
+            "gửi full payload một lần như trước"
+        ),
+    )
     al.set_defaults(func=cmd_all)
 
     al2 = sub.add_parser(
@@ -884,6 +895,11 @@ def _parser() -> argparse.ArgumentParser:
         help="accounts.json nguồn để tạo accounts-all2.json (mặc định MT5_ACCOUNTS_JSON)",
     )
     al2.add_argument("--model", default=None, metavar="ID", help=_OPENAI_MODEL_HELP)
+    al2.add_argument(
+        "--no-all-two-phase",
+        action="store_true",
+        help="Tắt luồng 2-batch chained (giống `all --no-all-two-phase`)",
+    )
     al2.set_defaults(func=cmd_all_2)
 
     tl = sub.add_parser(
@@ -1920,23 +1936,38 @@ def _run_openai_flow(
     vector_store_ids: list[str] | None = None,
     reasoning_effort: str | None = DEFAULT_REASONING_EFFORT,
     chart_stamp: str | None = None,
+    two_phase: bool = False,
+    structure_prompt: str | None = None,
+    footprint_prompt: str | None = None,
 ) -> PromptTwoStepResult:
+    vs_ids = vector_store_ids if vector_store_ids is not None else s.openai_vector_store_ids
+    common_kw: dict[str, object] = {
+        "api_key": s.openai_api_key,
+        "charts_dir": charts_dir,
+        "max_images_per_call": max_images,
+        "vector_store_ids": vs_ids,
+        "store": s.openai_responses_store,
+        "include": s.openai_responses_include,
+        "chart_paths": chart_paths,
+        "chart_payloads": chart_payloads,
+        "on_first_model_text": on_first_model_text,
+        "model": model,
+        "reasoning_effort": reasoning_effort,
+        "chart_stamp": chart_stamp,
+    }
+    if two_phase:
+        if not (structure_prompt or "").strip() or not (footprint_prompt or "").strip():
+            raise ValueError("two_phase requires structure_prompt and footprint_prompt")
+        return run_full_analysis_two_phase_flow(
+            structure_prompt=str(structure_prompt),
+            footprint_prompt=str(footprint_prompt),
+            **common_kw,  # type: ignore[arg-type]
+        )
     return run_analysis_responses_flow(
-        api_key=s.openai_api_key,
-        charts_dir=charts_dir,
         analysis_prompt=analysis_prompt,
-        max_images_per_call=max_images,
-        vector_store_ids=vector_store_ids if vector_store_ids is not None else s.openai_vector_store_ids,
-        store=s.openai_responses_store,
-        include=s.openai_responses_include,
-        chart_paths=chart_paths,
-        chart_payloads=chart_payloads,
-        on_first_model_text=on_first_model_text,
         purge_json_attachment_storage=purge_json_attachment_storage,
         purge_openai_user_data_files=purge_openai_user_data_files,
-        model=model,
-        reasoning_effort=reasoning_effort,
-        chart_stamp=chart_stamp,
+        **common_kw,  # type: ignore[arg-type]
     )
 
 
@@ -2417,6 +2448,36 @@ def _resolved_analysis_prompt(args: argparse.Namespace, charts_dir: Path) -> str
     sym = read_main_chart_symbol(charts_dir)
     fp = footprint_source_for_stamp(charts_dir)
     return default_analysis_prompt(sym, footprint_source=fp)
+
+
+def _all_flow_two_phase_enabled(args: argparse.Namespace) -> bool:
+    if getattr(args, "no_all_two_phase", False):
+        return False
+    p = getattr(args, "prompt", None)
+    if p is not None and str(p).strip():
+        return False
+    return True
+
+
+def _all_flow_openai_prompts(
+    args: argparse.Namespace, charts_dir: Path
+) -> tuple[bool, str, str | None, str | None]:
+    """
+    Returns ``(two_phase, analysis_prompt, structure_prompt, footprint_prompt)``.
+
+    When ``two_phase`` is True, ``analysis_prompt`` is empty and structure/footprint prompts are set.
+    """
+    if not _all_flow_two_phase_enabled(args):
+        if getattr(args, "prompt", None) and str(getattr(args, "prompt", "")).strip():
+            _log.info("all: custom --prompt — dùng single-phase (không 2-batch)")
+        return False, _resolved_analysis_prompt(args, charts_dir), None, None
+    sym = read_main_chart_symbol(charts_dir)
+    return (
+        True,
+        "",
+        full_analysis_structure_prompt(sym),
+        full_analysis_footprint_prompt(sym),
+    )
 
 
 def _extend_payloads_with_footprint_json(
@@ -3240,6 +3301,9 @@ def _run_all_second_flow(
     session_slot: Optional[SessionSlot] = None,
     mt5_accounts_json: Optional[Path] = None,
     chart_stamp: str | None = None,
+    two_phase: bool = False,
+    structure_prompt: str | None = None,
+    footprint_prompt: str | None = None,
 ) -> PromptTwoStepResult:
     """Luồng OpenAI thứ hai của ``all``: vector store riêng, Telegram nhóm 2, ghi shard ``-2``."""
     try:
@@ -3254,6 +3318,9 @@ def _run_all_second_flow(
             vector_store_ids=[_ALL_SECOND_FLOW_VECTOR_STORE_ID],
             reasoning_effort=ALL_FLOW_REASONING_EFFORT,
             chart_stamp=chart_stamp,
+            two_phase=two_phase,
+            structure_prompt=structure_prompt,
+            footprint_prompt=footprint_prompt,
         )
     except Exception as e:
         re_raise_unless_openai(e)
@@ -3315,11 +3382,16 @@ def cmd_all_2(args: argparse.Namespace) -> None:
         )
 
     prompt = _resolved_analysis_prompt(args, charts_dir)
+    two_phase, analysis_prompt, structure_prompt, footprint_prompt = _all_flow_openai_prompts(
+        args, charts_dir
+    )
+    if not two_phase:
+        analysis_prompt = prompt
     print(f"all-2: using stamp {stamp} | {len(payloads)} payload(s) from {charts_dir}", flush=True)
     _run_all_second_flow(
         s,
         charts_dir=charts_dir,
-        analysis_prompt=prompt,
+        analysis_prompt=analysis_prompt,
         max_images_per_call=args.max_images_per_call,
         chart_payloads=payloads,
         no_telegram=args.no_telegram,
@@ -3328,6 +3400,9 @@ def cmd_all_2(args: argparse.Namespace) -> None:
         session_slot=run_slot,
         mt5_accounts_json=getattr(args, "mt5_accounts_json", None),
         chart_stamp=stamp,
+        two_phase=two_phase,
+        structure_prompt=structure_prompt,
+        footprint_prompt=footprint_prompt,
     )
 
 
@@ -3730,9 +3805,15 @@ def cmd_all(args: argparse.Namespace) -> None:
             f"under {charts_dir}. Check capture and chart slot order (effective_chart_image_order)."
         )
 
-    prompt_all = _resolved_analysis_prompt(args, charts_dir)
+    two_phase, prompt_all, structure_prompt, footprint_prompt = _all_flow_openai_prompts(
+        args, charts_dir
+    )
     max_images = args.max_images_per_call
     openai_model = resolved_openai_model(s, getattr(args, "model", None))
+    if two_phase:
+        _log.info(
+            "all: OpenAI 2-batch chained | phase1=TV+DXY overview PNG phase2=GC footprint"
+        )
 
     def _openai_all_work() -> PromptTwoStepResult:
         return _run_openai_flow(
@@ -3745,6 +3826,9 @@ def cmd_all(args: argparse.Namespace) -> None:
             model=openai_model,
             reasoning_effort=ALL_FLOW_REASONING_EFFORT,
             chart_stamp=stamp,
+            two_phase=two_phase,
+            structure_prompt=structure_prompt,
+            footprint_prompt=footprint_prompt,
         )
 
     try:
@@ -3847,6 +3931,9 @@ def cmd_all(args: argparse.Namespace) -> None:
         session_slot=run_slot,
         mt5_accounts_json=getattr(args, "mt5_accounts_json", None),
         chart_stamp=stamp,
+        two_phase=two_phase,
+        structure_prompt=structure_prompt,
+        footprint_prompt=footprint_prompt,
     )
 
 

@@ -47,7 +47,7 @@ csv_export:
 overview:
   refresh_button_id: "refresh-button"
   zoom_out_button_id: "zoomOut-button"
-  zoom_out_clicks: 2
+  zoom_out_clicks: 1
   zoom_click_delay_ms: 500
 
 detail_chart:
@@ -116,7 +116,7 @@ footprint_ws:
   max_candles: 50
   wait_ms: 45000
   export_format: combined
-  mt5_spot: false
+  mt5_spot: true
   derived:
     enabled: true
     imbalance_enabled: true

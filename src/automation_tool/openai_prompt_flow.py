@@ -38,6 +38,7 @@ from automation_tool.images import (
     openai_payloads_for_attachment_paths,
     ordered_chart_openai_payloads,
     read_main_chart_symbol,
+    split_openai_payloads_by_phase,
 )
 from automation_tool.state_files import MORNING_FULL_ANALYSIS_FILENAME
 from automation_tool.zones_state import format_intraday_update_time_line
@@ -45,7 +46,7 @@ from automation_tool.zones_state import format_intraday_update_time_line
 _log = logging.getLogger(__name__)
 
 DEFAULT_REASONING_EFFORT = "medium"
-ALL_FLOW_REASONING_EFFORT = "medium"
+ALL_FLOW_REASONING_EFFORT = "high"
 
 # GoCharting footprint for main gold pair: COMEX GC1! future, not spot XAUUSD.
 GOCHARTING_GOLD_FUTURE_LABEL = "Gold Future (GC1!)"
@@ -61,9 +62,11 @@ _GOCHARTING_CHART_READ_GUIDE = (
     "Hướng dẫn đọc footprint GoCharting (JSON combined + overview PNG):\n"
     "PNG overview/detail (xác nhận visual hoặc khi JSON chưa đủ):\n"
     "- Box có border #FF6600 ở detail view = volume POC.\n"
-    "- Line ngang màu #FA6578 = POC.\n"
-    "- Line ngang màu #17CE1B = VAH.\n"
-    "- Line ngang màu #5B2D1B = VAL.\n"
+    "- Line ngang màu #FA6578 = POC Session Profile (Extend VP POC).\n"
+    "- Line ngang màu #17CE1B = VAH Session Profile (Extend VP VA trên).\n"
+    "- Line ngang màu #5B2D1B = VAL Session Profile (Extend VP VA dưới).\n"
+    "- Lấy đúng session hôm nay: chỉ dùng POC/VAH/VAL có nhãn ngày = ngày phân tích "
+    "(GMT+7); nếu nhiều line cùng màu thì chọn session gần giá hiện tại, bỏ qua session cũ.\n"
 )
 
 _GOCHARTING_TRADE_MANAGEMENT_SUFFIX = (
@@ -168,6 +171,77 @@ def default_analysis_prompt(
 DEFAULT_ANALYSIS_PROMPT = default_analysis_prompt(DEFAULT_MAIN_CHART_SYMBOL)
 DEFAULT_FIRST_PROMPT = DEFAULT_ANALYSIS_PROMPT
 DEFAULT_FOLLOW_UP_PROMPT = ""
+
+
+def _resolved_main_symbol(main_symbol: str | None = None) -> str:
+    sym = DEFAULT_MAIN_CHART_SYMBOL
+    if main_symbol and str(main_symbol).strip():
+        try:
+            sym = normalize_main_chart_symbol(str(main_symbol).strip())
+        except ValueError:
+            pass
+    return sym
+
+
+def full_analysis_structure_prompt(main_symbol: str | None = None) -> str:
+    """Batch 1/2: TradingView + DXY GoCharting overview PNG — structure, POI, candidate zones."""
+    sym = _resolved_main_symbol(main_symbol)
+    return (
+        "[FULL_ANALYSIS — BƯỚC 1/2: CẤU TRÚC GIÁ]\n"
+        f"Cặp chính: {sym}.\n"
+        "Đính kèm (theo thứ tự):\n"
+        "- TradingView: DXY H4, H1, M15 → "
+        f"{sym} H4, H1, M15, M15 Session Liquidity Check / ICT Killzones, M5 "
+        "(snapshot URL/PNG hoặc JSON OHLC tvdatafeed)\n"
+        "- GoCharting DXY M15: **chỉ PNG overview** (orderflow chart macro — không có CSV)\n"
+        "Nhiệm vụ: phân tích cấu trúc giá (DXY macro bias + trend/POI cặp chính) và liệt kê "
+        "các **vùng có cấu trúc tốt** (OB/FVG/HL, premium-discount hợp lệ) làm candidate cho batch 2.\n"
+        "KHÔNG chấm điểm footprint/CVD GC (chưa có GoCharting GC / footprint_combined).\n"
+        "Trả duy nhất một block ```json với object:\n"
+        "{\n"
+        '  "step": 1,\n'
+        '  "context": {\n'
+        '    "DXY": {"H4": "...", "H1": "...", "M15": "..."},\n'
+        f'    "{sym}": {{"H4": "...", "H1": "..."}}\n'
+        "  },\n"
+        '  "structure_notes": "...",\n'
+        '  "m15_plan_draft": "...",\n'
+        '  "m5_entry_module": "...",\n'
+        '  "candidate_zones": [\n'
+        "    {\n"
+        '      "direction": "BUY|SELL",\n'
+        '      "price_hint": 0.0,\n'
+        '      "poi_type": "OB|FVG|HL|...",\n'
+        '      "rationale": "..."\n'
+        "    }\n"
+        "  ]\n"
+        "}\n"
+        "candidate_zones: không gán label plan_chinh/plan_phu/scalp — batch 2 phân loại sau footprint.\n"
+    )
+
+
+def full_analysis_footprint_prompt(main_symbol: str | None = None) -> str:
+    """Batch 2/2: GoCharting GC footprint only (no DXY) — scoring and full Schema A."""
+    sym = _resolved_main_symbol(main_symbol)
+    return (
+        "[FULL_ANALYSIS — BƯỚC 2/2: FOOTPRINT & KẾT LUẬN]\n"
+        f"Cặp chính: {sym}.\n"
+        "Tiếp nối bước 1: dùng `context` và `candidate_zones` từ response trước "
+        "(cùng thread OpenAI). DXY macro bias đã xác định ở bước 1 — **không** đính kèm lại DXY.\n"
+        "Đính kèm GoCharting footprint **cặp chính (GC1!)**:\n"
+        f"- GC M15 và M5 (COMEX gold futures, không phải spot {sym}; CSV orderflow + PNG overview"
+        " + detail PNG nếu có) → "
+        "footprint_combined_15m.json và footprint_combined_5m.json "
+        "(footprint[] buy/sell volume từng level).\n"
+        f"{_GOCHARTING_BID_ASK_HINT}"
+        f"{_GOCHARTING_CHART_READ_GUIDE}"
+        "Nhiệm vụ (playbook §1.3 bước 5–8):\n"
+        "- Footprint GC M15/M5: trap, CVD ≥3 nến, stacked, absorption, VWAP/POC\n"
+        "- Filters (anti-sweep, RR, session)\n"
+        "- Chấm điểm hop_luu theo mục 0.3 (4 nhóm)\n"
+        "- Trả đầy đủ Schema A: phan_tich_cham_diem + output_ngan_gon + prices[] + intraday_hanh_dong\n"
+        f"{_PHAN_TICH_CHAM_DIEM_FULL_HINT}"
+    )
 
 
 def _default_max_coinmap_json_chars() -> int:
@@ -636,6 +710,214 @@ def _log_openai_error(
     )
 
 
+def _build_responses_common(
+    *,
+    vector_store_ids: list[str],
+    store: bool,
+    include: list[str],
+    reasoning_summary: str,
+    reasoning_effort: str | None,
+    model: str | None,
+) -> dict[str, Any]:
+    tools: list[dict[str, Any]] = []
+    if vector_store_ids:
+        tools.append(
+            {
+                "type": "file_search",
+                "vector_store_ids": list(vector_store_ids),
+            }
+        )
+    reasoning: dict[str, Any] = {"summary": reasoning_summary}
+    _eff = (reasoning_effort or "").strip()
+    if _eff:
+        reasoning["effort"] = _eff
+    common: dict[str, Any] = {
+        "store": store,
+        "include": include,
+        "reasoning": reasoning,
+    }
+    if tools:
+        common["tools"] = tools
+    _merge_model(common, model)
+    return common
+
+
+def _run_chained_payload_batches(
+    *,
+    client: OpenAI,
+    common: dict[str, Any],
+    analysis_prompt: str,
+    payloads: list[ChartOpenAIPayload],
+    max_images_per_call: int,
+    max_json_chars: int,
+    chart_stamp: str | None,
+    flow: str,
+    model: str | None,
+    previous_response_id: str | None = None,
+    on_first_model_text: Optional[Callable[[str], None]] = None,
+    batch_prompt_suffix: bool = True,
+) -> tuple[str | None, list[str]]:
+    """
+    Run one or more chained API batches for ``payloads``.
+
+    Returns ``(final_response_id, assistant_text_parts)``.
+    """
+    chunks = chunk_payloads(payloads, max_images_per_call)
+    assistant_parts: list[str] = []
+    prev_id: str | None = previous_response_id
+    total = len(chunks)
+    first_batch = prev_id is None
+
+    for bi, batch in enumerate(chunks):
+        if total == 1 or not batch_prompt_suffix:
+            p_text = analysis_prompt
+        else:
+            n_img = sum(1 for k, _ in batch if k not in ("json", "csv"))
+            n_json = sum(1 for k, _ in batch if k == "json")
+            n_csv = sum(1 for k, _ in batch if k == "csv")
+            extra = []
+            if n_json:
+                extra.append(f"{n_json} JSON block(s)")
+            if n_csv:
+                extra.append(f"{n_csv} CSV block(s)")
+            if n_img:
+                extra.append(f"{n_img} image(s)/URL(s)")
+            p_text = (
+                f"{analysis_prompt}\n\n"
+                f"(Batch {bi + 1} of {total}: {', '.join(extra)}.)"
+            )
+        try:
+            content = _build_mixed_chart_user_content(
+                p_text, batch, max_json_chars=max_json_chars, chart_stamp=chart_stamp
+            )
+            kwargs: dict[str, Any] = {
+                **common,
+                "input": responses_input_messages(user_content=content),
+            }
+            if prev_id is not None:
+                kwargs["previous_response_id"] = prev_id
+            _log_openai_send(
+                flow=flow,
+                batch_index=bi + 1,
+                total_batches=total,
+                payloads=batch,
+                model=model,
+                chained=prev_id is not None,
+            )
+            r = client.responses.create(**kwargs)
+        except Exception:
+            _log_openai_error(
+                flow=flow,
+                batch_index=bi + 1,
+                total_batches=total,
+                payloads=batch,
+            )
+            raise
+        prev_id = r.id
+        chunk_text = (r.output_text or "").strip()
+        _log_openai_receive(
+            flow=flow,
+            batch_index=bi + 1,
+            total_batches=total,
+            response_id=prev_id,
+            output_text=chunk_text,
+        )
+        assistant_parts.append(chunk_text)
+        if first_batch and bi == 0 and on_first_model_text is not None and chunk_text:
+            on_first_model_text(chunk_text)
+
+    return prev_id, assistant_parts
+
+
+def run_full_analysis_two_phase_flow(
+    *,
+    api_key: str,
+    charts_dir: Path,
+    structure_prompt: str,
+    footprint_prompt: str,
+    max_images_per_call: int,
+    vector_store_ids: list[str],
+    store: bool,
+    include: list[str],
+    reasoning_summary: str = "auto",
+    reasoning_effort: str | None = DEFAULT_REASONING_EFFORT,
+    chart_payloads: list[ChartOpenAIPayload],
+    max_coinmap_json_chars: int | None = None,
+    on_first_model_text: Optional[Callable[[str], None]] = None,
+    model: str | None = None,
+    chart_stamp: str | None = None,
+) -> PromptTwoStepResult:
+    """
+    FULL_ANALYSIS in two chained phases: TradingView structure, then GoCharting footprint.
+
+    ``first_text`` = batch 1 output; ``after_charts`` = final batch 2 output (Schema A).
+    """
+    client = OpenAI(api_key=api_key)
+    common = _build_responses_common(
+        vector_store_ids=vector_store_ids,
+        store=store,
+        include=include,
+        reasoning_summary=reasoning_summary,
+        reasoning_effort=reasoning_effort,
+        model=model,
+    )
+    mx_json = (
+        max_coinmap_json_chars
+        if max_coinmap_json_chars is not None
+        else _default_max_coinmap_json_chars()
+    )
+    payloads = _filter_valid_chart_payloads(list(chart_payloads))
+    tv_payloads, fp_payloads = split_openai_payloads_by_phase(payloads)
+    if not tv_payloads:
+        raise ValueError(
+            "two-phase FULL_ANALYSIS: no structure payloads "
+            "(expected TradingView DXY/main slots; optional GoCharting DXY overview PNG)"
+        )
+    if not fp_payloads:
+        raise ValueError(
+            "two-phase FULL_ANALYSIS: no footprint payloads "
+            "(expected GoCharting GC/Coinmap or footprint_combined JSON; DXY excluded)"
+        )
+
+    prev_id, phase1_parts = _run_chained_payload_batches(
+        client=client,
+        common=common,
+        analysis_prompt=structure_prompt.strip(),
+        payloads=tv_payloads,
+        max_images_per_call=max_images_per_call,
+        max_json_chars=mx_json,
+        chart_stamp=chart_stamp,
+        flow="analysis-two-phase-1",
+        model=model,
+        on_first_model_text=on_first_model_text,
+        batch_prompt_suffix=False,
+    )
+    assert prev_id is not None
+    text_1 = "\n\n---\n\n".join(phase1_parts)
+
+    prev_id, phase2_parts = _run_chained_payload_batches(
+        client=client,
+        common=common,
+        analysis_prompt=footprint_prompt.strip(),
+        payloads=fp_payloads,
+        max_images_per_call=max_images_per_call,
+        max_json_chars=mx_json,
+        chart_stamp=chart_stamp,
+        flow="analysis-two-phase-2",
+        model=model,
+        previous_response_id=prev_id,
+        batch_prompt_suffix=True,
+    )
+    assert prev_id is not None
+    text_2 = "\n\n---\n\n".join(phase2_parts)
+
+    return PromptTwoStepResult(
+        first_text=text_1,
+        after_charts=text_2,
+        final_response_id=prev_id,
+    )
+
+
 def run_analysis_responses_flow(
     *,
     api_key: str,
@@ -672,28 +954,14 @@ def run_analysis_responses_flow(
     if not (analysis_prompt or "").strip():
         analysis_prompt = default_analysis_prompt(read_main_chart_symbol(charts_dir))
     client = OpenAI(api_key=api_key)
-    tools: list[dict[str, Any]] = []
-    if vector_store_ids:
-        tools.append(
-            {
-                "type": "file_search",
-                "vector_store_ids": list(vector_store_ids),
-            }
-        )
-
-    reasoning: dict[str, Any] = {"summary": reasoning_summary}
-    _eff = (reasoning_effort or "").strip()
-    if _eff:
-        reasoning["effort"] = _eff
-
-    common: dict[str, Any] = {
-        "store": store,
-        "include": include,
-        "reasoning": reasoning,
-    }
-    if tools:
-        common["tools"] = tools
-    _merge_model(common, model)
+    common = _build_responses_common(
+        vector_store_ids=vector_store_ids,
+        store=store,
+        include=include,
+        reasoning_summary=reasoning_summary,
+        reasoning_effort=reasoning_effort,
+        model=model,
+    )
 
     mx_json = (
         max_coinmap_json_chars
@@ -745,61 +1013,19 @@ def run_analysis_responses_flow(
             on_first_model_text(out)
         return PromptTwoStepResult(first_text="", after_charts=out, final_response_id=r.id)
 
-    chunks = chunk_payloads(payloads, max_images_per_call)
-    assistant_parts: list[str] = []
-    prev_id: str | None = None
-    total = len(chunks)
-
-    for bi, batch in enumerate(chunks):
-        if total == 1:
-            p_text = analysis_prompt
-        else:
-            n_img = sum(1 for k, _ in batch if k != "json")
-            n_json = sum(1 for k, _ in batch if k == "json")
-            p_text = (
-                f"{analysis_prompt}\n\n"
-                f"(Batch {bi + 1} of {total}: {n_img} image(s)/URL(s), {n_json} JSON block(s).)"
-            )
-        try:
-            content = _build_mixed_chart_user_content(
-                p_text, batch, max_json_chars=mx_json, chart_stamp=chart_stamp
-            )
-            kwargs: dict[str, Any] = {
-                **common,
-                "input": responses_input_messages(user_content=content),
-            }
-            if prev_id is not None:
-                kwargs["previous_response_id"] = prev_id
-            _log_openai_send(
-                flow="analysis",
-                batch_index=bi + 1,
-                total_batches=total,
-                payloads=batch,
-                model=model,
-                chained=prev_id is not None,
-            )
-            r = client.responses.create(**kwargs)
-        except Exception:
-            _log_openai_error(
-                flow="analysis",
-                batch_index=bi + 1,
-                total_batches=total,
-                payloads=batch,
-            )
-            raise
-        prev_id = r.id
-        chunk_text = (r.output_text or "").strip()
-        _log_openai_receive(
-            flow="analysis",
-            batch_index=bi + 1,
-            total_batches=total,
-            response_id=prev_id,
-            output_text=chunk_text,
-        )
-        assistant_parts.append(chunk_text)
-        if bi == 0 and on_first_model_text is not None and chunk_text:
-            on_first_model_text(chunk_text)
-
+    prev_id, assistant_parts = _run_chained_payload_batches(
+        client=client,
+        common=common,
+        analysis_prompt=analysis_prompt,
+        payloads=payloads,
+        max_images_per_call=max_images_per_call,
+        max_json_chars=mx_json,
+        chart_stamp=chart_stamp,
+        flow="analysis",
+        model=model,
+        on_first_model_text=on_first_model_text,
+        batch_prompt_suffix=True,
+    )
     after = "\n\n---\n\n".join(assistant_parts)
     assert prev_id is not None
     return PromptTwoStepResult(

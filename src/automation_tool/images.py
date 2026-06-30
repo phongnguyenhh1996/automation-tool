@@ -979,3 +979,79 @@ def chunk_payloads(
     if max_per_chunk <= 0:
         return [payloads]
     return [payloads[i : i + max_per_chunk] for i in range(0, len(payloads), max_per_chunk)]
+
+
+_FOOTPRINT_PAYLOAD_MARKERS = (
+    "_gocharting_",
+    "_coinmap_",
+    "footprint_combined_",
+    "footprint_bid_ask_",
+    "_mt5_",
+)
+
+
+def _is_gocharting_dxy_path(name: str) -> bool:
+    return "_gocharting_dxy_" in name.lower()
+
+
+def _is_gocharting_dxy_overview_png(kind: str, path: Path) -> bool:
+    """Overview PNG only (no CSV, no detail_* panels) — sent in batch 1."""
+    if kind != "image" or path.suffix.lower() != ".png":
+        return False
+    lower = path.name.lower()
+    return "_gocharting_dxy_" in lower and "_detail_" not in lower
+
+
+def _payload_phase(name: str) -> str | None:
+    """``tradingview`` | ``footprint`` | None if unclassified."""
+    lower = name.lower()
+    if "_tradingview_" in lower:
+        return "tradingview"
+    if any(m in lower for m in _FOOTPRINT_PAYLOAD_MARKERS):
+        return "footprint"
+    return None
+
+
+def split_openai_payloads_by_phase(
+    payloads: list[ChartOpenAIPayload],
+) -> tuple[list[ChartOpenAIPayload], list[ChartOpenAIPayload]]:
+    """
+    Split full-analysis payloads for 2-batch chained flow.
+
+    Batch 1 (structure): TradingView + GoCharting DXY M15 overview PNG only.
+    Batch 2 (footprint): GC/Coinmap footprint — excludes all GoCharting DXY CSV/PNG.
+    """
+    import logging
+
+    log = logging.getLogger(__name__)
+    structure: list[ChartOpenAIPayload] = []
+    footprint: list[ChartOpenAIPayload] = []
+    for kind, p in payloads:
+        if kind == "image_url":
+            structure.append((kind, p))
+            continue
+        if not isinstance(p, Path):
+            log.warning("split_openai_payloads_by_phase: skip unclassified non-path payload kind=%s", kind)
+            continue
+        name = p.name
+        if _is_gocharting_dxy_path(name):
+            if _is_gocharting_dxy_overview_png(kind, p):
+                structure.append((kind, p))
+            else:
+                log.debug(
+                    "split_openai_payloads_by_phase: skip GoCharting DXY %s (batch 2 excludes DXY)",
+                    name,
+                )
+            continue
+        phase = _payload_phase(name)
+        if phase == "tradingview":
+            structure.append((kind, p))
+        elif phase == "footprint":
+            footprint.append((kind, p))
+        else:
+            log.warning(
+                "split_openai_payloads_by_phase: skip unclassified file %s (kind=%s)",
+                name,
+                kind,
+            )
+    return structure, footprint
