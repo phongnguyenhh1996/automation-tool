@@ -747,7 +747,7 @@ def test_capture_gocharting_in_context_dxy_skips_symbol_search_with_dedicated_ur
     assert select_calls == ["GC"]
 
 
-def test_capture_gocharting_skips_detail_and_calls_ws_when_enabled(
+def test_capture_gocharting_captures_detail_and_ws_when_enabled(
     monkeypatch, tmp_path: Path, gc_cfg: dict
 ) -> None:
     cfg = dict(gc_cfg)
@@ -823,6 +823,6 @@ def test_capture_gocharting_skips_detail_and_calls_ws_when_enabled(
         capture_intervals=None,
     )
 
-    assert detail_called is False
+    assert detail_called is True
     assert ws_called is True
     assert any(p.name == "footprint_combined_5m.json" for p in paths)
