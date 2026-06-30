@@ -81,7 +81,7 @@ from automation_tool.images import (
     gocharting_main_interval_csv_path,
     gocharting_png_path_for_csv,
     latest_chart_stamp,
-    persist_openai_footprint_json_debug,
+    persist_prepared_footprint_json_files,
     ordered_chart_images,
     ordered_chart_openai_payloads,
     read_main_chart_symbol,
@@ -2495,8 +2495,12 @@ def _all_flow_openai_prompts(
 def _extend_payloads_with_footprint_json(
     payloads: list[ChartOpenAIPayload],
     charts_dir: Path,
+    *,
+    gocharting_cfg: dict | None = None,
 ) -> list[ChartOpenAIPayload]:
-    extended = extend_openai_payloads_with_footprint_json(payloads, charts_dir)
+    extended = extend_openai_payloads_with_footprint_json(
+        payloads, charts_dir, gocharting_cfg=gocharting_cfg
+    )
     added = len(extended) - len(payloads)
     if added:
         names = [
@@ -2551,24 +2555,31 @@ def _persist_openai_footprint_json_debug(
     gocharting_yaml: Path | None = None,
     flow_label: str,
 ) -> None:
-    """Save enriched GoCharting footprint JSON to charts_dir for debugging."""
+    """Save prepared GoCharting footprint JSON (``footprint_{SYM}_{iv}.json``)."""
     gc_yaml = gocharting_yaml or default_gocharting_config_path()
     gc_cfg = load_gocharting_yaml(gc_yaml)
-    written = persist_openai_footprint_json_debug(
-        charts_dir,
-        stamp=stamp,
-        chart_stamp=stamp,
-        gocharting_cfg=gc_cfg,
-    )
+    try:
+        written = persist_prepared_footprint_json_files(
+            charts_dir,
+            chart_stamp=stamp,
+            gocharting_cfg=gc_cfg,
+        )
+    except Exception as e:
+        from automation_tool.gocharting_gc_spot_convert import GcToSpotConversionError
+
+        if isinstance(e, GcToSpotConversionError):
+            _log.error("%s: gc_to_spot failed | %s", flow_label, e)
+            raise
+        raise
     if written:
         _log.info(
-            "%s: đã ghi footprint JSON (OpenAI enrich) | %s",
+            "%s: đã ghi footprint JSON prepared | %s",
             flow_label,
             ", ".join(p.name for p in written),
         )
     else:
         _log.info(
-            "%s: không có footprint JSON trên disk — bỏ qua ghi debug",
+            "%s: không có footprint JSON trên disk — bỏ qua ghi prepared",
             flow_label,
         )
 
@@ -3576,7 +3587,7 @@ def cmd_capture_full_analysis(args: argparse.Namespace) -> None:
     if not manifest.get("ready_for_analysis"):
         raise SystemExit(
             "Capture finished but manifest reports not ready_for_analysis. "
-            "Check slots and footprint_combined JSON."
+            "Check slots and footprint_XAUUSD_*.json."
         )
 
 
@@ -3801,8 +3812,6 @@ def cmd_all(args: argparse.Namespace) -> None:
     )
     capture_pngs = ordered_chart_images(charts_dir, stamp=stamp, **gc_openai_kw)
     require_openai(s)
-    payloads = ordered_chart_openai_payloads(charts_dir, stamp=stamp, **gc_openai_kw)
-    payloads = _extend_payloads_with_footprint_json(payloads, charts_dir)
     if use_gc:
         _persist_openai_footprint_json_debug(
             charts_dir,
@@ -3810,6 +3819,10 @@ def cmd_all(args: argparse.Namespace) -> None:
             gocharting_yaml=gc_yaml,
             flow_label="all",
         )
+    payloads = ordered_chart_openai_payloads(charts_dir, stamp=stamp, **gc_openai_kw)
+    payloads = _extend_payloads_with_footprint_json(
+        payloads, charts_dir, gocharting_cfg=load_gocharting_yaml(gc_yaml) if use_gc else None
+    )
     _warn_if_incomplete_chart_payloads(charts_dir, payloads)
     if not payloads:
         raise SystemExit(
@@ -3824,7 +3837,7 @@ def cmd_all(args: argparse.Namespace) -> None:
     openai_model = resolved_openai_model(s, getattr(args, "model", None))
     if two_phase:
         _log.info(
-            "all: OpenAI 2-batch chained | phase1=TV+DXY overview PNG phase2=GC footprint"
+            "all: OpenAI 2-batch chained | phase1=TV+DXY overview PNG phase2=XAUUSD footprint"
         )
 
     def _openai_all_work() -> PromptTwoStepResult:
@@ -4465,27 +4478,38 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
                 "Check config/gocharting.yaml capture_plan."
             )
         require_valid_gocharting_exports_for_stamp(charts_dir, stamp or "")
-        footprint_paths = [m15, m5]
-        footprint_paths = _append_footprint_json_paths(footprint_paths, charts_dir)
+        gc_cfg = load_gocharting_yaml(gc_yaml)
         _persist_openai_footprint_json_debug(
             charts_dir,
             stamp=stamp or "",
             gocharting_yaml=gc_yaml,
             flow_label="update-scalp",
         )
-        m15_png = gocharting_png_path_for_csv(m15)
-        m5_png = gocharting_png_path_for_csv(m5)
-        _log.info(
-            "update-scalp: GoCharting PNG | M15=%s | M5=%s",
-            m15_png,
-            m5_png,
-        )
-        if m15_png is None or m5_png is None:
-            print(
-                "Warning: thiếu PNG GoCharting overview sau capture "
-                f"(M15={m15_png is not None}, M5={m5_png is not None}).",
-                file=sys.stderr,
+        from automation_tool.gocharting_gc_spot_convert import gc_to_spot_enabled
+
+        if gc_to_spot_enabled(gc_cfg):
+            footprint_paths = _append_footprint_json_paths(
+                [], charts_dir, gocharting_cfg=gc_cfg
             )
+        else:
+            footprint_paths = [m15, m5]
+            footprint_paths = _append_footprint_json_paths(
+                footprint_paths, charts_dir, gocharting_cfg=gc_cfg
+            )
+        if not gc_to_spot_enabled(gc_cfg):
+            m15_png = gocharting_png_path_for_csv(m15)
+            m5_png = gocharting_png_path_for_csv(m5)
+            _log.info(
+                "update-scalp: GoCharting PNG | M15=%s | M5=%s",
+                m15_png,
+                m5_png,
+            )
+            if m15_png is None or m5_png is None:
+                print(
+                    "Warning: thiếu PNG GoCharting overview sau capture "
+                    f"(M15={m15_png is not None}, M5={m5_png is not None}).",
+                    file=sys.stderr,
+                )
     else:
         m15 = coinmap_main_pair_interval_json_path(charts_dir, "15m", stamp=stamp)
         m5 = coinmap_main_pair_interval_json_path(charts_dir, "5m", stamp=stamp)

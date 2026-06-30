@@ -61,8 +61,7 @@ def test_build_intraday_update_user_text_followup_merged_mode() -> None:
     t = build_intraday_update_user_text(first_after_all=False, coinmap_attachment_mode="merged")
     assert "[INTRADAY_UPDATE]" in t
     assert "Thời gian hiện tại" in t
-    assert "GoCharting" in t
-    assert "footprint_combined" in t
+    assert "footprint_XAUUSD" in t
     assert "chuỗi phản hồi" in t
     assert "morning_full_analysis" not in t
     assert "Trạng thái các vùng" not in t
@@ -73,16 +72,15 @@ def test_build_intraday_update_user_text_followup_merged_mode() -> None:
 def test_build_intraday_update_user_text_followup_legacy_split_files() -> None:
     t = build_intraday_update_user_text(first_after_all=False, coinmap_attachment_mode="legacy")
     assert "[INTRADAY_UPDATE]" in t
-    assert "GoCharting" in t
-    assert "M15" in t and "M5" in t
+    assert "footprint_XAUUSD_15m" in t
+    assert "footprint_XAUUSD_5m" in t
 
 
 def test_build_intraday_update_user_text_followup_m5_only() -> None:
     t = build_intraday_update_user_text(first_after_all=False, coinmap_attachment_mode="m5_only")
     assert "[INTRADAY_UPDATE]" in t
     assert "M5" in t
-    assert "footprint_combined_5m" in t
-    assert "không M15" in t or "chỉ khung M5" in t
+    assert "footprint_XAUUSD_5m" in t
 
 
 def test_build_intraday_update_user_text_first_after_all_m5_only() -> None:
@@ -97,7 +95,7 @@ def test_build_intraday_update_user_text_first_after_all_merged() -> None:
     t = build_intraday_update_user_text(first_after_all=True, coinmap_attachment_mode="merged")
     assert "[INTRADAY_UPDATE]" in t
     assert "Thời gian hiện tại" in t
-    assert "GoCharting" in t
+    assert "footprint_XAUUSD" in t
     assert "morning_full_analysis" in t
     assert "`context`" in t
     assert "DXY / macro bias" in t
@@ -109,7 +107,8 @@ def test_build_intraday_update_user_text_first_after_all_legacy_three_files() ->
     assert "[INTRADAY_UPDATE]" in t
     assert "ba" in t
     assert "morning_full_analysis" in t
-    assert "M15" in t and "M5" in t
+    assert "footprint_XAUUSD_15m" in t
+    assert "footprint_XAUUSD_5m" in t
 
 
 def test_build_intraday_update_user_text_followup_merged_m5() -> None:
@@ -117,7 +116,7 @@ def test_build_intraday_update_user_text_followup_merged_m5() -> None:
         first_after_all=False, coinmap_attachment_mode="merged_m5"
     )
     assert "[INTRADAY_UPDATE]" in t
-    assert "footprint_combined_5m" in t
+    assert "footprint_XAUUSD_5m" in t
     assert "M5" in t
     assert "morning_full_analysis" not in t
 
@@ -150,7 +149,7 @@ def test_build_scalp_update_user_text_first_after_all_merged_m5() -> None:
     assert "hai" in t
     assert "morning_full_analysis" in t
     assert "M5" in t
-    assert "GoCharting" in t
+    assert "footprint_XAUUSD" in t
 
 
 def test_build_scalp_update_user_text_followup_merged_m5() -> None:
@@ -158,7 +157,7 @@ def test_build_scalp_update_user_text_followup_merged_m5() -> None:
         first_after_all=False, coinmap_attachment_mode="merged_m5"
     )
     assert "[INTRADAY_UPDATE]" in t
-    assert "footprint_combined_5m" in t
+    assert "footprint_XAUUSD_5m" in t
     assert "M5" in t
     assert "morning_full_analysis" not in t
 
@@ -179,17 +178,16 @@ def test_build_scalp_update_user_text_first_after_all_legacy_m15_m5() -> None:
     assert "ba" in t
     assert "morning_full_analysis" in t
     assert "M15" in t and "M5" in t
-    assert "footprint_combined" in t
+    assert "footprint_XAUUSD" in t
     assert "scalp" in t.lower()
 
 
-def test_build_scalp_update_user_text_gocharting_footprint_hints() -> None:
+def test_build_scalp_update_user_text_footprint_hints() -> None:
     t = build_scalp_update_user_text(first_after_all=True)
-    assert "GoCharting" in t
-    assert "footprint_combined" in t
-    assert "stacked BID/ASK" in t
-    assert "không có BID/ASK theo price level" in t
-    assert "GC1!" in t
+    assert "footprint_XAUUSD" in t
+    assert "Hướng dẫn đọc footprint prepared JSON" in t
+    assert "GC" not in t
+    assert "COMEX" not in t
 
 
 def test_format_intraday_update_time_line() -> None:

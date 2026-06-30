@@ -62,6 +62,95 @@ def footprint_combined_openai_payloads(charts_dir: Path) -> list[ChartOpenAIPayl
     return [("json", path) for path in existing_footprint_combined_json_paths(charts_dir)]
 
 
+def existing_prepared_footprint_json_paths(
+    charts_dir: Path,
+    *,
+    logic_symbol: str | None = None,
+    intervals: tuple[str, ...] = ("15m", "5m"),
+) -> list[Path]:
+    """Return on-disk prepared footprint JSON files (15m then 5m)."""
+    from automation_tool.gocharting_gc_spot_convert import prepared_footprint_json_path
+
+    sym = (logic_symbol or read_main_chart_symbol(charts_dir)).strip().upper()
+    paths: list[Path] = []
+    for interval in intervals:
+        path = prepared_footprint_json_path(charts_dir, sym, interval)
+        if path.is_file():
+            paths.append(path)
+    return paths
+
+
+def prepared_footprint_openai_payloads(charts_dir: Path) -> list[ChartOpenAIPayload]:
+    """Prepared spot footprint JSON (``footprint_{SYMBOL}_{iv}.json``) for OpenAI."""
+    return [("json", path) for path in existing_prepared_footprint_json_paths(charts_dir)]
+
+
+def persist_prepared_footprint_json_files(
+    charts_dir: Path,
+    *,
+    chart_stamp: str | None = None,
+    gocharting_cfg: dict | None = None,
+) -> list[Path]:
+    """
+    Build and write ``footprint_{SYMBOL}_{iv}.json`` from raw WS + GC CSV + MT5 spot.
+
+    Raises :class:`GcToSpotConversionError` when conversion cannot meet min_matched_ratio.
+    """
+    import json
+
+    from automation_tool.gocharting_gc_spot_convert import (
+        gc_to_spot_enabled,
+        prepared_footprint_json_path,
+    )
+    from automation_tool.openai_prompt_flow import prepare_footprint_json_for_openai
+
+    cfg = gocharting_cfg if gocharting_cfg is not None else _default_gocharting_cfg()
+    if not gc_to_spot_enabled(cfg):
+        return persist_openai_footprint_json_debug(
+            charts_dir,
+            stamp=chart_stamp or latest_chart_stamp(charts_dir) or "",
+            chart_stamp=chart_stamp,
+            gocharting_cfg=cfg,
+        )
+
+    sym = read_main_chart_symbol(charts_dir)
+    if _footprint_ws_active(cfg):
+        sources = existing_footprint_combined_json_paths(charts_dir)
+    else:
+        from automation_tool.gocharting_footprint_ocr import existing_footprint_bid_ask_json_paths
+
+        sources = existing_footprint_bid_ask_json_paths(charts_dir)
+
+    stamp_for_csv = (chart_stamp or latest_chart_stamp(charts_dir) or "").strip()
+    written: list[Path] = []
+    for src in sources:
+        iv = ""
+        if src.name.startswith("footprint_combined_"):
+            iv = src.stem.replace("footprint_combined_", "")
+        elif src.name.startswith("footprint_bid_ask_"):
+            iv = src.stem.replace("footprint_bid_ask_", "")
+        if not iv:
+            continue
+        try:
+            raw = json.loads(src.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(raw, dict):
+            continue
+        prepared = prepare_footprint_json_for_openai(
+            src,
+            raw,
+            chart_stamp=stamp_for_csv or None,
+            gocharting_cfg=cfg,
+            charts_dir=charts_dir,
+        )
+        dest = prepared_footprint_json_path(charts_dir, sym, iv)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(json.dumps(prepared, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        written.append(dest)
+    return written
+
+
 def extend_openai_payloads_with_footprint_bid_ask(
     payloads: list[ChartOpenAIPayload],
     charts_dir: Path,
@@ -78,9 +167,15 @@ def extend_openai_payloads_with_footprint_json(
     *,
     gocharting_cfg: dict | None = None,
 ) -> list[ChartOpenAIPayload]:
-    """Append WS combined JSON when ``footprint_ws.enabled``; else OCR bid/ask JSON."""
-    if _footprint_ws_active(gocharting_cfg):
-        extra = footprint_combined_openai_payloads(charts_dir)
+    """Append prepared or WS combined JSON when ``footprint_ws.enabled``."""
+    from automation_tool.gocharting_gc_spot_convert import gc_to_spot_enabled
+
+    cfg = gocharting_cfg if gocharting_cfg is not None else _default_gocharting_cfg()
+    if _footprint_ws_active(cfg):
+        if gc_to_spot_enabled(cfg):
+            extra = prepared_footprint_openai_payloads(charts_dir)
+        else:
+            extra = footprint_combined_openai_payloads(charts_dir)
     else:
         extra = footprint_bid_ask_openai_payloads(charts_dir)
     if not extra:
@@ -109,9 +204,15 @@ def append_footprint_json_paths(
     *,
     gocharting_cfg: dict | None = None,
 ) -> list[Path]:
-    """Append WS combined or OCR bid/ask footprint JSON paths when on disk."""
-    if _footprint_ws_active(gocharting_cfg):
-        candidates = existing_footprint_combined_json_paths(charts_dir)
+    """Append prepared or WS combined footprint JSON paths when on disk."""
+    from automation_tool.gocharting_gc_spot_convert import gc_to_spot_enabled
+
+    cfg = gocharting_cfg if gocharting_cfg is not None else _default_gocharting_cfg()
+    if _footprint_ws_active(cfg):
+        if gc_to_spot_enabled(cfg):
+            candidates = existing_prepared_footprint_json_paths(charts_dir)
+        else:
+            candidates = existing_footprint_combined_json_paths(charts_dir)
     else:
         from automation_tool.gocharting_footprint_ocr import existing_footprint_bid_ask_json_paths
 
@@ -651,6 +752,12 @@ def _append_gocharting_openai_payloads(
     gocharting_cfg: dict | None = None,
     gocharting_detail_max_back_steps: int | None = None,
 ) -> None:
+    from automation_tool.gocharting_gc_spot_convert import gc_to_spot_enabled
+
+    cfg = gocharting_cfg if gocharting_cfg is not None else _default_gocharting_cfg()
+    if sym.upper() == GOCHARTING_GOLD_EXPORT_LABEL and gc_to_spot_enabled(cfg):
+        return
+
     iv_slug = re.sub(r"[^\w]+", "_", iv).strip("_")[:20] or "iv"
     cp = charts_dir / f"{stamp}_gocharting_{sym}_{iv_slug}.csv"
     pp = charts_dir / f"{stamp}_gocharting_{sym}_{iv_slug}.png"
@@ -742,8 +849,13 @@ def openai_payloads_for_attachment_paths(
     """
     ws_active = _footprint_ws_active(gocharting_cfg)
     out: list[ChartOpenAIPayload] = []
+    cfg = gocharting_cfg if gocharting_cfg is not None else _default_gocharting_cfg()
+    from automation_tool.gocharting_gc_spot_convert import gc_to_spot_enabled, is_gocharting_main_pair_path
+
     for p in paths:
         if p.suffix.lower() == ".csv":
+            if gc_to_spot_enabled(cfg) and is_gocharting_main_pair_path(p):
+                continue
             out.append(("csv", p))
             pp = gocharting_png_path_for_csv(p)
             if pp is not None:
@@ -986,6 +1098,8 @@ _FOOTPRINT_PAYLOAD_MARKERS = (
     "_coinmap_",
     "footprint_combined_",
     "footprint_bid_ask_",
+    "footprint_xauusd_",
+    "footprint_",
     "_mt5_",
 )
 

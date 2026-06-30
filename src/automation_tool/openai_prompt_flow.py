@@ -28,7 +28,6 @@ from automation_tool.prompts import responses_input_messages
 from automation_tool.images import (
     CHART_SLOT_COUNT,
     DEFAULT_MAIN_CHART_SYMBOL,
-    GOCHARTING_GOLD_EXPORT_LABEL,
     OPENAI_PAYLOAD_MAX,
     ChartOpenAIPayload,
     _detail_back_step_from_stem,
@@ -48,30 +47,43 @@ _log = logging.getLogger(__name__)
 DEFAULT_REASONING_EFFORT = "medium"
 ALL_FLOW_REASONING_EFFORT = "high"
 
-# GoCharting footprint for main gold pair: COMEX GC1! future, not spot XAUUSD.
-GOCHARTING_GOLD_FUTURE_LABEL = "Gold Future (GC1!)"
+# Main gold pair footprint: prepared spot JSON (footprint_{SYMBOL}_{iv}.json).
+MAIN_SPOT_FOOTPRINT_LABEL = "XAUUSD spot"
+
+
+def _prepared_footprint_filename(sym: str, interval: str) -> str:
+    return f"footprint_{sym.strip().upper()}_{interval.strip().lower()}.json"
+
+
+def _prepared_footprint_pair_desc(sym: str) -> str:
+    return (
+        f"{_prepared_footprint_filename(sym, '15m')} và "
+        f"{_prepared_footprint_filename(sym, '5m')}"
+    )
+
+
+_PREPARED_FOOTPRINT_HINT = (
+    "Footprint prepared JSON (spot broker prices): mỗi nến có ohlc, footprint[] "
+    "(buy/sell volume từng level), bar_flow {delta, cum_delta, max_delta, min_delta, "
+    "vwap, buy_volume, sell_volume}. Dữ liệu đã gộp trong footprint_XAUUSD_15m.json và footprint_XAUUSD_5m.json.\n"
+)
 
 _GOCHARTING_BID_ASK_HINT = (
-    "GoCharting CSV export chỉ có OHLC, Volume, Delta, CVD theo nến — "
-    "KHÔNG có BID/ASK theo từng price level (stacked BID/ASK, volume bid/ask từng mức). "
-    "Stacked BID/ASK, absorption: đọc từ footprint_combined_15m.json và footprint_combined_5m.json "
-    "(footprint[] buy/sell volume từng level), không suy từ CSV.\n"
+    "Stacked BID/ASK, absorption: đọc từ "
+    f"{_prepared_footprint_pair_desc('XAUUSD')} "
+    "(footprint[] buy/sell volume từng level; bar_flow cho CVD/delta theo nến).\n"
 )
 
 _GOCHARTING_CHART_READ_GUIDE = (
-    "Hướng dẫn đọc footprint GoCharting (JSON combined + overview PNG):\n"
-    "PNG overview/detail (xác nhận visual hoặc khi JSON chưa đủ):\n"
-    "- Box có border #FF6600 ở detail view = volume POC.\n"
-    "- Line ngang màu #FA6578 = POC Session Profile (Extend VP POC).\n"
-    "- Line ngang màu #17CE1B = VAH Session Profile (Extend VP VA trên).\n"
-    "- Line ngang màu #5B2D1B = VAL Session Profile (Extend VP VA dưới).\n"
-    "- Lấy đúng session hôm nay: chỉ dùng POC/VAH/VAL có nhãn ngày = ngày phân tích "
-    "(GMT+7); nếu nhiều line cùng màu thì chọn session gần giá hiện tại, bỏ qua session cũ.\n"
+    "Hướng dẫn đọc footprint prepared JSON:\n"
+    "- footprint[]: buy/sell volume từng price level (giá spot broker).\n"
+    "- bar_flow: delta, cum_delta, vwap theo nến.\n"
+    "- POC/VWAP: suy từ footprint[] và bar_flow.\n"
 )
 
 _GOCHARTING_TRADE_MANAGEMENT_SUFFIX = (
-    "Stacked BID/ASK, absorption: đọc từ footprint_combined_5m.json "
-    "(candles[].orderflow; footprint[] buy/sell volume từng level), không từ CSV.\n"
+    f"Stacked BID/ASK, absorption: đọc từ {_prepared_footprint_filename('XAUUSD', '5m')} "
+    "(candles[].orderflow nếu có; footprint[] buy/sell volume từng level).\n"
     f"{_GOCHARTING_CHART_READ_GUIDE}"
 )
 
@@ -86,16 +98,11 @@ _PHAN_TICH_CHAM_DIEM_FULL_HINT = (
 def _gocharting_main_footprint_label(main_symbol: str) -> str:
     sym = (main_symbol or "").strip().upper()
     if sym == "XAUUSD":
-        return GOCHARTING_GOLD_FUTURE_LABEL
+        return MAIN_SPOT_FOOTPRINT_LABEL
     return sym or DEFAULT_MAIN_CHART_SYMBOL
 
 
 def _gocharting_gold_future_slot_note(path: Path) -> str:
-    if f"_gocharting_{GOCHARTING_GOLD_EXPORT_LABEL}_" in path.name:
-        return (
-            "Instrument: Gold Future (GC1!) — COMEX gold futures footprint; "
-            "not spot XAUUSD.\n"
-        )
     return ""
 
 
@@ -140,21 +147,14 @@ def default_analysis_prompt(
         except ValueError:
             pass
     footprint_desc = (
-        f"({CHART_SLOT_COUNT} slot chart; mỗi slot GoCharting: CSV orderflow + PNG overview):\n"
+        f"({CHART_SLOT_COUNT} slot chart):\n"
         "TradingView DXY (H4, H1, M15) → "
         f"TradingView {sym} (H4, H1, M15, M15 Session Liquidity Check / ICT Killzones, M5) "
         "(snapshot URL/PNG hoặc JSON OHLC tvdatafeed) → "
-        "GoCharting DXY M15 (CSV; PNG overview) → "
-        f"GoCharting {_gocharting_main_footprint_label(sym)} M15 và M5 "
-        "(footprint hợp đồng tương lai vàng GC1! trên GoCharting; không phải spot XAUUSD; "
-        "mỗi khung: CSV + PNG overview) → "
-        f"MT5 spot {sym} OHLC (broker) nằm trong footprint_combined JSON "
-        "(mỗi nến: ``mt5_spot_ohlc``) → "
-        "footprint_combined_15m.json và footprint_combined_5m.json (WS: GC ohlc + footprint[] + spot OHLC, "
-        "N nến mới nhất).\n"
-        "Ưu tiên footprint_combined JSON: footprint[] (buy/sell volume từng level); "
-        "GoCharting CSV cho CVD/delta/volume theo nến; OHLC tvdatafeed khi cần cấu trúc giá TV.\n"
-        f"{_GOCHARTING_BID_ASK_HINT}"
+        "GoCharting DXY M15 (PNG overview) → "
+        f"Footprint spot {sym}: {_prepared_footprint_pair_desc(sym)} "
+        "(ohlc spot + footprint[] buy/sell volume + bar_flow delta/CVD/VWAP).\n"
+        f"{_PREPARED_FOOTPRINT_HINT}"
         f"{_GOCHARTING_CHART_READ_GUIDE}"
     )
     _ = footprint_source  # legacy callers may pass this; prompts are GoCharting-only
@@ -196,7 +196,7 @@ def full_analysis_structure_prompt(main_symbol: str | None = None) -> str:
         "- GoCharting DXY M15: **chỉ PNG overview** (orderflow chart macro — không có CSV)\n"
         "Nhiệm vụ: phân tích cấu trúc giá (DXY macro bias + trend/POI cặp chính) và liệt kê "
         "các **vùng có cấu trúc tốt** (OB/FVG/HL, premium-discount hợp lệ) làm candidate cho batch 2.\n"
-        "KHÔNG chấm điểm footprint/CVD GC (chưa có GoCharting GC / footprint_combined).\n"
+        "KHÔNG chấm điểm footprint (chưa có footprint prepared JSON cặp chính).\n"
         "Trả duy nhất một block ```json với object:\n"
         "{\n"
         '  "step": 1,\n'
@@ -221,22 +221,20 @@ def full_analysis_structure_prompt(main_symbol: str | None = None) -> str:
 
 
 def full_analysis_footprint_prompt(main_symbol: str | None = None) -> str:
-    """Batch 2/2: GoCharting GC footprint only (no DXY) — scoring and full Schema A."""
+    """Batch 2/2: XAUUSD spot footprint only (no DXY) — scoring and full Schema A."""
     sym = _resolved_main_symbol(main_symbol)
     return (
         "[FULL_ANALYSIS — BƯỚC 2/2: FOOTPRINT & KẾT LUẬN]\n"
         f"Cặp chính: {sym}.\n"
         "Tiếp nối bước 1: dùng `context` và `candidate_zones` từ response trước "
         "(cùng thread OpenAI). DXY macro bias đã xác định ở bước 1 — **không** đính kèm lại DXY.\n"
-        "Đính kèm GoCharting footprint **cặp chính (GC1!)**:\n"
-        f"- GC M15 và M5 (COMEX gold futures, không phải spot {sym}; CSV orderflow + PNG overview"
-        " + detail PNG nếu có) → "
-        "footprint_combined_15m.json và footprint_combined_5m.json "
-        "(footprint[] buy/sell volume từng level).\n"
-        f"{_GOCHARTING_BID_ASK_HINT}"
+        f"Đính kèm footprint spot **{sym}**:\n"
+        f"- {_prepared_footprint_pair_desc(sym)} "
+        "(footprint[] buy/sell volume từng level + bar_flow delta/CVD/VWAP).\n"
+        f"{_PREPARED_FOOTPRINT_HINT}"
         f"{_GOCHARTING_CHART_READ_GUIDE}"
         "Nhiệm vụ (playbook §1.3 bước 5–8):\n"
-        "- Footprint GC M15/M5: trap, CVD ≥3 nến, stacked, absorption, VWAP/POC\n"
+        "- Footprint XAUUSD M15/M5: trap, CVD ≥3 nến, stacked, absorption, VWAP/POC\n"
         "- Filters (anti-sweep, RR, session)\n"
         "- Chấm điểm hop_luu theo mục 0.3 (4 nhóm)\n"
         "- Trả đầy đủ Schema A: phan_tich_cham_diem + output_ngan_gon + prices[] + intraday_hanh_dong\n"
@@ -301,11 +299,26 @@ def prepare_footprint_json_for_openai(
     *,
     chart_stamp: str | None = None,
     gocharting_cfg: dict[str, Any] | None = None,
+    charts_dir: Path | None = None,
 ) -> dict[str, Any]:
     """
     GoCharting footprint JSON after trim / aggregate / enrich — same document sent to OpenAI.
     Non-footprint paths are returned unchanged.
+    Prepared ``footprint_{SYMBOL}_{iv}.json`` files are returned as-is.
     """
+    from automation_tool.gocharting_gc_spot_convert import (
+        build_basis_index,
+        convert_footprint_combined_to_spot,
+        enrich_prepared_footprint_from_gc_csv,
+        gc_to_spot_enabled,
+        is_prepared_footprint_path,
+        resolve_gc_csv_for_interval,
+        resolve_mt5_spot_payload,
+    )
+
+    if is_prepared_footprint_path(path):
+        return data
+
     name = path.name
     if name.startswith("footprint_combined_") and path.suffix.lower() == ".json":
         from automation_tool.gocharting_ws_decode import (
@@ -319,7 +332,7 @@ def prepare_footprint_json_for_openai(
             enrich_footprint_combined_document,
             footprint_derived_enabled,
         )
-        from automation_tool.images import _default_gocharting_cfg
+        from automation_tool.images import _default_gocharting_cfg, read_main_chart_symbol
 
         cfg = gocharting_cfg if gocharting_cfg is not None else _default_gocharting_cfg()
         iv = path.stem.replace("footprint_combined_", "")
@@ -331,6 +344,45 @@ def prepare_footprint_json_for_openai(
         out = aggregate_footprint_combined_document(out, cfg=cfg)
         if footprint_derived_enabled(cfg):
             out = enrich_footprint_combined_document(out, cfg=cfg)
+        if gc_to_spot_enabled(cfg):
+            cd = charts_dir
+            if cd is None:
+                parent = path.parent
+                cd = parent.parent if parent.name == "footprint_images" else parent
+            sym = read_main_chart_symbol(cd)
+            candles = out.get("candles") if isinstance(out.get("candles"), list) else []
+            mt5 = resolve_mt5_spot_payload(
+                charts_dir=cd,
+                logic_symbol=sym,
+                interval=iv,
+                count=len(candles),
+                chart_stamp=chart_stamp,
+            )
+            out = convert_footprint_combined_to_spot(
+                out,
+                mt5_payload=mt5,
+                cfg=cfg,
+                logic_symbol=sym,
+                interval=iv,
+            )
+            basis_index, _ = build_basis_index(
+                [c for c in candles if isinstance(c, dict)],
+                mt5,
+            )
+            csv_path = resolve_gc_csv_for_interval(cd, iv, chart_stamp=chart_stamp)
+            out = enrich_prepared_footprint_from_gc_csv(
+                out,
+                csv_path,
+                cfg=cfg,
+                basis_index=basis_index,
+            )
+            source = out.get("source")
+            if not isinstance(source, dict):
+                source = {}
+            else:
+                source = dict(source)
+            source["footprint_ws"] = path.name
+            out["source"] = source
         return slim_footprint_combined_for_openai(out)
     if name.startswith("footprint_bid_ask_") and path.suffix.lower() == ".json":
         from automation_tool.gocharting_footprint_ocr import (
@@ -363,6 +415,8 @@ def _json_file_header_and_body(
     Header (input_text) + body string for upload. Slim only Coinmap paths when enabled;
     TradingView JSON is compacted but not passed through ``slim_coinmap_export_for_openai``.
     """
+    from automation_tool.gocharting_gc_spot_convert import is_prepared_footprint_path
+
     raw = path.read_text(encoding="utf-8")
     try:
         data = json.loads(raw)
@@ -397,25 +451,34 @@ def _json_file_header_and_body(
     elif "_mt5_" in path.name:
         header = (
             f"[MT5 spot OHLC (broker execution price) — file: {path.name}]\n"
-            "Instrument: spot XAUUSD on broker MT5 (not GC1! futures footprint).\n"
+            "Instrument: spot XAUUSD on broker MT5.\n"
             "Bar times (`t`) and generated_at are Asia/Ho_Chi_Minh (UTC+7).\n"
+        )
+    elif is_prepared_footprint_path(path):
+        from automation_tool.gocharting_gc_spot_convert import parse_prepared_footprint_path
+
+        parsed = parse_prepared_footprint_path(path)
+        sym_label, iv = parsed if parsed else ("XAUUSD", "?")
+        header = (
+            f"[Footprint prepared — {iv} — file: {path.name}]\n"
+            f"Instrument: spot {sym_label}. Each candle: time_gmt7, ohlc (spot broker), "
+            "footprint[] (buy/sell volume per price block), "
+            "bar_flow {delta, cum_delta, max_delta, min_delta, vwap, buy_volume, sell_volume}.\n"
         )
     elif path.name.startswith("footprint_combined_") and path.suffix.lower() == ".json":
         iv = path.stem.replace("footprint_combined_", "")
         header = (
-            f"[GoCharting footprint combined — {iv} — file: {path.name}]\n"
-            "Instrument: COMEX:GC1! futures. Each candle: time_gmt7, ohlc (GC1!), "
-            "mt5_spot_ohlc (spot broker), footprint[] "
-            "with buy/sell volume per price block (GoCharting chart row labels; "
-            "tick_size × block_multiplier from config; latest N candles from WS capture).\n"
+            f"[Footprint prepared — {iv} — file: {path.name}]\n"
+            f"Instrument: spot {DEFAULT_MAIN_CHART_SYMBOL}. Each candle: time_gmt7, ohlc, "
+            "footprint[] (buy/sell volume per price block), "
+            "bar_flow {delta, cum_delta, vwap, buy_volume, sell_volume}.\n"
         )
     elif path.name.startswith("footprint_bid_ask_") and path.suffix.lower() == ".json":
         iv = path.stem.replace("footprint_bid_ask_", "")
         header = (
-            f"[GoCharting Bid/Ask footprint — {iv} — file: {path.name}]\n"
-            "Instrument: COMEX:GC1! futures. Each candle: time (HH:MM) + price_levels "
-            "[{bid, ask, price}, ...] top→bottom per closed bar "
-            "(price from CSV High aligned to GoCharting chart row labels, default block 0.3).\n"
+            f"[Footprint bid/ask — {iv} — file: {path.name}]\n"
+            f"Instrument: spot {DEFAULT_MAIN_CHART_SYMBOL}. Each candle: time (HH:MM) + price_levels "
+            "[{bid, ask, price}, ...] top→bottom per closed bar.\n"
         )
     elif "_openai_coinmap_merged" in path.name or path.name.endswith("_merged.json"):
         header = f"[Coinmap merged analysis — file: {path.name}]\n"
@@ -876,7 +939,7 @@ def run_full_analysis_two_phase_flow(
     if not fp_payloads:
         raise ValueError(
             "two-phase FULL_ANALYSIS: no footprint payloads "
-            "(expected GoCharting GC/Coinmap or footprint_combined JSON; DXY excluded)"
+            "(expected footprint prepared JSON or Coinmap; DXY excluded)"
         )
 
     prev_id, phase1_parts = _run_chained_payload_batches(
@@ -1081,8 +1144,8 @@ def run_prompt_two_step_flow(
 
 DEFAULT_UPDATE_PROMPT_TEMPLATE = (
     "[INTRADAY_UPDATE]\n"
-    "Cập nhật intraday: lần đầu sau [FULL_ANALYSIS] kèm morning_full_analysis.json + GoCharting M5 "
-    "(CSV + footprint_combined_5m.json; có thể kèm TradingView 15m ICT + TV M5).\n"
+    "Cập nhật intraday: lần đầu sau [FULL_ANALYSIS] kèm morning_full_analysis.json + "
+    "footprint_XAUUSD_5m.json (có thể kèm TradingView 15m ICT + TV M5).\n"
 )
 
 _INTRADAY_UPDATE_PLAN_HINT = (
@@ -1108,30 +1171,22 @@ _SCALP_UPDATE_PLAN_HINT = (
 )
 
 _GOCHARTING_INTRADAY_CHART_READ_PRIORITY_HINT = (
-    "Ưu tiên footprint_combined JSON: footprint[] (buy/sell volume từng level); "
-    "CSV GoCharting chỉ có CVD/delta/volume theo nến — không có BID/ASK theo price level. "
+    f"Ưu tiên {_prepared_footprint_pair_desc('XAUUSD')}: footprint[] + bar_flow. "
     "TradingView snapshot khi cần cấu trúc giá / liquidity.\n"
     f"{_GOCHARTING_CHART_READ_GUIDE}"
 )
 
+
+def _gocharting_intraday_attachment_line(*, m5_only: bool, sym: str = DEFAULT_MAIN_CHART_SYMBOL) -> str:
+    fp = _prepared_footprint_filename(sym, "5m") if m5_only else _prepared_footprint_pair_desc(sym)
+    if m5_only:
+        return f"Footprint spot **{sym}**: **{fp}** (M5 only)."
+    return f"Footprint spot **{sym}**: **{fp}**."
+
+
 _INTRADAY_UPDATE_SUFFIX = _GOCHARTING_INTRADAY_CHART_READ_PRIORITY_HINT + _INTRADAY_UPDATE_PLAN_HINT
 _SCALP_UPDATE_SUFFIX = _GOCHARTING_INTRADAY_CHART_READ_PRIORITY_HINT + _SCALP_UPDATE_PLAN_HINT
 _GOCHARTING_SCALP_UPDATE_SUFFIX = _SCALP_UPDATE_SUFFIX
-
-
-def _gocharting_intraday_attachment_line(*, m5_only: bool) -> str:
-    gc = (
-        f"footprint {GOCHARTING_GOLD_FUTURE_LABEL} trên GoCharting (GC1! COMEX; không phải spot XAUUSD); "
-        "CSV orderflow + PNG overview; footprint_combined_*.json (GC ohlc + footprint[] + mt5_spot_ohlc)."
-    )
-    if m5_only:
-        return (
-            f"GoCharting **M5** CSV + footprint_combined_5m.json ({gc} chỉ khung M5)."
-        )
-    return (
-        f"GoCharting **M15** và **M5** CSV (+ PNG overview sau mỗi CSV; "
-        f"footprint_combined_15m.json và footprint_combined_5m.json; {gc})"
-    )
 
 
 def is_first_intraday_update_after_all(
@@ -1175,7 +1230,8 @@ def build_intraday_update_user_text(
         else:
             files = (
                 "Đính kèm **ba** phần theo thứ tự: **(1)** morning_full_analysis.json, "
-                f"**(2)** GoCharting M15 CSV, **(3)** M5 CSV + footprint_combined JSON "
+                f"**(2)** {_prepared_footprint_filename('XAUUSD', '15m')}, "
+                f"**(3)** {_prepared_footprint_filename('XAUUSD', '5m')} "
                 f"({attach})\n"
             )
         return (
@@ -1222,7 +1278,8 @@ def build_scalp_update_user_text(
         else:
             files = (
                 "Đính kèm **ba** phần theo thứ tự: **(1)** morning_full_analysis.json, "
-                f"**(2)** GoCharting M15 CSV, **(3)** M5 CSV + footprint_combined JSON "
+                f"**(2)** {_prepared_footprint_filename('XAUUSD', '15m')}, "
+                f"**(3)** {_prepared_footprint_filename('XAUUSD', '5m')} "
                 f"({attach})\n"
             )
         return (
@@ -1243,24 +1300,25 @@ def build_scalp_update_user_text(
     )
 
 
-# TradingView tab Nhật ký: giá chạm → footprint_combined JSON + OpenAI (intraday).
+# TradingView tab Nhật ký: giá chạm → footprint_XAUUSD_*.json + OpenAI (intraday).
 # Trả về Schema E: chỉ ``phan_tich_alert`` + ``intraday_hanh_dong``; nếu VÀO LỆNH, dùng trade_line theo baseline vùng.
 JOURNAL_INTRADAY_FIRST_USER_TEMPLATE = (
     "[INTRADAY_ALERT]\n"
     "Cảnh báo TradingView đã kích hoạt tại mức giá {touched_price}.\n"
-    "Đính kèm **footprint_combined_5m.json** (GoCharting GC ohlc + footprint[] + mt5_spot_ohlc).\n"
+    f"Đính kèm **{_prepared_footprint_filename('XAUUSD', '5m')}** "
+    "(spot ohlc + footprint[] + bar_flow).\n"
 )
 
 JOURNAL_INTRADAY_RETRY_USER_TEMPLATE = (
     "[INTRADAY_ALERT]\n"
     "Tiếp tục đánh giá sau {wait_minutes} phút; vẫn theo dõi mức đã chạm {touched_price}.\n"
-    "Đính kèm bản **footprint_combined_5m.json** mới.\n"
+    f"Đính kèm bản **{_prepared_footprint_filename('XAUUSD', '5m')}** mới.\n"
 )
 
 # Sau khi giá last realtime chạm TP1 (vùng đang ``cho_tp1``).
 TP1_POST_TOUCH_USER_TEMPLATE = (
     "[TRADE_MANAGEMENT]\n"
-    f"Đánh giá Footprint GoCharting M5 (footprint_combined_5m.json) đính kèm — {GOCHARTING_GOLD_FUTURE_LABEL} "
+    f"Đánh giá Footprint spot M5 ({_prepared_footprint_filename('XAUUSD', '5m')}) đính kèm "
     "(giữ hay thoát / chỉnh SL/TP).\n"
     f"{_GOCHARTING_TRADE_MANAGEMENT_SUFFIX}"
     "Vùng (label): {plan_label}\n"
@@ -1273,7 +1331,7 @@ TP1_POST_TOUCH_USER_TEMPLATE = (
 R1_POST_TOUCH_USER_TEMPLATE = (
     "[TRADE_MANAGEMENT]\n"
     "Giá đã đạt mức {r_level}R; "
-    f"đánh giá Footprint GoCharting M5 (footprint_combined_5m.json) đính kèm — {GOCHARTING_GOLD_FUTURE_LABEL} "
+    f"đánh giá Footprint spot M5 ({_prepared_footprint_filename('XAUUSD', '5m')}) đính kèm "
     "(giữ hay thoát / chỉnh SL/TP).\n"
     f"{_GOCHARTING_TRADE_MANAGEMENT_SUFFIX}"
     "Vùng (label): {plan_label}\n"
@@ -1288,8 +1346,8 @@ R1_POST_TOUCH_USER_TEMPLATE = (
 POST_FILL_MANAGEMENT_USER_TEMPLATE = (
     "[TRADE_MANAGEMENT]\n"
     "Lệnh đã khớp khoảng {minutes_after_fill} phút trước. "
-    f"Đánh giá Footprint GoCharting M5 (footprint_combined_5m.json) đính kèm — {GOCHARTING_GOLD_FUTURE_LABEL} "
-    "(hợp đồng tương lai vàng COMEX GC1! trên GoCharting; không phải spot XAUUSD MT5) "
+    f"Đánh giá Footprint spot M5 ({_prepared_footprint_filename('XAUUSD', '5m')}) đính kèm "
+    "(footprint spot XAUUSD; giá broker MT5) "
     "(giữ hay thoát / chỉnh SL/TP).\n"
     f"{_GOCHARTING_TRADE_MANAGEMENT_SUFFIX}"
     "Đây là khuyến nghị tham khảo — người dùng tự quyết trên MT5.\n"

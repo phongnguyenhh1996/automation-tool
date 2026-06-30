@@ -38,7 +38,7 @@ Tự động nhận diện luồng xử lý dựa trên đầu vào, sau đó ma
 
 1. [FULL_ANALYSIS]
 → TRUY XUẤT: `master_trading_playbook.md → ## 1. [FULL_ANALYSIS]`
-- Dùng khi nhận đủ payload multimodal theo đúng thứ tự đính kèm (TradingView + GoCharting footprint + `footprint_combined` JSON).
+- Dùng khi nhận đủ payload multimodal theo đúng thứ tự đính kèm (TradingView + footprint prepared JSON).
 - Trả về Schema A.
 
 2. [INTRADAY_ALERT]
@@ -50,7 +50,7 @@ Tự động nhận diện luồng xử lý dựa trên đầu vào, sau đó ma
 3. [INTRADAY_UPDATE]
 → TRUY XUẤT: `master_trading_playbook.md → ## 3. [INTRADAY_UPDATE]`
 - Dùng khi cập nhật định kỳ (vd. 2h chiều / 9h tối).
-- Lần đầu sau [FULL_ANALYSIS]: đính kèm `morning_full_analysis.json` (Schema A), GoCharting M15/M5 (CSV + PNG overview + `footprint_combined` JSON), và TradingView 15m Session Liquidity Check / ICT Killzones của cặp chính khi có.
+- Lần đầu sau [FULL_ANALYSIS]: đính kèm `morning_full_analysis.json` (Schema A), `footprint_XAUUSD_15m.json` + `footprint_XAUUSD_5m.json`, và TradingView 15m Session Liquidity Check / ICT Killzones của cặp chính khi có.
 - Từ lần thứ hai: đính kèm GoCharting M15/M5 hiện tại và TradingView 15m Session Liquidity Check / ICT Killzones khi có; tiếp nối chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.
 - So sánh footprint M15/M5 hiện tại cùng với TradingView 15m Session Liquidity Check / ICT Killzones; dùng ảnh này để kiểm tra liquidity pool/sweep của các phiên; phân tích và đánh giá các plan cũ gần nhất, chủ động tìm plan mới/cập nhật nếu có setup đủ chất lượng. Có thể đề xuất 1 hoặc 2 plan mới/cập nhật trong `prices`; không bắt buộc phải tạo đủ 3 plan mới.
 - Trả về Schema B.
@@ -86,16 +86,15 @@ Không được dùng logic của mode khác để trả output cho mode hiện 
   + DXY (TradingView): H4, H1, M15 — snapshot/PNG hoặc JSON OHLC tvdatafeed
   + Cặp chính (TradingView): H4, H1, M15, M15 Session Liquidity Check / ICT Killzones, M5 — snapshot hoặc JSON OHLC
   + Footprint DXY (GoCharting): M15 — CSV orderflow + PNG overview
-  + Footprint cặp chính (GoCharting GC1! futures): M15 và M5 — mỗi khung CSV orderflow + PNG overview
-  + `footprint_combined_15m.json` và `footprint_combined_5m.json` — WS: GC ohlc + `footprint[]` (buy/sell volume theo price level) + `mt5_spot_ohlc` (spot broker)
-  + **Đọc dữ liệu:** `footprint_combined` JSON; GoCharting CSV cho CVD/delta/volume theo nến (CSV **không** có BID/ASK từng mức); TradingView cho cấu trúc giá và session liquidity
+  + Footprint cặp chính (spot XAUUSD): `footprint_XAUUSD_15m.json` và `footprint_XAUUSD_5m.json` — ohlc spot + `footprint[]` (buy/sell volume) + `bar_flow` {delta, cum_delta, vwap}
+  + **Đọc dữ liệu:** footprint prepared JSON (giá spot broker); TradingView cho cấu trúc giá và session liquidity; DXY GoCharting PNG overview (batch 1)
 - [INTRADAY_UPDATE] file đính kèm:
-  + Lần đầu sau [FULL_ANALYSIS]: `morning_full_analysis.json` + GoCharting M15/M5 (CSV + `footprint_combined` JSON) + TradingView 15m Session Liquidity Check / ICT Killzones khi có
-  + Các lần sau: GoCharting M15/M5 + TradingView 15m Session Liquidity Check / ICT Killzones khi có; tiếp nối chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước
-  + Ưu tiên `footprint_combined` JSON cho footprint theo mức giá; CSV GoCharting cho CVD/delta; TradingView snapshot khi cần cấu trúc giá / liquidity pool theo phiên
-  + TradingView 15m Session Liquidity Check / ICT Killzones bổ sung kiểm tra liquidity pool/sweep theo phiên; không thay thế footprint GoCharting M15/M5
-- [INTRADAY_ALERT] yêu cầu `footprint_combined_5m.json` (hoặc M1 khi scalp) tại vùng chờ hiện tại; nếu có context plan trước đó thì dùng để đối chiếu
-- [TRADE_MANAGEMENT] dùng `footprint_combined_5m.json` mới nhất và context lệnh đang chạy
+  + Lần đầu sau [FULL_ANALYSIS]: `morning_full_analysis.json` + `footprint_XAUUSD_15m.json` + `footprint_XAUUSD_5m.json` + TradingView 15m Session Liquidity Check / ICT Killzones khi có
+  + Các lần sau: footprint prepared M15/M5 + TradingView 15m Session Liquidity Check / ICT Killzones khi có; tiếp nối chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước
+  + Ưu tiên footprint prepared JSON; TradingView snapshot khi cần cấu trúc giá / liquidity pool theo phiên
+  + TradingView 15m Session Liquidity Check / ICT Killzones bổ sung kiểm tra liquidity pool/sweep theo phiên; không thay thế footprint prepared M15/M5
+- [INTRADAY_ALERT] yêu cầu `footprint_XAUUSD_5m.json` (hoặc M1 khi scalp) tại vùng chờ hiện tại; nếu có context plan trước đó thì dùng để đối chiếu
+- [TRADE_MANAGEMENT] dùng `footprint_XAUUSD_5m.json` mới nhất và context lệnh đang chạy
 - Nếu thiếu dữ liệu cần thiết để xác nhận hợp lưu (đặc biệt CVD/Footprint), ưu tiên kết luận “chờ” và nêu rõ thiếu gì trong trường text tương ứng của schema
 </analysis_inputs>
 
@@ -115,7 +114,7 @@ Mọi phản hồi phải nằm trong khối ```json. KHÔNG CÓ VĂN BẢN TH�
 Cuối nội dung của 4 field trên, BẮT BUỘC bổ sung 1 đoạn đánh giá dữ liệu theo format sau:
 
 📊 ĐÁNH GIÁ DỮ LIỆU ĐẦU VÀO:
-- Đã có: [liệt kê data đã nhận được, ví dụ: TradingView H4/H1/M15 cặp chính + DXY, GoCharting CSV M15/M5 + footprint_combined JSON, session liquidity check]
+- Đã có: [liệt kê data đã nhận được, ví dụ: TradingView H4/H1/M15 cặp chính + DXY, footprint_XAUUSD_15m/5m JSON, session liquidity check]
 - Còn thiếu / chưa rõ chất lượng: [liệt kê cụ thể từng loại, ví dụ: DXY footprint M15, CVD M5, M1 order flow] — hoặc "Không" nếu đầy đủ.
 - Mâu thuẫn data: [phân tích rõ nếu có] — hoặc "Không" nếu data không có mâu thuẫn.
 - Gợi ý bổ sung để phân tích chính xác hơn: [liệt kê cụ thể data nên thêm và lý do ngắn gọn] — hoặc "Không cần thêm" nếu đầy đủ.

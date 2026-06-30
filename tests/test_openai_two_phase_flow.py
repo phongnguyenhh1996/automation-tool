@@ -67,7 +67,7 @@ def test_two_phase_flow_chains_previous_response_id(tmp_path: Path) -> None:
         "tradingview" in (c.get("text") or "") for c in content1 if c.get("type") == "input_text"
     )
     assert any(
-        "gocharting" in (c.get("text") or "").lower() or "footprint_combined" in (c.get("text") or "")
+        "Footprint prepared" in (c.get("text") or "")
         for c in content2
         if c.get("type") == "input_text"
     )

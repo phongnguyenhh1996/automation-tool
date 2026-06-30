@@ -49,6 +49,22 @@ def test_split_gocharting_gc_and_footprint_json(tmp_path: Path) -> None:
     assert footprint[-1][1] == coinmap
 
 
+def test_split_prepared_footprint_json_only(tmp_path: Path) -> None:
+    prepared = tmp_path / "footprint_XAUUSD_15m.json"
+    prepared.write_text("{}", encoding="utf-8")
+    coinmap = tmp_path / "20260629_165354_coinmap_XAUUSD_15m.json"
+    coinmap.write_text("{}", encoding="utf-8")
+
+    payloads = [
+        ("json", prepared),
+        ("json", coinmap),
+    ]
+    structure, footprint = split_openai_payloads_by_phase(payloads)
+    assert structure == []
+    assert len(footprint) == 2
+    assert footprint[0][1] == prepared
+
+
 def test_split_dxy_gocharting_overview_png_to_structure_csv_excluded(tmp_path: Path) -> None:
     dxy_csv = tmp_path / "20260629_165354_gocharting_DXY_15m.csv"
     dxy_csv.write_text("time\n", encoding="utf-8")

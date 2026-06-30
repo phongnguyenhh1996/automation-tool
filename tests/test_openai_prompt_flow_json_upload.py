@@ -215,19 +215,17 @@ def test_default_analysis_prompt_describes_json_and_png() -> None:
     p = default_analysis_prompt("XAUUSD")
     assert "[FULL_ANALYSIS]" in p
     assert "100 payload" in p
-    assert "PNG" in p
     assert "GoCharting DXY M15" in p
-    assert "footprint_combined_15m.json" in p
+    assert "footprint_XAUUSD_15m.json" in p
+    assert "footprint_XAUUSD_5m.json" in p
+    assert "bar_flow" in p
     assert "Coinmap" not in p
-    assert "#FF6600" in p
-    assert "#FA6578" in p
 
 
 def test_default_analysis_prompt_gocharting_bid_ask_on_detail() -> None:
     p = default_analysis_prompt("XAUUSD", footprint_source="gocharting")
-    assert "KHÔNG có BID/ASK theo từng price level" in p
-    assert "footprint_combined" in p
-    assert "orderflow" in p
+    assert "footprint_XAUUSD" in p
+    assert "bar_flow" in p
     assert "Coinmap" not in p
 
 
@@ -235,8 +233,8 @@ def test_gocharting_csv_header_notes_bid_ask(tmp_path: Path) -> None:
     csv_p = tmp_path / "stamp_gocharting_GC_5m.csv"
     csv_p.write_text("Time,Open,High,Low,Close,Volume,Delta,CVD\n2026-01-01,1,2,3,4,5,6,7\n")
     header, _ = _csv_file_header_and_body(csv_p, max_chars=10_000)
-    assert "KHÔNG có BID/ASK theo từng price level" in header
-    assert "footprint_combined" in header
+    assert "footprint_XAUUSD" in header
+    assert "bar_flow" in header
 
 
 def test_gocharting_detail_png_headers_are_brief(tmp_path: Path) -> None:
@@ -275,8 +273,8 @@ def test_build_mixed_gocharting_detail_png_header_not_repeated(tmp_path: Path) -
         max_json_chars=100_000,
     )
     texts = [p["text"] for p in parts if p.get("type") == "input_text"]
-    bid_ask_mentions = [t for t in texts if "KHÔNG có BID/ASK" in t]
-    assert len(bid_ask_mentions) == 1
+    footprint_mentions = [t for t in texts if "footprint_XAUUSD" in t]
+    assert len(footprint_mentions) == 1
     assert any("detail footprint zoomed in" in t for t in texts)
     assert any("history pan step 1" in t for t in texts)
 
