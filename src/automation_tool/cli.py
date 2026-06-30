@@ -55,10 +55,8 @@ from automation_tool.openai_analysis_json import (
 )
 from automation_tool.openai_errors import re_raise_unless_openai
 from automation_tool.openai_prompt_flow import (
-    ALL_FLOW_MODEL,
     ALL_FLOW_REASONING_EFFORT,
     DEFAULT_REASONING_EFFORT,
-    resolved_all_flow_openai_model,
     PromptTwoStepResult,
     build_intraday_update_user_text,
     build_scalp_update_user_text,
@@ -220,9 +218,6 @@ def _telegram_log_technical(settings, text: str) -> None:
 
 _OPENAI_MODEL_HELP = (
     "OpenAI Responses API model id (e.g. gpt-5.2). Overrides OPENAI_MODEL env."
-)
-_ALL_FLOW_MODEL_HELP = (
-    f"OpenAI model for all/all-2 (default: {ALL_FLOW_MODEL}). CLI --model overrides."
 )
 
 _MT5_ACCOUNTS_JSON_HELP = (
@@ -838,7 +833,7 @@ def _parser() -> argparse.ArgumentParser:
         metavar="FILE",
         help="accounts.json nguồn để tạo accounts-all2.json sau luồng 2 (mặc định MT5_ACCOUNTS_JSON)",
     )
-    al.add_argument("--model", default=None, metavar="ID", help=_ALL_FLOW_MODEL_HELP)
+    al.add_argument("--model", default=None, metavar="ID", help=_OPENAI_MODEL_HELP)
     al.set_defaults(func=cmd_all)
 
     al2 = sub.add_parser(
@@ -888,7 +883,7 @@ def _parser() -> argparse.ArgumentParser:
         metavar="FILE",
         help="accounts.json nguồn để tạo accounts-all2.json (mặc định MT5_ACCOUNTS_JSON)",
     )
-    al2.add_argument("--model", default=None, metavar="ID", help=_ALL_FLOW_MODEL_HELP)
+    al2.add_argument("--model", default=None, metavar="ID", help=_OPENAI_MODEL_HELP)
     al2.set_defaults(func=cmd_all_2)
 
     tl = sub.add_parser(
@@ -3255,7 +3250,7 @@ def _run_all_second_flow(
             max_images_per_call,
             chart_payloads=chart_payloads,
             on_first_model_text=None,
-            model=resolved_all_flow_openai_model(model),
+            model=resolved_openai_model(s, model),
             vector_store_ids=[_ALL_SECOND_FLOW_VECTOR_STORE_ID],
             reasoning_effort=ALL_FLOW_REASONING_EFFORT,
             chart_stamp=chart_stamp,
@@ -3737,7 +3732,7 @@ def cmd_all(args: argparse.Namespace) -> None:
 
     prompt_all = _resolved_analysis_prompt(args, charts_dir)
     max_images = args.max_images_per_call
-    openai_model = resolved_all_flow_openai_model(getattr(args, "model", None))
+    openai_model = resolved_openai_model(s, getattr(args, "model", None))
 
     def _openai_all_work() -> PromptTwoStepResult:
         return _run_openai_flow(

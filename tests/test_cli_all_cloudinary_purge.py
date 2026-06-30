@@ -39,7 +39,7 @@ def test_all_does_not_request_cloudinary_json_purge(monkeypatch, tmp_path: Path)
     monkeypatch.setattr(cli, "_run_openai_flow", fake_run_openai_flow)
     monkeypatch.setattr(cli, "write_last_response_id", lambda _response_id: None)
     monkeypatch.setattr(cli, "write_last_all_response_id", lambda _response_id: None)
-    monkeypatch.setattr(cli, "resolved_all_flow_openai_model", lambda model: model)
+    monkeypatch.setattr(cli, "resolved_openai_model", lambda _settings, model: model)
     monkeypatch.setattr(cli, "zones_dir_from_cli_path", lambda _path: tmp_path / "zones")
 
     args = _parser().parse_args(
@@ -100,7 +100,7 @@ def test_all_morning_clear_keeps_ea_neverdie_json(monkeypatch, tmp_path: Path) -
     monkeypatch.setattr(cli, "_run_openai_flow", lambda *_args, **_kwargs: OpenAIResult())
     monkeypatch.setattr(cli, "write_last_response_id", lambda _response_id: None)
     monkeypatch.setattr(cli, "write_last_all_response_id", lambda _response_id: None)
-    monkeypatch.setattr(cli, "resolved_all_flow_openai_model", lambda model: model)
+    monkeypatch.setattr(cli, "resolved_openai_model", lambda _settings, model: model)
 
     args = _parser().parse_args(
         [
@@ -212,7 +212,7 @@ def test_all_runs_second_flow_with_dedicated_vector_channel_and_all2_shards(
     monkeypatch.setattr(cli, "write_last_all_response_id", lambda _response_id: None)
     monkeypatch.setattr(cli, "write_morning_full_analysis", lambda _obj: None)
     monkeypatch.setattr(cli, "write_morning_baseline_prices", lambda _trip: None)
-    monkeypatch.setattr(cli, "resolved_all_flow_openai_model", lambda model: model)
+    monkeypatch.setattr(cli, "resolved_openai_model", lambda _settings, model: model)
     monkeypatch.setattr(
         "automation_tool.ea_neverdie_zone_publish.maybe_publish_neverdie_after_cli",
         lambda **_kwargs: None,
@@ -296,7 +296,7 @@ def test_all_2_standalone_uses_existing_charts_without_capture(monkeypatch, tmp_
     monkeypatch.setattr(cli, "capture_charts", fake_capture)
     monkeypatch.setattr(cli, "_run_openai_flow", fake_run_openai_flow)
     monkeypatch.setattr(cli, "send_openai_output_to_telegram", fake_send_openai_output_to_telegram)
-    monkeypatch.setattr(cli, "resolved_all_flow_openai_model", lambda model: model)
+    monkeypatch.setattr(cli, "resolved_openai_model", lambda _settings, model: model)
     monkeypatch.setattr(cli, "sync_accounts_all2_json", lambda _path: None)
     zones_dir = tmp_path / "zones"
     write_calls: list[dict[str, object]] = []
