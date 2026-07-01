@@ -2535,9 +2535,20 @@ def _all_flow_gocharting_openai_kw(
     return kw
 
 
-def _append_footprint_json_paths(paths: list[Path], charts_dir: Path) -> list[Path]:
+def _append_footprint_json_paths(
+    paths: list[Path],
+    charts_dir: Path,
+    *,
+    gocharting_cfg: dict | None = None,
+    intervals: tuple[str, ...] = ("15m", "5m"),
+) -> list[Path]:
     before = len(paths)
-    append_footprint_json_paths(paths, charts_dir)
+    append_footprint_json_paths(
+        paths,
+        charts_dir,
+        gocharting_cfg=gocharting_cfg,
+        intervals=intervals,
+    )
     added = len(paths) - before
     if added:
         _log.info(
@@ -2554,6 +2565,7 @@ def _persist_openai_footprint_json_debug(
     stamp: str,
     gocharting_yaml: Path | None = None,
     flow_label: str,
+    intervals: tuple[str, ...] = ("15m", "5m"),
 ) -> None:
     """Save prepared GoCharting footprint JSON (``footprint_{SYM}_{iv}.json``)."""
     gc_yaml = gocharting_yaml or default_gocharting_config_path()
@@ -2563,6 +2575,7 @@ def _persist_openai_footprint_json_debug(
             charts_dir,
             chart_stamp=stamp,
             gocharting_cfg=gc_cfg,
+            intervals=intervals,
         )
     except Exception as e:
         from automation_tool.gocharting_gc_spot_convert import GcToSpotConversionError
@@ -4373,8 +4386,9 @@ def cmd_update(args: argparse.Namespace) -> None:
 
 def cmd_update_scalp(args: argparse.Namespace) -> None:
     """
-    Luồng ``update-scalp``: TradingView **15m ICT + 5m**, rồi Coinmap **M15 + M5** (JSON + PNG,
-    ``bearer_request``) → OpenAI, tìm plan đẹp nhất. Dùng ``--no-tradingview`` để chỉ Coinmap.
+    Luồng ``update-scalp``: TradingView **15m ICT + 5m**, rồi footprint **M5** (Coinmap M15+M5
+    hoặc GoCharting M5 ``gc_to_spot``) → OpenAI, tìm plan đẹp nhất. Dùng ``--no-tradingview``
+    để chỉ footprint.
     - Vector store: ``OPENAI_UPDATE_SCALP_VECTOR_STORE_ID(S)``; nếu không set thì giống ``all-2``
       (``_ALL_SECOND_FLOW_VECTOR_STORE_ID``), không dùng ``OPENAI_VECTOR_STORE_IDS``.
     - Thread OpenAI riêng (``last_scalp_response_id.txt``).
@@ -4413,6 +4427,7 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
     storage = args.storage_state or default_storage_state_path()
     use_gc = bool(getattr(args, "gocharting", False))
     gc_yaml = getattr(args, "gocharting_config", None) or default_gocharting_config_path()
+    gc_footprint_intervals: tuple[str, ...] = ("5m",) if use_gc else ("15m", "5m")
     _log.info(
         "update-scalp: bắt đầu | capture_yaml=%s tv_yaml=%s no_tradingview=%s gocharting=%s",
         cfg_cap,
@@ -4453,25 +4468,19 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
         gocharting_password=s.gocharting_password or "",
         gocharting_detail_history_steps=GOCHARTING_UPDATE_SCALP_DETAIL_HISTORY_STEPS,
         mt5_accounts_json=resolve_mt5_accounts_path(getattr(args, "mt5_accounts_json", None)),
+        coinmap_capture_intervals=gc_footprint_intervals,
     )
 
     print(f"Captured {len(paths)} file(s) for update-scalp run.")
     footprint_paths: list[Path]
     if use_gc:
-        m15 = gocharting_main_interval_csv_path(charts_dir, "15m", stamp=stamp)
         m5 = gocharting_main_interval_csv_path(charts_dir, "5m", stamp=stamp)
         _log.info(
-            "update-scalp: capture xong | %s file(s) | stamp=%s | M15 CSV=%s | M5 CSV=%s",
+            "update-scalp: capture xong | %s file(s) | stamp=%s | M5 CSV=%s",
             len(paths),
             stamp,
-            m15,
             m5,
         )
-        if m15 is None:
-            raise SystemExit(
-                f"No 15m GoCharting CSV under {charts_dir} after capture (stamp={stamp!r}). "
-                "Check config/gocharting.yaml capture_plan."
-            )
         if m5 is None:
             raise SystemExit(
                 f"No 5m GoCharting CSV under {charts_dir} after capture (stamp={stamp!r}). "
@@ -4484,32 +4493,40 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
             stamp=stamp or "",
             gocharting_yaml=gc_yaml,
             flow_label="update-scalp",
+            intervals=gc_footprint_intervals,
         )
         from automation_tool.gocharting_gc_spot_convert import gc_to_spot_enabled
 
         if gc_to_spot_enabled(gc_cfg):
             footprint_paths = _append_footprint_json_paths(
-                [], charts_dir, gocharting_cfg=gc_cfg
+                [],
+                charts_dir,
+                gocharting_cfg=gc_cfg,
+                intervals=gc_footprint_intervals,
             )
         else:
-            footprint_paths = [m15, m5]
+            footprint_paths = [m5]
             footprint_paths = _append_footprint_json_paths(
-                footprint_paths, charts_dir, gocharting_cfg=gc_cfg
+                footprint_paths,
+                charts_dir,
+                gocharting_cfg=gc_cfg,
+                intervals=gc_footprint_intervals,
             )
         if not gc_to_spot_enabled(gc_cfg):
-            m15_png = gocharting_png_path_for_csv(m15)
             m5_png = gocharting_png_path_for_csv(m5)
             _log.info(
-                "update-scalp: GoCharting PNG | M15=%s | M5=%s",
-                m15_png,
+                "update-scalp: GoCharting PNG | M5=%s",
                 m5_png,
             )
-            if m15_png is None or m5_png is None:
+            if m5_png is None:
                 print(
-                    "Warning: thiếu PNG GoCharting overview sau capture "
-                    f"(M15={m15_png is not None}, M5={m5_png is not None}).",
+                    "Warning: thiếu PNG GoCharting overview sau capture (M5).",
                     file=sys.stderr,
                 )
+        if not footprint_paths:
+            raise SystemExit(
+                f"No M5 GoCharting footprint JSON under {charts_dir} after gc_to_spot prepare."
+            )
     else:
         m15 = coinmap_main_pair_interval_json_path(charts_dir, "15m", stamp=stamp)
         m5 = coinmap_main_pair_interval_json_path(charts_dir, "5m", stamp=stamp)
@@ -4558,11 +4575,11 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
 
     user_msg = build_scalp_update_user_text(
         first_after_all=True,
-        coinmap_attachment_mode="legacy",
+        coinmap_attachment_mode="m5_only" if use_gc else "legacy",
         footprint_source="gocharting" if use_gc else "coinmap",
     )
     if tv_chart_payloads:
-        fp_label = "GoCharting CSV" if use_gc else "JSON Coinmap"
+        fp_label = "GoCharting footprint M5" if use_gc else "JSON Coinmap"
         user_msg += (
             f"\nĐính kèm thêm ảnh TradingView cặp chính sau {fp_label}: **15m** Session Liquidity Check "
             "/ ICT Killzones và **5m** khung thường (không ICT).\n"

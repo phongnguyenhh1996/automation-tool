@@ -483,25 +483,24 @@ def _parse_gc_csv_bar_flow_rows(text: str) -> dict[str, dict[str, Any]]:
     return by_time
 
 
-_BAR_FLOW_PRICE_KEYS = (
-    "open",
-    "high",
-    "low",
-    "close",
+_BAR_FLOW_SHIFT_PRICE_KEYS = (
     "vwap",
     "buy_vwap",
     "sell_vwap",
     "buyvwap",
     "sellvwap",
 )
+_BAR_FLOW_OHLC_KEYS = ("open", "high", "low", "close")
 
 
 def _shift_bar_flow_prices(bar: dict[str, Any], basis: float, *, spot_tick: float) -> dict[str, Any]:
     out = dict(bar)
-    for key in _BAR_FLOW_PRICE_KEYS:
+    for key in _BAR_FLOW_SHIFT_PRICE_KEYS:
         val = _float_or_none(out.get(key))
         if val is not None:
             out[key] = _shift_price(val, basis, spot_tick=spot_tick)
+    for key in _BAR_FLOW_OHLC_KEYS:
+        out.pop(key, None)
     return out
 
 

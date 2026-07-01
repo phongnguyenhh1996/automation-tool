@@ -90,6 +90,7 @@ def persist_prepared_footprint_json_files(
     *,
     chart_stamp: str | None = None,
     gocharting_cfg: dict | None = None,
+    intervals: tuple[str, ...] = ("15m", "5m"),
 ) -> list[Path]:
     """
     Build and write ``footprint_{SYMBOL}_{iv}.json`` from raw WS + GC CSV + MT5 spot.
@@ -115,11 +116,11 @@ def persist_prepared_footprint_json_files(
 
     sym = read_main_chart_symbol(charts_dir)
     if _footprint_ws_active(cfg):
-        sources = existing_footprint_combined_json_paths(charts_dir)
+        sources = existing_footprint_combined_json_paths(charts_dir, intervals=intervals)
     else:
         from automation_tool.gocharting_footprint_ocr import existing_footprint_bid_ask_json_paths
 
-        sources = existing_footprint_bid_ask_json_paths(charts_dir)
+        sources = existing_footprint_bid_ask_json_paths(charts_dir, intervals=intervals)
 
     stamp_for_csv = (chart_stamp or latest_chart_stamp(charts_dir) or "").strip()
     written: list[Path] = []
@@ -203,6 +204,7 @@ def append_footprint_json_paths(
     charts_dir: Path,
     *,
     gocharting_cfg: dict | None = None,
+    intervals: tuple[str, ...] = ("15m", "5m"),
 ) -> list[Path]:
     """Append prepared or WS combined footprint JSON paths when on disk."""
     from automation_tool.gocharting_gc_spot_convert import gc_to_spot_enabled
@@ -210,13 +212,13 @@ def append_footprint_json_paths(
     cfg = gocharting_cfg if gocharting_cfg is not None else _default_gocharting_cfg()
     if _footprint_ws_active(cfg):
         if gc_to_spot_enabled(cfg):
-            candidates = existing_prepared_footprint_json_paths(charts_dir)
+            candidates = existing_prepared_footprint_json_paths(charts_dir, intervals=intervals)
         else:
-            candidates = existing_footprint_combined_json_paths(charts_dir)
+            candidates = existing_footprint_combined_json_paths(charts_dir, intervals=intervals)
     else:
         from automation_tool.gocharting_footprint_ocr import existing_footprint_bid_ask_json_paths
 
-        candidates = existing_footprint_bid_ask_json_paths(charts_dir)
+        candidates = existing_footprint_bid_ask_json_paths(charts_dir, intervals=intervals)
     for path in candidates:
         if path not in paths:
             paths.append(path)

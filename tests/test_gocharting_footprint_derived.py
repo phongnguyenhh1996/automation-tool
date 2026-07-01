@@ -16,7 +16,9 @@ from automation_tool.gocharting_footprint_derived import (
     compute_stacked_in_candle,
     enrich_footprint_combined_document,
     enrich_footprint_levels_in_candle,
+    enrich_prepared_footprint_stacked,
     footprint_derived_enabled,
+    _level_volumes,
 )
 from automation_tool.openai_prompt_flow import _json_file_header_and_body
 
@@ -324,3 +326,40 @@ def test_json_file_header_and_body_drops_forming_candle(
     assert len(payload["candles"]) == 1
     assert payload["candles"][0]["time_gmt7"] == closed_time
     assert forming_time not in body
+
+
+def test_level_volumes_accepts_slim_int_buy_sell() -> None:
+    price, bid, ask = _level_volumes({"price": 4019.0, "buy": 12, "sell": 3})
+    assert price == 4019.0
+    assert bid == 12
+    assert ask == 3
+
+
+def test_enrich_prepared_footprint_stacked_on_slim_footprint() -> None:
+    doc = {
+        "symbol": "XAUUSD",
+        "interval": "5m",
+        "candles": [
+            {
+                "time_gmt7": "Thu Jun 25 2026 10:05:00 GMT+0700",
+                "ohlc": {"low": 4024.6, "high": 4025.0, "close": 4024.8},
+                "footprint": [
+                    {"price": 4025.0, "buy": 50, "sell": 0},
+                    {"price": 4024.8, "buy": 40, "sell": 5},
+                    {"price": 4024.7, "buy": 36, "sell": 4},
+                    {"price": 4024.6, "buy": 1, "sell": 1},
+                ],
+            }
+        ],
+    }
+    out = enrich_prepared_footprint_stacked(
+        doc,
+        cfg={"footprint_ws": {"derived": {"stacked_min_levels": 3, "rl_min": 4.0}}},
+    )
+    candle = out["candles"][0]
+    assert "orderflow" in candle
+    assert candle["orderflow"]["stacked_in_candle"]
+    stacked = candle["orderflow"]["stacked_in_candle"][0]
+    assert stacked["side"] == "BID"
+    assert stacked["level_count"] >= 3
+    assert stacked["prices"][0] == 4025.0

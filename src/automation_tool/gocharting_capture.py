@@ -874,6 +874,7 @@ def _capture_gocharting_in_context(
                     gocharting_yaml=gocharting_yaml,
                     main_symbol=main_chart_symbol,
                     mt5_accounts_json=mt5_accounts_json,
+                    capture_intervals=capture_intervals,
                 )
                 paths.extend(ws_paths)
         return paths

@@ -126,7 +126,7 @@ footprint_ws:
   derived:
     enabled: false
     imbalance_enabled: false
-    stacked_enabled: false
+    stacked_enabled: true
     absorption_enabled: false
     rl_min: 4.0
     stacked_min_levels: 3

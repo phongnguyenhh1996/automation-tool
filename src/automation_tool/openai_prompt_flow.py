@@ -65,7 +65,8 @@ def _prepared_footprint_pair_desc(sym: str) -> str:
 _PREPARED_FOOTPRINT_HINT = (
     "Footprint prepared JSON (spot broker prices): mỗi nến có ohlc, footprint[] "
     "(buy/sell volume từng level), bar_flow {delta, cum_delta, max_delta, min_delta, "
-    "vwap, buy_volume, sell_volume}. Dữ liệu đã gộp trong footprint_XAUUSD_15m.json và footprint_XAUUSD_5m.json.\n"
+    "vwap, buy_volume, sell_volume}, orderflow.stacked_in_candle (BID/ASK stacked RL≥rl_min). "
+    "Dữ liệu đã gộp trong footprint_XAUUSD_15m.json và footprint_XAUUSD_5m.json.\n"
 )
 
 _GOCHARTING_BID_ASK_HINT = (
@@ -341,6 +342,7 @@ def prepare_footprint_json_for_openai(
         )
         from automation_tool.gocharting_footprint_derived import (
             enrich_footprint_combined_document,
+            enrich_prepared_footprint_stacked,
             footprint_derived_enabled,
         )
         from automation_tool.images import _default_gocharting_cfg, read_main_chart_symbol
@@ -359,7 +361,7 @@ def prepare_footprint_json_for_openai(
             max_candles=footprint_ws_max_candles_from_cfg(cfg),
         )
         out = aggregate_footprint_combined_document(out, cfg=cfg)
-        if footprint_derived_enabled(cfg):
+        if footprint_derived_enabled(cfg) and not gc_to_spot_enabled(cfg):
             out = enrich_footprint_combined_document(out, cfg=cfg)
         if gc_to_spot_enabled(cfg):
             cd = charts_dir
@@ -398,6 +400,7 @@ def prepare_footprint_json_for_openai(
                 logic_symbol=sym,
                 interval=iv,
             )
+            out = enrich_prepared_footprint_stacked(out, cfg=cfg)
         return slim_footprint_combined_for_openai(out)
     if name.startswith("footprint_bid_ask_") and path.suffix.lower() == ".json":
         from automation_tool.gocharting_footprint_ocr import (
@@ -478,7 +481,8 @@ def _json_file_header_and_body(
             f"[Footprint prepared — {iv} — file: {path.name}]\n"
             f"Instrument: spot {sym_label}. Each candle: time_gmt7, ohlc (spot broker), "
             "footprint[] (buy/sell volume per price block), "
-            "bar_flow {delta, cum_delta, max_delta, min_delta, vwap, buy_volume, sell_volume}.\n"
+            "bar_flow {delta, cum_delta, max_delta, min_delta, vwap, buy_volume, sell_volume}, "
+            "orderflow.stacked_in_candle.\n"
         )
     elif path.name.startswith("footprint_combined_") and path.suffix.lower() == ".json":
         iv = path.stem.replace("footprint_combined_", "")
@@ -1176,11 +1180,11 @@ _MORNING_CONTEXT_HINT = (
 )
 
 _SCALP_UPDATE_PLAN_HINT = (
-    "Nhiệm vụ chính: tìm **1 plan đẹp nhất** trong phiên hiện tại (hop_luu >= 60, "
+    "Nhiệm vụ chính: tìm **1 scalp đẹp nhất** trong phiên hiện tại (hop_luu >= 60, "
     "có đủ hợp lưu M5 để vào lệnh nhanh). "
-    "Không cần đánh giá lại plan cũ; chỉ tập trung vào plan mới đủ chất lượng. "
-    "Nếu có 2–3 plan đủ chất lượng thì có thể trả thêm, nhưng không bắt buộc. "
-    "Bắt buộc dùng label dạng `scalp_<id>` cho mỗi plan trong `prices` "
+    "Không cần đánh giá lại scalp cũ; chỉ tập trung vào scalp mới đủ chất lượng. "
+    "Nếu có 2–3 scalp đủ chất lượng thì có thể trả thêm, nhưng không bắt buộc. "
+    "Bắt buộc dùng label dạng `scalp_<id>` cho mỗi scalp trong `prices` "
     "(ví dụ: `scalp_1`, `scalp_2`, `scalp_3`). "
     "Không dùng label `plan_chinh` hay `plan_phu` cho luồng scalp này.\n"
 )
@@ -1190,6 +1194,19 @@ _GOCHARTING_INTRADAY_CHART_READ_PRIORITY_HINT = (
     "TradingView snapshot khi cần cấu trúc giá / liquidity.\n"
     f"{_GOCHARTING_CHART_READ_GUIDE}"
 )
+
+
+def _gocharting_intraday_chart_read_priority_hint(
+    *,
+    m5_only: bool,
+    sym: str = DEFAULT_MAIN_CHART_SYMBOL,
+) -> str:
+    fp = _prepared_footprint_filename(sym, "5m") if m5_only else _prepared_footprint_pair_desc(sym)
+    return (
+        f"Ưu tiên {fp}: footprint[] + bar_flow. "
+        "TradingView snapshot khi cần cấu trúc giá / liquidity.\n"
+        f"{_GOCHARTING_CHART_READ_GUIDE}"
+    )
 
 
 def _gocharting_intraday_attachment_line(*, m5_only: bool, sym: str = DEFAULT_MAIN_CHART_SYMBOL) -> str:
@@ -1274,7 +1291,7 @@ def build_scalp_update_user_text(
     footprint_source: str = "gocharting",
 ) -> str:
     """
-    User message cho ``update-scalp``: tìm plan đẹp nhất, label ``scalp_<id>`` (GoCharting footprint).
+    User message cho ``update-scalp``: tìm scalp đẹp nhất, label ``scalp_<id>`` (GoCharting footprint).
 
     ``coinmap_attachment_mode``: ``m5_only`` / ``merged_m5`` → chỉ M5; mặc định M15 + M5.
     """
@@ -1283,6 +1300,9 @@ def build_scalp_update_user_text(
     mode = str(coinmap_attachment_mode or "merged").strip().lower()
     m5_only = mode in ("m5_only", "merged_m5", "merged_m5_only")
     attach = _gocharting_intraday_attachment_line(m5_only=m5_only)
+    suffix = (
+        _gocharting_intraday_chart_read_priority_hint(m5_only=m5_only) + _SCALP_UPDATE_PLAN_HINT
+    )
 
     if first_after_all:
         if m5_only:
@@ -1303,7 +1323,7 @@ def build_scalp_update_user_text(
             "Phân tích buổi sáng (Schema A) nằm trong file **morning_full_analysis.json** đính kèm đầu tiên.\n"
             f"{files}"
             f"{_MORNING_CONTEXT_HINT}"
-            f"{_SCALP_UPDATE_SUFFIX}"
+            f"{suffix}"
         )
 
     return (
@@ -1311,7 +1331,7 @@ def build_scalp_update_user_text(
         f"{time_line}"
         "Tiếp tục chuỗi phản hồi sau lần [INTRADAY_UPDATE] trước.\n"
         f"Đính kèm {attach}\n"
-        f"{_SCALP_UPDATE_SUFFIX}"
+        f"{suffix}"
     )
 
 

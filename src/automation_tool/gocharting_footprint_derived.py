@@ -181,10 +181,32 @@ def compute_diagonal_level_rl_at_index(
 
 def _level_volumes(level: dict[str, Any]) -> tuple[float, int, int]:
     price = level.get("price")
-    buy = level.get("buy") if isinstance(level.get("buy"), dict) else {}
-    sell = level.get("sell") if isinstance(level.get("sell"), dict) else {}
-    bid = int(buy.get("volume") or 0)
-    ask = int(sell.get("volume") or 0)
+    if "bid" in level or "ask" in level:
+        try:
+            bid = int(level.get("bid") or 0)
+        except (TypeError, ValueError):
+            bid = 0
+        try:
+            ask = int(level.get("ask") or 0)
+        except (TypeError, ValueError):
+            ask = 0
+    else:
+        buy_raw = level.get("buy")
+        sell_raw = level.get("sell")
+        if isinstance(buy_raw, dict):
+            bid = int(buy_raw.get("volume") or 0)
+        else:
+            try:
+                bid = int(buy_raw or 0)
+            except (TypeError, ValueError):
+                bid = 0
+        if isinstance(sell_raw, dict):
+            ask = int(sell_raw.get("volume") or 0)
+        else:
+            try:
+                ask = int(sell_raw or 0)
+            except (TypeError, ValueError):
+                ask = 0
     try:
         price_f = float(price) if price is not None else 0.0
     except (TypeError, ValueError):
@@ -477,6 +499,42 @@ def enrich_footprint_combined_document(
         block = dict(candle)
         block["footprint"] = enrich_footprint_levels_in_candle(block, cfg=derived_cfg)
         orderflow = compute_candle_orderflow(block, cfg=derived_cfg)
+        if orderflow:
+            block["orderflow"] = orderflow
+        enriched.append(block)
+    out["candles"] = enriched
+    return out
+
+
+def enrich_prepared_footprint_stacked(
+    doc: dict[str, Any],
+    *,
+    cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Attach ``orderflow.stacked_in_candle`` on spot-prepared footprint (after ``gc_to_spot``)."""
+    if not isinstance(doc, dict):
+        return doc
+    derived_raw = derived_config_from_cfg(cfg or {}, doc)
+    stacked_cfg = DerivedConfig(
+        imbalance_enabled=False,
+        stacked_enabled=True,
+        absorption_enabled=False,
+        rl_min=derived_raw.rl_min,
+        stacked_min_levels=derived_raw.stacked_min_levels,
+        tick_size=derived_raw.tick_size,
+    )
+    candles_raw = doc.get("candles")
+    if not isinstance(candles_raw, list):
+        return doc
+
+    out = dict(doc)
+    enriched: list[Any] = []
+    for candle in candles_raw:
+        if not isinstance(candle, dict):
+            enriched.append(candle)
+            continue
+        block = dict(candle)
+        orderflow = compute_candle_orderflow(block, cfg=stacked_cfg)
         if orderflow:
             block["orderflow"] = orderflow
         enriched.append(block)

@@ -252,14 +252,18 @@ def capture_footprint_ws_plan(
     gocharting_yaml: Optional[Path] = None,
     main_symbol: str | None = None,
     mt5_accounts_json: Path | None = None,
+    capture_intervals: tuple[str, ...] | None = None,
 ) -> list[Path]:
     """Capture WS footprint JSON for each ``footprint_screenshot.intervals`` entry."""
     specs = footprint_ws_interval_specs(cfg)
     if not specs:
         raise ValueError("footprint_screenshot.intervals with page_url required for footprint_ws")
 
+    iv_filter = {i.strip().lower() for i in capture_intervals} if capture_intervals else None
     paths: list[Path] = []
     for interval, page_url in specs:
+        if iv_filter is not None and interval.strip().lower() not in iv_filter:
+            continue
         page = context.new_page()
         try:
             dest = capture_footprint_ws_on_page(

@@ -139,7 +139,9 @@ def test_parse_gc_csv_and_enrich_bar_flow(tmp_path: Path) -> None:
     )
     bar_flow = out["candles"][0]["bar_flow"]
     assert bar_flow["delta"] == -5
-    assert bar_flow["close"] == pytest.approx(4023.5)
+    assert "close" not in bar_flow
+    assert "open" not in bar_flow
+    assert bar_flow["vwap"] == pytest.approx(4024.0)
     assert bar_flow["buyvwap"] == pytest.approx(4024.5)
     assert bar_flow["sellvwap"] == pytest.approx(4022.5)
     assert "source" not in out
@@ -148,18 +150,26 @@ def test_parse_gc_csv_and_enrich_bar_flow(tmp_path: Path) -> None:
 def test_shift_bar_flow_prices_includes_buyvwap_sellvwap() -> None:
     basis = -13.7261
     bar = {
+        "open": 4015.0,
+        "high": 4020.0,
+        "low": 4014.0,
+        "close": 4019.0,
         "vwap": 4017.04,
         "buyvwap": 4031.0,
         "sellvwap": 4030.0,
         "buy_vwap": 4031.5,
         "sell_vwap": 4029.5,
+        "delta": 10,
     }
     out = _shift_bar_flow_prices(bar, basis, spot_tick=0.01)
+    for key in ("open", "high", "low", "close"):
+        assert key not in out
     assert out["vwap"] == pytest.approx(4003.31)
     assert out["buyvwap"] == pytest.approx(4017.27)
     assert out["sellvwap"] == pytest.approx(4016.27)
     assert out["buy_vwap"] == pytest.approx(4017.77)
     assert out["sell_vwap"] == pytest.approx(4015.77)
+    assert out["delta"] == 10
 
 
 def test_convert_footprint_drops_unmatched_candles() -> None:

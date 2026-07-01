@@ -278,6 +278,34 @@ def test_append_footprint_json_paths_prefers_combined(tmp_path: Path) -> None:
     assert bid_ask not in paths
 
 
+def test_append_footprint_json_paths_respects_intervals_filter(tmp_path: Path) -> None:
+    charts = tmp_path / "charts"
+    fp_dir = charts / "footprint_images"
+    fp_dir.mkdir(parents=True)
+    (charts / ".main_chart_symbol").write_text("XAUUSD\n", encoding="utf-8")
+    m15 = fp_dir / "footprint_combined_15m.json"
+    m5 = fp_dir / "footprint_combined_5m.json"
+    m15.write_text('{"candles":[]}\n', encoding="utf-8")
+    m5.write_text('{"candles":[]}\n', encoding="utf-8")
+    prepared_m15 = charts / "footprint_XAUUSD_15m.json"
+    prepared_m5 = charts / "footprint_XAUUSD_5m.json"
+    prepared_m15.write_text('{"candles":[]}\n', encoding="utf-8")
+    prepared_m5.write_text('{"candles":[]}\n', encoding="utf-8")
+    gc_cfg = {
+        "footprint_ws": {
+            "enabled": True,
+            "gc_to_spot": {"enabled": True},
+        }
+    }
+    paths = append_footprint_json_paths(
+        [],
+        charts,
+        gocharting_cfg=gc_cfg,
+        intervals=("5m",),
+    )
+    assert paths == [prepared_m5]
+
+
 def test_persist_openai_footprint_json_debug_writes_stamp_files(tmp_path: Path) -> None:
     charts = tmp_path / "charts"
     fp_dir = charts / "footprint_images"
