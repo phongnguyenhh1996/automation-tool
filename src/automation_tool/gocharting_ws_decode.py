@@ -53,9 +53,20 @@ def parse_ws_binary_envelope(raw: bytes) -> Optional[tuple[str, bytes]]:
     return type_str, payload
 
 
+def footprint_protobuf_payload_from_bytes(raw: bytes) -> tuple[bytes, Optional[str]]:
+    """Strip optional GoCharting WS ``m`` envelope before protobuf decode."""
+    parsed = parse_ws_binary_envelope(raw)
+    if parsed is not None:
+        type_str, payload = parsed
+        if "FOOTPRINT" in type_str.upper():
+            return payload, type_str
+    return raw, None
+
+
 def decode_footprint_for_date_response(payload: bytes) -> pb.FootPrintForDateResponse:
+    proto_payload, _ = footprint_protobuf_payload_from_bytes(payload)
     msg = pb.FootPrintForDateResponse()
-    msg.ParseFromString(payload)
+    msg.ParseFromString(proto_payload)
     return msg
 
 

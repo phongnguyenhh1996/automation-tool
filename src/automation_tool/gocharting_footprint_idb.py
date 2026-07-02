@@ -14,9 +14,11 @@ from automation_tool.gocharting_ws_decode import (
     FOOTPRINT_EXPORT_FORMAT_RAW,
     decode_footprint_for_date_response,
     document_timeframe,
+    footprint_protobuf_payload_from_bytes,
     footprint_response_to_document,
     footprint_response_to_raw_document,
     merge_footprint_raw_with_ohlc,
+    parse_ws_binary_envelope,
 )
 
 _log = logging.getLogger(__name__)
@@ -127,16 +129,50 @@ def footprint_idb_lookup_days(cfg: dict[str, Any]) -> int:
     return 2
 
 
+def footprint_idb_retry_wait_ms(cfg: dict[str, Any]) -> int:
+    """Wait before a second IndexedDB read when prior-session keys decode empty."""
+    ws = cfg.get("footprint_ws")
+    if isinstance(ws, dict):
+        idb = ws.get("idb")
+        if isinstance(idb, dict) and idb.get("retry_wait_ms") is not None:
+            try:
+                return max(0, int(idb["retry_wait_ms"]))
+            except (TypeError, ValueError):
+                pass
+    return 15_000
+
+
+def _idb_payload_debug_hint(payload: bytes) -> str:
+    if not payload:
+        return "bytes=0"
+    magic = payload[0]
+    magic_s = (
+        f"magic=0x{magic:02x}({chr(magic)!r})"
+        if 32 <= magic < 127
+        else f"magic=0x{magic:02x}"
+    )
+    parts = [f"bytes={len(payload)}", magic_s]
+    parsed = parse_ws_binary_envelope(payload)
+    if parsed is not None:
+        type_str, inner = parsed
+        parts.append(f"envelope={type_str!r} inner_bytes={len(inner)}")
+    return " ".join(parts)
+
+
 def decode_idb_footprint_bytes(
     payload: bytes,
     *,
     export_format: str,
     idb_key: str = "",
 ) -> dict[str, Any]:
+    _, envelope_type = footprint_protobuf_payload_from_bytes(payload)
     msg = decode_footprint_for_date_response(payload)
-    ws_type = "INDEXEDDB"
-    if idb_key:
-        ws_type = f"INDEXEDDB/{idb_key}"
+    if envelope_type:
+        ws_type = f"INDEXEDDB/{envelope_type}"
+    else:
+        ws_type = "INDEXEDDB"
+        if idb_key:
+            ws_type = f"INDEXEDDB/{idb_key}"
     if export_format in (FOOTPRINT_EXPORT_FORMAT_RAW, FOOTPRINT_EXPORT_FORMAT_COMBINED):
         doc = footprint_response_to_raw_document(msg, ws_type=ws_type)
     else:
@@ -251,11 +287,16 @@ def idb_probe_to_documents(
         b64 = entry.get("data_b64")
         if not isinstance(b64, str) or not b64:
             continue
+        payload = base64.b64decode(b64)
         try:
-            payload = base64.b64decode(b64)
             doc = decode_idb_footprint_bytes(payload, export_format=export_format, idb_key=key)
         except Exception as exc:
-            _log.warning("footprint_idb: decode failed for %s: %s", key, exc)
+            _log.warning(
+                "footprint_idb: decode failed for %s: %s (%s)",
+                key,
+                exc,
+                _idb_payload_debug_hint(payload),
+            )
             continue
         docs.append(doc)
         _log.info(

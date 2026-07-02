@@ -116,6 +116,8 @@ footprint_ws:
   max_candles: 50
   extra_session_days: 1
   wait_ms: 45000
+  idb:
+    retry_wait_ms: 15000
   export_format: combined
   mt5_spot: true
   gc_to_spot:

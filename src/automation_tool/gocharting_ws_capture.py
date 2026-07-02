@@ -11,6 +11,7 @@ from automation_tool.gocharting_footprint_idb import (
     build_output_with_idb,
     capture_footprint_idb_documents,
     footprint_idb_enabled,
+    footprint_idb_retry_wait_ms,
 )
 from automation_tool.gocharting_footprint_ws_request import request_footprint_dates_on_page
 from automation_tool.gocharting_footprint_ocr import footprint_images_dir, footprint_interval_json_path
@@ -225,6 +226,7 @@ def capture_footprint_ws_on_page(
     page.wait_for_timeout(wait)
 
     extra_days = footprint_ws_extra_session_days(cfg)
+    prior_dates: list[str] = []
     if extra_days > 0:
         prior_dates = prior_session_dates_to_request(footprint_docs, extra_days=extra_days)
         if prior_dates:
@@ -251,6 +253,42 @@ def capture_footprint_ws_on_page(
                 else FOOTPRINT_EXPORT_FORMAT_BID_ASK
             ),
         )
+        if prior_dates:
+            found_dates = {
+                footprint_document_request_date(doc)
+                for doc in idb_docs
+                if footprint_document_request_date(doc)
+            }
+            missing_dates = [d for d in prior_dates if d not in found_dates]
+            retry_ms = footprint_idb_retry_wait_ms(cfg)
+            if missing_dates and retry_ms > 0:
+                _log.info(
+                    "footprint_idb: prior session still missing %s — retry in %dms",
+                    missing_dates,
+                    retry_ms,
+                )
+                page.wait_for_timeout(retry_ms)
+                retry_docs = capture_footprint_idb_documents(
+                    page,
+                    cfg=cfg,
+                    interval=iv,
+                    dates=missing_dates,
+                    export_format=(
+                        FOOTPRINT_EXPORT_FORMAT_RAW
+                        if fmt in (FOOTPRINT_EXPORT_FORMAT_RAW, FOOTPRINT_EXPORT_FORMAT_COMBINED)
+                        else FOOTPRINT_EXPORT_FORMAT_BID_ASK
+                    ),
+                )
+                seen_keys = {str(doc.get("idb_key") or "") for doc in idb_docs if doc.get("idb_key")}
+                for doc in retry_docs:
+                    key = str(doc.get("idb_key") or "")
+                    if key and key in seen_keys:
+                        continue
+                    if key:
+                        seen_keys.add(key)
+                    idb_docs.append(doc)
+                if retry_docs:
+                    _log.info("footprint_idb: retry loaded %d document(s)", len(retry_docs))
         if idb_docs:
             _log.info("footprint_idb: loaded %d document(s) for merge", len(idb_docs))
 
