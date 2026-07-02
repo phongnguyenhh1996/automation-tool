@@ -360,6 +360,42 @@ def capture_footprint_ws_on_page(
     return dest
 
 
+def _persist_prepared_footprint_after_ws_capture(
+    *,
+    charts_dir: Path,
+    cfg: dict[str, Any],
+    chart_stamp: str | None,
+    gocharting_yaml: Optional[Path],
+    capture_intervals: tuple[str, ...] | None,
+) -> list[Path]:
+    """Write ``footprint_{SYMBOL}_{iv}.json`` right after WS combined capture."""
+    from automation_tool.gocharting_gc_spot_convert import gc_to_spot_enabled
+    from automation_tool.images import persist_prepared_footprint_json_files
+
+    if not gc_to_spot_enabled(cfg):
+        return []
+    intervals = capture_intervals or tuple(
+        iv.strip().lower()
+        for iv, _url in footprint_ws_interval_specs(cfg)
+        if iv.strip()
+    )
+    if not intervals:
+        return []
+    written = persist_prepared_footprint_json_files(
+        charts_dir,
+        chart_stamp=chart_stamp,
+        gocharting_cfg=cfg,
+        gocharting_yaml=gocharting_yaml,
+        intervals=intervals,
+    )
+    if written:
+        _log.info(
+            "footprint_ws: đã ghi prepared spot JSON | %s",
+            ", ".join(p.name for p in written),
+        )
+    return written
+
+
 def capture_footprint_ws_plan(
     context: BrowserContext,
     cfg: dict[str, Any],
@@ -371,6 +407,7 @@ def capture_footprint_ws_plan(
     main_symbol: str | None = None,
     mt5_accounts_json: Path | None = None,
     capture_intervals: tuple[str, ...] | None = None,
+    chart_stamp: str | None = None,
 ) -> list[Path]:
     """Capture WS footprint JSON for each ``footprint_screenshot.intervals`` entry."""
     specs = footprint_ws_interval_specs(cfg)
@@ -379,6 +416,7 @@ def capture_footprint_ws_plan(
 
     iv_filter = {i.strip().lower() for i in capture_intervals} if capture_intervals else None
     paths: list[Path] = []
+    captured_intervals: list[str] = []
     for interval, page_url in specs:
         if iv_filter is not None and interval.strip().lower() not in iv_filter:
             continue
@@ -397,11 +435,19 @@ def capture_footprint_ws_plan(
                 mt5_accounts_json=mt5_accounts_json,
             )
             paths.append(dest)
+            captured_intervals.append(interval.strip().lower())
         finally:
             try:
                 page.close()
             except Exception:
                 pass
+    _persist_prepared_footprint_after_ws_capture(
+        charts_dir=charts_dir,
+        cfg=cfg,
+        chart_stamp=chart_stamp,
+        gocharting_yaml=gocharting_yaml,
+        capture_intervals=tuple(captured_intervals),
+    )
     return paths
 
 

@@ -12,6 +12,7 @@ from automation_tool.gocharting_ws_decode import (
     FOOTPRINT_EXPORT_FORMAT_BID_ASK,
     FOOTPRINT_EXPORT_FORMAT_COMBINED,
     FOOTPRINT_EXPORT_FORMAT_RAW,
+    candle_sort_datetime,
     decode_footprint_for_date_response,
     document_timeframe,
     footprint_protobuf_payload_from_bytes,
@@ -203,7 +204,7 @@ def merge_footprint_documents(docs: list[dict[str, Any]]) -> Optional[dict[str, 
                 continue
             by_time[time_key] = candle
 
-    candles = sorted(by_time.values(), key=lambda c: str(c.get("time_gmt7") or c.get("time") or ""))
+    candles = sorted(by_time.values(), key=candle_sort_datetime)
     merged["candles"] = candles
     merged["idb_merged_from"] = len(usable)
     return merged

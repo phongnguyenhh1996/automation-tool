@@ -177,6 +177,32 @@ def validate_match_ratio(matched: int, total: int, cfg: dict[str, Any], *, label
         )
 
 
+def _mt5_payload_covers_footprint(
+    payload: dict[str, Any],
+    footprint_candles: list[dict[str, Any]] | None,
+    *,
+    min_overlap_ratio: float = 0.5,
+) -> bool:
+    """True when cached MT5 bars overlap enough footprint candle times."""
+    if not footprint_candles:
+        return True
+    from automation_tool.gocharting_ws_decode import footprint_candle_time_key
+
+    fp_keys = {
+        footprint_candle_time_key(c)
+        for c in footprint_candles
+        if isinstance(c, dict)
+    }
+    fp_keys = {k for k in fp_keys if k}
+    if not fp_keys:
+        return True
+    mt5_keys = set(build_mt5_spot_ohlc_index(payload).keys())
+    overlap = len(fp_keys & mt5_keys)
+    if overlap == 0:
+        return False
+    return (overlap / len(fp_keys)) >= min_overlap_ratio
+
+
 def resolve_mt5_spot_payload(
     *,
     charts_dir: Path,
@@ -198,7 +224,12 @@ def resolve_mt5_spot_payload(
         try:
             payload = json.loads(cached.read_text(encoding="utf-8"))
             if isinstance(payload, dict) and payload.get("bars"):
-                return payload
+                if _mt5_payload_covers_footprint(payload, footprint_candles):
+                    return payload
+                _log.info(
+                    "gc_to_spot: bỏ MT5 cache %s — không khớp cửa sổ footprint hiện tại",
+                    cached.name,
+                )
         except (OSError, json.JSONDecodeError):
             pass
 
@@ -397,6 +428,41 @@ def convert_footprint_combined_to_spot(
     return out
 
 
+def _newest_footprint_session_date(doc: dict[str, Any]) -> str | None:
+    """Newest session date for prepared spot ``request.date`` (not oldest IDB merge key)."""
+    session_dates = doc.get("ws_session_dates")
+    if isinstance(session_dates, list) and session_dates:
+        dated = [str(d).strip() for d in session_dates if str(d).strip()]
+        if dated:
+            return max(dated)
+    profiles = doc.get("session_profiles")
+    if isinstance(profiles, list):
+        keys = [
+            str(p.get("session_key")).strip()
+            for p in profiles
+            if isinstance(p, dict) and str(p.get("session_key") or "").strip()
+        ]
+        if keys:
+            return max(keys)
+    candles = doc.get("candles")
+    if isinstance(candles, list):
+        from automation_tool.gocharting_footprint_ocr import parse_footprint_candle_datetime
+
+        dts = []
+        for candle in candles:
+            if not isinstance(candle, dict):
+                continue
+            time_key = str(candle.get("time_gmt7") or candle.get("time") or "").strip()
+            dt = parse_footprint_candle_datetime(time_key)
+            if dt is not None:
+                dts.append(dt)
+        if dts:
+            return max(dts).strftime("%Y-%m-%d")
+    req = doc.get("request") if isinstance(doc.get("request"), dict) else {}
+    date = str(req.get("date") or "").strip()
+    return date or None
+
+
 def _spot_footprint_request(
     logic_symbol: str,
     interval: str,
@@ -407,9 +473,8 @@ def _spot_footprint_request(
 
     sym = normalize_main_chart_symbol(logic_symbol)
     iv = (interval or "").strip().lower()
-    req = doc.get("request") if isinstance(doc.get("request"), dict) else {}
     out: dict[str, Any] = {"symbol": sym, "interval": iv}
-    date = req.get("date")
+    date = _newest_footprint_session_date(doc)
     if date:
         out["date"] = date
     return out

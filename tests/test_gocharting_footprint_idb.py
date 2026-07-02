@@ -91,3 +91,27 @@ def test_merge_footprint_documents_by_time() -> None:
     assert len(merged["candles"]) == 3
     assert merged["candles"][0]["time_gmt7"].startswith("01/07")
     assert merged["candles"][-1]["time_gmt7"].startswith("02/07")
+
+
+def test_merge_footprint_documents_chronological_not_string_sort() -> None:
+    """Wed Jul 1 23:55 must sort after Thu Jul 2 05:00 (string sort breaks trim)."""
+    from automation_tool.gocharting_ws_decode import trim_footprint_document
+
+    jul1_evening = [
+        {"time_gmt7": f"Wed Jul 1 2026 {h:02d}:{m:02d}:00 GMT+0700", "footprint": []}
+        for h, m in ((19, 50), (23, 55))
+    ]
+    jul2_morning = [
+        {"time_gmt7": f"Thu Jul 2 2026 {h:02d}:{m:02d}:00 GMT+0700", "footprint": []}
+        for h, m in ((5, 0), (13, 45), (17, 50))
+    ]
+    d1 = {"symbol": "COMEX:GC1!", "candles": jul1_evening}
+    d2 = {"symbol": "COMEX:GC1!", "candles": jul2_morning}
+    merged = merge_footprint_documents([d1, d2])
+    assert merged is not None
+    keys = [c["time_gmt7"] for c in merged["candles"]]
+    assert keys[0].startswith("Wed Jul 1")
+    assert keys[-1].startswith("Thu Jul 2")
+    trimmed = trim_footprint_document(merged, max_candles=3)
+    last_three = [c["time_gmt7"] for c in trimmed["candles"]]
+    assert all(k.startswith("Thu Jul 2") for k in last_three)

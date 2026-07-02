@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -32,13 +33,17 @@ from automation_tool.images import (
 
 
 def _mt5_payload(time_key: str, close: float) -> dict:
+    from automation_tool.gocharting_footprint_ocr import parse_footprint_candle_datetime
+
+    dt = parse_footprint_candle_datetime(time_key)
+    iso_t = dt.isoformat() if dt is not None else "2026-06-25T05:00:00+07:00"
     return {
         "symbol": "XAUUSD",
         "broker_symbol": "XAUUSDm",
         "interval": "5m",
         "bars": [
             {
-                "t": "2026-06-25T05:00:00+07:00",
+                "t": iso_t,
                 "open": close - 1,
                 "high": close + 2,
                 "low": close - 3,
@@ -399,3 +404,57 @@ def test_persist_prepared_footprint_mocked(tmp_path: Path, monkeypatch: pytest.M
     assert written[0].name == "footprint_XAUUSD_5m.json"
     paths = existing_prepared_footprint_json_paths(tmp_path)
     assert paths[0].name == "footprint_XAUUSD_5m.json"
+
+
+def test_mt5_payload_covers_footprint_rejects_stale_cache() -> None:
+    from automation_tool.gocharting_gc_spot_convert import _mt5_payload_covers_footprint
+
+    old_key = "Wed Jul 1 2026 19:50:00 GMT+0700"
+    new_key = "Thu Jul 2 2026 13:45:00 GMT+0700"
+    cached = _mt5_payload(old_key, 4023.5)
+    footprint_candles = [{"time_gmt7": new_key, "ohlc": {"open": 4086.0, "close": 4086.0}}]
+    assert not _mt5_payload_covers_footprint(cached, footprint_candles)
+    assert _mt5_payload_covers_footprint(
+        cached,
+        [{"time_gmt7": old_key, "ohlc": {"open": 4023.5, "close": 4023.5}}],
+    )
+
+
+def test_resolve_mt5_spot_payload_skips_stale_cached_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from automation_tool.gocharting_gc_spot_convert import resolve_mt5_spot_payload
+
+    old_key = "Wed Jul 1 2026 19:50:00 GMT+0700"
+    new_key = "Thu Jul 2 2026 13:45:00 GMT+0700"
+    stamp = "20260702_120000"
+    cached_path = tmp_path / f"{stamp}_mt5_XAUUSD_5m.json"
+    cached_path.write_text(json.dumps(_mt5_payload(old_key, 4023.5)), encoding="utf-8")
+    fresh = _mt5_payload(new_key, 4086.0)
+
+    def fake_fetch(**_kwargs):
+        return fresh
+
+    monkeypatch.setattr(
+        "automation_tool.mt5_candles.fetch_mt5_spot_candles_payload",
+        fake_fetch,
+    )
+    out = resolve_mt5_spot_payload(
+        charts_dir=tmp_path,
+        logic_symbol="XAUUSD",
+        interval="5m",
+        count=1,
+        chart_stamp=stamp,
+        footprint_candles=[{"time_gmt7": new_key, "ohlc": {"open": 4086.0, "close": 4086.0}}],
+    )
+    assert out is fresh
+
+
+def test_newest_footprint_session_date_prefers_latest_session() -> None:
+    from automation_tool.gocharting_gc_spot_convert import _newest_footprint_session_date
+
+    doc = {
+        "request": {"date": "2026-06-30"},
+        "ws_session_dates": ["2026-06-30", "2026-07-01", "2026-07-02"],
+    }
+    assert _newest_footprint_session_date(doc) == "2026-07-02"

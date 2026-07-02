@@ -90,6 +90,7 @@ def persist_prepared_footprint_json_files(
     *,
     chart_stamp: str | None = None,
     gocharting_cfg: dict | None = None,
+    gocharting_yaml: Optional[Path] = None,
     intervals: tuple[str, ...] = ("15m", "5m"),
 ) -> list[Path]:
     """
@@ -116,7 +117,11 @@ def persist_prepared_footprint_json_files(
 
     sym = read_main_chart_symbol(charts_dir)
     if _footprint_ws_active(cfg):
-        sources = existing_footprint_combined_json_paths(charts_dir, intervals=intervals)
+        sources = existing_footprint_combined_json_paths(
+            charts_dir,
+            gocharting_yaml=gocharting_yaml,
+            intervals=intervals,
+        )
     else:
         from automation_tool.gocharting_footprint_ocr import existing_footprint_bid_ask_json_paths
 
@@ -132,6 +137,15 @@ def persist_prepared_footprint_json_files(
             iv = src.stem.replace("footprint_bid_ask_", "")
         if not iv:
             continue
+        dest = prepared_footprint_json_path(charts_dir, sym, iv)
+        if dest.is_file() and dest.stat().st_mtime < src.stat().st_mtime:
+            import logging
+
+            logging.getLogger(__name__).info(
+                "footprint prepared: %s cũ hơn %s — tái tạo từ combined WS",
+                dest.name,
+                src.name,
+            )
         try:
             raw = json.loads(src.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
@@ -145,7 +159,6 @@ def persist_prepared_footprint_json_files(
             gocharting_cfg=cfg,
             charts_dir=charts_dir,
         )
-        dest = prepared_footprint_json_path(charts_dir, sym, iv)
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(json.dumps(prepared, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         written.append(dest)

@@ -792,6 +792,7 @@ def _capture_gocharting_in_context(
             main_symbol=main_chart_symbol,
             mt5_accounts_json=mt5_accounts_json,
             capture_intervals=iv_filter,
+            chart_stamp=stamp,
         )
         _log.info(
             "gocharting: footprint_ws capture only (%d file(s), intervals=%s)",
@@ -901,6 +902,7 @@ def _capture_gocharting_in_context(
                     main_symbol=main_chart_symbol,
                     mt5_accounts_json=mt5_accounts_json,
                     capture_intervals=capture_intervals,
+                    chart_stamp=stamp,
                 )
                 paths.extend(ws_paths)
         return paths
