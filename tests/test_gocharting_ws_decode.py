@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -8,11 +9,13 @@ import pytest
 from automation_tool.gocharting_ws_decode import (
     FOOTPRINT_EXPORT_FORMAT_COMBINED,
     FOOTPRINT_EXPORT_FORMAT_RAW,
+    bar_flow_from_ws_candle,
     decode_ws_footprint_frame,
     decode_ws_frames_dir,
     decode_ws_frames_merged,
     decode_ws_ohlc_frame,
     drop_forming_footprint_candle,
+    enrich_footprint_document_with_ws_bar_flow,
     footprint_ws_extra_session_days,
     merge_footprint_ws_documents,
     parse_proto_candle_datetime,
@@ -83,6 +86,60 @@ def test_decode_ws_footprint_frame_raw() -> None:
     assert "sell" in level0
 
 
+@pytest.mark.skipif(not _FOOTPRINT_FRAME.is_file(), reason="sniff fixture missing")
+def test_bar_flow_from_ws_candle_matches_ending_summary() -> None:
+    raw = _FOOTPRINT_FRAME.read_bytes()
+    doc = decode_ws_footprint_frame(raw, export_format=FOOTPRINT_EXPORT_FORMAT_RAW)
+    assert doc is not None
+    pp = int(doc["fp_day"]["price_precision"])
+    first = doc["candles"][0]
+    es = first["ending_summary"]
+    bar = bar_flow_from_ws_candle(first, price_precision=pp)
+    assert bar["delta"] == int(es["close_delta"])
+    assert bar["max_delta"] == int(es["max_delta"])
+    assert bar["buy_volume"] == int(es["total_buy"])
+    assert bar["sell_volume"] == int(es["total_sell"])
+    enriched = enrich_footprint_document_with_ws_bar_flow(doc)
+    assert enriched["bar_flow_source"] == "ws"
+    assert enriched["candles"][0]["bar_flow"]["cum_delta"] == bar["delta"]
+
+
+@pytest.mark.skipif(not _FOOTPRINT_FRAME.is_file(), reason="sniff fixture missing")
+def test_bar_flow_cum_delta_matches_csv_overlap() -> None:
+    from automation_tool.gocharting_gc_spot_convert import _parse_gc_csv_bar_flow_rows
+
+    raw = _FOOTPRINT_FRAME.read_bytes()
+    doc = decode_ws_footprint_frame(raw, export_format=FOOTPRINT_EXPORT_FORMAT_RAW)
+    assert doc is not None
+    ws_path = (
+        Path(__file__).resolve().parents[1]
+        / "data"
+        / "network_sniff"
+        / "footprint_ws_5m_2026-07-01.json"
+    )
+    csv_path = (
+        Path(__file__).resolve().parents[1]
+        / "data"
+        / "XAUUSD"
+        / "charts"
+        / "20260702_132817_gocharting_GC_5m.csv"
+    )
+    if not ws_path.is_file() or not csv_path.is_file():
+        pytest.skip("overlap fixture missing")
+    full_doc = json.loads(ws_path.read_text())
+    enriched = enrich_footprint_document_with_ws_bar_flow(full_doc)
+    csv_rows = _parse_gc_csv_bar_flow_rows(csv_path.read_text())
+    ok = 0
+    for candle in enriched["candles"]:
+        tk = candle.get("time_gmt7")
+        csv = csv_rows.get(tk)
+        if not csv or csv.get("cum_delta") is None:
+            continue
+        assert candle["bar_flow"]["cum_delta"] == csv["cum_delta"]
+        ok += 1
+    assert ok >= 40
+
+
 @pytest.mark.skipif(not _FIXTURE_DIR.is_dir(), reason="sniff fixture missing")
 def test_decode_ws_frames_dir_raw() -> None:
     docs = decode_ws_frames_dir(_FIXTURE_DIR, export_format=FOOTPRINT_EXPORT_FORMAT_RAW)
@@ -121,6 +178,8 @@ def test_merge_footprint_with_ohlc_fixture() -> None:
     assert first["ohlc"] is not None
     assert first["ohlc"]["open"] == 4019.0
     assert first["footprint"]
+    assert isinstance(first.get("bar_flow"), dict)
+    assert first["bar_flow"].get("delta") is not None
     assert "ending_summary" not in first
     assert "max" not in first
     assert "min" not in first

@@ -115,6 +115,7 @@ def _build_output_document(
     ohlc_docs: list[dict[str, Any]],
     export_format: str,
     interval: str,
+    cfg: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     best_fp = merge_footprint_ws_documents(footprint_docs)
     if best_fp is None:
@@ -124,7 +125,7 @@ def _build_output_document(
         )
     if export_format == FOOTPRINT_EXPORT_FORMAT_COMBINED:
         ohlc_index = build_ohlc_index(ohlc_docs)
-        return merge_footprint_raw_with_ohlc(best_fp, ohlc_index)
+        return merge_footprint_raw_with_ohlc(best_fp, ohlc_index, cfg=cfg)
     return best_fp
 
 
@@ -266,6 +267,7 @@ def capture_footprint_ws_on_page(
             ohlc_docs=ohlc_docs,
             export_format=fmt,
             interval=iv,
+            cfg=cfg,
         )
     output_doc = trim_footprint_document(output_doc, max_candles=mc)
     output_doc = _enrich_with_mt5_spot(

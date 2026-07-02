@@ -92,6 +92,15 @@ def gc_to_spot_spot_tick(cfg: dict[str, Any]) -> float:
         return DEFAULT_GC_TO_SPOT_TICK
 
 
+def gc_to_spot_price_precision(cfg: dict[str, Any]) -> int:
+    """Decimal places for spot-shifted prices (from ``spot_tick``)."""
+    tick = gc_to_spot_spot_tick(cfg)
+    text = f"{tick:.10f}".rstrip("0")
+    if "." not in text:
+        return 0
+    return len(text.split(".", 1)[1])
+
+
 def gc_to_spot_min_matched_ratio(cfg: dict[str, Any]) -> float:
     raw = gc_to_spot_cfg(cfg).get("min_matched_ratio", DEFAULT_GC_TO_SPOT_MIN_MATCHED_RATIO)
     try:
@@ -485,6 +494,7 @@ def _parse_gc_csv_bar_flow_rows(text: str) -> dict[str, dict[str, Any]]:
 
 _BAR_FLOW_SHIFT_PRICE_KEYS = (
     "vwap",
+    "session_vwap",
     "buy_vwap",
     "sell_vwap",
     "buyvwap",
@@ -501,6 +511,80 @@ def _shift_bar_flow_prices(bar: dict[str, Any], basis: float, *, spot_tick: floa
             out[key] = _shift_price(val, basis, spot_tick=spot_tick)
     for key in _BAR_FLOW_OHLC_KEYS:
         out.pop(key, None)
+    return out
+
+
+def _latest_basis_from_index(
+    candles: list[dict[str, Any]],
+    basis_index: dict[str, float],
+) -> Optional[float]:
+    """Basis from the newest candle that has an MT5 match."""
+    from automation_tool.gocharting_ws_decode import candle_sort_datetime
+
+    ordered = sorted(
+        [c for c in candles if isinstance(c, dict)],
+        key=candle_sort_datetime,
+        reverse=True,
+    )
+    for candle in ordered:
+        time_key = str(candle.get("time_gmt7") or "").strip()
+        if time_key and time_key in basis_index:
+            return basis_index[time_key]
+    return None
+
+
+def shift_footprint_session_levels_to_spot(
+    doc: dict[str, Any],
+    *,
+    basis_index: dict[str, float],
+    cfg: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Shift session POC/VAH/VAL/VWAP by the **latest** candle basis.
+
+    Per-candle ``bar_flow.session_vwap`` is shifted separately (each bar's own basis)
+    in :func:`_shift_bar_flow_prices` during bar_flow enrich.
+    """
+    from automation_tool.gocharting_session_profile import shift_session_profile_prices
+
+    candles_raw = doc.get("candles")
+    if not isinstance(candles_raw, list) or not candles_raw:
+        return doc
+
+    latest_basis = _latest_basis_from_index(
+        [c for c in candles_raw if isinstance(c, dict)],
+        basis_index,
+    )
+    if latest_basis is None:
+        return doc
+
+    spot_tick = gc_to_spot_spot_tick(cfg)
+    out = dict(doc)
+
+    profiles = out.get("session_profiles")
+    if isinstance(profiles, list):
+        out["session_profiles"] = [
+            shift_session_profile_prices(p, latest_basis, spot_tick=spot_tick)
+            if isinstance(p, dict)
+            else p
+            for p in profiles
+        ]
+
+    candles_out: list[Any] = []
+    for candle in candles_raw:
+        if not isinstance(candle, dict):
+            candles_out.append(candle)
+            continue
+        block = dict(candle)
+        sp = block.get("session_profile")
+        if isinstance(sp, dict):
+            block["session_profile"] = shift_session_profile_prices(
+                sp,
+                latest_basis,
+                spot_tick=spot_tick,
+            )
+        candles_out.append(block)
+    out["candles"] = candles_out
     return out
 
 
@@ -546,7 +630,49 @@ def enrich_prepared_footprint_from_gc_csv(
 
     out = dict(doc)
     out["candles"] = candles_out
-    return out
+    return shift_footprint_session_levels_to_spot(out, basis_index=basis_index, cfg=cfg)
+
+
+def enrich_prepared_footprint_from_ws_bar_flow(
+    doc: dict[str, Any],
+    *,
+    cfg: dict[str, Any],
+    basis_index: dict[str, float],
+) -> dict[str, Any]:
+    """Shift per-candle ``bar_flow`` (from WS ``ending_summary``) to spot prices."""
+    spot_tick = gc_to_spot_spot_tick(cfg)
+    candles_raw = doc.get("candles")
+    if not isinstance(candles_raw, list):
+        raise GcToSpotConversionError("gc_to_spot: document has no candles list")
+
+    matched = 0
+    candles_out: list[dict[str, Any]] = []
+    for candle in candles_raw:
+        if not isinstance(candle, dict):
+            continue
+        block = dict(candle)
+        time_key = str(block.get("time_gmt7") or "").strip()
+        ws_bar = block.get("bar_flow")
+        basis = basis_index.get(time_key)
+        if isinstance(ws_bar, dict) and basis is not None:
+            block["bar_flow"] = _shift_bar_flow_prices(ws_bar, basis, spot_tick=spot_tick)
+            matched += 1
+        candles_out.append(block)
+
+    validate_match_ratio(matched, len(candles_raw), cfg, label="WS bar_flow merge")
+    out = dict(doc)
+    out["candles"] = candles_out
+    return shift_footprint_session_levels_to_spot(out, basis_index=basis_index, cfg=cfg)
+
+
+def footprint_has_ws_bar_flow(doc: dict[str, Any]) -> bool:
+    candles = doc.get("candles")
+    if not isinstance(candles, list) or not candles:
+        return False
+    with_bar = sum(
+        1 for c in candles if isinstance(c, dict) and isinstance(c.get("bar_flow"), dict)
+    )
+    return with_bar >= max(1, int(len(candles) * 0.5))
 
 
 def resolve_gc_csv_for_interval(

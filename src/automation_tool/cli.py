@@ -1145,7 +1145,7 @@ def _parser() -> argparse.ArgumentParser:
     wd.add_argument("--no-save-storage", action="store_true")
     wd.add_argument("--headed", action="store_true")
     wd.add_argument("--no-telegram", action="store_true")
-    wd.add_argument("--poll-seconds", type=float, default=1.0)
+    wd.add_argument("--poll-seconds", type=float, default=0.35)
     wd.add_argument(
         "--mt5-stale-reconnect-seconds",
         type=float,

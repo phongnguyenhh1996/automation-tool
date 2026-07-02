@@ -311,8 +311,11 @@ def prepare_footprint_json_for_openai(
         build_basis_index,
         convert_footprint_combined_to_spot,
         enrich_prepared_footprint_from_gc_csv,
+        enrich_prepared_footprint_from_ws_bar_flow,
         finalize_prepared_spot_footprint,
+        footprint_has_ws_bar_flow,
         gc_to_spot_enabled,
+        gc_to_spot_skip_main_csv,
         is_finalized_spot_footprint,
         is_prepared_footprint_path,
         parse_prepared_footprint_path,
@@ -388,13 +391,20 @@ def prepare_footprint_json_for_openai(
                 [c for c in candles if isinstance(c, dict)],
                 mt5,
             )
-            csv_path = resolve_gc_csv_for_interval(cd, iv, chart_stamp=chart_stamp)
-            out = enrich_prepared_footprint_from_gc_csv(
-                out,
-                csv_path,
-                cfg=cfg,
-                basis_index=basis_index,
-            )
+            if footprint_has_ws_bar_flow(out):
+                out = enrich_prepared_footprint_from_ws_bar_flow(
+                    out,
+                    cfg=cfg,
+                    basis_index=basis_index,
+                )
+            elif not gc_to_spot_skip_main_csv(cfg):
+                csv_path = resolve_gc_csv_for_interval(cd, iv, chart_stamp=chart_stamp)
+                out = enrich_prepared_footprint_from_gc_csv(
+                    out,
+                    csv_path,
+                    cfg=cfg,
+                    basis_index=basis_index,
+                )
             out = finalize_prepared_spot_footprint(
                 out,
                 logic_symbol=sym,

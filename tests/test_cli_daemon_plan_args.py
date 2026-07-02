@@ -53,7 +53,7 @@ def test_daemon_plan_poll_seconds_defaults_to_five_seconds() -> None:
 def test_tv_watchlist_daemon_poll_seconds_stays_fast_by_default() -> None:
     args = _parser().parse_args(["tv-watchlist-daemon"])
 
-    assert args.poll_seconds == 1.0
+    assert args.poll_seconds == 0.35
 
 
 def test_daemon_plan_stop_at_hour_minus_one_disables_cutoff() -> None:

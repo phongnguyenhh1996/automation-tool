@@ -134,6 +134,11 @@ footprint_ws:
     absorption_volume_pct: 0.25
     absorption_extreme_ticks: 2
     absorption_side_ratio: 1.5
+  session_profile:
+    enabled: true
+    value_area_pct: 0.7
+    use_raw_ticks: true
+    expansion_mode: symmetric
 
 clear_charts_before_capture: false
 viewport_width: 1920

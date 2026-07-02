@@ -89,6 +89,29 @@ def datetime_to_footprint_time_key(dt: datetime) -> str:
     return format_footprint_candle_time(local)
 
 
+def candle_sort_datetime(candle: dict[str, Any]) -> datetime:
+    """Chronological sort key for footprint candles (never use ``time_gmt7`` string sort)."""
+    date_raw = str(candle.get("date") or "").strip()
+    if date_raw:
+        try:
+            return parse_proto_candle_datetime(date_raw).astimezone(_TZ_GMT7).replace(tzinfo=None)
+        except ValueError:
+            pass
+    from automation_tool.gocharting_footprint_ocr import parse_footprint_candle_datetime
+
+    time_key = str(candle.get("time_gmt7") or candle.get("time") or "").strip()
+    if time_key:
+        parsed = parse_footprint_candle_datetime(time_key)
+        if parsed is not None:
+            return parsed.replace(tzinfo=None)
+    return datetime.min
+
+
+def _is_eth_session_open_candle(dt: datetime) -> bool:
+    """COMEX ETH session opens at 05:00 GMT+7 (first intraday bar)."""
+    return dt.hour == 5 and dt.minute == 0
+
+
 def display_symbol_from_request(req: pb.FootPrintForDateRequest) -> str:
     exchange = (req.exchange or "").strip()
     segment = (req.segment or "").strip()
@@ -221,6 +244,165 @@ def _footprint_side_volume(side: Any) -> int:
         return 0
 
 
+def _ending_summary_int(summary: Any, key: str) -> int:
+    if not isinstance(summary, dict):
+        return 0
+    try:
+        return int(summary.get(key) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _footprint_vwaps_from_levels(
+    levels: list[dict[str, Any]],
+) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    """Volume-weighted prices from ``footprint[]`` (matches GoCharting CSV rounding)."""
+    tot_vol = tot_pv = buy_vol = buy_pv = sell_vol = sell_pv = 0.0
+    for level in levels:
+        if not isinstance(level, dict):
+            continue
+        try:
+            price = float(level.get("price") or 0)
+        except (TypeError, ValueError):
+            continue
+        if price <= 0:
+            continue
+        buy = _footprint_side_volume(level.get("buy"))
+        sell = _footprint_side_volume(level.get("sell"))
+        tot_vol += buy + sell
+        tot_pv += price * (buy + sell)
+        buy_vol += buy
+        buy_pv += price * buy
+        sell_vol += sell
+        sell_pv += price * sell
+
+    def _round_vwap(pv: float, vol: float) -> Optional[float]:
+        if vol <= 0:
+            return None
+        return round(pv / vol, 0)
+
+    return (
+        _round_vwap(tot_pv, tot_vol),
+        _round_vwap(buy_pv, buy_vol),
+        _round_vwap(sell_pv, sell_vol),
+    )
+
+
+def bar_flow_from_ws_candle(
+    candle: dict[str, Any],
+    *,
+    price_precision: int,
+    include_ohlc: bool = True,
+) -> dict[str, Any]:
+    """
+    Build CSV-equivalent ``bar_flow`` from WS ``ending_summary`` + ``footprint[]`` + ``ohlc``.
+
+  ``close_delta`` maps to CSV ``Delta``; VWAP columns are computed from footprint levels.
+    """
+    es = candle.get("ending_summary") if isinstance(candle.get("ending_summary"), dict) else {}
+    totals = candle.get("totals") if isinstance(candle.get("totals"), dict) else {}
+    footprint = candle.get("footprint") if isinstance(candle.get("footprint"), list) else []
+
+    buy = _ending_summary_int(es, "total_buy")
+    sell = _ending_summary_int(es, "total_sell")
+    if buy == 0 and sell == 0:
+        buy = _footprint_side_volume((totals.get("buy") or {}) if isinstance(totals.get("buy"), dict) else {})
+        sell = _footprint_side_volume((totals.get("sell") or {}) if isinstance(totals.get("sell"), dict) else {})
+
+    vwap, buyvwap, sellvwap = _footprint_vwaps_from_levels(footprint)
+    pp = max(0, int(price_precision))
+
+    out: dict[str, Any] = {
+        "delta": _ending_summary_int(es, "close_delta") if es else buy - sell,
+        "max_delta": _ending_summary_int(es, "max_delta"),
+        "min_delta": _ending_summary_int(es, "min_delta"),
+        "buy_volume": buy,
+        "sell_volume": sell,
+        "volume": buy + sell,
+        "cot_high": _ending_summary_int(es, "cot_high"),
+        "cot_low": _ending_summary_int(es, "cot_low"),
+    }
+    if vwap is not None:
+        out["vwap"] = vwap
+    if buyvwap is not None:
+        out["buyvwap"] = buyvwap
+    if sellvwap is not None:
+        out["sellvwap"] = sellvwap
+
+    if include_ohlc:
+        ohlc = candle.get("ohlc") if isinstance(candle.get("ohlc"), dict) else {}
+        high_raw = es.get("high") if es else None
+        low_raw = es.get("low") if es else None
+        if high_raw is not None:
+            out["high"] = scaled_price(int(high_raw), pp)
+        elif ohlc.get("high") is not None:
+            out["high"] = ohlc["high"]
+        if low_raw is not None:
+            out["low"] = scaled_price(int(low_raw), pp)
+        elif ohlc.get("low") is not None:
+            out["low"] = ohlc["low"]
+        for key in ("open", "close"):
+            if ohlc.get(key) is not None:
+                out[key] = ohlc[key]
+
+    return out
+
+
+def enrich_footprint_document_with_ws_bar_flow(
+    doc: dict[str, Any],
+    *,
+    cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Attach ``bar_flow`` + session ``cum_delta`` to each candle from WS fields."""
+    if not isinstance(doc, dict):
+        return doc
+    pp = _price_precision_from_doc(doc)
+    candles_raw = doc.get("candles")
+    if not isinstance(candles_raw, list):
+        return doc
+
+    candles_sorted = sorted(
+        [c for c in candles_raw if isinstance(c, dict)],
+        key=candle_sort_datetime,
+    )
+    cum_delta = 0
+    prev_dt: datetime | None = None
+    by_time: dict[str, dict[str, Any]] = {}
+    for candle in candles_sorted:
+        dt = candle_sort_datetime(candle)
+        if (
+            prev_dt is not None
+            and _is_eth_session_open_candle(dt)
+            and not _is_eth_session_open_candle(prev_dt)
+        ):
+            cum_delta = 0
+        block = bar_flow_from_ws_candle(candle, price_precision=pp)
+        cum_delta += int(block.get("delta") or 0)
+        block["cum_delta"] = cum_delta
+        prev_dt = dt
+        time_key = str(candle.get("time_gmt7") or "").strip()
+        if time_key:
+            by_time[time_key] = block
+
+    candles_out: list[Any] = []
+    for candle in candles_raw:
+        if not isinstance(candle, dict):
+            candles_out.append(candle)
+            continue
+        block = dict(candle)
+        time_key = str(block.get("time_gmt7") or "").strip()
+        if time_key and time_key in by_time:
+            block["bar_flow"] = dict(by_time[time_key])
+        candles_out.append(block)
+
+    out = dict(doc)
+    out["candles"] = candles_out
+    out["bar_flow_source"] = "ws"
+    from automation_tool.gocharting_session_profile import enrich_footprint_document_with_session_profiles
+
+    return enrich_footprint_document_with_session_profiles(out, cfg=cfg)
+
+
 def slim_footprint_level_for_openai(level: dict[str, Any]) -> dict[str, Any]:
     """Compact one ``footprint[]`` row: drop ``level``, buy/sell → volume ints."""
     row: dict[str, Any] = {}
@@ -288,6 +470,8 @@ def slim_footprint_combined_document(doc: dict[str, Any]) -> dict[str, Any]:
 def merge_footprint_raw_with_ohlc(
     footprint_doc: dict[str, Any],
     ohlc_index: dict[str, dict[str, Any]],
+    *,
+    cfg: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     merged = dict(footprint_doc)
     candles_out: list[dict[str, Any]] = []
@@ -305,6 +489,7 @@ def merge_footprint_raw_with_ohlc(
     merged["candles"] = candles_out
     merged["ohlc_matched"] = matched
     merged["ohlc_available"] = len(ohlc_index)
+    merged = enrich_footprint_document_with_ws_bar_flow(merged, cfg=cfg)
     return slim_footprint_combined_document(merged)
 
 
@@ -863,10 +1048,7 @@ def merge_footprint_ws_documents(docs: list[dict[str, Any]]) -> Optional[dict[st
             if time_key:
                 by_time[time_key] = candle
 
-    merged["candles"] = sorted(
-        by_time.values(),
-        key=lambda c: str(c.get("time_gmt7") or c.get("time") or ""),
-    )
+    merged["candles"] = sorted(by_time.values(), key=candle_sort_datetime)
     merged["ws_merged_from"] = len(usable)
     merged["ws_session_dates"] = session_dates
     return merged

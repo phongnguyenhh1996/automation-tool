@@ -354,7 +354,7 @@ class WatchlistDaemonParams:
     storage_state_path: Optional[Path]
     headless: bool
     no_save_storage: bool
-    poll_seconds: float = 1.0
+    poll_seconds: float = 0.35
     timezone_name: str = "Asia/Ho_Chi_Minh"
     no_telegram: bool = False
     mt5_execute: bool = True
@@ -4459,9 +4459,9 @@ def run_tv_watchlist_daemon(
     if not isinstance(tv, dict):
         tv = {}
 
-    poll_s = float(params.poll_seconds or 1.0)
+    poll_s = float(params.poll_seconds or 0.35)
     if poll_s <= 0:
-        poll_s = 1.0
+        poll_s = 0.35
 
     sym = (tv.get("watchlist_symbol_short") or "").strip().upper()
     if not sym or sym == DEFAULT_MAIN_CHART_SYMBOL:

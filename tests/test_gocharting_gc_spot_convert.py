@@ -12,6 +12,7 @@ from automation_tool.gocharting_gc_spot_convert import (
     build_basis_index,
     convert_footprint_combined_to_spot,
     enrich_prepared_footprint_from_gc_csv,
+    enrich_prepared_footprint_from_ws_bar_flow,
     finalize_prepared_spot_footprint,
     is_finalized_spot_footprint,
     is_gocharting_main_pair_path,
@@ -155,6 +156,7 @@ def test_shift_bar_flow_prices_includes_buyvwap_sellvwap() -> None:
         "low": 4014.0,
         "close": 4019.0,
         "vwap": 4017.04,
+        "session_vwap": 4016.5,
         "buyvwap": 4031.0,
         "sellvwap": 4030.0,
         "buy_vwap": 4031.5,
@@ -165,11 +167,82 @@ def test_shift_bar_flow_prices_includes_buyvwap_sellvwap() -> None:
     for key in ("open", "high", "low", "close"):
         assert key not in out
     assert out["vwap"] == pytest.approx(4003.31)
+    assert out["session_vwap"] == pytest.approx(4002.77)
     assert out["buyvwap"] == pytest.approx(4017.27)
     assert out["sellvwap"] == pytest.approx(4016.27)
     assert out["buy_vwap"] == pytest.approx(4017.77)
     assert out["sell_vwap"] == pytest.approx(4015.77)
     assert out["delta"] == 10
+
+
+def test_enrich_ws_bar_flow_shifts_session_profile_with_latest_basis() -> None:
+    time_early = "Thu Jun 25 2026 05:00:00 GMT+0700"
+    time_late = "Thu Jun 25 2026 05:05:00 GMT+0700"
+    basis_early = 4.0
+    basis_late = 4.5
+    doc = {
+        "fp_day": {"price_precision": 1},
+        "candles": [
+            {
+                "time_gmt7": time_early,
+                "ohlc": {"close": 4019.0},
+                "bar_flow": {
+                    "delta": 10,
+                    "volume": 100,
+                    "vwap": 4019.5,
+                    "session_vwap": 4019.0,
+                },
+                "session_profile": {
+                    "poc": 4019.0,
+                    "vah": 4020.0,
+                    "val": 4018.0,
+                    "vwap": 4019.5,
+                    "value_area_pct": 0.7,
+                },
+            },
+            {
+                "time_gmt7": time_late,
+                "ohlc": {"close": 4020.0},
+                "bar_flow": {
+                    "delta": 5,
+                    "volume": 50,
+                    "vwap": 4020.0,
+                    "session_vwap": 4019.8,
+                },
+                "session_profile": {
+                    "poc": 4019.0,
+                    "vah": 4020.0,
+                    "val": 4018.0,
+                    "vwap": 4019.5,
+                    "value_area_pct": 0.7,
+                },
+            },
+        ],
+        "session_profiles": [
+            {
+                "poc": 4019.0,
+                "vah": 4020.0,
+                "val": 4018.0,
+                "vwap": 4019.5,
+                "session_key": "2026-06-25",
+                "candles": 2,
+            }
+        ],
+    }
+    cfg = {"footprint_ws": {"gc_to_spot": {"spot_tick": 0.01}}}
+    out = enrich_prepared_footprint_from_ws_bar_flow(
+        doc,
+        cfg=cfg,
+        basis_index={time_early: basis_early, time_late: basis_late},
+    )
+    sp = out["candles"][-1]["session_profile"]
+    assert sp["poc"] == pytest.approx(4023.5)
+    assert sp["vah"] == pytest.approx(4024.5)
+    assert sp["val"] == pytest.approx(4022.5)
+    assert sp["vwap"] == pytest.approx(4024.0)
+    assert out["session_profiles"][-1]["poc"] == sp["poc"]
+    assert out["candles"][0]["bar_flow"]["session_vwap"] == pytest.approx(4023.0)
+    assert out["candles"][-1]["bar_flow"]["session_vwap"] == pytest.approx(4024.3)
 
 
 def test_convert_footprint_drops_unmatched_candles() -> None:
