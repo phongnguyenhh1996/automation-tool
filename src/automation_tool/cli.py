@@ -93,6 +93,7 @@ from automation_tool.chart_payload_validate import (
     list_invalid_chart_slots_for_stamp,
     require_valid_coinmap_exports_for_stamp,
     require_valid_gocharting_exports_for_stamp,
+    require_valid_gocharting_footprint_ws_exports,
 )
 from automation_tool.chart_recapture import (
     recapture_failed_chart_slots,
@@ -2516,6 +2517,27 @@ def _extend_payloads_with_footprint_json(
     return extended
 
 
+def _require_gocharting_post_capture_valid(
+    charts_dir: Path,
+    stamp: str,
+    gc_yaml: Path,
+    *,
+    intervals: tuple[str, ...] = ("15m", "5m"),
+) -> None:
+    from automation_tool.gocharting_ws_decode import footprint_ws_enabled
+
+    cfg = load_gocharting_yaml(gc_yaml)
+    if footprint_ws_enabled(cfg):
+        require_valid_gocharting_footprint_ws_exports(
+            charts_dir,
+            cfg,
+            intervals=intervals,
+            gocharting_yaml=gc_yaml,
+        )
+        return
+    _require_gocharting_post_capture_valid(charts_dir, stamp, gc_yaml)
+
+
 def _all_flow_gocharting_openai_kw(
     *,
     use_gocharting: bool,
@@ -2523,16 +2545,11 @@ def _all_flow_gocharting_openai_kw(
     charts_dir: Path,
     stamp: str | None = None,
 ) -> dict[str, object]:
-    """When ``all`` uses GoCharting + footprint_ws, attach detail_zoom + one pan-back per slot."""
+    """OpenAI payload options when ``all`` / ``update-scalp`` use GoCharting footprint WS."""
     if not use_gocharting and footprint_source_for_stamp(charts_dir, stamp=stamp) != "gocharting":
         return {}
     gc_cfg = load_gocharting_yaml(gocharting_yaml)
-    from automation_tool.images import _footprint_ws_active
-
-    kw: dict[str, object] = {"gocharting_cfg": gc_cfg}
-    if _footprint_ws_active(gc_cfg):
-        kw["gocharting_detail_max_back_steps"] = GOCHARTING_ALL_FLOW_WS_DETAIL_BACK_STEPS
-    return kw
+    return {"gocharting_cfg": gc_cfg}
 
 
 def _append_footprint_json_paths(
@@ -3458,7 +3475,11 @@ def _validate_chart_slots_with_recapture(
 ) -> None:
     """Validate chart slots; recapture invalid slots up to ``_CHART_JSON_VALIDATE_MAX_ROUNDS`` times."""
     for attempt in range(_CHART_JSON_VALIDATE_MAX_ROUNDS + 1):
-        bad = list_invalid_chart_slots_for_stamp(charts_dir, stamp)
+        bad = list_invalid_chart_slots_for_stamp(
+            charts_dir,
+            stamp,
+            gocharting_cfg=load_gocharting_yaml(gc_yaml) if use_gc else None,
+        )
         stale_fn = is_gocharting_stale_chart_issue if use_gc else is_coinmap_stale_chart_issue
         stale = [x for x in bad if stale_fn(x)]
         if stale:
@@ -3592,7 +3613,7 @@ def cmd_capture_full_analysis(args: argparse.Namespace) -> None:
         settings=s,
         args=args,
     )
-    require_valid_gocharting_exports_for_stamp(charts_dir, stamp)
+    _require_gocharting_post_capture_valid(charts_dir, stamp, gc_yaml)
 
     manifest = build_full_analysis_manifest(charts_dir, stamp=stamp, gocharting_yaml=gc_yaml)
     print(f"main_symbol={manifest['main_symbol']} stamp={stamp}", flush=True)
@@ -3755,7 +3776,11 @@ def cmd_all(args: argparse.Namespace) -> None:
         raise SystemExit("Could not determine capture stamp from chart artifacts; aborting.")
     _CHART_JSON_VALIDATE_MAX_ROUNDS = 3
     for attempt in range(_CHART_JSON_VALIDATE_MAX_ROUNDS + 1):
-        bad = list_invalid_chart_slots_for_stamp(charts_dir, stamp)
+        bad = list_invalid_chart_slots_for_stamp(
+            charts_dir,
+            stamp,
+            gocharting_cfg=load_gocharting_yaml(gc_yaml) if use_gc else None,
+        )
         stale_fn = is_gocharting_stale_chart_issue if use_gc else is_coinmap_stale_chart_issue
         stale = [x for x in bad if stale_fn(x)]
         if stale:
@@ -3813,7 +3838,12 @@ def cmd_all(args: argparse.Namespace) -> None:
             raise SystemExit(f"Recapture after validation failed: {e}") from e
 
     if use_gc:
-        require_valid_gocharting_exports_for_stamp(charts_dir, stamp)
+        _require_gocharting_post_capture_valid(
+            charts_dir,
+            stamp,
+            gc_yaml,
+            intervals=("15m", "5m"),
+        )
     else:
         require_valid_coinmap_exports_for_stamp(charts_dir, stamp)
 
@@ -3850,7 +3880,7 @@ def cmd_all(args: argparse.Namespace) -> None:
     openai_model = resolved_openai_model(s, getattr(args, "model", None))
     if two_phase:
         _log.info(
-            "all: OpenAI 2-batch chained | phase1=TV+DXY overview PNG phase2=XAUUSD footprint"
+            "all: OpenAI 2-batch chained | phase1=TradingView phase2=XAUUSD footprint JSON"
         )
 
     def _openai_all_work() -> PromptTwoStepResult:
@@ -4474,20 +4504,22 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
     print(f"Captured {len(paths)} file(s) for update-scalp run.")
     footprint_paths: list[Path]
     if use_gc:
-        m5 = gocharting_main_interval_csv_path(charts_dir, "5m", stamp=stamp)
+        gc_cfg = load_gocharting_yaml(gc_yaml)
+        from automation_tool.chart_payload_validate import gocharting_footprint_ws_json_path
+
+        m5_fp = gocharting_footprint_ws_json_path(charts_dir, "5m", gocharting_yaml=gc_yaml)
         _log.info(
-            "update-scalp: capture xong | %s file(s) | stamp=%s | M5 CSV=%s",
+            "update-scalp: capture xong | %s file(s) | stamp=%s | M5 footprint=%s",
             len(paths),
             stamp,
-            m5,
+            m5_fp,
         )
-        if m5 is None:
-            raise SystemExit(
-                f"No 5m GoCharting CSV under {charts_dir} after capture (stamp={stamp!r}). "
-                "Check config/gocharting.yaml capture_plan."
-            )
-        require_valid_gocharting_exports_for_stamp(charts_dir, stamp or "")
-        gc_cfg = load_gocharting_yaml(gc_yaml)
+        _require_gocharting_post_capture_valid(
+            charts_dir,
+            stamp or "",
+            gc_yaml,
+            intervals=gc_footprint_intervals,
+        )
         _persist_openai_footprint_json_debug(
             charts_dir,
             stamp=stamp or "",
@@ -4495,37 +4527,16 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
             flow_label="update-scalp",
             intervals=gc_footprint_intervals,
         )
-        from automation_tool.gocharting_gc_spot_convert import gc_to_spot_enabled
 
-        if gc_to_spot_enabled(gc_cfg):
-            footprint_paths = _append_footprint_json_paths(
-                [],
-                charts_dir,
-                gocharting_cfg=gc_cfg,
-                intervals=gc_footprint_intervals,
-            )
-        else:
-            footprint_paths = [m5]
-            footprint_paths = _append_footprint_json_paths(
-                footprint_paths,
-                charts_dir,
-                gocharting_cfg=gc_cfg,
-                intervals=gc_footprint_intervals,
-            )
-        if not gc_to_spot_enabled(gc_cfg):
-            m5_png = gocharting_png_path_for_csv(m5)
-            _log.info(
-                "update-scalp: GoCharting PNG | M5=%s",
-                m5_png,
-            )
-            if m5_png is None:
-                print(
-                    "Warning: thiếu PNG GoCharting overview sau capture (M5).",
-                    file=sys.stderr,
-                )
+        footprint_paths = _append_footprint_json_paths(
+            [],
+            charts_dir,
+            gocharting_cfg=gc_cfg,
+            intervals=gc_footprint_intervals,
+        )
         if not footprint_paths:
             raise SystemExit(
-                f"No M5 GoCharting footprint JSON under {charts_dir} after gc_to_spot prepare."
+                f"No M5 GoCharting footprint JSON under {charts_dir} after capture."
             )
     else:
         m15 = coinmap_main_pair_interval_json_path(charts_dir, "15m", stamp=stamp)
@@ -4591,16 +4602,12 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
     )
     scalp_openai_model = resolved_openai_model(s, getattr(args, "model", None))
 
-    scalp_gocharting_openai_kw: dict[str, object] = {}
-    if use_gc:
-        gc_cfg = load_gocharting_yaml(gc_yaml)
-        from automation_tool.images import _footprint_ws_active
-
-        scalp_gocharting_openai_kw["gocharting_cfg"] = gc_cfg
-        if _footprint_ws_active(gc_cfg):
-            scalp_gocharting_openai_kw["gocharting_detail_max_back_steps"] = (
-                GOCHARTING_UPDATE_SCALP_DETAIL_HISTORY_STEPS
-            )
+    scalp_gocharting_openai_kw = _all_flow_gocharting_openai_kw(
+        use_gocharting=use_gc,
+        gocharting_yaml=gc_yaml,
+        charts_dir=charts_dir,
+        stamp=stamp,
+    )
 
     def _openai_scalp_work() -> tuple[str, str]:
         return run_single_followup_responses(

@@ -774,6 +774,32 @@ def _capture_gocharting_in_context(
     gocharting_yaml: Optional[Path] = None,
     mt5_accounts_json: Optional[Path] = None,
 ) -> list[Path]:
+    from automation_tool.gocharting_ws_decode import footprint_ws_enabled
+
+    if footprint_ws_enabled(cfg):
+        from automation_tool.gocharting_ws_capture import capture_footprint_ws_plan
+
+        iv_filter: tuple[str, ...] | None = capture_intervals
+        if only_slots:
+            iv_filter = tuple(sorted({iv.strip().lower() for _, iv in only_slots if iv.strip()}))
+        paths = capture_footprint_ws_plan(
+            context,
+            cfg,
+            charts_dir=charts_dir,
+            email=email,
+            password=password,
+            gocharting_yaml=gocharting_yaml,
+            main_symbol=main_chart_symbol,
+            mt5_accounts_json=mt5_accounts_json,
+            capture_intervals=iv_filter,
+        )
+        _log.info(
+            "gocharting: footprint_ws capture only (%d file(s), intervals=%s)",
+            len(paths),
+            iv_filter or "all",
+        )
+        return paths
+
     slot_filter: set[tuple[str, str]] | None = None
     if only_slots:
         slot_filter = {(lbl.upper(), iv.lower()) for lbl, iv in only_slots}

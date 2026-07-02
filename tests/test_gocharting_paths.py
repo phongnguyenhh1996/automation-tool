@@ -133,12 +133,12 @@ def test_ordered_chart_openai_payloads_gocharting_ws_skips_detail(tmp_path: Path
             _write_rgb_png(charts / f"{stamp}_gocharting_{sym}_{iv}_detail_zoom.png")
     payloads = ordered_chart_openai_payloads(charts, stamp=stamp, gocharting_cfg=ws_cfg)
     kinds = [k for k, _ in payloads]
-    assert kinds.count("csv") == 3
-    assert kinds.count("image") == 3
-    assert all("_detail_" not in p.name for k, p in payloads if k == "image")
+    assert kinds.count("csv") == 0
+    assert kinds.count("image") == 0
+    assert all("_gocharting_" not in p.name for k, p in payloads if isinstance(p, Path))
 
 
-def test_ordered_chart_openai_payloads_gocharting_ws_includes_zoom_and_one_back(
+def test_ordered_chart_openai_payloads_gocharting_ws_skips_overview_and_detail(
     tmp_path: Path,
 ) -> None:
     charts = tmp_path / "charts"
@@ -155,7 +155,6 @@ def test_ordered_chart_openai_payloads_gocharting_ws_includes_zoom_and_one_back(
     for iv in ("15m", "5m"):
         _write_rgb_png(charts / f"{stamp}_gocharting_{sym}_{iv}_detail_zoom.png")
         _write_rgb_png(charts / f"{stamp}_gocharting_{sym}_{iv}_detail_back_1.png")
-        _write_rgb_png(charts / f"{stamp}_gocharting_{sym}_{iv}_detail_back_2.png")
 
     payloads = ordered_chart_openai_payloads(
         charts,
@@ -163,11 +162,7 @@ def test_ordered_chart_openai_payloads_gocharting_ws_includes_zoom_and_one_back(
         gocharting_cfg=ws_cfg,
         gocharting_detail_max_back_steps=GOCHARTING_ALL_FLOW_WS_DETAIL_BACK_STEPS,
     )
-    image_names = [p.name for k, p in payloads if k == "image"]
-    for iv in ("15m", "5m"):
-        assert f"{stamp}_gocharting_{sym}_{iv}_detail_zoom_part1.png" in image_names
-        assert f"{stamp}_gocharting_{sym}_{iv}_detail_back_1_part1.png" in image_names
-        assert f"{stamp}_gocharting_{sym}_{iv}_detail_back_2_part1.png" not in image_names
+    assert payloads == []
 
 
 def test_openai_payload_max_gocharting_order() -> None:
@@ -182,7 +177,7 @@ def test_openai_payload_max_gocharting_order() -> None:
             gocharting_cfg=ws_cfg,
             gocharting_detail_max_back_steps=GOCHARTING_ALL_FLOW_WS_DETAIL_BACK_STEPS,
         )
-        == 26
+        == 14
     )
 
 

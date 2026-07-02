@@ -7,7 +7,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from automation_tool.cli import cmd_all
-from automation_tool.images import GOCHARTING_GOLD_EXPORT_LABEL
 
 
 def test_cmd_all_gocharting_calls_capture_gocharting(tmp_path: Path, monkeypatch) -> None:
@@ -22,18 +21,15 @@ def test_cmd_all_gocharting_calls_capture_gocharting(tmp_path: Path, monkeypatch
         nonlocal gc_called, gc_clear_before
         gc_called = True
         gc_clear_before = kwargs.get("clear_charts_before_capture")
+        fp_dir = charts / "footprint_images"
+        fp_dir.mkdir(parents=True, exist_ok=True)
         stamp = "20260616_120000"
-        paths = []
-        for sym, iv in (
-            ("DXY", "15m"),
-            (GOCHARTING_GOLD_EXPORT_LABEL, "15m"),
-            (GOCHARTING_GOLD_EXPORT_LABEL, "5m"),
-        ):
-            csv_p = charts / f"{stamp}_gocharting_{sym}_{iv}.csv"
-            png_p = charts / f"{stamp}_gocharting_{sym}_{iv}.png"
-            csv_p.write_text("Time,Open\n1,2\n", encoding="utf-8")
-            png_p.write_bytes(b"x")
-            paths.extend([csv_p, png_p])
+        paths = [charts / f"{stamp}_tradingview_XAUUSD_5m.png"]
+        paths[0].write_bytes(b"x")
+        for iv in ("15m", "5m"):
+            p = fp_dir / f"footprint_combined_{iv}.json"
+            p.write_text('{"candles":[{"time_gmt7":"Thu Jul 2 2026 05:00:00 GMT+0700"}]}\n', encoding="utf-8")
+            paths.append(p)
         return paths
 
     monkeypatch.setattr("automation_tool.cli.capture_gocharting", fake_capture_gocharting)
@@ -75,15 +71,16 @@ def test_cmd_all_gocharting_calls_capture_gocharting(tmp_path: Path, monkeypatch
     )
 
     with patch("automation_tool.cli.list_invalid_chart_slots_for_stamp", return_value=[]):
-        with patch("automation_tool.cli._run_openai_flow") as mock_openai:
-            mock_openai.return_value = MagicMock(
-                full_text=lambda: "ok",
-                final_response_id="r1",
-                after_charts="",
-            )
-            with patch("automation_tool.cli._run_all_second_flow"):
-                with patch("automation_tool.cli.send_capture_screenshots_to_log_chat", return_value=0):
-                    cmd_all(args)
+        with patch("automation_tool.cli._persist_openai_footprint_json_debug"):
+            with patch("automation_tool.cli._run_openai_flow") as mock_openai:
+                mock_openai.return_value = MagicMock(
+                    full_text=lambda: "ok",
+                    final_response_id="r1",
+                    after_charts="",
+                )
+                with patch("automation_tool.cli._run_all_second_flow"):
+                    with patch("automation_tool.cli.send_capture_screenshots_to_log_chat", return_value=0):
+                        cmd_all(args)
 
     assert gc_called is True
     assert gc_clear_before is True

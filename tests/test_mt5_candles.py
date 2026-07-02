@@ -14,6 +14,7 @@ from automation_tool.mt5_candles import (
     export_mt5_spot_candles_json,
     fetch_mt5_spot_candles_payload,
     footprint_candle_time_bounds,
+    mt5_footprint_range_utc_bounds,
     mt5_spot_candles_json_stem,
     resolve_mt5_broker_symbol,
 )
@@ -40,6 +41,21 @@ def test_footprint_candle_time_bounds() -> None:
     lo, hi = bounds
     assert lo == datetime(2026, 6, 30, 22, 0, 0)
     assert hi == datetime(2026, 7, 1, 5, 0, 0)
+
+
+def test_mt5_footprint_range_utc_bounds_padding_10_bars() -> None:
+    lo = datetime(2026, 7, 1, 22, 0, 0)
+    hi = datetime(2026, 7, 2, 5, 0, 0)
+    from_utc, to_utc, range_from, range_to = mt5_footprint_range_utc_bounds(
+        lo,
+        hi,
+        interval="5m",
+        padding_bars=10,
+    )
+    assert range_from == "2026-07-01T21:10:00+07:00"
+    assert range_to == "2026-07-02T05:55:00+07:00"
+    assert from_utc.isoformat().startswith("2026-07-01T14:10:00")
+    assert to_utc.isoformat().startswith("2026-07-01T22:55:00")
 
 
 def test_fetch_mt5_spot_candles_payload_mock(monkeypatch: pytest.MonkeyPatch) -> None:

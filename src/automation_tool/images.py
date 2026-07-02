@@ -424,10 +424,7 @@ def _gocharting_detail_png_per_slot(
     if sym.strip().upper() == "DXY":
         return 0
     if _footprint_ws_active(gocharting_cfg):
-        if gocharting_detail_max_back_steps is None or gocharting_detail_max_back_steps <= 0:
-            return 0
-        source_count = 1 + int(gocharting_detail_max_back_steps)
-        return source_count * 3
+        return 0
     return GOCHARTING_DETAIL_PNG_PER_SLOT
 
 
@@ -501,13 +498,16 @@ def clear_main_chart_symbol_marker(charts_dir: Path) -> None:
 
 
 def footprint_source_for_stamp(charts_dir: Path, stamp: Optional[str] = None) -> str:
-    """``gocharting`` when stamp has GoCharting CSV exports; else ``coinmap``."""
+    """``gocharting`` when stamp has GoCharting CSV or footprint WS JSON exports."""
     if not charts_dir.is_dir():
-        return "gocharting"
+        return "coinmap"
     st = stamp or latest_chart_stamp(charts_dir)
     if not st:
         return "gocharting"
     if any(charts_dir.glob(f"{st}_gocharting_*.csv")):
+        return "gocharting"
+    fp_dir = charts_dir / "footprint_images"
+    if fp_dir.is_dir() and any(fp_dir.glob("footprint_combined_*.json")):
         return "gocharting"
     return "coinmap"
 
@@ -754,6 +754,9 @@ def _append_gocharting_openai_payloads(
     gocharting_cfg: dict | None = None,
     gocharting_detail_max_back_steps: int | None = None,
 ) -> None:
+    if _footprint_ws_active(gocharting_cfg):
+        return
+
     from automation_tool.gocharting_gc_spot_convert import gc_to_spot_enabled
 
     cfg = gocharting_cfg if gocharting_cfg is not None else _default_gocharting_cfg()

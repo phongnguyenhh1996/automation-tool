@@ -54,7 +54,26 @@ def _resolve_tradingview_paths(charts_dir: Path, stamp: str, sym: str, iv: str) 
     return []
 
 
-def _resolve_gocharting_paths(charts_dir: Path, stamp: str, sym: str, iv: str) -> list[Path]:
+def _resolve_gocharting_paths(
+    charts_dir: Path,
+    stamp: str,
+    sym: str,
+    iv: str,
+    *,
+    gocharting_yaml: Path | None = None,
+) -> list[Path]:
+    from automation_tool.config import default_gocharting_config_path
+    from automation_tool.gocharting_capture import load_gocharting_yaml
+    from automation_tool.gocharting_ws_decode import footprint_ws_enabled
+    from automation_tool.images import GOCHARTING_GOLD_EXPORT_LABEL
+
+    gc_yaml = gocharting_yaml or default_gocharting_config_path()
+    cfg = load_gocharting_yaml(gc_yaml)
+    if footprint_ws_enabled(cfg) and sym.upper() == GOCHARTING_GOLD_EXPORT_LABEL:
+        from automation_tool.chart_payload_validate import gocharting_footprint_ws_json_path
+
+        fp = gocharting_footprint_ws_json_path(charts_dir, iv, gocharting_yaml=gc_yaml)
+        return [fp] if fp.is_file() else []
     cp = gocharting_interval_csv_path(charts_dir, sym, iv, stamp=stamp)
     if cp is None:
         return []
@@ -71,11 +90,19 @@ def _resolve_slot_paths(
     source: str,
     sym: str,
     iv: str,
+    *,
+    gocharting_yaml: Path | None = None,
 ) -> list[Path]:
     if source == "tradingview":
         return _resolve_tradingview_paths(charts_dir, stamp, sym, iv)
     if source == "gocharting":
-        return _resolve_gocharting_paths(charts_dir, stamp, sym, iv)
+        return _resolve_gocharting_paths(
+            charts_dir,
+            stamp,
+            sym,
+            iv,
+            gocharting_yaml=gocharting_yaml,
+        )
     jp = charts_dir / f"{stamp}_{source}_{sym}_{iv}.json"
     pp = charts_dir / f"{stamp}_{source}_{sym}_{iv}.png"
     out: list[Path] = []
@@ -115,14 +142,25 @@ def build_full_analysis_manifest(
         }
 
     order = effective_chart_image_order(charts_dir, stamp=st)
-    invalid = list_invalid_chart_slots_for_stamp(charts_dir, st)
+    invalid = list_invalid_chart_slots_for_stamp(
+        charts_dir,
+        st,
+        gocharting_cfg=load_gocharting_yaml(gc_yaml),
+    )
     invalid_map = {_slot_key(i.source, i.symbol, i.interval): i for i in invalid}
 
     slots: list[dict[str, Any]] = []
     for idx, (src, sym, iv) in enumerate(order, start=1):
         key = _slot_key(src, sym, iv)
         issue = invalid_map.get(key)
-        resolved_paths = _resolve_slot_paths(charts_dir, st, src, sym, iv)
+        resolved_paths = _resolve_slot_paths(
+            charts_dir,
+            st,
+            src,
+            sym,
+            iv,
+            gocharting_yaml=gc_yaml,
+        )
         if issue is not None:
             status = "stale" if "stale" in issue.reason.lower() else "missing"
             reason = issue.reason

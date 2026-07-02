@@ -249,6 +249,63 @@ def gocharting_raw_export_paths_for_stamp(charts_dir: Path, stamp: str) -> list[
     return out
 
 
+def gocharting_footprint_ws_json_path(
+    charts_dir: Path,
+    interval: str,
+    *,
+    gocharting_yaml: Path | None = None,
+) -> Path:
+    from automation_tool.gocharting_footprint_ocr import footprint_images_dir
+    from automation_tool.gocharting_ws_decode import footprint_combined_json_path
+
+    fp_dir = footprint_images_dir(charts_dir, gocharting_yaml=gocharting_yaml)
+    return footprint_combined_json_path(fp_dir, interval.strip().lower())
+
+
+def validate_gocharting_footprint_ws_file(path: Path) -> tuple[bool, str]:
+    if not path.is_file():
+        return False, "missing footprint WS JSON"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return False, f"invalid JSON: {exc}"
+    if not isinstance(data, dict):
+        return False, "footprint WS JSON root must be an object"
+    candles = data.get("candles")
+    if not isinstance(candles, list) or not candles:
+        return False, "footprint WS JSON has no candles"
+    return True, ""
+
+
+def require_valid_gocharting_footprint_ws_exports(
+    charts_dir: Path,
+    cfg: dict[str, Any],
+    *,
+    intervals: tuple[str, ...] | None = None,
+    gocharting_yaml: Path | None = None,
+) -> None:
+    from automation_tool.gocharting_ws_decode import footprint_ws_interval_specs
+
+    ivs = intervals
+    if not ivs:
+        specs = footprint_ws_interval_specs(cfg)
+        ivs = tuple(iv for iv, _ in specs) or ("15m", "5m")
+    reasons: list[str] = []
+    for iv in ivs:
+        path = gocharting_footprint_ws_json_path(
+            charts_dir,
+            iv,
+            gocharting_yaml=gocharting_yaml,
+        )
+        ok, reason = validate_gocharting_footprint_ws_file(path)
+        if not ok:
+            reasons.append(f"{path.name}: {reason}")
+    if reasons:
+        raise SystemExit(
+            f"GoCharting footprint WS validation failed: {'; '.join(reasons)}"
+        )
+
+
 def require_valid_gocharting_exports_for_stamp(charts_dir: Path, stamp: str) -> None:
     paths = gocharting_raw_export_paths_for_stamp(charts_dir, stamp)
     if not paths:
@@ -395,6 +452,8 @@ def _coinmap_raw_export_freshness_issues(
 def list_invalid_chart_slots_for_stamp(
     charts_dir: Path,
     stamp: str,
+    *,
+    gocharting_cfg: dict | None = None,
 ) -> list[ChartSlotIssue]:
     """
     Check each slot in ``effective_chart_image_order`` against what
@@ -412,6 +471,32 @@ def list_invalid_chart_slots_for_stamp(
     validated_export_paths: set[Path] = set()
     for src, sym, iv in order:
         if src == "gocharting":
+            cfg = gocharting_cfg
+            if cfg is None:
+                from automation_tool.images import _default_gocharting_cfg
+
+                cfg = _default_gocharting_cfg()
+            from automation_tool.gocharting_ws_decode import footprint_ws_enabled
+            from automation_tool.images import GOCHARTING_GOLD_EXPORT_LABEL
+
+            if footprint_ws_enabled(cfg):
+                if sym.upper() == "DXY":
+                    continue
+                if sym.upper() != GOCHARTING_GOLD_EXPORT_LABEL:
+                    continue
+                fp = gocharting_footprint_ws_json_path(charts_dir, iv)
+                ok, r = validate_gocharting_footprint_ws_file(fp)
+                if not ok:
+                    issues.append(
+                        ChartSlotIssue(
+                            source=src,
+                            symbol=sym,
+                            interval=iv,
+                            expected_path=fp,
+                            reason=r,
+                        )
+                    )
+                continue
             cp = _gocharting_slot_path(charts_dir, stamp, sym, iv)
             if not cp.is_file():
                 issues.append(

@@ -57,6 +57,38 @@ def mt5_spot_candles_json_path(
     return charts_dir / f"{mt5_spot_candles_json_stem(st, logic_symbol, iv)}.json"
 
 
+DEFAULT_MT5_FOOTPRINT_RANGE_PADDING_BARS = 10
+
+
+def mt5_footprint_range_padding_bars() -> int:
+    raw = os.getenv("MT5_FOOTPRINT_RANGE_PADDING_BARS", "").strip()
+    if raw.isdigit():
+        return max(0, int(raw))
+    return DEFAULT_MT5_FOOTPRINT_RANGE_PADDING_BARS
+
+
+def mt5_footprint_range_utc_bounds(
+    lo: datetime,
+    hi: datetime,
+    *,
+    interval: str,
+    padding_bars: int | None = None,
+) -> tuple[datetime, datetime, str, str]:
+    """UTC ``copy_rates_range`` bounds with ``padding_bars`` before/after footprint window."""
+    bars = padding_bars if padding_bars is not None else mt5_footprint_range_padding_bars()
+    bar_minutes = _interval_minutes(interval)
+    pad = timedelta(minutes=bar_minutes * bars)
+    date_from = lo.replace(tzinfo=_VN_TZ) - pad
+    # +1 bar past ``hi`` so the last footprint open is included in MT5 range.
+    date_to = hi.replace(tzinfo=_VN_TZ) + pad + timedelta(minutes=bar_minutes)
+    return (
+        date_from.astimezone(timezone.utc),
+        date_to.astimezone(timezone.utc),
+        date_from.isoformat(),
+        date_to.isoformat(),
+    )
+
+
 def _interval_minutes(interval: str) -> int:
     iv = (interval or "").strip().lower().replace(" ", "")
     mapping = {
@@ -250,13 +282,13 @@ def fetch_mt5_spot_candles_payload(
         )
         if bounds is not None:
             lo, hi = bounds
-            pad = timedelta(minutes=_interval_minutes(iv))
-            date_from = lo.replace(tzinfo=_VN_TZ) - pad
-            date_to = hi.replace(tzinfo=_VN_TZ) + pad + timedelta(minutes=_interval_minutes(iv))
-            date_from_utc = date_from.astimezone(timezone.utc)
-            date_to_utc = date_to.astimezone(timezone.utc)
-            range_from = date_from.isoformat()
-            range_to = date_to.isoformat()
+            padding_bars = mt5_footprint_range_padding_bars()
+            date_from_utc, date_to_utc, range_from, range_to = mt5_footprint_range_utc_bounds(
+                lo,
+                hi,
+                interval=iv,
+                padding_bars=padding_bars,
+            )
             rates = mt5.copy_rates_range(broker_symbol, tf, date_from_utc, date_to_utc)
             if rates is not None and len(rates) > 0:
                 fetch_mode = "range"
@@ -292,6 +324,7 @@ def fetch_mt5_spot_candles_payload(
         if range_from and range_to:
             payload["range_from"] = range_from
             payload["range_to"] = range_to
+            payload["range_padding_bars"] = mt5_footprint_range_padding_bars()
         return payload
     finally:
         if shutdown_after:
