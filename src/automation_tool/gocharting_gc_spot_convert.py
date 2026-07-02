@@ -184,6 +184,7 @@ def resolve_mt5_spot_payload(
     interval: str,
     count: int,
     chart_stamp: str | None = None,
+    footprint_candles: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     from automation_tool.mt5_candles import fetch_mt5_spot_candles_payload, mt5_spot_candles_json_path
 
@@ -205,6 +206,7 @@ def resolve_mt5_spot_payload(
         logic_symbol=logic_symbol,
         interval=interval,
         count=count,
+        footprint_candles=footprint_candles,
     )
     if payload is None:
         raise GcToSpotConversionError(
@@ -255,12 +257,14 @@ def build_basis_index(
     mt5_payload: dict[str, Any],
 ) -> tuple[dict[str, float], dict[str, dict[str, Any]]]:
     """Return ``(time_key → basis, time_key → spot ohlc)``."""
+    from automation_tool.gocharting_ws_decode import footprint_candle_time_key
+
     spot_index = build_mt5_spot_ohlc_index(mt5_payload)
     basis_index: dict[str, float] = {}
     for candle in candles:
         if not isinstance(candle, dict):
             continue
-        time_key = str(candle.get("time_gmt7") or "").strip()
+        time_key = footprint_candle_time_key(candle)
         if not time_key:
             continue
         spot = spot_index.get(time_key)

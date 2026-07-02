@@ -379,6 +379,7 @@ def prepare_footprint_json_for_openai(
                 interval=iv,
                 count=len(candles),
                 chart_stamp=chart_stamp,
+                footprint_candles=[c for c in candles if isinstance(c, dict)],
             )
             out = convert_footprint_combined_to_spot(
                 out,

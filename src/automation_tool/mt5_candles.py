@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
@@ -55,6 +55,51 @@ def mt5_spot_candles_json_path(
     st = stamp or latest_chart_stamp(charts_dir) or ""
     iv = interval or mt5_spot_candles_interval()
     return charts_dir / f"{mt5_spot_candles_json_stem(st, logic_symbol, iv)}.json"
+
+
+def _interval_minutes(interval: str) -> int:
+    iv = (interval or "").strip().lower().replace(" ", "")
+    mapping = {
+        "1m": 1,
+        "5m": 5,
+        "15m": 15,
+        "30m": 30,
+        "1h": 60,
+        "4h": 240,
+        "1d": 1440,
+    }
+    return mapping.get(iv, 5)
+
+
+def footprint_candle_time_bounds(
+    candles: list[dict[str, Any]],
+) -> tuple[datetime, datetime] | None:
+    """Earliest/latest footprint bar open (naive GMT+7 wall time) from candle keys."""
+    from automation_tool.gocharting_footprint_ocr import parse_footprint_candle_datetime
+    from automation_tool.gocharting_ws_decode import parse_proto_candle_datetime
+
+    dts: list[datetime] = []
+    for candle in candles:
+        if not isinstance(candle, dict):
+            continue
+        time_key = str(candle.get("time_gmt7") or candle.get("time") or "").strip()
+        dt = parse_footprint_candle_datetime(time_key)
+        if dt is None:
+            date_raw = str(candle.get("date") or "").strip()
+            if date_raw:
+                try:
+                    dt = (
+                        parse_proto_candle_datetime(date_raw)
+                        .astimezone(_VN_TZ)
+                        .replace(tzinfo=None)
+                    )
+                except ValueError:
+                    dt = None
+        if dt is not None:
+            dts.append(dt)
+    if not dts:
+        return None
+    return min(dts), max(dts)
 
 
 def _interval_to_mt5_timeframe(mt5: Any, interval: str) -> Optional[int]:
@@ -150,8 +195,9 @@ def fetch_mt5_spot_candles_payload(
     interval: str | None = None,
     count: int | None = None,
     accounts_json: Path | None = None,
+    footprint_candles: list[dict[str, Any]] | None = None,
 ) -> Optional[dict[str, Any]]:
-    """Fetch latest OHLC bars from MT5; ``None`` when MT5/symbol unavailable."""
+    """Fetch OHLC bars from MT5 aligned to footprint candles when possible."""
     try:
         _load_mt5()
     except SystemExit:
@@ -183,6 +229,10 @@ def fetch_mt5_spot_candles_payload(
                 pass
         return None
 
+    fetch_mode = "position"
+    range_from: str | None = None
+    range_to: str | None = None
+
     try:
         if not mt5.symbol_select(broker_symbol, True):
             _log.warning(
@@ -191,17 +241,43 @@ def fetch_mt5_spot_candles_payload(
                 broker_symbol,
             )
             return None
-        rates = mt5.copy_rates_from_pos(broker_symbol, tf, 0, n)
+
+        rates = None
+        bounds = (
+            footprint_candle_time_bounds(footprint_candles)
+            if footprint_candles
+            else None
+        )
+        if bounds is not None:
+            lo, hi = bounds
+            pad = timedelta(minutes=_interval_minutes(iv))
+            date_from = lo.replace(tzinfo=_VN_TZ) - pad
+            date_to = hi.replace(tzinfo=_VN_TZ) + pad + timedelta(minutes=_interval_minutes(iv))
+            date_from_utc = date_from.astimezone(timezone.utc)
+            date_to_utc = date_to.astimezone(timezone.utc)
+            range_from = date_from.isoformat()
+            range_to = date_to.isoformat()
+            rates = mt5.copy_rates_range(broker_symbol, tf, date_from_utc, date_to_utc)
+            if rates is not None and len(rates) > 0:
+                fetch_mode = "range"
+
+        if rates is None or len(rates) == 0:
+            fetch_mode = "position"
+            range_from = None
+            range_to = None
+            rates = mt5.copy_rates_from_pos(broker_symbol, tf, 0, n)
+
         bars = _bar_records(rates)
         if not bars:
             _log.warning(
-                "mt5_candles: 0 nến | logic=%s broker=%s interval=%s",
+                "mt5_candles: 0 nến | logic=%s broker=%s interval=%s mode=%s",
                 logic_symbol,
                 broker_symbol,
                 iv,
+                fetch_mode,
             )
             return None
-        return {
+        payload: dict[str, Any] = {
             "source": "mt5",
             "symbol": (logic_symbol or "XAUUSD").strip().upper(),
             "broker_symbol": broker_symbol,
@@ -209,9 +285,14 @@ def fetch_mt5_spot_candles_payload(
             "timezone": MT5_CANDLES_TIMEZONE,
             "n_bars": len(bars),
             "n_bars_requested": n,
+            "fetch_mode": fetch_mode,
             "generated_at": datetime.now(_VN_TZ).isoformat(),
             "bars": bars,
         }
+        if range_from and range_to:
+            payload["range_from"] = range_from
+            payload["range_to"] = range_to
+        return payload
     finally:
         if shutdown_after:
             try:

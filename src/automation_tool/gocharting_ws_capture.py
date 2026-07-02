@@ -154,6 +154,7 @@ def _enrich_with_mt5_spot(
         interval=interval,
         count=n_bars,
         accounts_json=mt5_accounts_json,
+        footprint_candles=[c for c in candles if isinstance(c, dict)],
     )
     if mt5_payload is None:
         _log.warning(
@@ -165,13 +166,39 @@ def _enrich_with_mt5_spot(
         return doc
     enriched = merge_footprint_with_mt5_spot(doc, mt5_payload)
     spot_meta = enriched.get("mt5_spot") or {}
+    matched = spot_meta.get("matched")
+    available = spot_meta.get("available")
     _log.info(
-        "footprint_ws: MT5 spot merged | %s %s matched=%s/%s bars",
+        "footprint_ws: MT5 spot merged | %s %s matched=%s/%s bars mode=%s",
         logic_symbol,
         interval,
-        spot_meta.get("matched"),
-        spot_meta.get("available"),
+        matched,
+        available,
+        mt5_payload.get("fetch_mode"),
     )
+    if matched == 0 and available:
+        from automation_tool.gocharting_ws_decode import (
+            footprint_candle_time_key,
+            mt5_bar_time_to_footprint_key,
+        )
+
+        fp_sample = [
+            footprint_candle_time_key(c)
+            for c in candles[:3]
+            if isinstance(c, dict)
+        ]
+        mt5_sample = [
+            mt5_bar_time_to_footprint_key(str(b.get("t") or ""))
+            for b in (mt5_payload.get("bars") or [])[:3]
+            if isinstance(b, dict)
+        ]
+        _log.warning(
+            "footprint_ws: MT5 spot time mismatch | footprint_sample=%s mt5_sample=%s range=%s..%s",
+            fp_sample,
+            mt5_sample,
+            mt5_payload.get("range_from"),
+            mt5_payload.get("range_to"),
+        )
     return enriched
 
 

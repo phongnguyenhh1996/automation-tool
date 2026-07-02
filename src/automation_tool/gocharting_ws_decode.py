@@ -504,6 +504,23 @@ def merge_footprint_raw_with_ohlc(
     return slim_footprint_combined_document(merged)
 
 
+def footprint_candle_time_key(candle: dict[str, Any]) -> str:
+    """Canonical ``time_gmt7`` key for matching footprint candles to MT5/OHLC."""
+    from automation_tool.gocharting_footprint_ocr import canonical_footprint_time_key
+
+    raw = str(candle.get("time_gmt7") or candle.get("time") or "").strip()
+    if raw:
+        key = canonical_footprint_time_key(raw)
+        return key or raw
+    date_raw = str(candle.get("date") or "").strip()
+    if date_raw:
+        try:
+            return proto_candle_time_key(date_raw)
+        except ValueError:
+            return ""
+    return ""
+
+
 def mt5_bar_time_to_footprint_key(iso_t: str) -> str:
     """Convert MT5 bar ``t`` (ISO Asia/Ho_Chi_Minh) to footprint ``time_gmt7`` key."""
     raw = (iso_t or "").strip()
@@ -553,7 +570,7 @@ def merge_footprint_with_mt5_spot(
         if not isinstance(candle, dict):
             continue
         block = dict(candle)
-        time_key = str(block.get("time_gmt7") or "").strip()
+        time_key = footprint_candle_time_key(block)
         spot = spot_index.get(time_key)
         block["mt5_spot_ohlc"] = spot
         if spot is not None:

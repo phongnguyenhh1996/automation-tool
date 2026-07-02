@@ -343,7 +343,7 @@ def test_merge_footprint_with_mt5_spot() -> None:
     doc = {
         "candles": [
             {"time_gmt7": time_key, "ohlc": {"open": 4019.0}},
-            {"time_gmt7": "Thu Jun 25 2026 05:05:00 GMT+0700"},
+            {"date": "2026-06-25T05:05:00+07:00", "ohlc": {"close": 4020.0}},
         ]
     }
     mt5_payload = {

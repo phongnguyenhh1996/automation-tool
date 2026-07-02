@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -12,6 +13,7 @@ from automation_tool.mt5_candles import (
     MT5_CANDLES_TIMEZONE,
     export_mt5_spot_candles_json,
     fetch_mt5_spot_candles_payload,
+    footprint_candle_time_bounds,
     mt5_spot_candles_json_stem,
     resolve_mt5_broker_symbol,
 )
@@ -26,6 +28,18 @@ def test_mt5_spot_candles_json_stem() -> None:
 def test_resolve_mt5_broker_symbol() -> None:
     assert resolve_mt5_broker_symbol("XAUUSD") == "XAUUSDm"
     assert resolve_mt5_broker_symbol("XAUUSD", account_symbol_map={"XAUUSD": "XAUUSD"}) == "XAUUSD"
+
+
+def test_footprint_candle_time_bounds() -> None:
+    candles = [
+        {"time_gmt7": "Tue Jun 30 2026 22:00:00 GMT+0700"},
+        {"date": "2026-07-01T05:00:00+07:00"},
+    ]
+    bounds = footprint_candle_time_bounds(candles)
+    assert bounds is not None
+    lo, hi = bounds
+    assert lo == datetime(2026, 6, 30, 22, 0, 0)
+    assert hi == datetime(2026, 7, 1, 5, 0, 0)
 
 
 def test_fetch_mt5_spot_candles_payload_mock(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -69,6 +83,53 @@ def test_fetch_mt5_spot_candles_payload_mock(monkeypatch: pytest.MonkeyPatch) ->
     assert payload["bars"][0]["t"] == "2023-11-15T05:13:20+07:00"
     assert payload["bars"][1]["t"] == "2023-11-15T05:18:20+07:00"
     assert payload["generated_at"].endswith("+07:00")
+
+
+def test_fetch_mt5_spot_candles_range_mock(monkeypatch: pytest.MonkeyPatch) -> None:
+    rates = np.array(
+        [
+            (1_718_000_000, 2650.0, 2651.0, 2649.0, 2650.5, 100, 0, 0),
+            (1_718_000_300, 2650.5, 2652.0, 2650.0, 2651.0, 120, 0, 0),
+        ],
+        dtype=[
+            ("time", "i8"),
+            ("open", "f8"),
+            ("high", "f8"),
+            ("low", "f8"),
+            ("close", "f8"),
+            ("tick_volume", "i8"),
+            ("spread", "i4"),
+            ("real_volume", "i8"),
+        ],
+    )
+    mt5 = MagicMock()
+    mt5.TIMEFRAME_M5 = 5
+    mt5.symbol_select.return_value = True
+    mt5.copy_rates_range.return_value = rates
+    mt5.copy_rates_from_pos.return_value = None
+
+    monkeypatch.setattr("automation_tool.mt5_candles._load_mt5", lambda: mt5)
+    monkeypatch.setattr(
+        "automation_tool.mt5_candles._connect_mt5_for_candles",
+        lambda _account: (mt5, False),
+    )
+    monkeypatch.setattr("automation_tool.mt5_candles.load_mt5_accounts_for_cli", lambda _p: None)
+
+    footprint_candles = [
+        {"time_gmt7": "Wed Jul 1 2026 22:00:00 GMT+0700"},
+        {"time_gmt7": "Wed Jul 1 2026 22:05:00 GMT+0700"},
+    ]
+    payload = fetch_mt5_spot_candles_payload(
+        logic_symbol="XAUUSD",
+        interval="5m",
+        count=50,
+        footprint_candles=footprint_candles,
+    )
+    assert payload is not None
+    assert payload["fetch_mode"] == "range"
+    assert payload["n_bars"] == 2
+    assert mt5.copy_rates_range.called
+    assert not mt5.copy_rates_from_pos.called
 
 
 def test_export_mt5_spot_candles_json_writes_file(
