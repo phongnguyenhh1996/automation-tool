@@ -13,9 +13,12 @@ from automation_tool.gocharting_ws_decode import (
     decode_ws_frames_merged,
     decode_ws_ohlc_frame,
     drop_forming_footprint_candle,
+    footprint_ws_extra_session_days,
+    merge_footprint_ws_documents,
     parse_proto_candle_datetime,
     parse_ws_binary_envelope,
     pick_best_footprint_document,
+    prior_session_dates_to_request,
     proto_candle_time_key,
     trim_footprint_document,
 )
@@ -480,3 +483,56 @@ def test_footprint_raw_document_to_bid_ask_block_multiplier(tmp_path: Path) -> N
     levels = out["candles"][0]["price_levels"]
     assert len(levels) == 1
     assert levels[0] == {"bid": 10, "ask": 0, "price": 4060.6}
+
+
+def test_footprint_ws_extra_session_days_default() -> None:
+    assert footprint_ws_extra_session_days({}) == 1
+    assert footprint_ws_extra_session_days({"footprint_ws": {"extra_session_days": 0}}) == 0
+
+
+def test_prior_session_dates_to_request() -> None:
+    docs = [{"request": {"date": "2026-07-02"}, "candles": [{"time_gmt7": "t1"}]}]
+    assert prior_session_dates_to_request(docs, extra_days=1) == ["2026-07-01"]
+    assert prior_session_dates_to_request(docs, extra_days=2) == ["2026-06-30", "2026-07-01"]
+
+    both = [
+        {"request": {"date": "2026-07-02"}, "candles": []},
+        {"request": {"date": "2026-07-01"}, "candles": []},
+    ]
+    assert prior_session_dates_to_request(both, extra_days=1) == []
+
+
+def test_merge_footprint_ws_documents_multi_session() -> None:
+    docs = [
+        {
+            "request": {"date": "2026-07-01"},
+            "candles": [{"time_gmt7": "Wed Jul 1 2026 05:00:00 GMT+0700"}],
+        },
+        {
+            "request": {"date": "2026-07-02"},
+            "candles": [{"time_gmt7": "Thu Jul 2 2026 05:00:00 GMT+0700"}],
+        },
+    ]
+    merged = merge_footprint_ws_documents(docs)
+    assert merged is not None
+    assert merged["ws_session_dates"] == ["2026-07-01", "2026-07-02"]
+    assert len(merged["candles"]) == 2
+
+
+def test_trim_after_multi_session_merge_keeps_newest() -> None:
+    docs = [
+        {
+            "request": {"date": "2026-07-01"},
+            "candles": [{"time_gmt7": f"t{i:03d}"} for i in range(40)],
+        },
+        {
+            "request": {"date": "2026-07-02"},
+            "candles": [{"time_gmt7": f"t{i:03d}"} for i in range(40, 60)],
+        },
+    ]
+    merged = merge_footprint_ws_documents(docs)
+    assert merged is not None
+    trimmed = trim_footprint_document(merged, max_candles=50)
+    assert len(trimmed["candles"]) == 50
+    assert trimmed["candles"][0]["time_gmt7"] == "t010"
+    assert trimmed["candles"][-1]["time_gmt7"] == "t059"

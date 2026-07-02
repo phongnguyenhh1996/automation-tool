@@ -7,6 +7,12 @@ from typing import Any, Optional
 
 from playwright.sync_api import BrowserContext, Page
 
+from automation_tool.gocharting_footprint_idb import (
+    build_output_with_idb,
+    capture_footprint_idb_documents,
+    footprint_idb_enabled,
+)
+from automation_tool.gocharting_footprint_ws_request import request_footprint_dates_on_page
 from automation_tool.gocharting_footprint_ocr import footprint_images_dir, footprint_interval_json_path
 from automation_tool.gocharting_ws_decode import (
     FOOTPRINT_EXPORT_FORMAT_BID_ASK,
@@ -17,14 +23,18 @@ from automation_tool.gocharting_ws_decode import (
     decode_ws_ohlc_frame,
     document_timeframe,
     footprint_combined_json_path,
+    footprint_document_request_date,
     footprint_raw_json_path,
     footprint_ws_export_format,
+    footprint_ws_extra_session_days,
+    footprint_ws_extra_session_wait_ms,
     footprint_ws_interval_specs,
     footprint_ws_max_candles,
     footprint_ws_wait_ms,
     merge_footprint_raw_with_ohlc,
     merge_footprint_with_mt5_spot,
-    pick_best_footprint_document,
+    merge_footprint_ws_documents,
+    prior_session_dates_to_request,
     trim_footprint_document,
     footprint_ws_mt5_spot_enabled,
     write_footprint_document,
@@ -79,9 +89,10 @@ def _attach_ws_listeners(
                     return
                 footprint_docs.append(fp_doc)
                 _log.info(
-                    "FOOTPRINT frame: %s %s candles=%d",
+                    "FOOTPRINT frame: %s %s date=%s candles=%d",
                     fp_doc.get("symbol"),
                     document_timeframe(fp_doc) or interval,
+                    footprint_document_request_date(fp_doc) or "?",
                     len(fp_doc.get("candles") or []),
                 )
             ohlc_doc = decode_ws_ohlc_frame(raw)
@@ -105,7 +116,7 @@ def _build_output_document(
     export_format: str,
     interval: str,
 ) -> dict[str, Any]:
-    best_fp = pick_best_footprint_document(footprint_docs)
+    best_fp = merge_footprint_ws_documents(footprint_docs)
     if best_fp is None:
         raise RuntimeError(
             f"No FOOTPRINT/V2 WebSocket frames captured for {interval}. "
@@ -212,12 +223,50 @@ def capture_footprint_ws_on_page(
     _log.info("footprint_ws: waiting %dms for FOOTPRINT/V2 + TS/V2 (%s)...", wait, iv)
     page.wait_for_timeout(wait)
 
-    output_doc = _build_output_document(
-        footprint_docs=footprint_docs,
-        ohlc_docs=ohlc_docs,
-        export_format=fmt,
-        interval=iv,
-    )
+    extra_days = footprint_ws_extra_session_days(cfg)
+    if extra_days > 0:
+        prior_dates = prior_session_dates_to_request(footprint_docs, extra_days=extra_days)
+        if prior_dates:
+            _log.info("footprint_ws: requesting %d prior session date(s): %s", len(prior_dates), prior_dates)
+            req_result = request_footprint_dates_on_page(page, prior_dates, interval=iv)
+            if not req_result.get("ok"):
+                _log.warning("footprint_ws: prior session request failed: %s", req_result)
+            extra_wait = footprint_ws_extra_session_wait_ms(cfg)
+            _log.info("footprint_ws: waiting %dms for prior session FOOTPRINT (%s)...", extra_wait, iv)
+            page.wait_for_timeout(extra_wait)
+
+    if footprint_idb_enabled(cfg):
+        _log.info("footprint_idb: workers attached: %d", len(page.workers))
+
+    idb_docs: list[dict[str, Any]] = []
+    if footprint_idb_enabled(cfg):
+        idb_docs = capture_footprint_idb_documents(
+            page,
+            cfg=cfg,
+            interval=iv,
+            export_format=(
+                FOOTPRINT_EXPORT_FORMAT_RAW
+                if fmt in (FOOTPRINT_EXPORT_FORMAT_RAW, FOOTPRINT_EXPORT_FORMAT_COMBINED)
+                else FOOTPRINT_EXPORT_FORMAT_BID_ASK
+            ),
+        )
+        if idb_docs:
+            _log.info("footprint_idb: loaded %d document(s) for merge", len(idb_docs))
+
+    if idb_docs:
+        output_doc = build_output_with_idb(
+            footprint_docs=footprint_docs,
+            ohlc_docs=ohlc_docs,
+            idb_docs=idb_docs,
+            export_format=fmt,
+        )
+    else:
+        output_doc = _build_output_document(
+            footprint_docs=footprint_docs,
+            ohlc_docs=ohlc_docs,
+            export_format=fmt,
+            interval=iv,
+        )
     output_doc = trim_footprint_document(output_doc, max_candles=mc)
     output_doc = _enrich_with_mt5_spot(
         output_doc,
@@ -230,13 +279,15 @@ def capture_footprint_ws_on_page(
     write_footprint_document(dest, output_doc)
 
     matched = output_doc.get("ohlc_matched")
+    session_dates = output_doc.get("ws_session_dates") or []
     _log.info(
-        "footprint_ws: wrote %s (%d candles, %s %s, format=%s%s)",
+        "footprint_ws: wrote %s (%d candles, %s %s, format=%s%s%s)",
         dest.name,
         len(output_doc.get("candles") or []),
         output_doc.get("symbol"),
         document_timeframe(output_doc) or iv,
         fmt,
+        f", sessions={session_dates}" if session_dates else "",
         f", ohlc_matched={matched}" if matched is not None else "",
     )
     return dest

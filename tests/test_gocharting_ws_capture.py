@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from automation_tool.gocharting_ws_decode import (
     footprint_ws_enabled,
+    footprint_ws_extra_session_days,
     footprint_ws_interval_specs,
     footprint_ws_max_candles,
 )
@@ -16,6 +17,10 @@ def test_footprint_ws_enabled() -> None:
 def test_footprint_ws_max_candles_from_cfg() -> None:
     cfg = {"footprint_ws": {"max_candles": 50}}
     assert footprint_ws_max_candles(cfg) == 50
+
+
+def test_footprint_ws_extra_session_days_from_cfg() -> None:
+    assert footprint_ws_extra_session_days({"footprint_ws": {"extra_session_days": 2}}) == 2
 
 
 def test_footprint_ws_interval_specs() -> None:

@@ -114,6 +114,7 @@ footprint_ws:
   tick_size: 0.1
   block_multiplier: 4
   max_candles: 50
+  extra_session_days: 1
   wait_ms: 45000
   export_format: combined
   mt5_spot: true

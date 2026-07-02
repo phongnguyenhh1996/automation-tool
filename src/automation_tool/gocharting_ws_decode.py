@@ -772,8 +772,111 @@ def decode_ws_frames_dir(
     return out
 
 
+def footprint_document_request_date(doc: dict[str, Any]) -> str:
+    req = doc.get("request")
+    if isinstance(req, dict):
+        date = str(req.get("date") or "").strip()
+        if date:
+            return date
+    return ""
+
+
+def footprint_ws_extra_session_days(cfg: dict[str, Any]) -> int:
+    """How many prior session dates to request via WS before ``max_candles`` trim."""
+    ws = cfg.get("footprint_ws")
+    if isinstance(ws, dict):
+        raw = ws.get("extra_session_days")
+        if raw is not None:
+            try:
+                return max(0, int(raw))
+            except (TypeError, ValueError):
+                pass
+    return 1
+
+
+def footprint_ws_extra_session_wait_ms(cfg: dict[str, Any]) -> int:
+    ws = cfg.get("footprint_ws")
+    if isinstance(ws, dict):
+        raw = ws.get("extra_session_wait_ms")
+        if raw is not None:
+            try:
+                return max(1000, int(raw))
+            except (TypeError, ValueError):
+                pass
+    return footprint_ws_wait_ms(cfg)
+
+
+def prior_session_dates_to_request(
+    footprint_docs: list[dict[str, Any]],
+    *,
+    extra_days: int = 1,
+) -> list[str]:
+    """Return prior session dates missing from ``footprint_docs`` (oldest first)."""
+    from datetime import date, datetime, timedelta, timezone
+
+    if extra_days <= 0:
+        return []
+
+    existing = {
+        footprint_document_request_date(d)
+        for d in footprint_docs
+        if footprint_document_request_date(d)
+    }
+    if existing:
+        anchor = max(existing)
+    else:
+        anchor = datetime.now(timezone(timedelta(hours=7))).date().isoformat()
+
+    anchor_date = date.fromisoformat(anchor)
+    out: list[str] = []
+    for offset in range(extra_days, 0, -1):
+        prior = (anchor_date - timedelta(days=offset)).isoformat()
+        if prior not in existing:
+            out.append(prior)
+    return out
+
+
+def merge_footprint_ws_documents(docs: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """Merge WS/IDB footprint docs: one session per ``request.date``, candles by ``time_gmt7``."""
+    usable = [d for d in docs if isinstance(d, dict) and d.get("candles")]
+    if not usable:
+        return None
+    if len(usable) == 1:
+        return usable[0]
+
+    by_date: dict[str, dict[str, Any]] = {}
+    for doc in usable:
+        rd = footprint_document_request_date(doc) or f"__anon_{id(doc)}"
+        by_date[rd] = doc
+
+    merged: dict[str, Any] = dict(usable[-1])
+    by_time: dict[str, dict[str, Any]] = {}
+    session_dates: list[str] = []
+    for rd in sorted(by_date.keys()):
+        if rd.startswith("__anon_"):
+            continue
+        session_dates.append(rd)
+        for candle in by_date[rd].get("candles") or []:
+            if not isinstance(candle, dict):
+                continue
+            time_key = str(candle.get("time_gmt7") or candle.get("time") or "").strip()
+            if time_key:
+                by_time[time_key] = candle
+
+    merged["candles"] = sorted(
+        by_time.values(),
+        key=lambda c: str(c.get("time_gmt7") or c.get("time") or ""),
+    )
+    merged["ws_merged_from"] = len(usable)
+    merged["ws_session_dates"] = session_dates
+    return merged
+
+
 def pick_best_footprint_document(docs: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
-    """Prefer the document with the most candles."""
+    """Prefer merged multi-session docs, else the document with the most candles."""
+    merged = merge_footprint_ws_documents(docs)
+    if merged is not None and len(merged.get("ws_session_dates") or []) > 1:
+        return merged
     if not docs:
         return None
     return max(docs, key=lambda d: len(d.get("candles") or []))
