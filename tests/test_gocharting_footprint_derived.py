@@ -354,7 +354,16 @@ def test_enrich_prepared_footprint_stacked_on_slim_footprint() -> None:
     }
     out = enrich_prepared_footprint_stacked(
         doc,
-        cfg={"footprint_ws": {"derived": {"stacked_min_levels": 3, "rl_min": 4.0}}},
+        cfg={
+            "footprint_ws": {
+                "derived": {
+                    "enabled": True,
+                    "stacked_enabled": True,
+                    "stacked_min_levels": 3,
+                    "rl_min": 4.0,
+                }
+            }
+        },
     )
     candle = out["candles"][0]
     assert "orderflow" in candle
@@ -363,3 +372,29 @@ def test_enrich_prepared_footprint_stacked_on_slim_footprint() -> None:
     assert stacked["side"] == "BID"
     assert stacked["level_count"] >= 3
     assert stacked["prices"][0] == 4025.0
+
+
+def test_enrich_prepared_footprint_stacked_respects_stacked_disabled() -> None:
+    doc = {
+        "symbol": "XAUUSD",
+        "candles": [
+            {
+                "time_gmt7": "Thu Jun 25 2026 10:05:00 GMT+0700",
+                "footprint": [
+                    {"price": 4025.0, "buy": 50, "sell": 0},
+                    {"price": 4024.8, "buy": 40, "sell": 5},
+                    {"price": 4024.7, "buy": 36, "sell": 4},
+                ],
+            }
+        ],
+    }
+    cfg = {
+        "footprint_ws": {
+            "derived": {
+                "enabled": False,
+                "stacked_enabled": False,
+            }
+        }
+    }
+    out = enrich_prepared_footprint_stacked(doc, cfg=cfg)
+    assert "orderflow" not in out["candles"][0]

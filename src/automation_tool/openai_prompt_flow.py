@@ -411,7 +411,10 @@ def prepare_footprint_json_for_openai(
                 logic_symbol=sym,
                 interval=iv,
             )
-            out = enrich_prepared_footprint_stacked(out, cfg=cfg)
+            from automation_tool.gocharting_footprint_derived import derived_config_from_cfg
+
+            if footprint_derived_enabled(cfg) and derived_config_from_cfg(cfg, out).stacked_enabled:
+                out = enrich_prepared_footprint_stacked(out, cfg=cfg)
         return slim_footprint_combined_for_openai(out)
     if name.startswith("footprint_bid_ask_") and path.suffix.lower() == ".json":
         from automation_tool.gocharting_footprint_ocr import (

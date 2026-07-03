@@ -514,7 +514,12 @@ def enrich_prepared_footprint_stacked(
     """Attach ``orderflow.stacked_in_candle`` on spot-prepared footprint (after ``gc_to_spot``)."""
     if not isinstance(doc, dict):
         return doc
-    derived_raw = derived_config_from_cfg(cfg or {}, doc)
+    cfg_raw = cfg if isinstance(cfg, dict) else {}
+    if not footprint_derived_enabled(cfg_raw):
+        return doc
+    derived_raw = derived_config_from_cfg(cfg_raw, doc)
+    if not derived_raw.stacked_enabled:
+        return doc
     stacked_cfg = DerivedConfig(
         imbalance_enabled=False,
         stacked_enabled=True,
