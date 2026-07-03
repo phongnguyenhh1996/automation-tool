@@ -50,6 +50,7 @@ def test_update_scalp_gocharting_detail_history_steps() -> None:
 
 def test_gocharting_footprint_export_label() -> None:
     assert gocharting_footprint_export_label("XAUUSD") == GOCHARTING_GOLD_EXPORT_LABEL
+    assert gocharting_footprint_export_label("GC1!") == GOCHARTING_GOLD_EXPORT_LABEL
     assert gocharting_footprint_export_label("EURUSD") == "EURUSD"
 
 

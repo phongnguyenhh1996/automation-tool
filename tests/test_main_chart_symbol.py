@@ -24,8 +24,17 @@ from automation_tool.images import (
 
 def test_normalize_main_chart_symbol() -> None:
     assert normalize_main_chart_symbol("  usdjpy  ") == "USDJPY"
+    assert normalize_main_chart_symbol("GC1!") == "GC1!"
     with pytest.raises(ValueError):
         normalize_main_chart_symbol("AB")
+
+
+def test_main_symbol_file_slug() -> None:
+    from automation_tool.images import main_symbol_file_slug, tradingview_file_symbol
+
+    assert main_symbol_file_slug("GC1!") == "GC1"
+    assert main_symbol_file_slug("XAUUSD") == "XAUUSD"
+    assert tradingview_file_symbol("GC1!") == "GC1"
 
 
 def test_apply_main_chart_symbol_to_config() -> None:

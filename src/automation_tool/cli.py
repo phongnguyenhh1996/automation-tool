@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import concurrent.futures
+import copy
 import json
 import logging
 import os
@@ -107,6 +108,7 @@ from automation_tool.state_files import (
     default_last_scalp_response_id_path,
     default_morning_baseline_prices_path,
     default_morning_full_analysis_path,
+    MORNING_FULL_ANALYSIS_FILENAME,
     merge_trade_lines_from_openai_analysis_text,
     read_last_alert_prices,
     read_last_all_response_id,
@@ -823,6 +825,14 @@ def _parser() -> argparse.ArgumentParser:
         "--gocharting",
         action="store_true",
         help="Dùng GoCharting (PNG+CSV) thay Coinmap footprint",
+    )
+    al.add_argument(
+        "--gc-only",
+        action="store_true",
+        help=(
+            "FULL_ANALYSIS thuần GC1! (COMEX): TV watchlist GC1!, footprint native, "
+            "Telegram only — không zones/EA/all-2/last_response_id (requires --gocharting)"
+        ),
     )
     al.add_argument(
         "--gocharting-config",
@@ -2456,11 +2466,16 @@ def _resolved_analysis_prompt(args: argparse.Namespace, charts_dir: Path) -> str
     p = getattr(args, "prompt", None)
     if p is not None and str(p).strip():
         return str(p)
-    from automation_tool.images import read_main_chart_symbol
+    from automation_tool.images import GC1_MAIN_SYMBOL, read_main_chart_symbol
 
-    sym = read_main_chart_symbol(charts_dir)
+    gc_only = bool(getattr(args, "gc_only", False))
+    sym = GC1_MAIN_SYMBOL if gc_only else read_main_chart_symbol(charts_dir)
     fp = footprint_source_for_stamp(charts_dir)
-    return default_analysis_prompt(sym, footprint_source=fp)
+    return default_analysis_prompt(
+        sym,
+        footprint_source=fp,
+        gc_native_footprint=gc_only,
+    )
 
 
 def _all_flow_two_phase_enabled(args: argparse.Namespace) -> bool:
@@ -2480,16 +2495,19 @@ def _all_flow_openai_prompts(
 
     When ``two_phase`` is True, ``analysis_prompt`` is empty and structure/footprint prompts are set.
     """
+    gc_only = bool(getattr(args, "gc_only", False))
     if not _all_flow_two_phase_enabled(args):
         if getattr(args, "prompt", None) and str(getattr(args, "prompt", "")).strip():
             _log.info("all: custom --prompt — dùng single-phase (không 2-batch)")
         return False, _resolved_analysis_prompt(args, charts_dir), None, None
-    sym = read_main_chart_symbol(charts_dir)
+    from automation_tool.images import GC1_MAIN_SYMBOL, read_main_chart_symbol
+
+    sym = GC1_MAIN_SYMBOL if gc_only else read_main_chart_symbol(charts_dir)
     return (
         True,
         "",
-        full_analysis_structure_prompt(sym),
-        full_analysis_footprint_prompt(sym),
+        full_analysis_structure_prompt(sym, gc_native_footprint=gc_only),
+        full_analysis_footprint_prompt(sym, gc_native_footprint=gc_only),
     )
 
 
@@ -2538,17 +2556,34 @@ def _require_gocharting_post_capture_valid(
     _require_gocharting_post_capture_valid(charts_dir, stamp, gc_yaml)
 
 
+def _gc_only_gocharting_cfg(gocharting_yaml: Path) -> dict:
+    """Runtime override: native GC1! footprint (no gc_to_spot / mt5_spot merge)."""
+    cfg = copy.deepcopy(load_gocharting_yaml(gocharting_yaml))
+    ws = cfg.get("footprint_ws")
+    if not isinstance(ws, dict):
+        ws = {}
+        cfg["footprint_ws"] = ws
+    gts = ws.get("gc_to_spot")
+    if not isinstance(gts, dict):
+        gts = {}
+        ws["gc_to_spot"] = gts
+    gts["enabled"] = False
+    ws["mt5_spot"] = False
+    return cfg
+
+
 def _all_flow_gocharting_openai_kw(
     *,
     use_gocharting: bool,
     gocharting_yaml: Path,
     charts_dir: Path,
     stamp: str | None = None,
+    gocharting_cfg_override: dict | None = None,
 ) -> dict[str, object]:
     """OpenAI payload options when ``all`` / ``update-scalp`` use GoCharting footprint WS."""
     if not use_gocharting and footprint_source_for_stamp(charts_dir, stamp=stamp) != "gocharting":
         return {}
-    gc_cfg = load_gocharting_yaml(gocharting_yaml)
+    gc_cfg = gocharting_cfg_override or load_gocharting_yaml(gocharting_yaml)
     return {"gocharting_cfg": gc_cfg}
 
 
@@ -2581,12 +2616,13 @@ def _persist_openai_footprint_json_debug(
     *,
     stamp: str,
     gocharting_yaml: Path | None = None,
+    gocharting_cfg: dict | None = None,
     flow_label: str,
     intervals: tuple[str, ...] = ("15m", "5m"),
 ) -> None:
     """Save prepared GoCharting footprint JSON (``footprint_{SYM}_{iv}.json``)."""
     gc_yaml = gocharting_yaml or default_gocharting_config_path()
-    gc_cfg = load_gocharting_yaml(gc_yaml)
+    gc_cfg = gocharting_cfg if gocharting_cfg is not None else load_gocharting_yaml(gc_yaml)
     try:
         written = persist_prepared_footprint_json_files(
             charts_dir,
@@ -3651,14 +3687,24 @@ def cmd_sync_vector_store_knowledge(args: argparse.Namespace) -> None:
 
 def cmd_all(args: argparse.Namespace) -> None:
     s = load_settings()
-    from automation_tool.images import set_active_main_symbol_file
+    from automation_tool.config import symbol_data_dir
+    from automation_tool.images import GC1_MAIN_SYMBOL, set_active_main_symbol_file
 
-    if getattr(args, "main_symbol", None):
+    gc_only = bool(getattr(args, "gc_only", False))
+    if gc_only and not bool(getattr(args, "gocharting", False)):
+        raise SystemExit("--gc-only requires --gocharting")
+
+    if gc_only:
+        if getattr(args, "main_symbol", None):
+            _log.info("all --gc-only: bỏ qua --main-symbol (cố định GC1!)")
+    elif getattr(args, "main_symbol", None):
         set_active_main_symbol_file(args.main_symbol)
 
     zones_dir = zones_dir_from_cli_path(args.zones_json)
     run_slot: SessionSlot = session_slot_now_hcm()
-    if not args.no_clear_zones_state:
+    if gc_only:
+        _log.info("all --gc-only: skip zones clear/write | slot=%s dir=%s", run_slot, zones_dir)
+    elif not args.no_clear_zones_state:
         accts = _resolved_mt5_accounts_json(args)
         if run_slot == "sang":
             prior_cancel = cancel_all_zone_pending_before_clear(
@@ -3694,25 +3740,34 @@ def cmd_all(args: argparse.Namespace) -> None:
     storage = args.storage_state or default_storage_state_path()
     use_gc = bool(getattr(args, "gocharting", False))
     gc_yaml = getattr(args, "gocharting_config", None) or default_gocharting_config_path()
+    gc_cfg_override = _gc_only_gocharting_cfg(gc_yaml) if gc_only else None
+    gc_main_sym = GC1_MAIN_SYMBOL if gc_only else None
     _log.info(
-        "all: bắt đầu | tv_yaml=%s charts=%s no_tradingview=%s gocharting=%s",
+        "all: bắt đầu | tv_yaml=%s charts=%s no_tradingview=%s gocharting=%s gc_only=%s",
         cfg,
         args.charts_dir if args.charts_dir is not None else "(default)",
         args.no_tradingview,
         use_gc,
+        gc_only,
     )
     _send_python_bot_job_started(
         s,
         title=f"Phân tích vào lúc {_now_clock_hcm()} bắt đầu chạy",
         no_telegram=args.no_telegram,
     )
-    charts_dir = args.charts_dir or default_charts_dir()
+    charts_dir = (
+        args.charts_dir
+        if args.charts_dir is not None
+        else (symbol_data_dir(GC1_MAIN_SYMBOL) / "charts" if gc_only else default_charts_dir())
+    )
+    if gc_only:
+        charts_dir.mkdir(parents=True, exist_ok=True)
     paths: list[Path] = []
     if use_gc:
         if not args.no_tradingview:
             paths = capture_charts(
                 coinmap_yaml=cfg,
-                charts_dir=args.charts_dir,
+                charts_dir=charts_dir,
                 storage_state_path=storage,
                 email=s.coinmap_email,
                 password=s.coinmap_password,
@@ -3720,7 +3775,8 @@ def cmd_all(args: argparse.Namespace) -> None:
                 save_storage_state=not args.no_save_storage,
                 headless=not args.headed,
                 reuse_browser_context=None,
-                main_chart_symbol=args.main_symbol,
+                main_chart_symbol=gc_main_sym or args.main_symbol,
+                set_global_active_symbol=not gc_only,
                 enable_coinmap=False,
                 enable_tradingview=True,
                 clear_charts_before_capture=True,
@@ -3730,7 +3786,7 @@ def cmd_all(args: argparse.Namespace) -> None:
         stamp_pre = stamp_from_capture_paths(paths)
         from automation_tool.images import get_active_main_symbol
 
-        main_sym = get_active_main_symbol()
+        main_sym = gc_main_sym or get_active_main_symbol()
         gc_paths = capture_gocharting(
             gocharting_yaml=gc_yaml,
             charts_dir=charts_dir,
@@ -3739,7 +3795,7 @@ def cmd_all(args: argparse.Namespace) -> None:
             storage_state_path=storage,
             save_storage_state=not args.no_save_storage,
             headless=not args.headed,
-            main_chart_symbol=args.main_symbol,
+            main_chart_symbol=gc_main_sym or args.main_symbol,
             stamp_override=stamp_pre,
             clear_charts_before_capture=True,
             capture_symbols=("DXY", main_sym),
@@ -3779,7 +3835,7 @@ def cmd_all(args: argparse.Namespace) -> None:
         bad = list_invalid_chart_slots_for_stamp(
             charts_dir,
             stamp,
-            gocharting_cfg=load_gocharting_yaml(gc_yaml) if use_gc else None,
+            gocharting_cfg=(gc_cfg_override or load_gocharting_yaml(gc_yaml)) if use_gc else None,
         )
         stale_fn = is_gocharting_stale_chart_issue if use_gc else is_coinmap_stale_chart_issue
         stale = [x for x in bad if stale_fn(x)]
@@ -3815,7 +3871,7 @@ def cmd_all(args: argparse.Namespace) -> None:
                     password=s.gocharting_password,
                     save_storage_state=not args.no_save_storage,
                     headless=not args.headed,
-                    main_chart_symbol=getattr(args, "main_symbol", None),
+                    main_chart_symbol=gc_main_sym or getattr(args, "main_symbol", None),
                 )
             tv_cm_issues = [i for i in bad if i.source in ("coinmap", "tradingview")]
             if tv_cm_issues:
@@ -3830,7 +3886,7 @@ def cmd_all(args: argparse.Namespace) -> None:
                     tradingview_password=s.tradingview_password,
                     save_storage_state=not args.no_save_storage,
                     headless=not args.headed,
-                    main_chart_symbol=getattr(args, "main_symbol", None),
+                    main_chart_symbol=gc_main_sym or getattr(args, "main_symbol", None),
                 )
         except SystemExit:
             raise
@@ -3852,6 +3908,7 @@ def cmd_all(args: argparse.Namespace) -> None:
         gocharting_yaml=gc_yaml,
         charts_dir=charts_dir,
         stamp=stamp,
+        gocharting_cfg_override=gc_cfg_override,
     )
     capture_pngs = ordered_chart_images(charts_dir, stamp=stamp, **gc_openai_kw)
     require_openai(s)
@@ -3860,11 +3917,14 @@ def cmd_all(args: argparse.Namespace) -> None:
             charts_dir,
             stamp=stamp,
             gocharting_yaml=gc_yaml,
-            flow_label="all",
+            gocharting_cfg=gc_cfg_override,
+            flow_label="all-gc-only" if gc_only else "all",
         )
     payloads = ordered_chart_openai_payloads(charts_dir, stamp=stamp, **gc_openai_kw)
     payloads = _extend_payloads_with_footprint_json(
-        payloads, charts_dir, gocharting_cfg=load_gocharting_yaml(gc_yaml) if use_gc else None
+        payloads,
+        charts_dir,
+        gocharting_cfg=(gc_cfg_override or load_gocharting_yaml(gc_yaml)) if use_gc else None,
     )
     _warn_if_incomplete_chart_payloads(charts_dir, payloads)
     if not payloads:
@@ -3879,8 +3939,10 @@ def cmd_all(args: argparse.Namespace) -> None:
     max_images = args.max_images_per_call
     openai_model = resolved_openai_model(s, getattr(args, "model", None))
     if two_phase:
+        phase2_sym = gc_main_sym or "main pair"
         _log.info(
-            "all: OpenAI 2-batch chained | phase1=TradingView phase2=XAUUSD footprint JSON"
+            "all: OpenAI 2-batch chained | phase1=TradingView phase2=%s footprint JSON",
+            phase2_sym,
         )
 
     def _openai_all_work() -> PromptTwoStepResult:
@@ -3918,8 +3980,9 @@ def cmd_all(args: argparse.Namespace) -> None:
     print(out.full_text())
     _log.info("all: OpenAI xong | response_id=%s", out.final_response_id)
 
-    write_last_response_id(out.final_response_id)
-    write_last_all_response_id(out.final_response_id)
+    if not gc_only:
+        write_last_response_id(out.final_response_id)
+        write_last_all_response_id(out.final_response_id)
     if not args.no_telegram and out.after_charts:
         require_telegram(s)
         send_openai_output_to_telegram(
@@ -3933,76 +3996,83 @@ def cmd_all(args: argparse.Namespace) -> None:
     if out.after_charts:
         morning_obj = extract_json_object(out.after_charts)
         if morning_obj is not None:
-            write_morning_full_analysis(morning_obj)
+            morning_path = (
+                symbol_data_dir(GC1_MAIN_SYMBOL) / MORNING_FULL_ANALYSIS_FILENAME
+                if gc_only
+                else default_morning_full_analysis_path()
+            )
+            write_morning_full_analysis(morning_obj, path=morning_path)
             _log.info(
                 "all: đã ghi %s",
-                default_morning_full_analysis_path().name,
+                morning_path.name if gc_only else default_morning_full_analysis_path().name,
             )
         else:
             _log.warning(
                 "all: không extract được JSON object từ after_charts — không ghi %s",
-                default_morning_full_analysis_path().name,
+                MORNING_FULL_ANALYSIS_FILENAME,
             )
 
-        payload = parse_analysis_from_openai_text(out.after_charts)
-        if payload is not None and payload.prices:
-            trip = triple_from_zone_prices(payload.prices)
-            if trip is not None:
-                write_morning_baseline_prices(trip)
-                _log.info(
-                    "all: đã ghi %s",
-                    default_morning_baseline_prices_path().name,
+        if not gc_only:
+            payload = parse_analysis_from_openai_text(out.after_charts)
+            if payload is not None and payload.prices:
+                trip = triple_from_zone_prices(payload.prices)
+                if trip is not None:
+                    write_morning_baseline_prices(trip)
+                    _log.info(
+                        "all: đã ghi %s",
+                        default_morning_baseline_prices_path().name,
+                    )
+                from automation_tool.images import get_active_main_symbol
+
+                sym = get_active_main_symbol().strip().upper()
+                slot: SessionSlot = run_slot
+                zones = zones_from_analysis_payload(
+                    symbol=sym, payload=payload, source="all", session_slot=slot
                 )
-            from automation_tool.images import get_active_main_symbol
-
-            sym = get_active_main_symbol().strip().upper()
-            slot: SessionSlot = run_slot
-            zones = zones_from_analysis_payload(
-                symbol=sym, payload=payload, source="all", session_slot=slot
-            )
-            if zones:
-                write_zones_for_slot(symbol=sym, zones=zones, slot=slot, zones_dir=zones_dir)
-                _log.info(
-                    "all: đã ghi shard zones | slot=%s zones=%d | symbol=%s",
-                    slot,
-                    len(zones),
-                    sym,
+                if zones:
+                    write_zones_for_slot(symbol=sym, zones=zones, slot=slot, zones_dir=zones_dir)
+                    _log.info(
+                        "all: đã ghi shard zones | slot=%s zones=%d | symbol=%s",
+                        slot,
+                        len(zones),
+                        sym,
+                    )
+                else:
+                    _log.warning("all: parse JSON có prices nhưng không tạo được zones — không ghi shard")
+            elif out.after_charts.strip():
+                print(
+                    "Warning: could not parse analysis JSON for zones (no `prices` or empty).",
+                    file=sys.stderr,
                 )
-            else:
-                _log.warning("all: parse JSON có prices nhưng không tạo được zones — không ghi shard")
-        elif out.after_charts.strip():
-            print(
-                "Warning: could not parse analysis JSON for zones (no `prices` or empty).",
-                file=sys.stderr,
-            )
 
-        from automation_tool.ea_neverdie_zone_publish import maybe_publish_neverdie_after_cli
-        from automation_tool.images import get_active_main_symbol as _get_sym_publish
+            from automation_tool.ea_neverdie_zone_publish import maybe_publish_neverdie_after_cli
+            from automation_tool.images import get_active_main_symbol as _get_sym_publish
 
-        try:
-            maybe_publish_neverdie_after_cli(
-                symbol=_get_sym_publish().strip().upper(),
-                zones_dir=zones_dir,
-            )
-        except Exception as e:
-            _log.warning("all: ea-neverdie publish failed: %s", e)
+            try:
+                maybe_publish_neverdie_after_cli(
+                    symbol=_get_sym_publish().strip().upper(),
+                    zones_dir=zones_dir,
+                )
+            except Exception as e:
+                _log.warning("all: ea-neverdie publish failed: %s", e)
 
-    _run_all_second_flow(
-        s,
-        charts_dir=charts_dir,
-        analysis_prompt=prompt_all,
-        max_images_per_call=max_images,
-        chart_payloads=payloads,
-        no_telegram=args.no_telegram,
-        model=getattr(args, "model", None),
-        zones_dir=zones_dir,
-        session_slot=run_slot,
-        mt5_accounts_json=getattr(args, "mt5_accounts_json", None),
-        chart_stamp=stamp,
-        two_phase=two_phase,
-        structure_prompt=structure_prompt,
-        footprint_prompt=footprint_prompt,
-    )
+    if not gc_only:
+        _run_all_second_flow(
+            s,
+            charts_dir=charts_dir,
+            analysis_prompt=prompt_all,
+            max_images_per_call=max_images,
+            chart_payloads=payloads,
+            no_telegram=args.no_telegram,
+            model=getattr(args, "model", None),
+            zones_dir=zones_dir,
+            session_slot=run_slot,
+            mt5_accounts_json=getattr(args, "mt5_accounts_json", None),
+            chart_stamp=stamp,
+            two_phase=two_phase,
+            structure_prompt=structure_prompt,
+            footprint_prompt=footprint_prompt,
+        )
 
 
 def cmd_tv_alerts(args: argparse.Namespace) -> None:

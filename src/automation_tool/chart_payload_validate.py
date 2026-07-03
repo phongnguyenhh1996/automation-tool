@@ -349,9 +349,12 @@ def _tradingview_slot_validation_issue(
     """
     None if the slot has a valid OpenAI artifact (tvdatafeed JSON, https snapshot URL, or PNG).
     """
-    jp = charts_dir / f"{stamp}_tradingview_{sym}_{iv}.json"
-    up = charts_dir / f"{stamp}_tradingview_{sym}_{iv}.url"
-    pp = charts_dir / f"{stamp}_tradingview_{sym}_{iv}.png"
+    from automation_tool.images import gocharting_footprint_export_label, tradingview_file_symbol
+
+    file_sym = tradingview_file_symbol(sym)
+    jp = charts_dir / f"{stamp}_tradingview_{file_sym}_{iv}.json"
+    up = charts_dir / f"{stamp}_tradingview_{file_sym}_{iv}.url"
+    pp = charts_dir / f"{stamp}_tradingview_{file_sym}_{iv}.png"
 
     if jp.is_file():
         data, err = _load_json(jp)
@@ -477,12 +480,13 @@ def list_invalid_chart_slots_for_stamp(
 
                 cfg = _default_gocharting_cfg()
             from automation_tool.gocharting_ws_decode import footprint_ws_enabled
-            from automation_tool.images import GOCHARTING_GOLD_EXPORT_LABEL
+            from automation_tool.images import gocharting_footprint_export_label
 
+            fp_label = gocharting_footprint_export_label(main_sym)
             if footprint_ws_enabled(cfg):
                 if sym.upper() == "DXY":
                     continue
-                if sym.upper() != GOCHARTING_GOLD_EXPORT_LABEL:
+                if sym.upper() != fp_label.upper():
                     continue
                 fp = gocharting_footprint_ws_json_path(charts_dir, iv)
                 ok, r = validate_gocharting_footprint_ws_file(fp)

@@ -19,16 +19,31 @@ ChartOpenAIPayload = Tuple[str, Union[Path, str]]
 MAIN_CHART_SYMBOL_FILENAME = ".main_chart_symbol"
 GLOBAL_MAIN_CHART_SYMBOL_FILENAME = ".main_chart_symbol"
 DEFAULT_MAIN_CHART_SYMBOL = "XAUUSD"
+# COMEX gold future — main pair for ``all --gocharting --gc-only``.
+GC1_MAIN_SYMBOL = "GC1!"
 # GoCharting footprint filename slug for main gold pair (GC1! future, not spot XAUUSD).
 GOCHARTING_GOLD_EXPORT_LABEL = "GC"
+_GOLD_MAIN_SYMBOLS = frozenset({DEFAULT_MAIN_CHART_SYMBOL, GC1_MAIN_SYMBOL, "GC1"})
 
 
 def gocharting_footprint_export_label(main_sym: str) -> str:
-    """Filename symbol for main-pair GoCharting exports (``XAUUSD`` → ``GC``)."""
+    """Filename symbol for main-pair GoCharting exports (``XAUUSD`` / ``GC1!`` → ``GC``)."""
     m = (main_sym or "").strip().upper() or DEFAULT_MAIN_CHART_SYMBOL
-    if m == DEFAULT_MAIN_CHART_SYMBOL:
+    if m in _GOLD_MAIN_SYMBOLS:
         return GOCHARTING_GOLD_EXPORT_LABEL
     return m
+
+
+def main_symbol_file_slug(sym: str) -> str:
+    """Sanitized symbol for artifact filenames (``GC1!`` → ``GC1`` after ``!`` → ``_`` + strip)."""
+    t = (sym or "").strip().upper() or DEFAULT_MAIN_CHART_SYMBOL
+    slug = re.sub(r"[^\w.-]+", "_", t).strip("_")[:40]
+    return slug or "sym"
+
+
+def tradingview_file_symbol(logic_sym: str) -> str:
+    """Filename segment in ``{stamp}_tradingview_{sym}_{interval}.*``."""
+    return main_symbol_file_slug(logic_sym)
 
 
 def footprint_bid_ask_openai_payloads(charts_dir: Path) -> list[ChartOpenAIPayload]:
@@ -290,11 +305,11 @@ def persist_openai_footprint_json_debug(
 
 
 def normalize_main_chart_symbol(s: str) -> str:
-    """Uppercase forex/crypto pair id for filenames (watchlist id on Coinmap / TV label)."""
+    """Uppercase instrument id for filenames (watchlist / Coinmap / TV label)."""
     t = (s or "").strip().upper()
-    if not re.match(r"^[A-Z0-9]{4,16}$", t):
+    if not re.match(r"^[A-Z0-9!]{3,16}$", t):
         raise ValueError(
-            f"main symbol must be 4-16 letters/digits (e.g. XAUUSD, USDJPY), got {s!r}"
+            f"main symbol must be 3-16 letters/digits (optional !), e.g. XAUUSD, GC1!, got {s!r}"
         )
     return t
 
@@ -978,9 +993,10 @@ def ordered_chart_openai_payloads(
                 gocharting_detail_max_back_steps=gocharting_detail_max_back_steps,
             )
         else:
-            jp = charts_dir / f"{st}_tradingview_{sym}_{iv}.json"
-            up = charts_dir / f"{st}_tradingview_{sym}_{iv}.url"
-            pp = charts_dir / f"{st}_tradingview_{sym}_{iv}.png"
+            tv_sym = tradingview_file_symbol(sym)
+            jp = charts_dir / f"{st}_tradingview_{tv_sym}_{iv}.json"
+            up = charts_dir / f"{st}_tradingview_{tv_sym}_{iv}.url"
+            pp = charts_dir / f"{st}_tradingview_{tv_sym}_{iv}.png"
             if jp.is_file():
                 out.append(("json", jp))
             elif up.is_file():
@@ -1058,7 +1074,11 @@ def ordered_chart_images(
     order = effective_chart_image_order(charts_dir)
     out: list[Path] = []
     for src, sym, iv in order:
-        p = charts_dir / f"{st}_{src}_{sym}_{iv}.png"
+        if src == "tradingview":
+            tv_sym = tradingview_file_symbol(sym)
+            p = charts_dir / f"{st}_tradingview_{tv_sym}_{iv}.png"
+        else:
+            p = charts_dir / f"{st}_{src}_{sym}_{iv}.png"
         if p.is_file():
             out.append(p)
         if src == "gocharting":

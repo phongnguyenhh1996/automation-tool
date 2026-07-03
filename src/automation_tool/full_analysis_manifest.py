@@ -35,10 +35,13 @@ def _slot_key(source: str, symbol: str, interval: str) -> tuple[str, str, str]:
 
 
 def _resolve_tradingview_paths(charts_dir: Path, stamp: str, sym: str, iv: str) -> list[Path]:
+    from automation_tool.images import tradingview_file_symbol
+
     iv_slug = re.sub(r"[^\w]+", "_", iv).strip("_")[:20] or "iv"
-    jp = charts_dir / f"{stamp}_tradingview_{sym}_{iv_slug}.json"
-    up = charts_dir / f"{stamp}_tradingview_{sym}_{iv_slug}.url"
-    pp = charts_dir / f"{stamp}_tradingview_{sym}_{iv_slug}.png"
+    file_sym = tradingview_file_symbol(sym)
+    jp = charts_dir / f"{stamp}_tradingview_{file_sym}_{iv_slug}.json"
+    up = charts_dir / f"{stamp}_tradingview_{file_sym}_{iv_slug}.url"
+    pp = charts_dir / f"{stamp}_tradingview_{file_sym}_{iv_slug}.png"
     if jp.is_file():
         return [jp]
     if up.is_file():

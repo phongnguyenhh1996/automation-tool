@@ -28,6 +28,7 @@ from automation_tool.prompts import responses_input_messages
 from automation_tool.images import (
     CHART_SLOT_COUNT,
     DEFAULT_MAIN_CHART_SYMBOL,
+    GC1_MAIN_SYMBOL,
     OPENAI_PAYLOAD_MAX,
     ChartOpenAIPayload,
     _detail_back_step_from_stem,
@@ -95,9 +96,54 @@ _PHAN_TICH_CHAM_DIEM_FULL_HINT = (
     "absorption, VWAP/POC) rồi `→ Phân tích chấm điểm:` — xem định dạng trong system-prompt.md.\n"
 )
 
+_GC1_RULES_EQUIVALENCE_HINT = (
+    "GC1! (COMEX Gold Future) là cặp chính thay XAUUSD spot.\n"
+    "Áp dụng hết mọi quy tắc phân tích/chấm điểm/lọc lệnh dành cho XAUUSD trong playbook và Schema A "
+    "(8 bước §1.3, hop_luu 4 nhóm, plan_chinh/plan_phu/scalp, premium-discount, session, anti-sweep, RR, …).\n"
+    "Mọi giá vùng, entry, SL, TP, footprint level và `prices[].value` phải theo thang giá GC1! — "
+    "không dùng giá spot XAUUSD.\n"
+    "Footprint đính kèm là COMEX GC1! native (footprint_combined_*.json); structure TradingView cũng chart GC1!.\n"
+)
+
+_COMBINED_FOOTPRINT_HINT = (
+    "Footprint COMEX GC1! native (footprint_combined_15m.json và footprint_combined_5m.json): "
+    "mỗi nến có ohlc futures, footprint[] (buy/sell volume từng level, tick 0.1), "
+    "bar_flow {delta, cum_delta, max_delta, min_delta, vwap, buy_volume, sell_volume}.\n"
+)
+
+
+def _is_gc1_main_symbol(sym: str) -> bool:
+    return (sym or "").strip().upper() in (GC1_MAIN_SYMBOL, "GC1")
+
+
+def _gc1_rules_hint(sym: str) -> str:
+    return _GC1_RULES_EQUIVALENCE_HINT if _is_gc1_main_symbol(sym) else ""
+
+
+def _footprint_desc_for_main(
+    sym: str,
+    *,
+    gc_native_footprint: bool = False,
+) -> str:
+    if gc_native_footprint or _is_gc1_main_symbol(sym):
+        fp_line = (
+            f"Footprint COMEX {sym}: footprint_combined_15m.json và footprint_combined_5m.json "
+            "(ohlc futures + footprint[] buy/sell + bar_flow delta/CVD/VWAP).\n"
+        )
+        hint = _COMBINED_FOOTPRINT_HINT
+    else:
+        fp_line = (
+            f"Footprint spot {sym}: {_prepared_footprint_pair_desc(sym)} "
+            "(ohlc spot + footprint[] buy/sell volume + bar_flow delta/CVD/VWAP).\n"
+        )
+        hint = _PREPARED_FOOTPRINT_HINT
+    return fp_line + hint + _GOCHARTING_CHART_READ_GUIDE
+
 
 def _gocharting_main_footprint_label(main_symbol: str) -> str:
     sym = (main_symbol or "").strip().upper()
+    if _is_gc1_main_symbol(sym):
+        return f"{GC1_MAIN_SYMBOL} COMEX futures"
     if sym == "XAUUSD":
         return MAIN_SPOT_FOOTPRINT_LABEL
     return sym or DEFAULT_MAIN_CHART_SYMBOL
@@ -134,6 +180,7 @@ def default_analysis_prompt(
     main_symbol: str | None = None,
     *,
     footprint_source: str = "gocharting",
+    gc_native_footprint: bool = False,
 ) -> str:
     """
     Default user message for multimodal analysis (GoCharting footprint workflow).
@@ -153,15 +200,14 @@ def default_analysis_prompt(
         f"TradingView {sym} (H4, H1, M15, M15 Session Liquidity Check / ICT Killzones, M5) "
         "(snapshot URL/PNG hoặc JSON OHLC tvdatafeed) → "
         "GoCharting DXY M15 (PNG overview) → "
-        f"Footprint spot {sym}: {_prepared_footprint_pair_desc(sym)} "
-        "(ohlc spot + footprint[] buy/sell volume + bar_flow delta/CVD/VWAP).\n"
-        f"{_PREPARED_FOOTPRINT_HINT}"
-        f"{_GOCHARTING_CHART_READ_GUIDE}"
+        f"{_footprint_desc_for_main(sym, gc_native_footprint=gc_native_footprint)}"
     )
     _ = footprint_source  # legacy callers may pass this; prompts are GoCharting-only
+    gc_hint = _gc1_rules_hint(sym)
     return (
         "[FULL_ANALYSIS]\n"
         f"Cặp chính: {sym}.\n"
+        f"{gc_hint}"
         f"Đính kèm theo thứ tự, tối đa {OPENAI_PAYLOAD_MAX} payload multimodal "
         f"{footprint_desc}"
         f"{_PHAN_TICH_CHAM_DIEM_FULL_HINT}"
@@ -184,12 +230,18 @@ def _resolved_main_symbol(main_symbol: str | None = None) -> str:
     return sym
 
 
-def full_analysis_structure_prompt(main_symbol: str | None = None) -> str:
+def full_analysis_structure_prompt(
+    main_symbol: str | None = None,
+    *,
+    gc_native_footprint: bool = False,
+) -> str:
     """Batch 1/2: TradingView + DXY GoCharting overview PNG — structure, POI, candidate zones."""
     sym = _resolved_main_symbol(main_symbol)
+    gc_hint = _gc1_rules_hint(sym)
     return (
         "[FULL_ANALYSIS — BƯỚC 1/2: CẤU TRÚC GIÁ]\n"
         f"Cặp chính: {sym}.\n"
+        f"{gc_hint}"
         "Đính kèm (theo thứ tự):\n"
         "- TradingView: DXY H4, H1, M15 → "
         f"{sym} H4, H1, M15, M15 Session Liquidity Check / ICT Killzones, M5 "
@@ -198,6 +250,7 @@ def full_analysis_structure_prompt(main_symbol: str | None = None) -> str:
         "Nhiệm vụ: phân tích cấu trúc giá (DXY macro bias + trend/POI cặp chính) và liệt kê "
         "các **vùng có cấu trúc tốt** (OB/FVG/HL, premium-discount hợp lệ) làm candidate cho batch 2.\n"
         "KHÔNG chấm điểm footprint (chưa có footprint prepared JSON cặp chính).\n"
+        f"Schema `context`: key cặp chính là `{sym}` (thay XAUUSD khi phân tích GC1!).\n"
         "Trả duy nhất một block ```json với object:\n"
         "{\n"
         '  "step": 1,\n'
@@ -221,24 +274,43 @@ def full_analysis_structure_prompt(main_symbol: str | None = None) -> str:
     )
 
 
-def full_analysis_footprint_prompt(main_symbol: str | None = None) -> str:
-    """Batch 2/2: XAUUSD spot footprint only (no DXY) — scoring and full Schema A."""
+def full_analysis_footprint_prompt(
+    main_symbol: str | None = None,
+    *,
+    gc_native_footprint: bool = False,
+) -> str:
+    """Batch 2/2: main-pair footprint only (no DXY) — scoring and full Schema A."""
     sym = _resolved_main_symbol(main_symbol)
+    gc_hint = _gc1_rules_hint(sym)
+    if gc_native_footprint or _is_gc1_main_symbol(sym):
+        fp_attach = (
+            "footprint_combined_15m.json và footprint_combined_5m.json "
+            "(footprint[] buy/sell volume từng level + bar_flow delta/CVD/VWAP).\n"
+            f"{_COMBINED_FOOTPRINT_HINT}"
+        )
+        fp_task = f"- Footprint {sym} M15/M5: trap, CVD ≥3 nến, stacked, absorption, VWAP/POC\n"
+    else:
+        fp_attach = (
+            f"Footprint spot **{sym}**:\n"
+            f"- {_prepared_footprint_pair_desc(sym)} "
+            "(footprint[] buy/sell volume từng level + bar_flow delta/CVD/VWAP).\n"
+            f"{_PREPARED_FOOTPRINT_HINT}"
+        )
+        fp_task = f"- Footprint {sym} M15/M5: trap, CVD ≥3 nến, stacked, absorption, VWAP/POC\n"
     return (
         "[FULL_ANALYSIS — BƯỚC 2/2: FOOTPRINT & KẾT LUẬN]\n"
         f"Cặp chính: {sym}.\n"
+        f"{gc_hint}"
         "Tiếp nối bước 1: dùng `context` và `candidate_zones` từ response trước "
         "(cùng thread OpenAI). DXY macro bias đã xác định ở bước 1 — **không** đính kèm lại DXY.\n"
-        f"Đính kèm footprint spot **{sym}**:\n"
-        f"- {_prepared_footprint_pair_desc(sym)} "
-        "(footprint[] buy/sell volume từng level + bar_flow delta/CVD/VWAP).\n"
-        f"{_PREPARED_FOOTPRINT_HINT}"
+        f"Đính kèm footprint **{sym}**:\n"
+        f"- {fp_attach}"
         f"{_GOCHARTING_CHART_READ_GUIDE}"
         "Nhiệm vụ (playbook §1.3 bước 5–8):\n"
-        "- Footprint XAUUSD M15/M5: trap, CVD ≥3 nến, stacked, absorption, VWAP/POC\n"
+        f"{fp_task}"
         "- Filters (anti-sweep, RR, session)\n"
         "- Chấm điểm hop_luu theo mục 0.3 (4 nhóm)\n"
-        "- Trả đầy đủ Schema A: phan_tich_cham_diem + output_ngan_gon + prices[] + intraday_hanh_dong\n"
+        "- Trả đầy đủ Schema A: phan_tich_cham_diem + output_ngan_gon + prices[] (plan_chinh/plan_phu/scalp) + intraday_hanh_dong\n"
         f"{_PHAN_TICH_CHAM_DIEM_FULL_HINT}"
     )
 
