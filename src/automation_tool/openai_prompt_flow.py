@@ -514,6 +514,7 @@ def _json_file_header_and_body(
     *,
     max_chars: int,
     chart_stamp: str | None = None,
+    gocharting_cfg: dict[str, Any] | None = None,
 ) -> tuple[str, str]:
     """
     Header (input_text) + body string for upload. Slim only Coinmap paths when enabled;
@@ -538,6 +539,7 @@ def _json_file_header_and_body(
                 path,
                 data,
                 chart_stamp=chart_stamp,
+                gocharting_cfg=gocharting_cfg,
             )
         compact = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     except json.JSONDecodeError:
@@ -610,6 +612,7 @@ def _prepare_json_headers_bodies(
     *,
     max_json_chars: int,
     chart_stamp: str | None = None,
+    gocharting_cfg: dict[str, Any] | None = None,
 ) -> list[tuple[str, str]]:
     """Return ``(header, body)`` per path, same order as ``paths``."""
     if not paths:
@@ -617,7 +620,14 @@ def _prepare_json_headers_bodies(
     if len(paths) == 1:
         p0 = paths[0]
         mx0 = _max_json_chars_for_path(p0, default_max=max_json_chars)
-        return [_json_file_header_and_body(p0, max_chars=mx0, chart_stamp=chart_stamp)]
+        return [
+            _json_file_header_and_body(
+                p0,
+                max_chars=mx0,
+                chart_stamp=chart_stamp,
+                gocharting_cfg=gocharting_cfg,
+            )
+        ]
     n = len(paths)
     workers = min(n, max(4, (os.cpu_count() or 2) * 2))
     with ThreadPoolExecutor(max_workers=workers) as ex:
@@ -627,6 +637,7 @@ def _prepare_json_headers_bodies(
                     pp,
                     max_chars=_max_json_chars_for_path(pp, default_max=max_json_chars),
                     chart_stamp=chart_stamp,
+                    gocharting_cfg=gocharting_cfg,
                 ),
                 paths,
             )
@@ -722,6 +733,7 @@ def _build_mixed_chart_user_content(
     *,
     max_json_chars: int,
     chart_stamp: str | None = None,
+    gocharting_cfg: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     json_paths = [p for k, p in payloads if k == "json" and isinstance(p, Path)]
     csv_paths = [p for k, p in payloads if k == "csv" and isinstance(p, Path)]
@@ -730,6 +742,7 @@ def _build_mixed_chart_user_content(
             json_paths,
             max_json_chars=max_json_chars,
             chart_stamp=chart_stamp,
+            gocharting_cfg=gocharting_cfg,
         )
     )
     mx_csv = _default_max_gocharting_csv_chars()
@@ -924,6 +937,7 @@ def _run_chained_payload_batches(
     previous_response_id: str | None = None,
     on_first_model_text: Optional[Callable[[str], None]] = None,
     batch_prompt_suffix: bool = True,
+    gocharting_cfg: dict[str, Any] | None = None,
 ) -> tuple[str | None, list[str]]:
     """
     Run one or more chained API batches for ``payloads``.
@@ -956,7 +970,11 @@ def _run_chained_payload_batches(
             )
         try:
             content = _build_mixed_chart_user_content(
-                p_text, batch, max_json_chars=max_json_chars, chart_stamp=chart_stamp
+                p_text,
+                batch,
+                max_json_chars=max_json_chars,
+                chart_stamp=chart_stamp,
+                gocharting_cfg=gocharting_cfg,
             )
             kwargs: dict[str, Any] = {
                 **common,
@@ -1014,6 +1032,7 @@ def run_full_analysis_two_phase_flow(
     on_first_model_text: Optional[Callable[[str], None]] = None,
     model: str | None = None,
     chart_stamp: str | None = None,
+    gocharting_cfg: dict | None = None,
 ) -> PromptTwoStepResult:
     """
     FULL_ANALYSIS in two chained phases: TradingView structure, then GoCharting footprint.
@@ -1059,6 +1078,7 @@ def run_full_analysis_two_phase_flow(
         model=model,
         on_first_model_text=on_first_model_text,
         batch_prompt_suffix=False,
+        gocharting_cfg=gocharting_cfg,
     )
     assert prev_id is not None
     text_1 = "\n\n---\n\n".join(phase1_parts)
@@ -1075,6 +1095,7 @@ def run_full_analysis_two_phase_flow(
         model=model,
         previous_response_id=prev_id,
         batch_prompt_suffix=True,
+        gocharting_cfg=gocharting_cfg,
     )
     assert prev_id is not None
     text_2 = "\n\n---\n\n".join(phase2_parts)
@@ -1105,6 +1126,7 @@ def run_analysis_responses_flow(
     purge_openai_user_data_files: bool | None = None,
     model: str | None = None,
     chart_stamp: str | None = None,
+    gocharting_cfg: dict | None = None,
 ) -> PromptTwoStepResult:
     """
     Một lần (hoặc nhiều batch nếu quá nhiều ảnh): user message multimodal với ``analysis_prompt``
@@ -1193,6 +1215,7 @@ def run_analysis_responses_flow(
         model=model,
         on_first_model_text=on_first_model_text,
         batch_prompt_suffix=True,
+        gocharting_cfg=gocharting_cfg,
     )
     after = "\n\n---\n\n".join(assistant_parts)
     assert prev_id is not None
@@ -1573,6 +1596,7 @@ def run_single_followup_responses(
         json_payloads + extra_payloads,
         max_json_chars=mx_json,
         chart_stamp=chart_stamp,
+        gocharting_cfg=gc_cfg,
     )
     create_kw: dict[str, Any] = {
         **common,

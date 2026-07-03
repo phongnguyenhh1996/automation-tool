@@ -1950,6 +1950,7 @@ def _run_openai_flow(
     two_phase: bool = False,
     structure_prompt: str | None = None,
     footprint_prompt: str | None = None,
+    gocharting_cfg: dict | None = None,
 ) -> PromptTwoStepResult:
     vs_ids = vector_store_ids if vector_store_ids is not None else s.openai_vector_store_ids
     common_kw: dict[str, object] = {
@@ -1985,11 +1986,13 @@ def _run_openai_flow(
             model=model,
             reasoning_effort=reasoning_effort,
             chart_stamp=chart_stamp,
+            gocharting_cfg=gocharting_cfg,
         )
     return run_analysis_responses_flow(
         analysis_prompt=analysis_prompt,
         purge_json_attachment_storage=purge_json_attachment_storage,
         purge_openai_user_data_files=purge_openai_user_data_files,
+        gocharting_cfg=gocharting_cfg,
         **common_kw,  # type: ignore[arg-type]
     )
 
@@ -3801,6 +3804,7 @@ def cmd_all(args: argparse.Namespace) -> None:
             capture_symbols=("DXY", main_sym),
             detail_history_steps=GOCHARTING_ALL_FLOW_WS_DETAIL_BACK_STEPS,
             mt5_accounts_json=_resolved_mt5_accounts_json(args),
+            gocharting_cfg_override=gc_cfg_override,
         )
         paths.extend(gc_paths)
     else:
@@ -3912,13 +3916,13 @@ def cmd_all(args: argparse.Namespace) -> None:
     )
     capture_pngs = ordered_chart_images(charts_dir, stamp=stamp, **gc_openai_kw)
     require_openai(s)
-    if use_gc:
+    if use_gc and not gc_only:
         _persist_openai_footprint_json_debug(
             charts_dir,
             stamp=stamp,
             gocharting_yaml=gc_yaml,
             gocharting_cfg=gc_cfg_override,
-            flow_label="all-gc-only" if gc_only else "all",
+            flow_label="all",
         )
     payloads = ordered_chart_openai_payloads(charts_dir, stamp=stamp, **gc_openai_kw)
     payloads = _extend_payloads_with_footprint_json(
@@ -3959,6 +3963,7 @@ def cmd_all(args: argparse.Namespace) -> None:
             two_phase=two_phase,
             structure_prompt=structure_prompt,
             footprint_prompt=footprint_prompt,
+            gocharting_cfg=gc_cfg_override if use_gc else None,
         )
 
     try:

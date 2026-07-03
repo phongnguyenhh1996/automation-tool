@@ -108,6 +108,29 @@ def test_gocharting_filter_xauusd_alias_for_gc1() -> None:
     assert "DXY" in syms
 
 
+def test_json_header_body_gc_native_skips_gc_to_spot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """footprint_combined upload must not invoke gc_to_spot when cfg override disables it."""
+    fp_dir = tmp_path / "footprint_images"
+    fp_dir.mkdir()
+    src = fp_dir / "footprint_combined_15m.json"
+    src.write_text(
+        '{"symbol":"COMEX:GC1!","candles":[{"time_gmt7":"09:00","ohlc":{"open":3400,"high":3401,"low":3399,"close":3400.5}}]}\n',
+        encoding="utf-8",
+    )
+    cfg = {"footprint_ws": {"enabled": True, "gc_to_spot": {"enabled": False}, "mt5_spot": False}}
+
+    def _fail_mt5(**_kwargs):
+        raise AssertionError("gc_to_spot must not call MT5 when disabled")
+
+    monkeypatch.setattr(
+        "automation_tool.gocharting_gc_spot_convert.resolve_mt5_spot_payload",
+        _fail_mt5,
+    )
+    from automation_tool.openai_prompt_flow import _json_file_header_and_body
+
+    _json_file_header_and_body(src, max_chars=100_000, gocharting_cfg=cfg)
+
+
 def test_cmd_all_gc_only_skips_side_effects(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """gc-only aborts early on missing capture; verify zones/last_response not touched when mocked through."""
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")

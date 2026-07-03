@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import logging
 import re
 from datetime import datetime
@@ -974,6 +975,7 @@ def capture_gocharting(
     detail_history_steps: Optional[int] = None,
     overview_capture: bool = True,
     mt5_accounts_json: Optional[Path] = None,
+    gocharting_cfg_override: dict | None = None,
 ) -> list[Path]:
     """
     Capture GoCharting footprint charts: PNG screenshot + CSV export per (symbol, interval).
@@ -996,7 +998,11 @@ def capture_gocharting(
                 f"(or existing storage state at {storage})."
             )
 
-    cfg = load_gocharting_yaml(gocharting_yaml)
+    cfg = (
+        copy.deepcopy(gocharting_cfg_override)
+        if gocharting_cfg_override is not None
+        else load_gocharting_yaml(gocharting_yaml)
+    )
     _ensure_dir(charts_dir)
 
     if clear_charts_before_capture is None:
