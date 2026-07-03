@@ -78,7 +78,7 @@ _GOCHARTING_BID_ASK_HINT = (
 _GOCHARTING_CHART_READ_GUIDE = (
     "Hướng dẫn đọc footprint prepared JSON:\n"
     "- footprint[]: buy/sell volume từng price level (giá spot broker).\n"
-    "- bar_flow: delta, cum_delta, vwap theo nến.\n"
+    "- bar_flow: delta, cum_delta, vwap = VWAP session tích lũy đến nến đó.\n"
     "- POC/VWAP: suy từ footprint[] và bar_flow.\n"
 )
 
@@ -492,7 +492,7 @@ def _json_file_header_and_body(
             f"[Footprint prepared — {iv} — file: {path.name}]\n"
             f"Instrument: spot {sym_label}. Each candle: time_gmt7, ohlc (spot broker), "
             "footprint[] (buy/sell volume per price block), "
-            "bar_flow {delta, cum_delta, max_delta, min_delta, vwap, buy_volume, sell_volume}, "
+            "bar_flow {delta, cum_delta, max_delta, min_delta, vwap (session cumulative), buy_volume, sell_volume}, "
             "orderflow.stacked_in_candle.\n"
         )
     elif path.name.startswith("footprint_combined_") and path.suffix.lower() == ".json":
@@ -501,7 +501,7 @@ def _json_file_header_and_body(
             f"[Footprint prepared — {iv} — file: {path.name}]\n"
             f"Instrument: spot {DEFAULT_MAIN_CHART_SYMBOL}. Each candle: time_gmt7, ohlc, "
             "footprint[] (buy/sell volume per price block), "
-            "bar_flow {delta, cum_delta, vwap, buy_volume, sell_volume}.\n"
+            "bar_flow {delta, cum_delta, vwap (session cumulative), buy_volume, sell_volume}.\n"
         )
     elif path.name.startswith("footprint_bid_ask_") and path.suffix.lower() == ".json":
         iv = path.stem.replace("footprint_bid_ask_", "")

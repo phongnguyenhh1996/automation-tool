@@ -133,7 +133,12 @@ def test_parse_gc_csv_and_enrich_bar_flow(tmp_path: Path) -> None:
         "candles": [
             {
                 "time_gmt7": time_key,
-                "ohlc": {"close": 4023.5},
+                "ohlc": {
+                    "open": 4023.5,
+                    "high": 4024.5,
+                    "low": 4022.5,
+                    "close": 4023.5,
+                },
                 "footprint": [],
             }
         ]
@@ -147,7 +152,7 @@ def test_parse_gc_csv_and_enrich_bar_flow(tmp_path: Path) -> None:
     assert bar_flow["delta"] == -5
     assert "close" not in bar_flow
     assert "open" not in bar_flow
-    assert bar_flow["vwap"] == pytest.approx(4024.0)
+    assert bar_flow["vwap"] == pytest.approx(4023.5)
     assert bar_flow["buyvwap"] == pytest.approx(4024.5)
     assert bar_flow["sellvwap"] == pytest.approx(4022.5)
     assert "source" not in out
@@ -161,7 +166,7 @@ def test_shift_bar_flow_prices_includes_buyvwap_sellvwap() -> None:
         "low": 4014.0,
         "close": 4019.0,
         "vwap": 4017.04,
-        "session_vwap": 4016.5,
+        "bar_vwap": 4017.04,
         "buyvwap": 4031.0,
         "sellvwap": 4030.0,
         "buy_vwap": 4031.5,
@@ -172,7 +177,7 @@ def test_shift_bar_flow_prices_includes_buyvwap_sellvwap() -> None:
     for key in ("open", "high", "low", "close"):
         assert key not in out
     assert out["vwap"] == pytest.approx(4003.31)
-    assert out["session_vwap"] == pytest.approx(4002.77)
+    assert out["bar_vwap"] == pytest.approx(4003.31)
     assert out["buyvwap"] == pytest.approx(4017.27)
     assert out["sellvwap"] == pytest.approx(4016.27)
     assert out["buy_vwap"] == pytest.approx(4017.77)
@@ -190,12 +195,11 @@ def test_enrich_ws_bar_flow_shifts_session_profile_with_latest_basis() -> None:
         "candles": [
             {
                 "time_gmt7": time_early,
-                "ohlc": {"close": 4019.0},
+                "ohlc": {"open": 4015.0, "high": 4016.0, "low": 4014.0, "close": 4015.0},
                 "bar_flow": {
                     "delta": 10,
                     "volume": 100,
-                    "vwap": 4019.5,
-                    "session_vwap": 4019.0,
+                    "bar_vwap": 4015.5,
                 },
                 "session_profile": {
                     "poc": 4019.0,
@@ -207,12 +211,11 @@ def test_enrich_ws_bar_flow_shifts_session_profile_with_latest_basis() -> None:
             },
             {
                 "time_gmt7": time_late,
-                "ohlc": {"close": 4020.0},
+                "ohlc": {"open": 4016.0, "high": 4017.0, "low": 4015.0, "close": 4016.0},
                 "bar_flow": {
                     "delta": 5,
                     "volume": 50,
-                    "vwap": 4020.0,
-                    "session_vwap": 4019.8,
+                    "bar_vwap": 4016.0,
                 },
                 "session_profile": {
                     "poc": 4019.0,
@@ -246,8 +249,8 @@ def test_enrich_ws_bar_flow_shifts_session_profile_with_latest_basis() -> None:
     assert sp["val"] == pytest.approx(4022.5)
     assert sp["vwap"] == pytest.approx(4024.0)
     assert out["session_profiles"][-1]["poc"] == sp["poc"]
-    assert out["candles"][0]["bar_flow"]["session_vwap"] == pytest.approx(4023.0)
-    assert out["candles"][-1]["bar_flow"]["session_vwap"] == pytest.approx(4024.3)
+    assert out["candles"][0]["bar_flow"]["vwap"] == pytest.approx(4015.0)
+    assert out["candles"][-1]["bar_flow"]["vwap"] == pytest.approx(4015.3)
 
 
 def test_convert_footprint_drops_unmatched_candles() -> None:

@@ -308,7 +308,8 @@ def bar_flow_from_ws_candle(
     """
     Build CSV-equivalent ``bar_flow`` from WS ``ending_summary`` + ``footprint[]`` + ``ohlc``.
 
-  ``close_delta`` maps to CSV ``Delta``; VWAP columns are computed from footprint levels.
+    ``close_delta`` maps to CSV ``Delta``. Per-bar footprint VWAP → ``bar_vwap``;
+    session cumulative VWAP is set on ``vwap`` in :func:`enrich_footprint_document_with_ws_bar_flow`.
     """
     es = candle.get("ending_summary") if isinstance(candle.get("ending_summary"), dict) else {}
     totals = candle.get("totals") if isinstance(candle.get("totals"), dict) else {}
@@ -334,7 +335,7 @@ def bar_flow_from_ws_candle(
         "cot_low": _ending_summary_int(es, "cot_low"),
     }
     if vwap is not None:
-        out["vwap"] = vwap
+        out["bar_vwap"] = vwap
     if buyvwap is not None:
         out["buyvwap"] = buyvwap
     if sellvwap is not None:
@@ -405,6 +406,10 @@ def enrich_footprint_document_with_ws_bar_flow(
         if time_key and time_key in by_time:
             block["bar_flow"] = dict(by_time[time_key])
         candles_out.append(block)
+
+    from automation_tool.gocharting_session_profile import apply_running_session_vwap_to_candles
+
+    apply_running_session_vwap_to_candles(candles_out, price_precision=pp)
 
     out = dict(doc)
     out["candles"] = candles_out

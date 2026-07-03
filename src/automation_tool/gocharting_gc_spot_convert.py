@@ -563,6 +563,7 @@ def _parse_gc_csv_bar_flow_rows(text: str) -> dict[str, dict[str, Any]]:
 
 _BAR_FLOW_SHIFT_PRICE_KEYS = (
     "vwap",
+    "bar_vwap",
     "session_vwap",
     "buy_vwap",
     "sell_vwap",
@@ -611,7 +612,7 @@ def shift_footprint_session_levels_to_spot(
     """
     Shift session POC/VAH/VAL/VWAP by the **latest** candle basis.
 
-    Per-candle ``bar_flow.session_vwap`` is shifted separately (each bar's own basis)
+    Per-candle ``bar_flow.vwap`` (running session VWAP) is shifted separately (each bar's own basis)
     in :func:`_shift_bar_flow_prices` during bar_flow enrich.
     """
     from automation_tool.gocharting_session_profile import shift_session_profile_prices
@@ -697,6 +698,12 @@ def enrich_prepared_footprint_from_gc_csv(
 
     validate_match_ratio(matched, len(candles_raw), cfg, label="CSV bar_flow merge")
 
+    from automation_tool.gocharting_session_profile import apply_running_session_vwap_to_candles
+    from automation_tool.gocharting_ws_decode import _price_precision_from_doc
+
+    pp = _price_precision_from_doc(doc)
+    apply_running_session_vwap_to_candles(candles_out, price_precision=pp)
+
     out = dict(doc)
     out["candles"] = candles_out
     return shift_footprint_session_levels_to_spot(out, basis_index=basis_index, cfg=cfg)
@@ -731,6 +738,13 @@ def enrich_prepared_footprint_from_ws_bar_flow(
     validate_match_ratio(matched, len(candles_raw), cfg, label="WS bar_flow merge")
     out = dict(doc)
     out["candles"] = candles_out
+    from automation_tool.gocharting_session_profile import apply_running_session_vwap_to_candles
+    from automation_tool.gocharting_ws_decode import _price_precision_from_doc
+
+    apply_running_session_vwap_to_candles(
+        candles_out,
+        price_precision=_price_precision_from_doc(out),
+    )
     return shift_footprint_session_levels_to_spot(out, basis_index=basis_index, cfg=cfg)
 
 

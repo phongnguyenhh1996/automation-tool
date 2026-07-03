@@ -202,6 +202,25 @@ def bar_flow_typical_price_volume(bar_flow: dict[str, Any]) -> tuple[Optional[fl
     return ap, vol
 
 
+def accumulate_session_vwap_from_candle(
+    sum_apv: float,
+    sum_vol: int,
+    candle: dict[str, Any],
+    *,
+    price_precision: int,
+) -> tuple[float, int, Optional[float]]:
+    """Update running session VWAP with one candle; returns ``(sum_apv, sum_vol, session_vwap)``."""
+    vol = _candle_volume(candle)
+    ap = _candle_average_price(candle, price_precision=price_precision)
+    if ap is not None and vol > 0:
+        sum_apv += ap * vol
+        sum_vol += vol
+    if sum_vol <= 0:
+        return sum_apv, sum_vol, None
+    precision = max(0, int(price_precision))
+    return sum_apv, sum_vol, round(sum_apv / sum_vol, precision)
+
+
 def accumulate_session_vwap_state(
     sum_apv: float,
     sum_vol: int,
@@ -218,6 +237,47 @@ def accumulate_session_vwap_state(
         return sum_apv, sum_vol, None
     precision = max(0, int(price_precision))
     return sum_apv, sum_vol, round(sum_apv / sum_vol, precision)
+
+
+def apply_running_session_vwap_to_candles(
+    candles: list[dict[str, Any]],
+    *,
+    price_precision: int,
+) -> None:
+    """Set each ``bar_flow.vwap`` to cumulative session VWAP at that bar (mutates in place)."""
+    from automation_tool.gocharting_ws_decode import (
+        _is_eth_session_open_candle,
+        candle_sort_datetime,
+    )
+
+    sorted_candles = sorted(
+        [c for c in candles if isinstance(c, dict)],
+        key=candle_sort_datetime,
+    )
+    sum_apv = 0.0
+    sum_vol = 0
+    prev_dt: datetime | None = None
+    for candle in sorted_candles:
+        bar_flow = candle.get("bar_flow")
+        if not isinstance(bar_flow, dict):
+            continue
+        dt = candle_sort_datetime(candle)
+        if (
+            prev_dt is not None
+            and _is_eth_session_open_candle(dt)
+            and not _is_eth_session_open_candle(prev_dt)
+        ):
+            sum_apv = 0.0
+            sum_vol = 0
+        sum_apv, sum_vol, session_vwap = accumulate_session_vwap_from_candle(
+            sum_apv,
+            sum_vol,
+            candle,
+            price_precision=price_precision,
+        )
+        if session_vwap is not None:
+            bar_flow["vwap"] = session_vwap
+        prev_dt = dt
 
 
 def compute_session_vwap(

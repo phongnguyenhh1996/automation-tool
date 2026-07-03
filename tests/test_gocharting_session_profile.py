@@ -93,6 +93,27 @@ def test_build_session_profile_includes_session_vwap() -> None:
     assert profile["vwap"] == compute_session_vwap(candles, price_precision=1)["vwap"]
 
 
+def test_apply_running_session_vwap_to_candles() -> None:
+    from automation_tool.gocharting_session_profile import apply_running_session_vwap_to_candles
+
+    candles = [
+        {
+            "time_gmt7": "Wed Jul 1 2026 05:00:00 GMT+0700",
+            "ohlc": {"high": 100.0, "low": 98.0, "close": 99.0},
+            "bar_flow": {"volume": 100, "delta": 0},
+        },
+        {
+            "time_gmt7": "Wed Jul 1 2026 05:05:00 GMT+0700",
+            "ohlc": {"high": 99.0, "low": 97.0, "close": 98.0},
+            "bar_flow": {"volume": 100, "delta": 0},
+        },
+    ]
+    apply_running_session_vwap_to_candles(candles, price_precision=1)
+    assert candles[0]["bar_flow"]["vwap"] == pytest.approx(99.0)
+    assert candles[1]["bar_flow"]["vwap"] == pytest.approx(98.5)
+    assert candles[1]["bar_flow"]["vwap"] == compute_session_vwap(candles, price_precision=1)["vwap"]
+
+
 def test_split_eth_sessions_at_0500() -> None:
     candles = [
         {"time_gmt7": "Wed Jul 1 2026 05:00:00 GMT+0700", "date": "2026-06-30T18:00:00-04:00"},
