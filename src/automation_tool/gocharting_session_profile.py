@@ -61,6 +61,12 @@ def session_profile_use_raw_ticks(cfg: dict[str, Any]) -> bool:
     return True
 
 
+def session_profile_value_area_enabled(cfg: dict[str, Any]) -> bool:
+    ws = cfg.get("footprint_ws") if isinstance(cfg.get("footprint_ws"), dict) else {}
+    sp = ws.get("session_profile") if isinstance(ws.get("session_profile"), dict) else {}
+    return bool(sp.get("value_area_enabled", True))
+
+
 def split_candles_into_eth_sessions(candles: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     """Split sorted candles into COMEX ETH sessions (open 05:00 GMT+7)."""
     ordered = sorted(
@@ -463,6 +469,7 @@ def compute_value_area_profile(
 def build_session_profile(
     candles: list[dict[str, Any]],
     *,
+    value_area_enabled: bool = True,
     value_area_pct: float = DEFAULT_VALUE_AREA_PCT,
     expansion_mode: str = VALUE_AREA_EXPANSION_SYMMETRIC,
     block_size: float = 0.0,
@@ -472,22 +479,26 @@ def build_session_profile(
 ) -> dict[str, Any]:
     if not candles:
         return {}
-    rows = aggregate_session_footprint_rows(
-        candles,
-        block_size=block_size,
-        price_precision=price_precision,
-        tick_size=tick_size,
-        block_multiplier=block_multiplier,
-    )
-    profile = compute_value_area_profile(
-        rows,
-        value_area_pct=value_area_pct,
-        expansion_mode=expansion_mode,
-    )
-    if not profile:
-        return {}
+    profile: dict[str, Any] = {}
+    if value_area_enabled:
+        rows = aggregate_session_footprint_rows(
+            candles,
+            block_size=block_size,
+            price_precision=price_precision,
+            tick_size=tick_size,
+            block_multiplier=block_multiplier,
+        )
+        profile = compute_value_area_profile(
+            rows,
+            value_area_pct=value_area_pct,
+            expansion_mode=expansion_mode,
+        )
+        if not profile:
+            profile = {}
 
     vwap_block = compute_session_vwap(candles, price_precision=price_precision)
+    if not vwap_block and not profile:
+        return {}
     profile.update(vwap_block)
 
     first = candles[0]
@@ -536,6 +547,7 @@ def enrich_footprint_document_with_session_profiles(
     block_multiplier = footprint_ws_block_multiplier(cfg_raw)
     va_pct = session_profile_value_area_pct(cfg_raw)
     expansion_mode = session_profile_expansion_mode(cfg_raw)
+    value_area_enabled = session_profile_value_area_enabled(cfg_raw)
     profile_block_size = 0.0 if session_profile_use_raw_ticks(cfg_raw) else block_size
     profile_block_multiplier = 1 if session_profile_use_raw_ticks(cfg_raw) else block_multiplier
 
@@ -547,6 +559,7 @@ def enrich_footprint_document_with_session_profiles(
     for session_candles in sessions:
         profile = build_session_profile(
             session_candles,
+            value_area_enabled=value_area_enabled,
             value_area_pct=va_pct,
             expansion_mode=expansion_mode,
             block_size=profile_block_size,
@@ -557,14 +570,20 @@ def enrich_footprint_document_with_session_profiles(
         if not profile:
             continue
         profiles.append(profile)
-        snippet = {
-            "poc": profile["poc"],
-            "vah": profile["vah"],
-            "val": profile["val"],
-            "value_area_pct": profile["value_area_pct"],
-        }
+        snippet: dict[str, Any] = {}
+        if value_area_enabled and profile.get("poc") is not None:
+            snippet.update(
+                {
+                    "poc": profile["poc"],
+                    "vah": profile["vah"],
+                    "val": profile["val"],
+                    "value_area_pct": profile["value_area_pct"],
+                }
+            )
         if profile.get("vwap") is not None:
             snippet["vwap"] = profile["vwap"]
+        if not snippet:
+            continue
         for candle in session_candles:
             time_key = str(candle.get("time_gmt7") or "").strip()
             if time_key:

@@ -68,6 +68,37 @@ def test_compute_session_vwap_typical_price_weighted() -> None:
     assert out["vwap_candles"] == 2
 
 
+def test_build_session_profile_vwap_only_when_value_area_disabled() -> None:
+    candles = [
+        {
+            "time_gmt7": "Wed Jul 1 2026 05:00:00 GMT+0700",
+            "date": "2026-06-30T18:00:00-04:00",
+            "ohlc": {"high": 100.0, "low": 98.0, "close": 99.0},
+            "bar_flow": {"volume": 100, "high": 100.0, "low": 98.0, "close": 99.0},
+            "footprint": [_level(100.0, 5, 5), _level(99.0, 25, 25)],
+        },
+        {
+            "time_gmt7": "Wed Jul 1 2026 05:05:00 GMT+0700",
+            "date": "2026-06-30T18:05:00-04:00",
+            "ohlc": {"high": 99.0, "low": 97.0, "close": 98.0},
+            "bar_flow": {"volume": 100, "high": 99.0, "low": 97.0, "close": 98.0},
+            "footprint": [_level(99.0, 10, 10), _level(98.0, 10, 10)],
+        },
+    ]
+    profile = build_session_profile(candles, value_area_enabled=False)
+    assert "poc" not in profile
+    assert "vah" not in profile
+    assert "val" not in profile
+    assert profile["vwap"] == compute_session_vwap(candles, price_precision=1)["vwap"]
+
+    cfg = {"footprint_ws": {"session_profile": {"enabled": True, "value_area_enabled": False}}}
+    doc = {"candles": candles}
+    out = enrich_footprint_document_with_session_profiles(doc, cfg=cfg)
+    sp = out["candles"][0]["session_profile"]
+    assert "poc" not in sp
+    assert sp["vwap"] == profile["vwap"]
+
+
 def test_build_session_profile_includes_session_vwap() -> None:
     candles = [
         {

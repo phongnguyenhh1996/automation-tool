@@ -138,6 +138,8 @@ footprint_ws:
     absorption_side_ratio: 1.5
   session_profile:
     enabled: true
+    # false = skip POC/VAH/VAL; bar_flow.vwap and session_profile.vwap still computed.
+    value_area_enabled: false
     value_area_pct: 0.7
     use_raw_ticks: true
     expansion_mode: symmetric
