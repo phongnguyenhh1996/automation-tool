@@ -849,12 +849,17 @@ def _parser() -> argparse.ArgumentParser:
     )
     al.add_argument("--model", default=None, metavar="ID", help=_OPENAI_MODEL_HELP)
     al.add_argument(
-        "--no-all-two-phase",
+        "--all-two-phase",
         action="store_true",
         help=(
-            "Tắt luồng 2-batch chained (TV cấu trúc → GoCharting footprint); "
-            "gửi full payload một lần như trước"
+            "Bật luồng 2-batch chained (TV cấu trúc → GoCharting footprint); "
+            "mặc định gửi full payload một lần"
         ),
+    )
+    al.add_argument(
+        "--no-all-two-phase",
+        action="store_true",
+        help="Legacy: giữ single-phase (mặc định hiện tại)",
     )
     al.set_defaults(func=cmd_all)
 
@@ -907,9 +912,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     al2.add_argument("--model", default=None, metavar="ID", help=_OPENAI_MODEL_HELP)
     al2.add_argument(
+        "--all-two-phase",
+        action="store_true",
+        help="Bật luồng 2-batch chained (giống `all --all-two-phase`)",
+    )
+    al2.add_argument(
         "--no-all-two-phase",
         action="store_true",
-        help="Tắt luồng 2-batch chained (giống `all --no-all-two-phase`)",
+        help="Legacy: giữ single-phase (mặc định hiện tại)",
     )
     al2.set_defaults(func=cmd_all_2)
 
@@ -917,7 +927,7 @@ def _parser() -> argparse.ArgumentParser:
         "telegram-listen",
         help=(
             "Listen inbound Telegram messages in a channel/group (poll getUpdates). "
-            "Supports /full, /update, /loai, /stop, /analyze-many, /ask, /ask-high."
+            "Supports /full, /update, /tim-scalp, /loai, /stop, /analyze-many, /ask, /ask-high."
         ),
     )
     tl.add_argument(
@@ -2483,6 +2493,8 @@ def _resolved_analysis_prompt(args: argparse.Namespace, charts_dir: Path) -> str
 
 def _all_flow_two_phase_enabled(args: argparse.Namespace) -> bool:
     if getattr(args, "no_all_two_phase", False):
+        return False
+    if not getattr(args, "all_two_phase", False):
         return False
     p = getattr(args, "prompt", None)
     if p is not None and str(p).strip():

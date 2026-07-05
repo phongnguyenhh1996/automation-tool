@@ -38,7 +38,7 @@ def test_all_does_not_request_cloudinary_json_purge(monkeypatch, tmp_path: Path)
     monkeypatch.setattr(cli, "require_openai", lambda _settings: None)
     monkeypatch.setattr(cli, "require_valid_coinmap_exports_for_stamp", lambda *_a, **_k: None)
     monkeypatch.setattr(cli, "ordered_chart_openai_payloads", lambda *_a, **_k: [("json", chart_json)])
-    monkeypatch.setattr(cli, "_extend_payloads_with_footprint_json", lambda p, _d: p)
+    monkeypatch.setattr(cli, "_extend_payloads_with_footprint_json", lambda p, _d, **_kw: p)
     monkeypatch.setattr(cli, "_warn_if_incomplete_chart_payloads", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "_run_openai_flow", fake_run_openai_flow)
     monkeypatch.setattr(cli, "_run_all_second_flow", lambda *_args, **_kwargs: OpenAIResult())
@@ -73,7 +73,83 @@ def test_all_does_not_request_cloudinary_json_purge(monkeypatch, tmp_path: Path)
     assert openai.get("two_phase") is False
 
 
-def test_all_default_uses_two_phase_openai(monkeypatch, tmp_path: Path) -> None:
+def test_all_default_uses_single_phase_openai(monkeypatch, tmp_path: Path) -> None:
+    from automation_tool import cli
+
+    tv_json = tmp_path / "20260629_165354_tradingview_DXY_4h.json"
+    tv_json.write_text("{}", encoding="utf-8")
+    gc_json = tmp_path / "20260629_165354_gocharting_DXY_15m.csv"
+    gc_json.write_text("x\n", encoding="utf-8")
+    calls: dict[str, object] = {}
+
+    class Settings:
+        coinmap_email = "user@example.com"
+        coinmap_password = "secret"
+        tradingview_password = "tv-secret"
+        telegram_bot_token = None
+        telegram_log_chat_id = None
+
+    class OpenAIResult:
+        final_response_id = "resp-1"
+        after_charts = ""
+
+        def full_text(self) -> str:
+            return "ok"
+
+    def fake_run_openai_flow(*args, **kwargs):
+        calls["openai"] = kwargs
+        calls["analysis_prompt"] = args[2] if len(args) > 2 else None
+        return OpenAIResult()
+
+    monkeypatch.setattr(cli, "load_settings", lambda: Settings())
+    monkeypatch.setattr(cli, "capture_charts", lambda **_kwargs: [tv_json])
+    monkeypatch.setattr(cli, "stamp_from_capture_paths", lambda _paths: "20260629_165354")
+    monkeypatch.setattr(cli, "list_invalid_chart_slots_for_stamp", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(cli, "require_openai", lambda _settings: None)
+    monkeypatch.setattr(
+        cli,
+        "ordered_chart_openai_payloads",
+        lambda *_charts_dir, **_kw: [("json", tv_json), ("csv", gc_json)],
+    )
+    monkeypatch.setattr(cli, "_extend_payloads_with_footprint_json", lambda p, _d, **_kw: p)
+    monkeypatch.setattr(cli, "_warn_if_incomplete_chart_payloads", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_run_openai_flow", fake_run_openai_flow)
+    monkeypatch.setattr(cli, "_run_all_second_flow", lambda *_args, **_kwargs: OpenAIResult())
+    monkeypatch.setattr(cli, "write_last_response_id", lambda _response_id: None)
+    monkeypatch.setattr(cli, "write_last_all_response_id", lambda _response_id: None)
+    monkeypatch.setattr(cli, "resolved_openai_model", lambda _settings, model: model)
+    monkeypatch.setattr(cli, "zones_dir_from_cli_path", lambda _path: tmp_path / "zones")
+    monkeypatch.setattr(cli, "ordered_chart_images", lambda *_args, **_kwargs: [])
+    def fake_parallel(**kw):
+        return 0, kw["work_fn"]()
+
+    monkeypatch.setattr(cli, "_run_capture_telegram_log_parallel_with", fake_parallel)
+    monkeypatch.setattr(cli, "require_valid_coinmap_exports_for_stamp", lambda *_a, **_k: None)
+    monkeypatch.setattr(cli, "footprint_source_for_stamp", lambda *_a, **_k: "gocharting")
+    monkeypatch.setattr(cli, "_all_flow_gocharting_openai_kw", lambda **_kw: {})
+    monkeypatch.setattr(cli, "_send_python_bot_job_started", lambda *_a, **_k: None)
+
+    args = _parser().parse_args(
+        [
+            "all",
+            "--charts-dir",
+            str(tmp_path),
+            "--no-telegram",
+            "--no-clear-zones-state",
+            "--no-tradingview",
+        ]
+    )
+    cli.cmd_all(args)
+
+    openai = calls["openai"]
+    assert isinstance(openai, dict)
+    assert openai.get("two_phase") is False
+    assert openai.get("structure_prompt") is None
+    assert openai.get("footprint_prompt") is None
+    assert (calls.get("analysis_prompt") or "").startswith("[FULL_ANALYSIS]")
+
+
+def test_all_all_two_phase_flag_uses_two_batch_openai(monkeypatch, tmp_path: Path) -> None:
     from automation_tool import cli
 
     tv_json = tmp_path / "20260629_165354_tradingview_DXY_4h.json"
@@ -110,7 +186,7 @@ def test_all_default_uses_two_phase_openai(monkeypatch, tmp_path: Path) -> None:
         "ordered_chart_openai_payloads",
         lambda *_charts_dir, **_kw: [("json", tv_json), ("csv", gc_json)],
     )
-    monkeypatch.setattr(cli, "_extend_payloads_with_footprint_json", lambda p, _d: p)
+    monkeypatch.setattr(cli, "_extend_payloads_with_footprint_json", lambda p, _d, **_kw: p)
     monkeypatch.setattr(cli, "_warn_if_incomplete_chart_payloads", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "_run_openai_flow", fake_run_openai_flow)
     monkeypatch.setattr(cli, "_run_all_second_flow", lambda *_args, **_kwargs: OpenAIResult())
@@ -136,6 +212,7 @@ def test_all_default_uses_two_phase_openai(monkeypatch, tmp_path: Path) -> None:
             "--no-telegram",
             "--no-clear-zones-state",
             "--no-tradingview",
+            "--all-two-phase",
         ]
     )
     cli.cmd_all(args)
@@ -186,7 +263,7 @@ def test_all_morning_clear_keeps_ea_neverdie_json(monkeypatch, tmp_path: Path) -
     monkeypatch.setattr(cli, "require_openai", lambda _settings: None)
     monkeypatch.setattr(cli, "require_valid_coinmap_exports_for_stamp", lambda *_a, **_k: None)
     monkeypatch.setattr(cli, "ordered_chart_openai_payloads", lambda *_a, **_k: [("json", chart_json)])
-    monkeypatch.setattr(cli, "_extend_payloads_with_footprint_json", lambda p, _d: p)
+    monkeypatch.setattr(cli, "_extend_payloads_with_footprint_json", lambda p, _d, **_kw: p)
     monkeypatch.setattr(cli, "_warn_if_incomplete_chart_payloads", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "_run_openai_flow", lambda *_args, **_kwargs: OpenAIResult())
     monkeypatch.setattr(cli, "_run_all_second_flow", lambda *_args, **_kwargs: OpenAIResult())
@@ -301,7 +378,7 @@ def test_all_runs_second_flow_with_dedicated_vector_channel_and_all2_shards(
     monkeypatch.setattr(cli, "require_telegram", lambda _settings: None)
     monkeypatch.setattr(cli, "require_valid_coinmap_exports_for_stamp", lambda *_a, **_k: None)
     monkeypatch.setattr(cli, "ordered_chart_openai_payloads", lambda *_a, **_k: [("json", chart_json)])
-    monkeypatch.setattr(cli, "_extend_payloads_with_footprint_json", lambda p, _d: p)
+    monkeypatch.setattr(cli, "_extend_payloads_with_footprint_json", lambda p, _d, **_kw: p)
     monkeypatch.setattr(cli, "_warn_if_incomplete_chart_payloads", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "_run_openai_flow", fake_run_openai_flow)
     monkeypatch.setattr(cli, "send_openai_output_to_telegram", fake_send_openai_output_to_telegram)
@@ -321,7 +398,7 @@ def test_all_runs_second_flow_with_dedicated_vector_channel_and_all2_shards(
 
     monkeypatch.setattr(cli, "write_last_response_id", fake_write_last_response_id)
     monkeypatch.setattr(cli, "write_last_all_response_id", lambda _response_id: None)
-    monkeypatch.setattr(cli, "write_morning_full_analysis", lambda _obj: None)
+    monkeypatch.setattr(cli, "write_morning_full_analysis", lambda _obj, **_kw: None)
     monkeypatch.setattr(cli, "write_morning_baseline_prices", lambda _trip: None)
     monkeypatch.setattr(cli, "resolved_openai_model", lambda _settings, model: model)
     monkeypatch.setattr(
@@ -407,7 +484,7 @@ def test_all_2_standalone_uses_existing_charts_without_capture(monkeypatch, tmp_
     monkeypatch.setattr(cli, "require_valid_coinmap_exports_for_stamp", lambda *_a, **_k: None)
     monkeypatch.setattr(cli, "capture_charts", fake_capture)
     monkeypatch.setattr(cli, "_run_openai_flow", fake_run_openai_flow)
-    monkeypatch.setattr(cli, "_extend_payloads_with_footprint_json", lambda p, _d: p)
+    monkeypatch.setattr(cli, "_extend_payloads_with_footprint_json", lambda p, _d, **_kw: p)
     monkeypatch.setattr(cli, "_all_flow_gocharting_openai_kw", lambda **_kw: {})
     monkeypatch.setattr(cli, "send_openai_output_to_telegram", fake_send_openai_output_to_telegram)
     monkeypatch.setattr(cli, "resolved_openai_model", lambda _settings, model: model)

@@ -1116,6 +1116,32 @@ def write_footprint_document(path: Path, doc: dict[str, Any]) -> None:
 
 DEFAULT_FOOTPRINT_WS_MAX_CANDLES = 50
 DEFAULT_FOOTPRINT_WS_WAIT_MS = 30_000
+DEFAULT_FOOTPRINT_WS_POLL_MS = 200
+DEFAULT_FOOTPRINT_WS_MIN_READY_CANDLES = 10
+
+
+def footprint_ws_poll_ms(cfg: dict[str, Any]) -> int:
+    ws = cfg.get("footprint_ws")
+    if isinstance(ws, dict):
+        raw = ws.get("poll_ms")
+        if raw is not None:
+            try:
+                return max(50, int(raw))
+            except (TypeError, ValueError):
+                pass
+    return DEFAULT_FOOTPRINT_WS_POLL_MS
+
+
+def footprint_ws_min_ready_candles(cfg: dict[str, Any]) -> int:
+    ws = cfg.get("footprint_ws")
+    if isinstance(ws, dict):
+        raw = ws.get("min_ready_candles")
+        if raw is not None:
+            try:
+                return max(1, int(raw))
+            except (TypeError, ValueError):
+                pass
+    return DEFAULT_FOOTPRINT_WS_MIN_READY_CANDLES
 
 
 def footprint_ws_enabled(cfg: dict[str, Any]) -> bool:
@@ -1199,6 +1225,31 @@ def _forming_candle_open(now: datetime, interval_min: int) -> datetime:
     """Floor naive GMT+7 ``now`` to the open of the current forming candle."""
     floored_minute = (now.minute // interval_min) * interval_min
     return now.replace(minute=floored_minute, second=0, microsecond=0)
+
+
+def latest_closed_candle_open_for_interval(
+    now: datetime,
+    interval: str,
+) -> datetime:
+    """Open time (naive GMT+7) of the most recently closed candle for ``interval``."""
+    ref = now
+    if ref.tzinfo is not None:
+        ref = ref.astimezone(_TZ_GMT7).replace(tzinfo=None)
+    interval_min = _interval_minutes_from_str(interval)
+    forming = _forming_candle_open(ref, interval_min)
+    return forming - timedelta(minutes=interval_min)
+
+
+def footprint_last_candle_fresh(
+    last_open: datetime | None,
+    expected_closed_open: datetime | None,
+) -> bool:
+    """True when ``last_open`` is at or after the expected latest closed bar open."""
+    if expected_closed_open is None:
+        return True
+    if last_open is None or last_open <= datetime.min:
+        return False
+    return last_open >= expected_closed_open
 
 
 def _last_candle_time_key(candle: dict[str, Any]) -> str:

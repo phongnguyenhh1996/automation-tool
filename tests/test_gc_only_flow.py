@@ -54,7 +54,19 @@ def test_all_flow_openai_prompts_gc_only(tmp_path: Path) -> None:
     charts = tmp_path / "charts"
     charts.mkdir()
     write_main_chart_symbol_marker(charts, GC1_MAIN_SYMBOL)
-    args = Namespace(gc_only=True, prompt=None, no_all_two_phase=False)
+    args = Namespace(gc_only=True, prompt=None, no_all_two_phase=False, all_two_phase=False)
+    two_phase, prompt_all, structure, footprint = _all_flow_openai_prompts(args, charts)
+    assert two_phase is False
+    assert prompt_all == default_analysis_prompt(GC1_MAIN_SYMBOL, gc_native_footprint=True)
+    assert structure is None
+    assert footprint is None
+
+
+def test_all_flow_openai_prompts_gc_only_with_all_two_phase(tmp_path: Path) -> None:
+    charts = tmp_path / "charts"
+    charts.mkdir()
+    write_main_chart_symbol_marker(charts, GC1_MAIN_SYMBOL)
+    args = Namespace(gc_only=True, prompt=None, no_all_two_phase=False, all_two_phase=True)
     two_phase, prompt_all, structure, footprint = _all_flow_openai_prompts(args, charts)
     assert two_phase is True
     assert prompt_all == ""
