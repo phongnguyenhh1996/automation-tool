@@ -36,6 +36,7 @@ set "SCALP_EXEC_LOT=0.01"
 set "SCALP_EXEC_SL_POINTS=4"
 set "SCALP_EXEC_TP_POINTS=4"
 set "SCALP_EXEC_ACCOUNT_IDS=acc_secondary2"
+set "TELEGRAM_CHAT_ID=-1004297700919"
 REM set "MT5_ACCOUNTS_JSON=%~dp0config\accounts.json"
 REM set "SCALP_EXEC_PATTERNS="
 REM -------------------------------------------------------------------

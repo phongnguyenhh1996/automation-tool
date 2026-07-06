@@ -56,6 +56,7 @@ from automation_tool.mt5_execute import (
 from automation_tool.mt5_multi import MT5MultiExecutionSummary, format_mt5_multi_for_telegram
 from automation_tool.mt5_openai_parse import ParsedTrade
 from automation_tool.mt5_manage import _mt5_init_current_terminal
+from automation_tool.telegram_bot import send_message
 
 from exec_line import (
     DEFAULT_SL_POINTS,
