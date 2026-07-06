@@ -17,7 +17,8 @@ REM   SCALP_EXEC_LISTEN_BOT_TOKEN — BAT BUOC: bot KHAC (admin channel), poll g
 REM                                 (cung token voi watch thi Telegram KHONG gui lai SCALP_EXEC)
 REM   SCALP_EXEC_ACCOUNT_IDS=id trong accounts.json (vd: main)
 REM   MT5_ACCOUNTS_JSON=duong dan accounts.json
-REM SL/TP: lay bid/ask MT5 live (XAUUSD/XAUUSDm/XAUUSDc), +-4 gia mac dinh.
+REM SL/TP: sau khi MARKET khop, doc price_open position roi gan +-N gia (mac dinh 4).
+REM   SCALP_EXEC_FAST_ENTRY=0  — tat: fetch gia truoc, gui MARKET kem SL/TP 1 lan (cu)
 
 cd /d "%~dp0"
 set "LOG_DIR=%~dp0logs"

@@ -67,7 +67,7 @@ from exec_line import (
     exec_to_parsed_trade,
     parse_exec_line,
 )
-from scalp_mt5_live import build_scalp_trade_live
+from scalp_mt5_live import build_scalp_trade_live, execute_scalp_market_fast
 
 _log = logging.getLogger("scalp_footprint.telegram_executor")
 
@@ -312,6 +312,7 @@ def _execute_parsed(
     account_ids: tuple[str, ...],
 ) -> tuple[str, float, float, float]:
     comment = f"scalp-{parsed.get('pattern_id', '')}"[:31]
+    fast_entry = _env_bool("SCALP_EXEC_FAST_ENTRY", True)
     all_accounts, missing = _resolve_exec_accounts(accounts_path, account_ids)
     if missing:
         raise ValueError(f"account id không có trong accounts.json: {', '.join(missing)}")
@@ -328,22 +329,38 @@ def _execute_parsed(
         summary = MT5MultiExecutionSummary()
         for acc in targets:
             try:
-                trade, live_entry = _build_live_trade_for_account(
-                    parsed,
-                    acc,
-                    lot=lot,
-                    sl_points=sl_points,
-                    tp_points=tp_points,
-                    dry_run=dry_run,
-                )
-                last_sl, last_tp = trade.sl, trade.tp1
-                ex = _execute_trade_on_account(
-                    trade,
-                    acc,
-                    lot=lot,
-                    dry_run=dry_run,
-                    comment=comment,
-                )
+                if fast_entry:
+                    ex, live_entry, last_sl, last_tp = execute_scalp_market_fast(
+                        parsed,
+                        lot=lot,
+                        dry_run=dry_run,
+                        sl_points=sl_points,
+                        tp_points=tp_points,
+                        terminal_path=acc.terminal_path,
+                        login=acc.login,
+                        password=acc.password,
+                        server=acc.server,
+                        account_symbol_map=acc.symbol_map or None,
+                        account_id=acc.id,
+                        order_comment=comment,
+                    )
+                else:
+                    trade, live_entry = _build_live_trade_for_account(
+                        parsed,
+                        acc,
+                        lot=lot,
+                        sl_points=sl_points,
+                        tp_points=tp_points,
+                        dry_run=dry_run,
+                    )
+                    last_sl, last_tp = trade.sl, trade.tp1
+                    ex = _execute_trade_on_account(
+                        trade,
+                        acc,
+                        lot=lot,
+                        dry_run=dry_run,
+                        comment=comment,
+                    )
             except Exception as e:
                 _log.exception("Execution failed for account %s", acc.id)
                 ex = MT5ExecutionResult(ok=False, message=str(e), account_id=acc.id)
@@ -358,6 +375,17 @@ def _execute_parsed(
             "SCALP_EXEC_ACCOUNT_IDS được set nhưng không load được accounts.json "
             f"(path={accounts_path or 'MT5_ACCOUNTS_JSON'})"
         )
+
+    if fast_entry:
+        ex, live_entry, last_sl, last_tp = execute_scalp_market_fast(
+            parsed,
+            lot=lot,
+            dry_run=dry_run,
+            sl_points=sl_points,
+            tp_points=tp_points,
+            order_comment=comment,
+        )
+        return format_mt5_execution_for_telegram(ex), live_entry, last_sl, last_tp
 
     trade, live_entry = _build_live_trade_default_session(
         parsed,
