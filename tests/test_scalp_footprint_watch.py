@@ -55,3 +55,17 @@ def test_15m_due_on_quarter_hour() -> None:
     due = intervals_due(now, buffer_sec=90, last_processed={})
     assert "15m" in due
     assert "5m" in due
+
+
+def test_map_paths_by_interval_exact_match() -> None:
+    from watch import _map_paths_by_interval
+
+    charts = Path("data/XAUUSD/charts/footprint_images")
+    paths = [
+        charts / "footprint_combined_5m.json",
+        charts / "footprint_combined_15m.json",
+    ]
+    mapped = _map_paths_by_interval(paths, ("5m", "15m"))
+    assert mapped["5m"].name == "footprint_combined_5m.json"
+    assert mapped["15m"].name == "footprint_combined_15m.json"
+    assert mapped["5m"] != mapped["15m"]

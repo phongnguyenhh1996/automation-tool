@@ -71,6 +71,37 @@ def test_footprint_ws_data_ready_ws_incomplete() -> None:
     assert not footprint_ws_data_ready(footprint_docs=docs, idb_candle_count=0, min_candles=10)
 
 
+def test_last_closed_candle_open_drops_forming() -> None:
+    from automation_tool.gocharting_ws_decode import last_closed_candle_open
+
+    now = datetime(2026, 7, 6, 8, 9, 0)
+    doc = {
+        "candles": [
+            {"time_gmt7": "Mon Jul 6 2026 07:45:00 GMT+0700"},
+            {"time_gmt7": "Mon Jul 6 2026 08:00:00 GMT+0700"},
+        ]
+    }
+    last = last_closed_candle_open(doc, interval="15m", now=now)
+    assert last == datetime(2026, 7, 6, 7, 45, 0)
+
+
+def test_footprint_ws_data_ready_ws_fresh_without_complete() -> None:
+    now = datetime(2026, 7, 3, 10, 6, 30)
+    expected = latest_closed_candle_open_for_interval(now, "5m")
+    docs = [
+        {
+            "candles": [{"time_gmt7": "Mon Jul 3 2026 10:00:00 GMT+0700"}] * 15,
+            "is_complete": False,
+        }
+    ]
+    assert footprint_ws_data_ready(
+        footprint_docs=docs,
+        idb_candle_count=0,
+        min_candles=10,
+        expected_closed_open=expected,
+    )
+
+
 def test_footprint_ws_data_ready_ws_too_few() -> None:
     docs = [{"candles": [{}] * 5, "is_complete": True}]
     assert not footprint_ws_data_ready(footprint_docs=docs, idb_candle_count=0, min_candles=10)

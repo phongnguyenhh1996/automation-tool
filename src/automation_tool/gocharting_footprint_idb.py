@@ -258,7 +258,10 @@ def read_footprint_idb_on_page(
     try:
         probes.append(page.evaluate(_READ_IDB_JS, args))
     except Exception as exc:
-        _log.warning("footprint_idb: main-frame read failed: %s", exc)
+        if "object stores was not found" in str(exc):
+            _log.debug("footprint_idb: main-frame store not ready: %s", exc)
+        else:
+            _log.warning("footprint_idb: main-frame read failed: %s", exc)
 
     for worker in page.workers:
         try:

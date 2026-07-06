@@ -35,7 +35,7 @@ from scheduling import (  # noqa: E402
 _log = logging.getLogger("scalp_footprint.watch")
 
 DEFAULT_TELEGRAM_CHAT_ID = "-1004297700919"
-DEFAULT_BUFFER_SEC = 90
+DEFAULT_BUFFER_SEC = 20
 DEFAULT_STATE_NAME = "scalp_footprint_watch_state.json"
 
 
@@ -107,16 +107,35 @@ def _serialize_processed_times(values: dict[str, datetime]) -> dict[str, str]:
     return {iv: dt.isoformat() for iv, dt in values.items()}
 
 
+def _map_paths_by_interval(
+    paths: list[Path],
+    intervals: tuple[str, ...],
+) -> dict[str, Path]:
+    """Map capture output paths to interval keys (``5m`` must not match ``15m``)."""
+    expected = {
+        iv.strip().lower(): f"footprint_combined_{iv.strip().lower()}.json" for iv in intervals
+    }
+    by_iv: dict[str, Path] = {}
+    for path in paths:
+        name = path.name.lower()
+        for iv, stem in expected.items():
+            if name == stem:
+                by_iv[iv] = path
+                break
+    return by_iv
+
+
 def capture_footprint_headless(
     *,
     intervals: tuple[str, ...],
     charts_dir: Path,
     gocharting_yaml: Path,
     headless: bool = True,
-    parallel: bool = True,
-    extra_session_days: int = 0,
+    parallel: bool = False,
+    extra_session_days: int | None = None,
+    stale_fallback: bool = True,
 ) -> list[Path]:
-    """Capture WS footprint (parallel browsers when ``parallel`` and multiple intervals)."""
+    """Capture WS footprint sequentially in one browser (default)."""
     from automation_tool.config import default_storage_state_path, load_all_dotenv
     from automation_tool.gocharting_capture import load_gocharting_yaml
     from automation_tool.gocharting_ws_capture import capture_footprint_ws_plan
@@ -167,6 +186,7 @@ def capture_footprint_headless(
                 parallel=False,
                 extra_session_days=extra_session_days,
                 headless=headless,
+                stale_fallback=stale_fallback,
             )
         finally:
             close_browser_and_context(browser, context)
@@ -238,6 +258,19 @@ def process_intervals(
 ) -> None:
     from scheduling import latest_closed_candle_open
 
+    from automation_tool.gocharting_ws_decode import (
+        footprint_last_candle_fresh,
+        last_closed_candle_open,
+    )
+
+    def _last_closed_in_file(json_path: Path, *, interval: str) -> datetime | None:
+        doc = load_footprint_json(json_path)
+        return last_closed_candle_open(
+            {"candles": doc["candles"]},
+            interval=interval,
+            now=now_gmt7_naive(),
+        )
+
     state = load_state(state_path)
     last_processed = _parse_processed_times(state.get("last_processed"))
     sent_keys: set[str] = set(state.get("sent_keys") or [])
@@ -249,13 +282,7 @@ def process_intervals(
         gocharting_yaml=gocharting_yaml,
         headless=headless,
     )
-    path_by_iv = {}
-    for p in paths:
-        name = p.name.lower()
-        for iv in intervals:
-            if iv in name:
-                path_by_iv[iv] = p
-                break
+    path_by_iv = _map_paths_by_interval(paths, intervals)
 
     now = now_gmt7_naive()
     alerts: list[str] = []
@@ -271,11 +298,23 @@ def process_intervals(
 
         minutes = 5 if iv == "5m" else 15
         closed_open = latest_closed_candle_open(now, minutes)
-        last_processed[iv] = closed_open
+        last_closed = _last_closed_in_file(json_path, interval=iv)
+        file_fresh = footprint_last_candle_fresh(last_closed, closed_open)
+        if file_fresh:
+            last_processed[iv] = closed_open
+        else:
+            _log.warning(
+                "%s: stale footprint file last_closed=%s expected=%s — skip state update",
+                iv,
+                last_closed.isoformat() if last_closed else "?",
+                closed_open.isoformat(),
+            )
         _log.info(
-            "%s: closed_bar=%s signals=%d new=%d path=%s",
+            "%s: closed_bar=%s last_closed=%s fresh=%s signals=%d new=%d path=%s",
             iv,
             closed_open.isoformat(),
+            last_closed.isoformat() if last_closed else "?",
+            file_fresh,
             len(signals),
             len(new_signals),
             json_path.name,

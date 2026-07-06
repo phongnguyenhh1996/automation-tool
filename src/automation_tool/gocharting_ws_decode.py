@@ -1328,6 +1328,24 @@ def drop_forming_footprint_candle(
     return doc
 
 
+def last_closed_candle_open(
+    doc: dict[str, Any],
+    *,
+    interval: str,
+    now: datetime | None = None,
+) -> datetime | None:
+    """Open time of the latest **closed** candle (forming bar excluded)."""
+    trimmed = drop_forming_footprint_candle(doc, interval=interval, now=now)
+    candles = trimmed.get("candles") or []
+    valid = [c for c in candles if isinstance(c, dict)]
+    if not valid:
+        return None
+    last_open = candle_sort_datetime(max(valid, key=candle_sort_datetime))
+    if last_open <= datetime.min:
+        return None
+    return last_open
+
+
 def trim_footprint_document(
     doc: dict[str, Any],
     *,

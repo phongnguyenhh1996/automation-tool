@@ -44,6 +44,7 @@ from automation_tool.gocharting_ws_decode import (
     footprint_ws_poll_ms,
     footprint_ws_wait_ms,
     latest_closed_candle_open_for_interval,
+    last_closed_candle_open,
     merge_footprint_raw_with_ohlc,
     merge_footprint_with_mt5_spot,
     merge_footprint_ws_documents,
@@ -55,6 +56,10 @@ from automation_tool.gocharting_ws_decode import (
 )
 
 _log = logging.getLogger(__name__)
+
+
+class FootprintCaptureStaleError(RuntimeError):
+    """Raised when captured footprint candles are older than the expected closed bar."""
 
 
 def _frame_bytes(frame) -> bytes:
@@ -150,14 +155,56 @@ def _last_candle_open(candles: list[Any]) -> datetime | None:
     return last_open
 
 
-def _ws_last_candle_open(footprint_docs: list[dict[str, Any]]) -> datetime | None:
+def _ws_last_candle_open(
+    footprint_docs: list[dict[str, Any]],
+    *,
+    interval: str | None = None,
+    now: datetime | None = None,
+) -> datetime | None:
     best = pick_best_footprint_document(footprint_docs)
     if best is None:
         return None
+    iv = (interval or document_timeframe(best) or "").strip().lower()
+    if iv:
+        return last_closed_candle_open(best, interval=iv, now=now)
     candles = best.get("candles") or []
     if not isinstance(candles, list):
         return None
     return _last_candle_open(candles)
+
+
+def footprint_capture_session_dates(
+    footprint_docs: list[dict[str, Any]],
+    *,
+    now: datetime | None = None,
+) -> list[str]:
+    """Calendar dates to subscribe: today (GMT+7) plus dates seen in WS frames."""
+    ref = now
+    if ref is None:
+        ref = datetime.now(timezone(timedelta(hours=7))).replace(tzinfo=None)
+    dates: list[str] = [ref.date().isoformat()]
+    for doc in footprint_docs:
+        rd = footprint_document_request_date(doc)
+        if rd and rd not in dates:
+            dates.append(rd)
+    return dates
+
+
+def _assert_output_fresh(
+    output_doc: dict[str, Any],
+    *,
+    interval: str,
+    expected_closed_open: datetime,
+    wait_source: str,
+    now: datetime | None = None,
+) -> None:
+    last_open = last_closed_candle_open(output_doc, interval=interval, now=now)
+    if footprint_last_candle_fresh(last_open, expected_closed_open):
+        return
+    raise FootprintCaptureStaleError(
+        f"Footprint capture stale for {interval}: last_closed={last_open} "
+        f"expected>={expected_closed_open} wait_source={wait_source}"
+    )
 
 
 def footprint_ws_data_ready(
@@ -165,17 +212,28 @@ def footprint_ws_data_ready(
     footprint_docs: list[dict[str, Any]],
     idb_candle_count: int,
     min_candles: int,
+    interval: str = "",
     idb_last_open: datetime | None = None,
     expected_closed_open: datetime | None = None,
+    now: datetime | None = None,
 ) -> bool:
     """True when IndexedDB or WebSocket has enough fresh footprint candles to proceed."""
     idb_fresh = footprint_last_candle_fresh(idb_last_open, expected_closed_open)
     if idb_candle_count >= min_candles and idb_fresh:
         return True
     ws_count, ws_complete = _ws_ready_stats(footprint_docs)
-    ws_last = _ws_last_candle_open(footprint_docs)
+    iv = interval.strip().lower() if interval else None
+    ws_last = _ws_last_candle_open(
+        footprint_docs,
+        interval=iv if expected_closed_open and iv else None,
+        now=now,
+    )
     ws_fresh = footprint_last_candle_fresh(ws_last, expected_closed_open)
-    return ws_count >= min_candles and ws_complete and ws_fresh
+    if ws_count < min_candles:
+        return False
+    if expected_closed_open is None:
+        return ws_complete
+    return ws_fresh
 
 
 def _idb_snapshot_on_page(
@@ -204,6 +262,20 @@ def _idb_snapshot_on_page(
                 seen.add(key)
             docs.append(doc)
     merged = merge_footprint_documents(docs)
+    if not merged and iv:
+        try:
+            probe = read_footprint_idb_on_page(page, date=None, interval=iv)
+        except Exception as exc:
+            _log.debug("footprint_idb poll: interval-only read failed: %s", exc)
+        else:
+            for doc in idb_probe_to_documents(probe, export_format=idb_fmt, interval=iv):
+                key = str(doc.get("idb_key") or "")
+                if key and key in seen:
+                    continue
+                if key:
+                    seen.add(key)
+                docs.append(doc)
+            merged = merge_footprint_documents(docs)
     if not merged:
         return 0, None
     candles = merged.get("candles") or []
@@ -258,8 +330,10 @@ def _wait_for_footprint_data(
             footprint_docs=footprint_docs,
             idb_candle_count=idb_count,
             min_candles=min_candles,
+            interval=interval,
             idb_last_open=idb_last,
             expected_closed_open=expected_closed_open,
+            now=now,
         ):
             elapsed = int((time.monotonic() - start) * 1000)
             idb_ready = idb_count >= min_candles and footprint_last_candle_fresh(
@@ -441,6 +515,7 @@ def capture_footprint_ws_on_page(
     main_symbol: str | None = None,
     mt5_accounts_json: Path | None = None,
     extra_session_days: int | None = None,
+    stale_fallback: bool = False,
 ) -> Path:
     """Open ``chart_url`` on an existing page, capture WS footprint JSON, trim, write."""
     from automation_tool.gocharting_capture import _maybe_login_gocharting
@@ -480,7 +555,17 @@ def capture_footprint_ws_on_page(
     _maybe_login_gocharting(page, cfg, email, password)
     page.wait_for_timeout(2000)
 
-    _wait_for_footprint_data(
+    capture_now = datetime.now(timezone(timedelta(hours=7))).replace(tzinfo=None)
+    expected_closed = latest_closed_candle_open_for_interval(capture_now, iv)
+    subscribe_dates = footprint_capture_session_dates(footprint_docs, now=capture_now)
+    sub_result = request_footprint_dates_on_page(page, subscribe_dates, interval=iv)
+    if not sub_result.get("ok"):
+        _log.warning("footprint_ws: subscribeFootprint failed: %s", sub_result)
+    else:
+        _log.info("footprint_ws: subscribed footprint dates=%s (%s)", subscribe_dates, iv)
+    page.wait_for_timeout(500)
+
+    wait_source, _, _ = _wait_for_footprint_data(
         page,
         cfg=cfg,
         interval=iv,
@@ -489,6 +574,7 @@ def capture_footprint_ws_on_page(
         max_wait_ms=wait,
         min_candles=min_ready,
         lookup_dates=idb_lookup_dates,
+        now=capture_now,
     )
 
     prior_dates: list[str] = []
@@ -575,6 +661,25 @@ def capture_footprint_ws_on_page(
             cfg=cfg,
         )
     output_doc = trim_footprint_document(output_doc, max_candles=mc)
+    try:
+        _assert_output_fresh(
+            output_doc,
+            interval=iv,
+            expected_closed_open=expected_closed,
+            wait_source=wait_source,
+            now=capture_now,
+        )
+    except FootprintCaptureStaleError:
+        if stale_fallback and dest.is_file():
+            _log.warning(
+                "footprint_ws: stale capture for %s — keeping existing %s (last_closed=%s expected>=%s)",
+                iv,
+                dest.name,
+                last_closed_candle_open(output_doc, interval=iv, now=capture_now),
+                expected_closed,
+            )
+            return dest
+        raise
     output_doc = _enrich_with_mt5_spot(
         output_doc,
         cfg=cfg,
@@ -705,6 +810,7 @@ def capture_footprint_ws_plan(
     parallel: bool = False,
     extra_session_days: int | None = None,
     headless: bool = True,
+    stale_fallback: bool = False,
 ) -> list[Path]:
     """Capture WS footprint JSON for each ``footprint_screenshot.intervals`` entry."""
     specs = footprint_ws_interval_specs(cfg)
@@ -738,6 +844,7 @@ def capture_footprint_ws_plan(
                     mt5_accounts_json=mt5_accounts_json,
                     extra_session_days=extra_session_days,
                     headless=headless,
+                    stale_fallback=stale_fallback,
                 ): interval.strip().lower()
                 for interval, page_url in jobs
             }
@@ -764,21 +871,27 @@ def capture_footprint_ws_plan(
                     main_symbol=main_symbol,
                     mt5_accounts_json=mt5_accounts_json,
                     extra_session_days=extra_session_days,
+                    stale_fallback=stale_fallback,
                 )
                 paths.append(dest)
                 captured_intervals.append(interval.strip().lower())
+            except FootprintCaptureStaleError as exc:
+                _log.warning("footprint_ws: capture skipped for %s: %s", interval, exc)
             finally:
                 try:
                     page.close()
                 except Exception:
                     pass
-    _persist_prepared_footprint_after_ws_capture(
-        charts_dir=charts_dir,
-        cfg=cfg,
-        chart_stamp=chart_stamp,
-        gocharting_yaml=gocharting_yaml,
-        capture_intervals=tuple(captured_intervals),
-    )
+    try:
+        _persist_prepared_footprint_after_ws_capture(
+            charts_dir=charts_dir,
+            cfg=cfg,
+            chart_stamp=chart_stamp,
+            gocharting_yaml=gocharting_yaml,
+            capture_intervals=tuple(captured_intervals),
+        )
+    except Exception as exc:
+        _log.warning("footprint_ws: prepared spot export skipped: %s", exc)
     return paths
 
 
