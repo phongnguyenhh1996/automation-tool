@@ -498,6 +498,21 @@ def _enrich_with_mt5_spot(
     return enriched
 
 
+def _symbol_entry_for_footprint_ws(
+    cfg: dict[str, Any],
+    main_symbol: str | None,
+) -> dict[str, Any]:
+    from automation_tool.images import normalize_main_chart_symbol
+
+    sym = normalize_main_chart_symbol((main_symbol or "XAUUSD").strip())
+    symbols = cfg.get("symbols") or {}
+    if isinstance(symbols, dict):
+        block = symbols.get(sym)
+        if isinstance(block, dict):
+            return block
+    return {}
+
+
 def capture_footprint_ws_on_page(
     page: Page,
     *,
@@ -518,7 +533,8 @@ def capture_footprint_ws_on_page(
     stale_fallback: bool = False,
 ) -> Path:
     """Open ``chart_url`` on an existing page, capture WS footprint JSON, trim, write."""
-    from automation_tool.gocharting_capture import _maybe_login_gocharting
+    from automation_tool.gocharting_capture import _maybe_login_gocharting, _select_chart_symbol
+    from automation_tool.gocharting_footprint_ws_request import _resolve_footprint_security
 
     iv = interval.strip().lower()
     fmt = export_format or footprint_ws_export_format(cfg)
@@ -555,10 +571,24 @@ def capture_footprint_ws_on_page(
     _maybe_login_gocharting(page, cfg, email, password)
     page.wait_for_timeout(2000)
 
+    ws_security = _resolve_footprint_security(cfg)
+    symbol_entry = _symbol_entry_for_footprint_ws(cfg, main_symbol)
+    if symbol_entry.get("search_query"):
+        _select_chart_symbol(page, cfg, symbol_entry)
+        footprint_docs.clear()
+        ohlc_docs.clear()
+        page.wait_for_timeout(5000)
+        _log.info(
+            "footprint_ws: switched chart symbol to %r",
+            symbol_entry.get("search_query"),
+        )
+
     capture_now = datetime.now(timezone(timedelta(hours=7))).replace(tzinfo=None)
     expected_closed = latest_closed_candle_open_for_interval(capture_now, iv)
     subscribe_dates = footprint_capture_session_dates(footprint_docs, now=capture_now)
-    sub_result = request_footprint_dates_on_page(page, subscribe_dates, interval=iv)
+    sub_result = request_footprint_dates_on_page(
+        page, subscribe_dates, interval=iv, security=ws_security
+    )
     if not sub_result.get("ok"):
         _log.warning("footprint_ws: subscribeFootprint failed: %s", sub_result)
     else:
@@ -582,7 +612,9 @@ def capture_footprint_ws_on_page(
         prior_dates = prior_session_dates_to_request(footprint_docs, extra_days=extra_days)
         if prior_dates:
             _log.info("footprint_ws: requesting %d prior session date(s): %s", len(prior_dates), prior_dates)
-            req_result = request_footprint_dates_on_page(page, prior_dates, interval=iv)
+            req_result = request_footprint_dates_on_page(
+                page, prior_dates, interval=iv, security=ws_security
+            )
             if not req_result.get("ok"):
                 _log.warning("footprint_ws: prior session request failed: %s", req_result)
             extra_wait = footprint_ws_extra_session_wait_ms(cfg)

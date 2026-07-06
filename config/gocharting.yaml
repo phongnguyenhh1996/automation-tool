@@ -25,10 +25,10 @@ symbols:
   XAUUSD:
     export_label: GC
     # COMEX Gold Future on GoCharting (not spot EXNESS:XAUUSD).
-    search_query: "GC1!"
-    openai_label: "Gold Future (GC1!)"
+    search_query: "GCQ26"
+    openai_label: "Gold Future (GCQ26)"
     # First search hit only expands the GC list; click the contract row to load the chart.
-    result_confirm_selector: 'b[title="GC1!"]'
+    result_confirm_selector: 'b[title="GCQ26"]'
 
 interval_panel:
   button_selector: 'button:has(div:text-is("{interval}"))'
@@ -86,7 +86,7 @@ capture_plan:
 
 footprint_screenshot:
   output_subdir: footprint_images
-  symbol: "COMEX:GC1!"
+  symbol: "COMEX:GCQ26"
   # Tick Manager: cluster height = tick_size × block_multiplier (0.1 × 3 = 0.3).
   tick_size: 0.1
   block_multiplier: 2
@@ -121,7 +121,7 @@ footprint_ws:
   export_format: combined
   mt5_spot: true
   gc_to_spot:
-    enabled: true
+    enabled: false
     spot_tick: 0.01
     min_matched_ratio: 0.8
     skip_main_csv: true

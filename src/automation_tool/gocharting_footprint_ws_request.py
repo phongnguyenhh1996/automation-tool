@@ -81,6 +81,29 @@ def list_timeseries_feed_keys(page: Page, *, wait_for_worker_ms: int = 3000) -> 
     return list(result) if isinstance(result, list) else []
 
 
+def _resolve_footprint_security(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Build ``security`` dict for ``_downloadFootprint`` fallback from config."""
+    fp = cfg.get("footprint_screenshot") or {}
+    sym = str(fp.get("symbol") or "").strip()
+    if sym.upper().startswith("COMEX:"):
+        symbol = sym.split(":", 1)[1].strip()
+    elif sym:
+        symbol = sym
+    else:
+        symbol = ""
+    if not symbol:
+        symbols = cfg.get("symbols") or {}
+        block = symbols.get("XAUUSD") if isinstance(symbols, dict) else None
+        if isinstance(block, dict):
+            symbol = str(block.get("search_query") or "").strip()
+    return {
+        "exchange": "COMEX",
+        "segment": "FUTURE",
+        "symbol": symbol or "GC1!",
+        "data_source_location": "nyc1",
+    }
+
+
 def request_footprint_dates_on_page(
     page: Page,
     dates: list[str],
@@ -124,7 +147,8 @@ def request_footprint_dates_on_page(
     sec = dict(security or {})
     sec.setdefault("exchange", "COMEX")
     sec.setdefault("segment", "FUTURE")
-    sec.setdefault("symbol", "GC1!")
+    if not sec.get("symbol"):
+        sec["symbol"] = "GC1!"
     sec.setdefault("data_source_location", "nyc1")
 
     try:

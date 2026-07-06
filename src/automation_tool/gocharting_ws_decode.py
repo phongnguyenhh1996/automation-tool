@@ -483,6 +483,60 @@ def slim_footprint_combined_document(doc: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _ohlc_fallback_from_footprint_candle(
+    candle: dict[str, Any],
+    *,
+    price_precision: int,
+) -> dict[str, Any] | None:
+    """Synthesize OHLC from WS footprint ``ending_summary`` when TS/OHLC feed is missing."""
+    es = candle.get("ending_summary") if isinstance(candle.get("ending_summary"), dict) else {}
+    high_raw = es.get("high")
+    low_raw = es.get("low")
+    pp = max(0, int(price_precision))
+    if high_raw is not None and low_raw is not None:
+        high = scaled_price(int(high_raw), pp)
+        low = scaled_price(int(low_raw), pp)
+    else:
+        bf = candle.get("bar_flow") if isinstance(candle.get("bar_flow"), dict) else {}
+        if bf.get("high") is None or bf.get("low") is None:
+            return None
+        high = float(bf["high"])
+        low = float(bf["low"])
+
+    totals = candle.get("totals") if isinstance(candle.get("totals"), dict) else {}
+    overall = totals.get("overall") if isinstance(totals.get("overall"), dict) else {}
+    try:
+        volume = int(overall.get("volume") or 0)
+    except (TypeError, ValueError):
+        volume = 0
+
+    vwap = None
+    bf = candle.get("bar_flow") if isinstance(candle.get("bar_flow"), dict) else {}
+    for key in ("bar_vwap", "buyvwap", "sellvwap"):
+        if bf.get(key) is not None:
+            vwap = float(bf[key])
+            break
+    if vwap is None:
+        footprint = candle.get("footprint") if isinstance(candle.get("footprint"), list) else []
+        prices = [
+            float(lvl["price"])
+            for lvl in footprint
+            if isinstance(lvl, dict) and lvl.get("price") is not None
+        ]
+        if prices:
+            vwap = sum(prices) / len(prices)
+    mid = (high + low) / 2.0
+    open_close = vwap if vwap is not None else mid
+    return {
+        "open": open_close,
+        "high": high,
+        "low": low,
+        "close": open_close,
+        "volume": volume,
+        "oi": 0,
+    }
+
+
 def merge_footprint_raw_with_ohlc(
     footprint_doc: dict[str, Any],
     ohlc_index: dict[str, dict[str, Any]],
@@ -490,14 +544,20 @@ def merge_footprint_raw_with_ohlc(
     cfg: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     merged = dict(footprint_doc)
+    pp = _price_precision_from_doc(footprint_doc)
     candles_out: list[dict[str, Any]] = []
     matched = 0
+    fallback = 0
     for candle in footprint_doc.get("candles") or []:
         if not isinstance(candle, dict):
             continue
         block = dict(candle)
         time_key = str(block.get("time_gmt7") or "").strip()
         ohlc = ohlc_index.get(time_key)
+        if ohlc is None:
+            ohlc = _ohlc_fallback_from_footprint_candle(block, price_precision=pp)
+            if ohlc is not None:
+                fallback += 1
         block["ohlc"] = ohlc
         if ohlc is not None:
             matched += 1
@@ -505,6 +565,8 @@ def merge_footprint_raw_with_ohlc(
     merged["candles"] = candles_out
     merged["ohlc_matched"] = matched
     merged["ohlc_available"] = len(ohlc_index)
+    if fallback:
+        merged["ohlc_fallback"] = fallback
     merged = enrich_footprint_document_with_ws_bar_flow(merged, cfg=cfg)
     return slim_footprint_combined_document(merged)
 
