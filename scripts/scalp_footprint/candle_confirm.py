@@ -97,20 +97,6 @@ def conflict_bar_indices(signals: list[ScalpSignal]) -> set[int]:
     return {bar for bar, dirs in by_bar.items() if len(dirs) > 1}
 
 
-def near_session_high(
-    candles: list[dict[str, Any]],
-    bar_index: int,
-    *,
-    threshold: float = 8.0,
-) -> bool:
-    session_high = max(c["ohlc"]["high"] for c in candles)
-    return candles[bar_index]["ohlc"]["high"] >= session_high - threshold
-
-
-def _pattern_priority(pattern_id: str) -> int:
-    return {"sell_climax_short": 0, "sell_stack_short": 1, "cot_trap_short": 2}.get(pattern_id, 99)
-
-
 def near_local_bottom(
     candles: list[dict[str, Any]],
     bar_index: int,
@@ -190,6 +176,9 @@ def confirm_long(
         tier = _tier_c_vrev(f)
         return "C" if tier else None
 
+    if sig.pattern_id in ("absorption_trap_long", "absorption_trap_short"):
+        return "A+"
+
     return None
 
 
@@ -213,23 +202,7 @@ def confirm_short_m15(
     if sig.pattern_id == "sell_stack_short":
         return None
 
-    if sig.pattern_id == "cot_trap_short":
-        if not near_session_high(candles, bar_index):
-            return None
-        if not f.is_shooting:
-            return None
-        return "C"
-
     return None
-
-
-def confirm_short_m5(sig: ScalpSignal, candles: list[dict[str, Any]]) -> bool:
-    """M5 cot_trap_short: require shooting star / close at high (rejection wick)."""
-    if sig.pattern_id != "cot_trap_short" or sig.timeframe != "5m":
-        return True
-    prev = candles[sig.bar_index - 1] if sig.bar_index > 0 else None
-    f = extract_candle_features(candles[sig.bar_index], prev)
-    return f.is_shooting or (f.close_pos >= 0.85 and f.upper_pct >= 0.15)
 
 
 def _dedupe_m15_bar(signals_on_bar: list[ScalpSignal]) -> list[ScalpSignal]:
@@ -277,14 +250,11 @@ def filter_confirmed(
         if key in seen_bars:
             continue
 
-        if tf == "5m":
-            if sig.direction == Direction.LONG:
-                tier = confirm_long(sig, candles, conflicts=conflicts)
-                if tier is None:
-                    continue
-                sig.metrics = {**sig.metrics, "candle_tier": tier}
-            elif not confirm_short_m5(sig, candles):
+        if tf == "5m" and sig.direction == Direction.LONG:
+            tier = confirm_long(sig, candles, conflicts=conflicts)
+            if tier is None:
                 continue
+            sig.metrics = {**sig.metrics, "candle_tier": tier}
 
         out.append(sig)
         seen_bars.add(key)

@@ -66,7 +66,7 @@ import os
 import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Literal, Optional, Union
+from typing import Any, Literal, Optional, Sequence, Union
 
 ShortPlanKind = Literal["scalp", "chinh", "phu"]
 
@@ -1077,6 +1077,29 @@ def primary_account(accounts: list[MT5AccountEntry]) -> MT5AccountEntry:
 
 def primary_account_id(accounts: list[MT5AccountEntry]) -> str:
     return primary_account(accounts).id
+
+
+def select_mt5_accounts_by_ids(
+    accounts: list[MT5AccountEntry],
+    account_ids: Sequence[str],
+) -> tuple[list[MT5AccountEntry], list[str]]:
+    """
+    Lọc account theo ``id`` (giữ thứ tự trong ``account_ids``).
+    Trả về ``(matched, missing_ids)``.
+    """
+    by_id = {a.id: a for a in accounts}
+    matched: list[MT5AccountEntry] = []
+    missing: list[str] = []
+    for raw in account_ids:
+        aid = str(raw or "").strip()
+        if not aid:
+            continue
+        acc = by_id.get(aid)
+        if acc is None:
+            missing.append(aid)
+        else:
+            matched.append(acc)
+    return matched, missing
 
 
 def reference_price_for_lot(

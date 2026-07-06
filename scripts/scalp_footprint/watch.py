@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Headless GoCharting footprint watcher: fetch on M5/M15 close, detect scalp signals, Telegram alert."""
+"""Headless GoCharting footprint watcher: detect signals, track TP/SL, Telegram alert."""
 
 from __future__ import annotations
 
@@ -25,6 +25,15 @@ from candle_confirm import filter_confirmed  # noqa: E402
 from detect import _format_signal_text  # noqa: E402
 from footprint_loader import load_footprint_json  # noqa: E402
 from patterns import detect_patterns  # noqa: E402
+from exec_line import format_exec_line  # noqa: E402
+from signal_tracker import (  # noqa: E402
+    DEFAULT_MAX_HOLD_BARS,
+    DEFAULT_TRADES_NAME,
+    evaluate_open_trades,
+    format_outcome_message,
+    register_open_trades,
+    trade_id_from_signal,
+)
 from scheduling import (  # noqa: E402
     intervals_due,
     next_close_trigger,
@@ -63,14 +72,7 @@ def _combined_json_path(charts_dir: Path, interval: str) -> Path:
 
 
 def _signal_key(sig: dict[str, Any]) -> str:
-    return "|".join(
-        [
-            str(sig.get("timeframe") or ""),
-            str(sig.get("time_gmt7") or ""),
-            str(sig.get("pattern_id") or ""),
-            str(sig.get("bar_index") or ""),
-        ]
-    )
+    return trade_id_from_signal(sig)
 
 
 def load_state(path: Path) -> dict[str, Any]:
@@ -132,10 +134,13 @@ def capture_footprint_headless(
     gocharting_yaml: Path,
     headless: bool = True,
     parallel: bool = False,
-    extra_session_days: int | None = None,
+    extra_session_days: int = 0,
     stale_fallback: bool = True,
 ) -> list[Path]:
-    """Capture WS footprint sequentially in one browser (default)."""
+    """Capture WS footprint sequentially in one browser (default).
+
+    Scalp watch uses ``extra_session_days=0`` (today only) — no prior-session WS/IDB fetch.
+    """
     from automation_tool.config import default_storage_state_path, load_all_dotenv
     from automation_tool.gocharting_capture import load_gocharting_yaml
     from automation_tool.gocharting_ws_capture import capture_footprint_ws_plan
@@ -146,6 +151,11 @@ def capture_footprint_headless(
     from automation_tool.gocharting_gc_spot_convert import native_gc_footprint_cfg
 
     cfg = native_gc_footprint_cfg(load_gocharting_yaml(gocharting_yaml))
+    ws = cfg.setdefault("footprint_ws", {})
+    if not isinstance(ws, dict):
+        ws = {}
+        cfg["footprint_ws"] = ws
+    ws["extra_session_days"] = max(0, int(extra_session_days))
     email = os.getenv("GOCHARTING_EMAIL", "")
     password = os.getenv("GOCHARTING_PASSWORD", "")
 
@@ -194,12 +204,8 @@ def capture_footprint_headless(
             close_browser_and_context(browser, context)
 
 
-def detect_latest_signals(
-    json_path: Path,
-    *,
-    interval: str,
-    confirmed: bool,
-) -> list[dict[str, Any]]:
+def load_closed_candles(json_path: Path, *, interval: str) -> list[dict[str, Any]]:
+    """Footprint candles with forming bar dropped (for TP/SL checks)."""
     from automation_tool.gocharting_ws_decode import drop_forming_footprint_candle
 
     doc = load_footprint_json(json_path)
@@ -209,10 +215,20 @@ def detect_latest_signals(
         interval=iv,
         now=now_gmt7_naive(),
     )
-    candles = trimmed.get("candles") or []
+    return trimmed.get("candles") or []
+
+
+def detect_latest_signals(
+    json_path: Path,
+    *,
+    interval: str,
+    confirmed: bool,
+) -> list[dict[str, Any]]:
+    candles = load_closed_candles(json_path, interval=interval)
     if len(candles) < 2:
         return []
 
+    iv = interval.strip().lower()
     raw_signals = detect_patterns(candles, interval=iv, latest_only=True)
     if confirmed:
         confirmed_signals = filter_confirmed(raw_signals, candles, interval=iv)
@@ -238,11 +254,19 @@ def send_telegram_alert(
     )
 
 
-def format_alert_message(signals: list[dict[str, Any]], *, interval: str) -> str:
+def format_alert_message(
+    signals: list[dict[str, Any]],
+    *,
+    interval: str,
+    symbol: str = "XAUUSD",
+    include_exec: bool = True,
+) -> str:
     lines = [f"📊 Scalp footprint {interval.upper()} — {len(signals)} signal(s)"]
     for sig in signals:
         lines.append("")
         lines.append(_format_signal_text(sig))
+        if include_exec:
+            lines.append(format_exec_line(sig, symbol=symbol))
     return "\n".join(lines)
 
 
@@ -256,6 +280,8 @@ def process_intervals(
     bot_token: str,
     chat_id: str,
     state_path: Path,
+    trades_path: Path,
+    max_hold_bars: int,
     dry_run: bool,
 ) -> None:
     from scheduling import latest_closed_candle_open
@@ -287,7 +313,8 @@ def process_intervals(
     path_by_iv = _map_paths_by_interval(paths, intervals)
 
     now = now_gmt7_naive()
-    alerts: list[str] = []
+    new_alerts: list[str] = []
+    outcome_alerts: list[str] = []
 
     for iv in intervals:
         json_path = path_by_iv.get(iv) or _combined_json_path(charts_dir, iv)
@@ -295,8 +322,27 @@ def process_intervals(
             _log.warning("No footprint JSON for %s at %s", iv, json_path)
             continue
 
+        candles = load_closed_candles(json_path, interval=iv)
+        closed_trades = evaluate_open_trades(
+            trades_path,
+            candles,
+            interval=iv,
+            max_bars=max_hold_bars,
+        )
+        for trade in closed_trades:
+            outcome_alerts.append(format_outcome_message(trade))
+            _log.info(
+                "Trade closed %s %s pnl=%s",
+                trade.get("status"),
+                (trade.get("signal") or {}).get("pattern_id"),
+                trade.get("pnl"),
+            )
+
         signals = detect_latest_signals(json_path, interval=iv, confirmed=confirmed)
         new_signals = [s for s in signals if _signal_key(s) not in sent_keys]
+
+        if new_signals:
+            register_open_trades(trades_path, new_signals)
 
         minutes = 5 if iv == "5m" else 15
         closed_open = latest_closed_candle_open(now, minutes)
@@ -323,12 +369,30 @@ def process_intervals(
         )
 
         if new_signals:
-            alerts.append(format_alert_message(new_signals, interval=iv))
+            symbol = "XAUUSD"
+            try:
+                doc = load_footprint_json(json_path)
+                symbol = str(doc.get("symbol") or symbol)
+            except Exception:
+                pass
+            new_alerts.append(
+                format_alert_message(
+                    new_signals,
+                    interval=iv,
+                    symbol=symbol,
+                )
+            )
             for s in new_signals:
                 sent_keys.add(_signal_key(s))
 
-    if alerts:
-        body = "\n\n---\n\n".join(alerts)
+    messages: list[str] = []
+    if outcome_alerts:
+        messages.append("📋 Kết quả lệnh:\n" + "\n\n".join(outcome_alerts))
+    if new_alerts:
+        messages.append("\n\n---\n\n".join(new_alerts))
+
+    if messages:
+        body = "\n\n---\n\n".join(messages)
         if dry_run:
             print(body)
         else:
@@ -339,7 +403,7 @@ def process_intervals(
             )
             _log.info("Telegram alert sent to %s", chat_id)
     else:
-        _log.info("No new signals for intervals: %s", ", ".join(intervals))
+        _log.info("No new signals or closed trades for intervals: %s", ", ".join(intervals))
 
     state["last_processed"] = _serialize_processed_times(last_processed)
     state["sent_keys"] = sorted(sent_keys)[-500:]
@@ -362,6 +426,8 @@ def run_once(args: argparse.Namespace) -> None:
         bot_token=args.bot_token,
         chat_id=args.chat_id,
         state_path=args.state_file,
+        trades_path=args.trades_file,
+        max_hold_bars=args.max_hold_bars,
         dry_run=args.dry_run,
     )
 
@@ -400,6 +466,8 @@ def run_loop(args: argparse.Namespace) -> None:
                     bot_token=args.bot_token,
                     chat_id=args.chat_id,
                     state_path=args.state_file,
+                    trades_path=args.trades_file,
+                    max_hold_bars=args.max_hold_bars,
                     dry_run=args.dry_run,
                 )
             except Exception:
@@ -430,6 +498,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--charts-dir", type=Path, default=None)
     p.add_argument("--gocharting-yaml", type=Path, default=None)
     p.add_argument("--state-file", type=Path, default=None)
+    p.add_argument("--trades-file", type=Path, default=None, help="Open/closed trade tracker JSON")
+    p.add_argument(
+        "--max-hold-bars",
+        type=int,
+        default=DEFAULT_MAX_HOLD_BARS,
+        help=f"Max bars to hold before TIMEOUT (default {DEFAULT_MAX_HOLD_BARS})",
+    )
     p.add_argument("--telegram-chat-id", default=DEFAULT_TELEGRAM_CHAT_ID)
     p.add_argument("--buffer-sec", type=int, default=DEFAULT_BUFFER_SEC)
     p.add_argument("--confirmed", action=argparse.BooleanOptionalAction, default=True)
@@ -455,6 +530,7 @@ def main(argv: list[str] | None = None) -> int:
     args.charts_dir = args.charts_dir or _default_charts_dir()
     args.gocharting_yaml = args.gocharting_yaml or _default_gocharting_yaml()
     args.state_file = args.state_file or (args.charts_dir / DEFAULT_STATE_NAME)
+    args.trades_file = args.trades_file or (args.charts_dir / DEFAULT_TRADES_NAME)
     args.chat_id = (args.telegram_chat_id or DEFAULT_TELEGRAM_CHAT_ID).strip()
     args.bot_token = (settings.telegram_bot_token or os.getenv("TELEGRAM_BOT_TOKEN", "")).strip()
 

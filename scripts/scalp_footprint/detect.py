@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Auto-detect six scalp footprint patterns on GoCharting footprint JSON."""
+"""Auto-detect scalp footprint patterns on GoCharting footprint JSON."""
 
 from __future__ import annotations
 
@@ -25,6 +25,18 @@ def _default_combined_paths(charts_dir: Path) -> list[Path]:
     ]
 
 
+def _format_entry_note(sig: dict) -> str:
+    hint = sig.get("entry_hint") or ""
+    level = sig.get("entry_bar_level")
+    ohlc = sig.get("ohlc") or {}
+    o, h, l, c = (ohlc.get("open"), ohlc.get("high"), ohlc.get("low"), ohlc.get("close"))
+    if level and all(v is not None for v in (o, h, l, c)):
+        return f"{hint} | điểm vào nến cuối: {level} (O={o:.2f} H={h:.2f} L={l:.2f} C={c:.2f})"
+    if level:
+        return f"{hint} | điểm vào nến cuối: {level}"
+    return hint
+
+
 def _format_signal_text(sig: dict) -> str:
     tp = sig.get("take_profit") or []
     tp_str = f"{tp[0]}–{tp[1]}" if len(tp) == 2 else str(tp)
@@ -37,7 +49,7 @@ def _format_signal_text(sig: dict) -> str:
         f"  time:    {sig.get('time_gmt7', '')}",
         f"  bar:     #{sig.get('bar_index')}  tf: {sig.get('timeframe')}",
         f"  flow:    delta={bf.get('delta', 0):+.0f}  cot_low={bf.get('cot_low', 0):+.0f}  cot_high={bf.get('cot_high', 0):+.0f}",
-        f"  note:    {sig.get('entry_hint')}",
+        f"  note:    {_format_entry_note(sig)}",
         f"  SL:      {sig.get('stop_loss')}  TP: {tp_str}",
     ]
     metrics = sig.get("metrics") or {}
@@ -93,16 +105,17 @@ def run_on_file(
 def main(argv: list[str] | None = None) -> int:
     pattern_ids = {p.id for p in PATTERNS}
     parser = argparse.ArgumentParser(
-        description="Detect six scalp footprint patterns on GoCharting JSON.",
+        description="Detect scalp footprint patterns on GoCharting JSON.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Patterns:
-  cot_trap_short      SHORT limit @ bar high     (5m, 15m)
-  sell_stack_short    SHORT limit @ bar high     (15m)
-  sell_climax_short   SHORT limit @ 50%% retrace  (15m)
-  exhaustion_long     LONG  market @ close       (5m)
-  v_reversal_long     LONG  market @ close       (5m, 2-bar)
-  sweep_absorb_long   LONG  market @ close       (5m)
+  sell_stack_short        SHORT limit @ bar high     (15m)
+  sell_climax_short       SHORT limit @ 50%% retrace  (15m)
+  exhaustion_long         LONG  market @ close       (5m)
+  v_reversal_long         LONG  market @ close       (5m, 2-bar)
+  sweep_absorb_long       LONG  market @ close       (5m)
+  absorption_trap_long    LONG  market @ confirm open (5m, A+)
+  absorption_trap_short   SHORT market @ confirm open (5m, A+)
 
 Examples:
   python scripts/scalp_footprint/detect.py data/XAUUSD/charts/footprint_images/footprint_combined_5m.json

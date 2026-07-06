@@ -114,29 +114,18 @@ def _lot_override_for_entry(
     return None, f"lot rule không hỗ trợ: {rule!r}"
 
 
-def execute_trade_all_accounts(
+def _execute_trade_on_account_list(
     trade: ParsedTrade,
     accounts: list[MT5AccountEntry],
     *,
     dry_run: bool = True,
     symbol_override: Optional[str] = None,
     zone_label: Optional[str] = None,
-    zone_id: Optional[str] = None,
-    zone_source: Optional[str] = None,
     deviation: int = 20,
     magic: Optional[int] = None,
     log_tp2: bool = True,
     order_comment: Optional[str] = None,
 ) -> MT5MultiExecutionSummary:
-    """
-    Gửi lệnh lần lượt qua từng tài khoản (``execute_trade`` shutdown sau mỗi lần).
-    """
-    accounts = filter_mt5_accounts_for_zone_label(
-        accounts,
-        zone_label,
-        zone_id=zone_id or zone_label,
-        zone_source=zone_source,
-    )
     out = MT5MultiExecutionSummary()
     if not accounts:
         out.ok_all = False
@@ -185,6 +174,68 @@ def execute_trade_all_accounts(
         if tid > 0 and ex.account_id:
             out.tickets_by_account_id[str(ex.account_id)] = tid
     return out
+
+
+def execute_trade_selected_accounts(
+    trade: ParsedTrade,
+    accounts: list[MT5AccountEntry],
+    *,
+    dry_run: bool = True,
+    symbol_override: Optional[str] = None,
+    zone_label: Optional[str] = None,
+    deviation: int = 20,
+    magic: Optional[int] = None,
+    log_tp2: bool = True,
+    order_comment: Optional[str] = None,
+) -> MT5MultiExecutionSummary:
+    """Gửi lệnh qua đúng danh sách account đã chọn (không lọc ``trade``/zone)."""
+    return _execute_trade_on_account_list(
+        trade,
+        accounts,
+        dry_run=dry_run,
+        symbol_override=symbol_override,
+        zone_label=zone_label,
+        deviation=deviation,
+        magic=magic,
+        log_tp2=log_tp2,
+        order_comment=order_comment,
+    )
+
+
+def execute_trade_all_accounts(
+    trade: ParsedTrade,
+    accounts: list[MT5AccountEntry],
+    *,
+    dry_run: bool = True,
+    symbol_override: Optional[str] = None,
+    zone_label: Optional[str] = None,
+    zone_id: Optional[str] = None,
+    zone_source: Optional[str] = None,
+    deviation: int = 20,
+    magic: Optional[int] = None,
+    log_tp2: bool = True,
+    order_comment: Optional[str] = None,
+) -> MT5MultiExecutionSummary:
+    """
+    Gửi lệnh lần lượt qua từng tài khoản (``execute_trade`` shutdown sau mỗi lần).
+    """
+    accounts = filter_mt5_accounts_for_zone_label(
+        accounts,
+        zone_label,
+        zone_id=zone_id or zone_label,
+        zone_source=zone_source,
+    )
+    return _execute_trade_on_account_list(
+        trade,
+        accounts,
+        dry_run=dry_run,
+        symbol_override=symbol_override,
+        zone_label=zone_label,
+        deviation=deviation,
+        magic=magic,
+        log_tp2=log_tp2,
+        order_comment=order_comment,
+    )
 
 
 def format_mt5_multi_for_telegram(summary: MT5MultiExecutionSummary) -> str:

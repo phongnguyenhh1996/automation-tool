@@ -76,8 +76,11 @@ def test_capture_footprint_headless_uses_native_gc_cfg(monkeypatch) -> None:
 
     captured_cfg: dict = {}
 
+    captured_kwargs: dict = {}
+
     def _fake_ws_plan(_ctx, cfg, **kwargs):
         captured_cfg.update(cfg)
+        captured_kwargs.update(kwargs)
         return []
 
     yaml_path = Path("config/gocharting.yaml")
@@ -103,6 +106,8 @@ def test_capture_footprint_headless_uses_native_gc_cfg(monkeypatch) -> None:
     )
     assert captured_cfg["footprint_ws"]["gc_to_spot"]["enabled"] is False
     assert captured_cfg["footprint_ws"]["mt5_spot"] is False
+    assert captured_cfg["footprint_ws"]["extra_session_days"] == 0
+    assert captured_kwargs.get("extra_session_days") == 0
 
 
 class _FakePlaywright:

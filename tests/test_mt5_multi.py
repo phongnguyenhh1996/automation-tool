@@ -773,3 +773,78 @@ def test_execute_trade_all_accounts_short_tp_overrides_tp(
     assert seen[1][0] == pytest.approx(4735.0)
     assert seen[1][1] == pytest.approx(4755.0)
     assert seen[1][2] == pytest.approx(4749.7)
+
+
+def test_select_mt5_accounts_by_ids_preserves_order() -> None:
+    from automation_tool.mt5_accounts import LotRuleFromTrade, select_mt5_accounts_by_ids
+
+    accounts = [
+        MT5AccountEntry(
+            id="acc_a",
+            terminal_path="/a",
+            login=1,
+            password="p",
+            server="s",
+            primary=True,
+            lot=LotRuleFromTrade(),
+        ),
+        MT5AccountEntry(
+            id="acc_b",
+            terminal_path="/b",
+            login=2,
+            password="p",
+            server="s",
+            primary=False,
+            lot=LotRuleFromTrade(),
+        ),
+    ]
+    selected, missing = select_mt5_accounts_by_ids(accounts, ("acc_b", "acc_a", "nope"))
+    assert [a.id for a in selected] == ["acc_b", "acc_a"]
+    assert missing == ["nope"]
+
+
+def test_execute_trade_selected_accounts_skips_zone_trade_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from automation_tool.mt5_accounts import LotRuleFromTrade
+    from automation_tool.mt5_multi import execute_trade_selected_accounts
+
+    trade = ParsedTrade(
+        symbol="XAUUSD",
+        side="BUY",
+        kind="MARKET",
+        price=None,
+        sl=4148.0,
+        tp1=4156.0,
+        tp2=None,
+        lot=0.01,
+        raw_line="BUY MARKET | SL 4148 | TP1 4156 | Lot 0.01",
+    )
+    accounts = [
+        MT5AccountEntry(
+            id="no_scalp_flag",
+            terminal_path="/tmp/mt5-acc-a/terminal64.exe",
+            login=1,
+            password="p",
+            server="srv",
+            primary=True,
+            lot=LotRuleFromTrade(),
+            trade={"chinh": True},
+        ),
+    ]
+    seen: list[str] = []
+
+    def fake_execute_trade(*args, **kwargs):
+        seen.append(str(kwargs.get("account_id")))
+        return MT5ExecutionResult(ok=True, message="ok", account_id=kwargs.get("account_id"))
+
+    monkeypatch.setattr("automation_tool.mt5_multi.execute_trade", fake_execute_trade)
+
+    summary = execute_trade_selected_accounts(
+        trade,
+        accounts,
+        dry_run=True,
+        zone_label="scalp",
+    )
+    assert summary.ok_all
+    assert seen == ["no_scalp_flag"]
