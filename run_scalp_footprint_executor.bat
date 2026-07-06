@@ -12,7 +12,9 @@ echo ============================================================
 REM Scalp footprint VPS executor: listen Telegram SCALP_EXEC -> MT5 MARKET.
 REM Can chay sau khi MT5 terminal da login (Task Scheduler "At log on").
 REM Cau hinh chinh: .env hoac block CONFIG ben duoi.
-REM   TELEGRAM_BOT_TOKEN
+REM   TELEGRAM_BOT_TOKEN          — post reply vao channel scalp
+REM   SCALP_EXEC_LISTEN_BOT_TOKEN — BAT BUOC: bot KHAC (admin channel), poll getUpdates
+REM                                 (cung token voi watch thi Telegram KHONG gui lai SCALP_EXEC)
 REM   SCALP_EXEC_ACCOUNT_IDS=id trong accounts.json (vd: main)
 REM   MT5_ACCOUNTS_JSON=duong dan accounts.json
 REM SL/TP: lay bid/ask MT5 live (XAUUSD/XAUUSDm/XAUUSDc), +-4 gia mac dinh.
@@ -36,7 +38,9 @@ set "SCALP_EXEC_LOT=0.01"
 set "SCALP_EXEC_SL_POINTS=4"
 set "SCALP_EXEC_TP_POINTS=4"
 set "SCALP_EXEC_ACCOUNT_IDS=acc_secondary2"
+set "SCALP_EXEC_LISTEN_BOT_TOKEN=7968007852:AAG5NDnedhqfw0aYUtDANY-RrIUU0gSlYEo"
 REM Telegram channel scalp footprint (hardcoded in telegram_executor.py): -1004297700919
+REM Catch-up 1 lenh: python scripts\scalp_footprint\telegram_executor.py --exec-line "SCALP_EXEC|..."
 REM set "MT5_ACCOUNTS_JSON=%~dp0config\accounts.json"
 REM set "SCALP_EXEC_PATTERNS="
 REM -------------------------------------------------------------------
@@ -69,6 +73,10 @@ echo [%date% %time%] INFO: Starting scalp footprint executor %DRY_FLAG% lot=%SCA
 if defined SCALP_EXEC_ACCOUNT_IDS (
   echo [%date% %time%] INFO: SCALP_EXEC_ACCOUNT_IDS=%SCALP_EXEC_ACCOUNT_IDS%
   >> "%LOG_FILE%" echo [%date% %time%] INFO: SCALP_EXEC_ACCOUNT_IDS=%SCALP_EXEC_ACCOUNT_IDS%
+)
+if defined SCALP_EXEC_LISTEN_BOT_TOKEN (
+  echo [%date% %time%] INFO: SCALP_EXEC_LISTEN_BOT_TOKEN is set (listen bot for getUpdates)
+  >> "%LOG_FILE%" echo [%date% %time%] INFO: SCALP_EXEC_LISTEN_BOT_TOKEN is set (listen bot for getUpdates)
 )
 if defined MT5_ACCOUNTS_JSON (
   echo [%date% %time%] INFO: MT5_ACCOUNTS_JSON=%MT5_ACCOUNTS_JSON%

@@ -5,7 +5,9 @@ VPS daemon: listen Telegram for SCALP_EXEC lines from watch.py and place MT5 ord
 Requires Windows VPS with MetaTrader5 terminal logged in.
 
 Env:
-  TELEGRAM_BOT_TOKEN (chat cố định scalp: -1004297700919 — không đọc TELEGRAM_CHAT_ID)
+  TELEGRAM_BOT_TOKEN — gửi reply vào channel scalp (watch cũng dùng token này để post)
+  SCALP_EXEC_LISTEN_BOT_TOKEN — bot KHÁC, admin channel scalp, dùng getUpdates (bắt buộc
+    nếu watch post bằng TELEGRAM_BOT_TOKEN: Telegram không echo channel_post của chính bot đó)
   SCALP_EXEC_LOT=0.01
   SCALP_EXEC_PATTERNS=   (empty = all patterns; comma list to filter)
   SCALP_EXEC_SL_POINTS=4
@@ -105,6 +107,18 @@ def _account_ids_from_env() -> tuple[str, ...]:
     if not raw:
         return ()
     return tuple(p.strip() for p in raw.split(",") if p.strip())
+
+
+def _send_bot_token(settings: Settings) -> str:
+    return (settings.telegram_bot_token or os.getenv("TELEGRAM_BOT_TOKEN", "")).strip()
+
+
+def _listen_bot_token(settings: Settings) -> str:
+    """Bot token for getUpdates — must differ from watch poster when using a channel."""
+    raw = (os.getenv("SCALP_EXEC_LISTEN_BOT_TOKEN") or "").strip()
+    if raw:
+        return raw
+    return _send_bot_token(settings)
 
 
 def _resolve_exec_accounts(
@@ -433,6 +447,54 @@ def handle_exec_line(
     return reply, True
 
 
+def run_exec_line_once(
+    line: str,
+    *,
+    settings: Settings,
+    state_path: Path,
+    lot: float,
+    dry_run: bool,
+    sl_points: float,
+    tp_points: float,
+    pattern_whitelist: set[str] | None,
+    accounts_path: Optional[Path],
+    account_ids: tuple[str, ...],
+    notify: bool = True,
+) -> int:
+    """Execute one SCALP_EXEC line (manual catch-up). Returns process exit code."""
+    send_token = _send_bot_token(settings)
+    if not send_token:
+        raise SystemExit("TELEGRAM_BOT_TOKEN is required.")
+
+    state = load_state(state_path)
+    reply, executed = handle_exec_line(
+        line.strip(),
+        state=state,
+        lot=lot,
+        dry_run=dry_run,
+        sl_points=sl_points,
+        tp_points=tp_points,
+        pattern_whitelist=pattern_whitelist,
+        accounts_path=accounts_path,
+        account_ids=account_ids,
+    )
+    save_state(state_path, state)
+
+    if reply and notify:
+        try:
+            send_message(
+                bot_token=send_token,
+                chat_id=DEFAULT_SCALP_TELEGRAM_CHAT_ID,
+                text=reply,
+            )
+        except Exception as e:
+            _log.warning("Failed to send execution reply: %s", e)
+
+    if reply:
+        print(reply)
+    return 0 if executed else 1
+
+
 def run_executor(
     *,
     settings: Settings,
@@ -446,21 +508,26 @@ def run_executor(
     account_ids: tuple[str, ...],
     long_poll_timeout: int = 45,
 ) -> None:
-    token = (settings.telegram_bot_token or "").strip()
-    if not token:
+    send_token = _send_bot_token(settings)
+    listen_token = _listen_bot_token(settings)
+    if not send_token:
         raise SystemExit("TELEGRAM_BOT_TOKEN is required.")
+    if not listen_token:
+        raise SystemExit("SCALP_EXEC_LISTEN_BOT_TOKEN or TELEGRAM_BOT_TOKEN is required.")
 
     chat_id = DEFAULT_SCALP_TELEGRAM_CHAT_ID
     notify = chat_id
     state = load_state(state_path)
-    base = f"https://api.telegram.org/bot{token}/getUpdates"
+    base = f"https://api.telegram.org/bot{listen_token}/getUpdates"
     offset: Optional[int] = None
     allowed_updates = json.dumps(["message", "channel_post"])
 
     accounts_label = ",".join(account_ids) if account_ids else "zone:scalp"
+    listen_src = "SCALP_EXEC_LISTEN_BOT_TOKEN" if os.getenv("SCALP_EXEC_LISTEN_BOT_TOKEN", "").strip() else "TELEGRAM_BOT_TOKEN"
     _log.info(
-        "Scalp executor listening chat_id=%s lot=%s sl/tp=%s/%s accounts=%s dry_run=%s patterns=%s state=%s",
+        "Scalp executor listening chat_id=%s listen_token=%s lot=%s sl/tp=%s/%s accounts=%s dry_run=%s patterns=%s state=%s",
         chat_id,
+        listen_src,
         lot,
         sl_points,
         tp_points,
@@ -469,11 +536,17 @@ def run_executor(
         sorted(pattern_whitelist) if pattern_whitelist else "ALL",
         state_path,
     )
+    if listen_token == send_token:
+        _log.warning(
+            "SCALP_EXEC_LISTEN_BOT_TOKEN not set — polling same bot that watch uses to POST. "
+            "Telegram does not deliver channel_post updates for a bot's own messages; "
+            "create a second bot, add it as channel admin, set SCALP_EXEC_LISTEN_BOT_TOKEN on VPS."
+        )
 
     if not dry_run:
         try:
             send_message(
-                bot_token=token,
+                bot_token=send_token,
                 chat_id=notify,
                 text=(
                     f"✅ Scalp footprint executor started (LIVE lot={lot}, "
@@ -538,7 +611,7 @@ def run_executor(
                         save_state(state_path, state)
                         if reply:
                             try:
-                                send_message(bot_token=token, chat_id=notify, text=reply)
+                                send_message(bot_token=send_token, chat_id=notify, text=reply)
                             except Exception as e:
                                 _log.warning("Failed to send execution reply: %s", e)
 
@@ -584,6 +657,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Comma-separated account id from accounts.json (override SCALP_EXEC_ACCOUNT_IDS)",
     )
     p.add_argument("--long-poll-timeout", type=int, default=45)
+    p.add_argument(
+        "--exec-line",
+        default=None,
+        help="Execute one SCALP_EXEC line then exit (manual catch-up)",
+    )
+    p.add_argument(
+        "--no-notify",
+        action="store_true",
+        help="With --exec-line: do not post result to Telegram",
+    )
     p.add_argument("-v", "--verbose", action="store_true")
     return p
 
@@ -624,6 +707,23 @@ def main(argv: list[str] | None = None) -> None:
         account_ids = tuple(p.strip() for p in args.account_ids.split(",") if p.strip())
     else:
         account_ids = _account_ids_from_env()
+
+    if args.exec_line:
+        raise SystemExit(
+            run_exec_line_once(
+                args.exec_line,
+                settings=settings,
+                state_path=state_path,
+                lot=lot,
+                dry_run=dry_run,
+                sl_points=sl_points,
+                tp_points=tp_points,
+                pattern_whitelist=wl,
+                accounts_path=args.accounts,
+                account_ids=account_ids,
+                notify=not args.no_notify,
+            )
+        )
 
     run_executor(
         settings=settings,

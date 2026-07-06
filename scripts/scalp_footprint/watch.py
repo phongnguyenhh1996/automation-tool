@@ -40,11 +40,12 @@ from scheduling import (  # noqa: E402
     now_gmt7_naive,
     seconds_until,
 )
+from warm_session import WarmFootprintSession  # noqa: E402
 
 _log = logging.getLogger("scalp_footprint.watch")
 
 DEFAULT_TELEGRAM_CHAT_ID = "-1004297700919"
-DEFAULT_BUFFER_SEC = 20
+DEFAULT_BUFFER_SEC = 5
 DEFAULT_STATE_NAME = "scalp_footprint_watch_state.json"
 
 
@@ -266,7 +267,8 @@ def format_alert_message(
         lines.append("")
         lines.append(_format_signal_text(sig))
         if include_exec:
-            lines.append(format_exec_line(sig, symbol=symbol))
+            # EXEC line always XAUUSD — VPS maps to broker symbol; not GC futures label.
+            lines.append(format_exec_line(sig, symbol="XAUUSD"))
     return "\n".join(lines)
 
 
@@ -283,6 +285,7 @@ def process_intervals(
     trades_path: Path,
     max_hold_bars: int,
     dry_run: bool,
+    captured_paths: list[Path] | None = None,
 ) -> None:
     from scheduling import latest_closed_candle_open
 
@@ -303,13 +306,17 @@ def process_intervals(
     last_processed = _parse_processed_times(state.get("last_processed"))
     sent_keys: set[str] = set(state.get("sent_keys") or [])
 
-    _log.info("Capturing footprint headless: %s", ", ".join(intervals))
-    paths = capture_footprint_headless(
-        intervals=intervals,
-        charts_dir=charts_dir,
-        gocharting_yaml=gocharting_yaml,
-        headless=headless,
-    )
+    if captured_paths is not None:
+        paths = captured_paths
+        _log.info("Using pre-captured footprint paths: %s", ", ".join(p.name for p in paths))
+    else:
+        _log.info("Capturing footprint headless: %s", ", ".join(intervals))
+        paths = capture_footprint_headless(
+            intervals=intervals,
+            charts_dir=charts_dir,
+            gocharting_yaml=gocharting_yaml,
+            headless=headless,
+        )
     path_by_iv = _map_paths_by_interval(paths, intervals)
 
     now = now_gmt7_naive()
@@ -417,8 +424,19 @@ def run_once(args: argparse.Namespace) -> None:
     if not due:
         due = ["5m", "15m"]
         _log.info("Nothing due by schedule — forcing capture: %s", due)
+    due_tuple = tuple(due)
+    captured_paths: list[Path] | None = None
+    if args.warm:
+        with WarmFootprintSession(
+            charts_dir=args.charts_dir,
+            gocharting_yaml=args.gocharting_yaml,
+            headless=not args.headed,
+            intervals=due_tuple,
+            warm_wait_ms=args.warm_wait_ms,
+        ) as session:
+            captured_paths = session.capture_intervals(due_tuple)
     process_intervals(
-        intervals=tuple(due),
+        intervals=due_tuple,
         charts_dir=args.charts_dir,
         gocharting_yaml=args.gocharting_yaml,
         confirmed=args.confirmed,
@@ -429,25 +447,68 @@ def run_once(args: argparse.Namespace) -> None:
         trades_path=args.trades_file,
         max_hold_bars=args.max_hold_bars,
         dry_run=args.dry_run,
+        captured_paths=captured_paths,
     )
 
 
-def run_loop(args: argparse.Namespace) -> None:
-    _log.info(
-        "Scalp footprint watch started | buffer=%ds chat=%s confirmed=%s",
-        args.buffer_sec,
-        args.chat_id,
-        args.confirmed,
-    )
+def _send_watch_error(args: argparse.Namespace) -> None:
     if not args.dry_run and args.bot_token:
         try:
             send_telegram_alert(
                 bot_token=args.bot_token,
                 chat_id=args.chat_id,
-                text="✅ Scalp footprint watch started (M5/M15 headless)",
+                text="⚠️ Scalp footprint watch error — xem log server",
+            )
+        except Exception:
+            pass
+
+
+def _startup_telegram(args: argparse.Namespace, *, mode: str) -> None:
+    if not args.dry_run and args.bot_token:
+        try:
+            send_telegram_alert(
+                bot_token=args.bot_token,
+                chat_id=args.chat_id,
+                text=f"✅ Scalp footprint watch started ({mode}, buffer={args.buffer_sec}s)",
             )
         except Exception as e:
             _log.warning("Startup Telegram ping failed: %s", e)
+
+
+def _run_due_cycle(
+    args: argparse.Namespace,
+    due: list[str],
+    *,
+    warm_session: WarmFootprintSession | None = None,
+) -> None:
+    due_tuple = tuple(due)
+    captured_paths: list[Path] | None = None
+    if warm_session is not None:
+        captured_paths = warm_session.capture_intervals(due_tuple)
+    process_intervals(
+        intervals=due_tuple,
+        charts_dir=args.charts_dir,
+        gocharting_yaml=args.gocharting_yaml,
+        confirmed=args.confirmed,
+        headless=not args.headed,
+        bot_token=args.bot_token,
+        chat_id=args.chat_id,
+        state_path=args.state_file,
+        trades_path=args.trades_file,
+        max_hold_bars=args.max_hold_bars,
+        dry_run=args.dry_run,
+        captured_paths=captured_paths,
+    )
+
+
+def run_loop_cold(args: argparse.Namespace) -> None:
+    _log.info(
+        "Scalp footprint watch (cold) | buffer=%ds chat=%s confirmed=%s",
+        args.buffer_sec,
+        args.chat_id,
+        args.confirmed,
+    )
+    _startup_telegram(args, mode="M5/M15 cold")
 
     while True:
         now = now_gmt7_naive()
@@ -457,30 +518,10 @@ def run_loop(args: argparse.Namespace) -> None:
 
         if due:
             try:
-                process_intervals(
-                    intervals=tuple(due),
-                    charts_dir=args.charts_dir,
-                    gocharting_yaml=args.gocharting_yaml,
-                    confirmed=args.confirmed,
-                    headless=not args.headed,
-                    bot_token=args.bot_token,
-                    chat_id=args.chat_id,
-                    state_path=args.state_file,
-                    trades_path=args.trades_file,
-                    max_hold_bars=args.max_hold_bars,
-                    dry_run=args.dry_run,
-                )
+                _run_due_cycle(args, due)
             except Exception:
                 _log.exception("Capture/detect cycle failed")
-                if not args.dry_run and args.bot_token:
-                    try:
-                        send_telegram_alert(
-                            bot_token=args.bot_token,
-                            chat_id=args.chat_id,
-                            text="⚠️ Scalp footprint watch error — xem log server",
-                        )
-                    except Exception:
-                        pass
+                _send_watch_error(args)
             continue
 
         t5 = next_close_trigger(now, 5, buffer_sec=args.buffer_sec)
@@ -489,6 +530,57 @@ def run_loop(args: argparse.Namespace) -> None:
         sleep_s = seconds_until(wake_at, now)
         _log.debug("Sleep %.0fs until %s", sleep_s, wake_at.isoformat())
         time.sleep(min(sleep_s, 3600))
+
+
+def run_loop_warm(args: argparse.Namespace) -> None:
+    _log.info(
+        "Scalp footprint watch (warm) | buffer=%ds chat=%s confirmed=%s warm_wait_ms=%d",
+        args.buffer_sec,
+        args.chat_id,
+        args.confirmed,
+        args.warm_wait_ms,
+    )
+    _startup_telegram(args, mode="M5/M15 warm WS")
+
+    session = WarmFootprintSession(
+        charts_dir=args.charts_dir,
+        gocharting_yaml=args.gocharting_yaml,
+        headless=not args.headed,
+        intervals=("5m", "15m"),
+        warm_wait_ms=args.warm_wait_ms,
+        health_interval_sec=args.health_interval_sec,
+    )
+    try:
+        session.start()
+        while True:
+            now = now_gmt7_naive()
+            state = load_state(args.state_file)
+            last_processed = _parse_processed_times(state.get("last_processed"))
+            due = intervals_due(now, buffer_sec=args.buffer_sec, last_processed=last_processed)
+
+            if due:
+                try:
+                    _run_due_cycle(args, due, warm_session=session)
+                except Exception:
+                    _log.exception("Warm capture/detect cycle failed")
+                    _send_watch_error(args)
+                continue
+
+            t5 = next_close_trigger(now, 5, buffer_sec=args.buffer_sec)
+            t15 = next_close_trigger(now, 15, buffer_sec=args.buffer_sec)
+            wake_at = min(t5, t15)
+            sleep_s = seconds_until(wake_at, now)
+            _log.debug("Sleep %.0fs until %s", sleep_s, wake_at.isoformat())
+            time.sleep(min(sleep_s, 3600))
+    finally:
+        session.close()
+
+
+def run_loop(args: argparse.Namespace) -> None:
+    if args.warm:
+        run_loop_warm(args)
+    else:
+        run_loop_cold(args)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -507,6 +599,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--telegram-chat-id", default=DEFAULT_TELEGRAM_CHAT_ID)
     p.add_argument("--buffer-sec", type=int, default=DEFAULT_BUFFER_SEC)
+    p.add_argument(
+        "--warm",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Keep M5/M15 GoCharting tabs warm with continuous WS (default: on)",
+    )
+    p.add_argument(
+        "--warm-wait-ms",
+        type=int,
+        default=15_000,
+        help="Max WS poll wait per warm capture cycle (default 15000)",
+    )
+    p.add_argument(
+        "--health-interval-sec",
+        type=int,
+        default=300,
+        help="Warm tab health check / resubscribe interval (default 300)",
+    )
     p.add_argument("--confirmed", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--headed", action="store_true", help="Show browser (default: headless)")
     p.add_argument("--dry-run", action="store_true", help="Print signals, do not send Telegram")
