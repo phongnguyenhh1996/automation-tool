@@ -143,7 +143,9 @@ def capture_footprint_headless(
     from playwright.sync_api import sync_playwright
 
     load_all_dotenv()
-    cfg = load_gocharting_yaml(gocharting_yaml)
+    from automation_tool.gocharting_gc_spot_convert import native_gc_footprint_cfg
+
+    cfg = native_gc_footprint_cfg(load_gocharting_yaml(gocharting_yaml))
     email = os.getenv("GOCHARTING_EMAIL", "")
     password = os.getenv("GOCHARTING_PASSWORD", "")
 

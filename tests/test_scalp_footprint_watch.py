@@ -69,3 +69,45 @@ def test_map_paths_by_interval_exact_match() -> None:
     assert mapped["5m"].name == "footprint_combined_5m.json"
     assert mapped["15m"].name == "footprint_combined_15m.json"
     assert mapped["5m"] != mapped["15m"]
+
+
+def test_capture_footprint_headless_uses_native_gc_cfg(monkeypatch) -> None:
+    from watch import capture_footprint_headless
+
+    captured_cfg: dict = {}
+
+    def _fake_ws_plan(_ctx, cfg, **kwargs):
+        captured_cfg.update(cfg)
+        return []
+
+    yaml_path = Path("config/gocharting.yaml")
+    monkeypatch.setattr(
+        "automation_tool.gocharting_ws_capture.capture_footprint_ws_plan",
+        _fake_ws_plan,
+    )
+    monkeypatch.setattr(
+        "automation_tool.playwright_browser.launch_chrome_context",
+        lambda *a, **k: (None, None),
+    )
+    monkeypatch.setattr(
+        "automation_tool.playwright_browser.close_browser_and_context",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr("playwright.sync_api.sync_playwright", lambda: _FakePlaywright())
+
+    capture_footprint_headless(
+        intervals=("5m",),
+        charts_dir=Path("data/XAUUSD/charts"),
+        gocharting_yaml=yaml_path,
+        headless=True,
+    )
+    assert captured_cfg["footprint_ws"]["gc_to_spot"]["enabled"] is False
+    assert captured_cfg["footprint_ws"]["mt5_spot"] is False
+
+
+class _FakePlaywright:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False

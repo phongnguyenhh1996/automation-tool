@@ -545,3 +545,45 @@ def enrich_prepared_footprint_stacked(
         enriched.append(block)
     out["candles"] = enriched
     return out
+
+
+def strip_disabled_orderflow(
+    doc: dict[str, Any],
+    cfg: dict[str, Any],
+) -> dict[str, Any]:
+    """Drop ``orderflow`` subfields turned off in config (e.g. ``stacked_in_candle``)."""
+    if not isinstance(doc, dict):
+        return doc
+    derived_cfg = derived_config_from_cfg(cfg, doc)
+    candles_raw = doc.get("candles")
+    if not isinstance(candles_raw, list):
+        return doc
+
+    out = dict(doc)
+    enriched: list[Any] = []
+    changed = False
+    for candle in candles_raw:
+        if not isinstance(candle, dict):
+            enriched.append(candle)
+            continue
+        block = dict(candle)
+        orderflow_raw = block.get("orderflow")
+        if not isinstance(orderflow_raw, dict):
+            enriched.append(block)
+            continue
+        orderflow = dict(orderflow_raw)
+        if not derived_cfg.stacked_enabled:
+            if orderflow.pop("stacked_in_candle", None) is not None:
+                changed = True
+        if not derived_cfg.absorption_enabled:
+            if orderflow.pop("absorption", None) is not None:
+                changed = True
+        if orderflow:
+            block["orderflow"] = orderflow
+        else:
+            block.pop("orderflow", None)
+            changed = True
+        enriched.append(block)
+    if changed:
+        out["candles"] = enriched
+    return out

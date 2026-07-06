@@ -2573,18 +2573,9 @@ def _require_gocharting_post_capture_valid(
 
 def _gc_only_gocharting_cfg(gocharting_yaml: Path) -> dict:
     """Runtime override: native GC1! footprint (no gc_to_spot / mt5_spot merge)."""
-    cfg = copy.deepcopy(load_gocharting_yaml(gocharting_yaml))
-    ws = cfg.get("footprint_ws")
-    if not isinstance(ws, dict):
-        ws = {}
-        cfg["footprint_ws"] = ws
-    gts = ws.get("gc_to_spot")
-    if not isinstance(gts, dict):
-        gts = {}
-        ws["gc_to_spot"] = gts
-    gts["enabled"] = False
-    ws["mt5_spot"] = False
-    return cfg
+    from automation_tool.gocharting_gc_spot_convert import native_gc_footprint_cfg
+
+    return native_gc_footprint_cfg(load_gocharting_yaml(gocharting_yaml))
 
 
 def _all_flow_gocharting_openai_kw(

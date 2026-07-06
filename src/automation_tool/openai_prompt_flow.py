@@ -379,6 +379,7 @@ def prepare_footprint_json_for_openai(
     Non-footprint paths are returned unchanged.
     Converted ``footprint_{SYMBOL}_{iv}.json`` that are already finalized are returned as-is.
     """
+    from automation_tool.gocharting_footprint_derived import strip_disabled_orderflow
     from automation_tool.gocharting_gc_spot_convert import (
         build_basis_index,
         convert_footprint_combined_to_spot,
@@ -394,12 +395,15 @@ def prepare_footprint_json_for_openai(
         resolve_gc_csv_for_interval,
         resolve_mt5_spot_payload,
     )
+    from automation_tool.images import _default_gocharting_cfg
+
+    cfg = gocharting_cfg if gocharting_cfg is not None else _default_gocharting_cfg()
 
     parsed_prepared = parse_prepared_footprint_path(path) if is_prepared_footprint_path(path) else None
     if parsed_prepared is not None:
         sym_early, _iv_early = parsed_prepared
         if is_finalized_spot_footprint(data, logic_symbol=sym_early):
-            return data
+            return strip_disabled_orderflow(data, cfg)
 
     name = path.name
     is_combined_source = name.startswith("footprint_combined_") and path.suffix.lower() == ".json"
@@ -420,9 +424,7 @@ def prepare_footprint_json_for_openai(
             enrich_prepared_footprint_stacked,
             footprint_derived_enabled,
         )
-        from automation_tool.images import _default_gocharting_cfg, read_main_chart_symbol
-
-        cfg = gocharting_cfg if gocharting_cfg is not None else _default_gocharting_cfg()
+        from automation_tool.images import read_main_chart_symbol
         if is_combined_source:
             iv = path.stem.replace("footprint_combined_", "")
         else:
@@ -487,6 +489,7 @@ def prepare_footprint_json_for_openai(
 
             if footprint_derived_enabled(cfg) and derived_config_from_cfg(cfg, out).stacked_enabled:
                 out = enrich_prepared_footprint_stacked(out, cfg=cfg)
+        out = strip_disabled_orderflow(out, cfg)
         return slim_footprint_combined_for_openai(out)
     if name.startswith("footprint_bid_ask_") and path.suffix.lower() == ".json":
         from automation_tool.gocharting_footprint_ocr import (
@@ -561,16 +564,22 @@ def _json_file_header_and_body(
             "Bar times (`t`) and generated_at are Asia/Ho_Chi_Minh (UTC+7).\n"
         )
     elif is_prepared_footprint_path(path):
+        from automation_tool.gocharting_footprint_derived import derived_config_from_cfg
         from automation_tool.gocharting_gc_spot_convert import parse_prepared_footprint_path
+        from automation_tool.images import _default_gocharting_cfg
 
         parsed = parse_prepared_footprint_path(path)
         sym_label, iv = parsed if parsed else ("XAUUSD", "?")
+        cfg = gocharting_cfg if gocharting_cfg is not None else _default_gocharting_cfg()
+        fields = (
+            "bar_flow {delta, cum_delta, max_delta, min_delta, vwap (session cumulative), buy_volume, sell_volume}"
+        )
+        if derived_config_from_cfg(cfg).stacked_enabled:
+            fields += ", orderflow.stacked_in_candle"
         header = (
             f"[Footprint prepared — {iv} — file: {path.name}]\n"
             f"Instrument: spot {sym_label}. Each candle: time_gmt7, ohlc (spot broker), "
-            "footprint[] (buy/sell volume per price block), "
-            "bar_flow {delta, cum_delta, max_delta, min_delta, vwap (session cumulative), buy_volume, sell_volume}, "
-            "orderflow.stacked_in_candle.\n"
+            f"footprint[] (buy/sell volume per price block), {fields}.\n"
         )
     elif path.name.startswith("footprint_combined_") and path.suffix.lower() == ".json":
         iv = path.stem.replace("footprint_combined_", "")

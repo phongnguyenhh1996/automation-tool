@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import csv
 import io
 import json
@@ -63,6 +64,22 @@ def gc_to_spot_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
 
 def gc_to_spot_enabled(cfg: dict[str, Any]) -> bool:
     return bool(gc_to_spot_cfg(cfg).get("enabled"))
+
+
+def native_gc_footprint_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Deep copy with ``gc_to_spot`` and ``mt5_spot`` disabled (native GC footprint)."""
+    out = copy.deepcopy(cfg)
+    ws = out.get("footprint_ws")
+    if not isinstance(ws, dict):
+        ws = {}
+        out["footprint_ws"] = ws
+    gts = ws.get("gc_to_spot")
+    if not isinstance(gts, dict):
+        gts = {}
+        ws["gc_to_spot"] = gts
+    gts["enabled"] = False
+    ws["mt5_spot"] = False
+    return out
 
 
 def gc_to_spot_skip_main_csv(cfg: dict[str, Any]) -> bool:

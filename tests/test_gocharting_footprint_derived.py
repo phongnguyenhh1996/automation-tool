@@ -18,6 +18,7 @@ from automation_tool.gocharting_footprint_derived import (
     enrich_footprint_levels_in_candle,
     enrich_prepared_footprint_stacked,
     footprint_derived_enabled,
+    strip_disabled_orderflow,
     _level_volumes,
 )
 from automation_tool.openai_prompt_flow import _json_file_header_and_body
@@ -397,4 +398,44 @@ def test_enrich_prepared_footprint_stacked_respects_stacked_disabled() -> None:
         }
     }
     out = enrich_prepared_footprint_stacked(doc, cfg=cfg)
+    assert "orderflow" not in out["candles"][0]
+
+
+def test_strip_disabled_orderflow_removes_stacked_when_disabled() -> None:
+    doc = {
+        "candles": [
+            {
+                "orderflow": {
+                    "stacked_in_candle": [{"side": "BID", "level_count": 3}],
+                    "absorption": {"side": "bid"},
+                }
+            }
+        ]
+    }
+    cfg = {
+        "footprint_ws": {
+            "derived": {
+                "stacked_enabled": False,
+                "absorption_enabled": True,
+            }
+        }
+    }
+    out = strip_disabled_orderflow(doc, cfg)
+    orderflow = out["candles"][0]["orderflow"]
+    assert "stacked_in_candle" not in orderflow
+    assert orderflow["absorption"] == {"side": "bid"}
+
+
+def test_strip_disabled_orderflow_drops_empty_orderflow() -> None:
+    doc = {
+        "candles": [
+            {
+                "orderflow": {
+                    "stacked_in_candle": [{"side": "BID", "level_count": 3}],
+                }
+            }
+        ]
+    }
+    cfg = {"footprint_ws": {"derived": {"stacked_enabled": False, "absorption_enabled": False}}}
+    out = strip_disabled_orderflow(doc, cfg)
     assert "orderflow" not in out["candles"][0]
