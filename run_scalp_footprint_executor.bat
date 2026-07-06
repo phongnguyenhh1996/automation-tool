@@ -12,7 +12,7 @@ echo ============================================================
 REM Scalp footprint VPS executor: listen Telegram SCALP_EXEC -> MT5 MARKET.
 REM Can chay sau khi MT5 terminal da login (Task Scheduler "At log on").
 REM Cau hinh chinh: .env hoac block CONFIG ben duoi.
-REM   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+REM   TELEGRAM_BOT_TOKEN
 REM   SCALP_EXEC_ACCOUNT_IDS=id trong accounts.json (vd: main)
 REM   MT5_ACCOUNTS_JSON=duong dan accounts.json
 REM SL/TP: lay bid/ask MT5 live (XAUUSD/XAUUSDm/XAUUSDc), +-4 gia mac dinh.
@@ -36,7 +36,7 @@ set "SCALP_EXEC_LOT=0.01"
 set "SCALP_EXEC_SL_POINTS=4"
 set "SCALP_EXEC_TP_POINTS=4"
 set "SCALP_EXEC_ACCOUNT_IDS=acc_secondary2"
-set "TELEGRAM_CHAT_ID=-1004297700919"
+REM Telegram channel scalp footprint (hardcoded in telegram_executor.py): -1004297700919
 REM set "MT5_ACCOUNTS_JSON=%~dp0config\accounts.json"
 REM set "SCALP_EXEC_PATTERNS="
 REM -------------------------------------------------------------------

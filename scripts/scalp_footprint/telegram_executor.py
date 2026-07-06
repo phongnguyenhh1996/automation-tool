@@ -5,7 +5,7 @@ VPS daemon: listen Telegram for SCALP_EXEC lines from watch.py and place MT5 ord
 Requires Windows VPS with MetaTrader5 terminal logged in.
 
 Env:
-  TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID (same channel as watch alerts)
+  TELEGRAM_BOT_TOKEN (chat cố định scalp: -1004297700919 — không đọc TELEGRAM_CHAT_ID)
   SCALP_EXEC_LOT=0.01
   SCALP_EXEC_PATTERNS=   (empty = all patterns; comma list to filter)
   SCALP_EXEC_SL_POINTS=4
@@ -71,6 +71,8 @@ _log = logging.getLogger("scalp_footprint.telegram_executor")
 
 DEFAULT_STATE_NAME = "scalp_footprint_executor_state.json"
 ZONE_LABEL = "scalp"
+# Cố định channel scalp footprint (cùng watch.py); không dùng TELEGRAM_CHAT_ID / *_CHAT_ID khác.
+DEFAULT_SCALP_TELEGRAM_CHAT_ID = "-1004297700919"
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -435,7 +437,6 @@ def run_executor(
     *,
     settings: Settings,
     state_path: Path,
-    listen_chat_id: str,
     lot: float,
     dry_run: bool,
     sl_points: float,
@@ -444,17 +445,13 @@ def run_executor(
     accounts_path: Optional[Path],
     account_ids: tuple[str, ...],
     long_poll_timeout: int = 45,
-    notify_chat_id: Optional[str] = None,
 ) -> None:
     token = (settings.telegram_bot_token or "").strip()
     if not token:
         raise SystemExit("TELEGRAM_BOT_TOKEN is required.")
 
-    chat_id = listen_chat_id.strip()
-    if not chat_id:
-        raise SystemExit("TELEGRAM_CHAT_ID is required.")
-
-    notify = (notify_chat_id or chat_id).strip()
+    chat_id = DEFAULT_SCALP_TELEGRAM_CHAT_ID
+    notify = chat_id
     state = load_state(state_path)
     base = f"https://api.telegram.org/bot{token}/getUpdates"
     offset: Optional[int] = None
@@ -556,8 +553,6 @@ def run_executor(
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Listen Telegram SCALP_EXEC lines and execute on MT5.")
     p.add_argument("--state-file", type=Path, default=None)
-    p.add_argument("--telegram-chat-id", default=None, help="Override TELEGRAM_CHAT_ID")
-    p.add_argument("--notify-chat-id", default=None, help="Reply chat (default: same as listen)")
     p.add_argument("--lot", type=float, default=None, help="Override SCALP_EXEC_LOT")
     p.add_argument(
         "--dry-run",
@@ -601,7 +596,6 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     settings = load_settings()
-    chat_id = (args.telegram_chat_id or settings.telegram_chat_id or "").strip()
     state_path = args.state_file or _default_state_path()
     lot = args.lot if args.lot is not None else _env_float("SCALP_EXEC_LOT", 0.01)
 
@@ -634,7 +628,6 @@ def main(argv: list[str] | None = None) -> None:
     run_executor(
         settings=settings,
         state_path=state_path,
-        listen_chat_id=chat_id,
         lot=lot,
         dry_run=dry_run,
         sl_points=sl_points,
@@ -643,7 +636,6 @@ def main(argv: list[str] | None = None) -> None:
         accounts_path=args.accounts,
         account_ids=account_ids,
         long_poll_timeout=args.long_poll_timeout,
-        notify_chat_id=args.notify_chat_id,
     )
 
 
