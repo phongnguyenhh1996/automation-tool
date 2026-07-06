@@ -121,7 +121,7 @@ footprint_ws:
   export_format: combined
   mt5_spot: true
   gc_to_spot:
-    enabled: false
+    enabled: true
     spot_tick: 0.01
     min_matched_ratio: 0.8
     skip_main_csv: true
