@@ -66,7 +66,7 @@ def _prepared_footprint_pair_desc(sym: str) -> str:
 _PREPARED_FOOTPRINT_HINT = (
     "Footprint prepared JSON (spot broker prices): mỗi nến có ohlc, footprint[] "
     "(buy/sell volume từng level), bar_flow {delta, cum_delta, max_delta, min_delta, "
-    "vwap, buy_volume, sell_volume}, orderflow.stacked_in_candle (BID/ASK stacked RL≥rl_min). "
+    "vwap, buy_volume, sell_volume}. "
     "Dữ liệu đã gộp trong footprint_XAUUSD_15m.json và footprint_XAUUSD_5m.json.\n"
 )
 
@@ -85,7 +85,7 @@ _GOCHARTING_CHART_READ_GUIDE = (
 
 _GOCHARTING_TRADE_MANAGEMENT_SUFFIX = (
     f"Stacked BID/ASK, absorption: đọc từ {_prepared_footprint_filename('XAUUSD', '5m')} "
-    "(candles[].orderflow nếu có; footprint[] buy/sell volume từng level).\n"
+    "(footprint[] buy/sell volume từng level).\n"
     f"{_GOCHARTING_CHART_READ_GUIDE}"
 )
 
@@ -564,18 +564,13 @@ def _json_file_header_and_body(
             "Bar times (`t`) and generated_at are Asia/Ho_Chi_Minh (UTC+7).\n"
         )
     elif is_prepared_footprint_path(path):
-        from automation_tool.gocharting_footprint_derived import derived_config_from_cfg
         from automation_tool.gocharting_gc_spot_convert import parse_prepared_footprint_path
-        from automation_tool.images import _default_gocharting_cfg
 
         parsed = parse_prepared_footprint_path(path)
         sym_label, iv = parsed if parsed else ("XAUUSD", "?")
-        cfg = gocharting_cfg if gocharting_cfg is not None else _default_gocharting_cfg()
         fields = (
             "bar_flow {delta, cum_delta, max_delta, min_delta, vwap (session cumulative), buy_volume, sell_volume}"
         )
-        if derived_config_from_cfg(cfg).stacked_enabled:
-            fields += ", orderflow.stacked_in_candle"
         header = (
             f"[Footprint prepared — {iv} — file: {path.name}]\n"
             f"Instrument: spot {sym_label}. Each candle: time_gmt7, ohlc (spot broker), "
