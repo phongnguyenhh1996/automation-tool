@@ -31,6 +31,17 @@ def session_profile_enabled(cfg: dict[str, Any]) -> bool:
     return bool(sp.get("enabled", True))
 
 
+_SESSION_VWAP_KEYS = ("vwap", "session_vwap")
+
+
+def strip_session_vwap_from_bar_flow(bar: dict[str, Any]) -> dict[str, Any]:
+    """Remove session cumulative VWAP from ``bar_flow``; keep per-candle ``bar_vwap`` / buy/sell VWAP."""
+    out = dict(bar)
+    for key in _SESSION_VWAP_KEYS:
+        out.pop(key, None)
+    return out
+
+
 def session_profile_value_area_pct(cfg: dict[str, Any]) -> float:
     ws = cfg.get("footprint_ws") if isinstance(cfg.get("footprint_ws"), dict) else {}
     sp = ws.get("session_profile") if isinstance(ws.get("session_profile"), dict) else {}

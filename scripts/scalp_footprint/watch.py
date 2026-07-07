@@ -44,6 +44,17 @@ from warm_session import WarmFootprintSession  # noqa: E402
 
 _log = logging.getLogger("scalp_footprint.watch")
 
+_HTTP_NOISY_LOGGERS = ("httpx", "httpcore", "httpcore.http11", "httpcore.connection")
+
+
+def _setup_logging(verbose: bool) -> None:
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    for name in _HTTP_NOISY_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
+
 DEFAULT_TELEGRAM_CHAT_ID = "-1004297700919"
 DEFAULT_BUFFER_SEC = 5
 DEFAULT_STATE_NAME = "scalp_footprint_watch_state.json"
@@ -632,10 +643,7 @@ def main(argv: list[str] | None = None) -> int:
     settings = load_settings()
     args = build_parser().parse_args(argv)
 
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    _setup_logging(args.verbose)
 
     args.charts_dir = args.charts_dir or _default_charts_dir()
     args.gocharting_yaml = args.gocharting_yaml or _default_gocharting_yaml()

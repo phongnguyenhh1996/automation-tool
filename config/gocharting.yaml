@@ -138,7 +138,7 @@ footprint_ws:
     absorption_side_ratio: 1.5
   session_profile:
     enabled: false
-    # false = skip POC/VAH/VAL; bar_flow.vwap and session_profile.vwap still computed.
+    # false = skip POC/VAH/VAL and session VWAP (bar_flow.vwap, session_profile.vwap); per-candle bar_vwap kept.
     value_area_enabled: false
     value_area_pct: 0.7
     use_raw_ticks: true

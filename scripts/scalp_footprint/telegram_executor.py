@@ -71,6 +71,17 @@ from scalp_mt5_live import build_scalp_trade_live, execute_scalp_market_fast
 
 _log = logging.getLogger("scalp_footprint.telegram_executor")
 
+_HTTP_NOISY_LOGGERS = ("httpx", "httpcore", "httpcore.http11", "httpcore.connection")
+
+
+def _setup_logging(verbose: bool) -> None:
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    for name in _HTTP_NOISY_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
+
 DEFAULT_STATE_NAME = "scalp_footprint_executor_state.json"
 ZONE_LABEL = "scalp"
 # Cố định channel scalp footprint (cùng watch.py); không dùng TELEGRAM_CHAT_ID / *_CHAT_ID khác.
@@ -701,10 +712,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    _setup_logging(args.verbose)
 
     settings = load_settings()
     state_path = args.state_file or _default_state_path()

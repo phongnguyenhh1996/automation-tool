@@ -124,6 +124,34 @@ def test_build_session_profile_includes_session_vwap() -> None:
     assert profile["vwap"] == compute_session_vwap(candles, price_precision=1)["vwap"]
 
 
+def test_session_profile_disabled_skips_session_vwap_only() -> None:
+    from automation_tool.gocharting_ws_decode import enrich_footprint_document_with_ws_bar_flow
+
+    candles = [
+        {
+            "time_gmt7": "Wed Jul 1 2026 05:00:00 GMT+0700",
+            "date": "2026-06-30T18:00:00-04:00",
+            "ohlc": {"high": 100.0, "low": 98.0, "close": 99.0},
+            "ending_summary": {
+                "total_buy": 30,
+                "total_sell": 20,
+                "close_delta": 10,
+                "high": 1000,
+                "low": 980,
+            },
+            "footprint": [_level(100.0, 15, 10), _level(99.0, 15, 10)],
+        },
+    ]
+    doc = {"candles": candles, "price_precision": 1}
+    cfg = {"footprint_ws": {"session_profile": {"enabled": False}}}
+    out = enrich_footprint_document_with_ws_bar_flow(doc, cfg=cfg)
+    bf = out["candles"][0]["bar_flow"]
+    assert "vwap" not in bf
+    assert bf.get("bar_vwap") is not None
+    assert out["candles"][0].get("session_profile") is None
+    assert out.get("session_profiles") is None
+
+
 def test_apply_running_session_vwap_to_candles() -> None:
     from automation_tool.gocharting_session_profile import apply_running_session_vwap_to_candles
 

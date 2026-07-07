@@ -309,7 +309,8 @@ def bar_flow_from_ws_candle(
     Build CSV-equivalent ``bar_flow`` from WS ``ending_summary`` + ``footprint[]`` + ``ohlc``.
 
     ``close_delta`` maps to CSV ``Delta``. Per-bar footprint VWAP → ``bar_vwap``;
-    session cumulative VWAP is set on ``vwap`` in :func:`enrich_footprint_document_with_ws_bar_flow`.
+    session cumulative VWAP is set on ``vwap`` in :func:`enrich_footprint_document_with_ws_bar_flow`
+    when ``footprint_ws.session_profile.enabled`` is true.
     """
     es = candle.get("ending_summary") if isinstance(candle.get("ending_summary"), dict) else {}
     totals = candle.get("totals") if isinstance(candle.get("totals"), dict) else {}
@@ -368,6 +369,10 @@ def enrich_footprint_document_with_ws_bar_flow(
     """Attach ``bar_flow`` + session ``cum_delta`` to each candle from WS fields."""
     if not isinstance(doc, dict):
         return doc
+    cfg_raw = cfg if isinstance(cfg, dict) else {}
+    from automation_tool.gocharting_session_profile import session_profile_enabled
+
+    session_vwap_enabled = session_profile_enabled(cfg_raw)
     pp = _price_precision_from_doc(doc)
     candles_raw = doc.get("candles")
     if not isinstance(candles_raw, list):
@@ -407,16 +412,17 @@ def enrich_footprint_document_with_ws_bar_flow(
             block["bar_flow"] = dict(by_time[time_key])
         candles_out.append(block)
 
-    from automation_tool.gocharting_session_profile import apply_running_session_vwap_to_candles
+    if session_vwap_enabled:
+        from automation_tool.gocharting_session_profile import apply_running_session_vwap_to_candles
 
-    apply_running_session_vwap_to_candles(candles_out, price_precision=pp)
+        apply_running_session_vwap_to_candles(candles_out, price_precision=pp)
 
     out = dict(doc)
     out["candles"] = candles_out
     out["bar_flow_source"] = "ws"
     from automation_tool.gocharting_session_profile import enrich_footprint_document_with_session_profiles
 
-    return enrich_footprint_document_with_session_profiles(out, cfg=cfg)
+    return enrich_footprint_document_with_session_profiles(out, cfg=cfg_raw)
 
 
 def slim_footprint_level_for_openai(level: dict[str, Any]) -> dict[str, Any]:

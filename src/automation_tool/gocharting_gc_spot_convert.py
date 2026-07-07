@@ -715,11 +715,21 @@ def enrich_prepared_footprint_from_gc_csv(
 
     validate_match_ratio(matched, len(candles_raw), cfg, label="CSV bar_flow merge")
 
-    from automation_tool.gocharting_session_profile import apply_running_session_vwap_to_candles
+    from automation_tool.gocharting_session_profile import (
+        apply_running_session_vwap_to_candles,
+        session_profile_enabled,
+        strip_session_vwap_from_bar_flow,
+    )
     from automation_tool.gocharting_ws_decode import _price_precision_from_doc
 
-    pp = _price_precision_from_doc(doc)
-    apply_running_session_vwap_to_candles(candles_out, price_precision=pp)
+    if session_profile_enabled(cfg):
+        pp = _price_precision_from_doc(doc)
+        apply_running_session_vwap_to_candles(candles_out, price_precision=pp)
+    else:
+        for i, candle in enumerate(candles_out):
+            bf = candle.get("bar_flow")
+            if isinstance(bf, dict):
+                candles_out[i] = {**candle, "bar_flow": strip_session_vwap_from_bar_flow(bf)}
 
     out = dict(doc)
     out["candles"] = candles_out
@@ -755,13 +765,23 @@ def enrich_prepared_footprint_from_ws_bar_flow(
     validate_match_ratio(matched, len(candles_raw), cfg, label="WS bar_flow merge")
     out = dict(doc)
     out["candles"] = candles_out
-    from automation_tool.gocharting_session_profile import apply_running_session_vwap_to_candles
+    from automation_tool.gocharting_session_profile import (
+        apply_running_session_vwap_to_candles,
+        session_profile_enabled,
+        strip_session_vwap_from_bar_flow,
+    )
     from automation_tool.gocharting_ws_decode import _price_precision_from_doc
 
-    apply_running_session_vwap_to_candles(
-        candles_out,
-        price_precision=_price_precision_from_doc(out),
-    )
+    if session_profile_enabled(cfg):
+        apply_running_session_vwap_to_candles(
+            candles_out,
+            price_precision=_price_precision_from_doc(out),
+        )
+    else:
+        for i, candle in enumerate(candles_out):
+            bf = candle.get("bar_flow")
+            if isinstance(bf, dict):
+                candles_out[i] = {**candle, "bar_flow": strip_session_vwap_from_bar_flow(bf)}
     return shift_footprint_session_levels_to_spot(out, basis_index=basis_index, cfg=cfg)
 
 
