@@ -927,7 +927,8 @@ def _parser() -> argparse.ArgumentParser:
         "telegram-listen",
         help=(
             "Listen inbound Telegram messages in a channel/group (poll getUpdates). "
-            "Supports /full, /update, /tim-scalp, /loai, /stop, /analyze-many, /ask, /ask-high."
+            "Supports /full, /full-coinmap, /update, /tim-scalp, /loai, /stop, "
+            "/analyze-many, /ask, /ask-high."
         ),
     )
     tl.add_argument(
@@ -946,7 +947,10 @@ def _parser() -> argparse.ArgumentParser:
         "--full-main-symbol",
         type=str,
         default="XAUUSD",
-        help="Symbol used when /full triggers (default: XAUUSD). On Windows runs run_daily.bat.",
+        help=(
+            "Symbol used when /full or /full-coinmap triggers (default: XAUUSD). "
+            "On Windows /full runs run_daily.bat; /full-coinmap runs run_daily_coinmap.bat."
+        ),
     )
     tl.add_argument(
         "--update-main-symbol",

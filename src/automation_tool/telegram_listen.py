@@ -128,7 +128,8 @@ def _message_thread_id_from_envelope(env: dict[str, Any]) -> Optional[int]:
 
 def _parse_command(text: str) -> tuple[Optional[str], str]:
     """
-    Parse "/full", "/update", "/loai", "/stop", "/analyze-many", "/ask", "/ask-high", "/full@BotName".
+    Parse "/full", "/full-coinmap", "/update", "/loai", "/stop", "/analyze-many",
+    "/ask", "/ask-high", "/full@BotName".
     Returns (cmd, args_text) where args_text is the remaining raw text (may be empty).
     """
     t = (text or "").strip()
@@ -394,22 +395,29 @@ def _run_full_pipeline_in_thread(
     reply_chat_id: str,
     full_main_symbol: str,
     trigger_message_id: Optional[int],
+    cmd_label: str = "/full",
+    windows_bat: str = "run_daily.bat",
+    use_gocharting: bool = True,
 ) -> None:
     """
     Runs the full daily pipeline asynchronously and posts start/finish messages.
+
+    ``/full`` → ``run_daily.bat`` (``all --gocharting``).
+    ``/full-coinmap`` → ``run_daily_coinmap.bat`` (``all`` without GoCharting).
     """
     root = _project_root()
     stamp = time.strftime("%Y-%m-%d %H:%M:%S")
     ref = f"(msg_id={trigger_message_id})" if trigger_message_id else ""
+    pipeline_desc = "full Coinmap pipeline" if not use_gocharting else "full pipeline"
     _send_status(
         settings,
         reply_chat_id,
-        f"▶️ /full received {ref}\nStarting full pipeline ({full_main_symbol}) at {stamp}.",
+        f"▶️ {cmd_label} received {ref}\nStarting {pipeline_desc} ({full_main_symbol}) at {stamp}.",
     )
 
     if sys.platform == "win32":
         # Prefer the batch file exactly as requested.
-        cmd = ["cmd", "/c", "run_daily.bat"]
+        cmd = ["cmd", "/c", windows_bat]
     else:
         # Cross-platform fallback (macOS/Linux): run the equivalent CLI directly.
         cmd = [
@@ -420,23 +428,30 @@ def _run_full_pipeline_in_thread(
             "--main-symbol",
             full_main_symbol,
         ]
+        if use_gocharting:
+            cmd.append("--gocharting")
 
+    proc_name = "full-coinmap" if not use_gocharting else "full"
     try:
-        mp = _spawn_managed_process(name="full", cmd=cmd, cwd=root)
+        mp = _spawn_managed_process(name=proc_name, cmd=cmd, cwd=root)
         out, _ = mp.popen.communicate()
         code = int(mp.popen.returncode or 0)
         if code == 0:
-            _send_status(settings, reply_chat_id, "✅ /full finished successfully (exit code 0).")
+            _send_status(
+                settings,
+                reply_chat_id,
+                f"✅ {cmd_label} finished successfully (exit code 0).",
+            )
         else:
             tail = (out or "").strip()
             if len(tail) > 1500:
                 tail = tail[-1500:]
-            msg = f"❌ /full failed (exit code {code})."
+            msg = f"❌ {cmd_label} failed (exit code {code})."
             if tail:
                 msg += "\n\nLast output:\n" + tail
             _send_status(settings, reply_chat_id, msg)
     except Exception as e:
-        _send_status(settings, reply_chat_id, f"❌ /full crashed: {e!r}")
+        _send_status(settings, reply_chat_id, f"❌ {cmd_label} crashed: {e!r}")
     finally:
         with _PROC_LOCK:
             _PROCS[:] = [p for p in _PROCS if p.popen.poll() is None]
@@ -788,9 +803,10 @@ def run_telegram_listener(
                             name="telegram-update-scalp-runner",
                         )
                         t.start()
-                    elif cmd == "full":
+                    elif cmd in ("full", "full-coinmap"):
                         mid = _message_id_from_envelope(env)
                         thread_id = _message_thread_id_from_envelope(env)
+                        is_coinmap = cmd == "full-coinmap"
                         t = threading.Thread(
                             target=_run_full_pipeline_in_thread,
                             kwargs={
@@ -798,9 +814,18 @@ def run_telegram_listener(
                                 "reply_chat_id": listen_chat_id,
                                 "full_main_symbol": (params.full_main_symbol or "XAUUSD").strip().upper(),
                                 "trigger_message_id": mid,
+                                "cmd_label": "/full-coinmap" if is_coinmap else "/full",
+                                "windows_bat": (
+                                    "run_daily_coinmap.bat" if is_coinmap else "run_daily.bat"
+                                ),
+                                "use_gocharting": not is_coinmap,
                             },
                             daemon=True,
-                            name="telegram-full-runner",
+                            name=(
+                                "telegram-full-coinmap-runner"
+                                if is_coinmap
+                                else "telegram-full-runner"
+                            ),
                         )
                         t.start()
                     elif cmd == "analyze-many":

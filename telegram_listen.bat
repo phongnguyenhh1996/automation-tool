@@ -31,7 +31,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-REM Listen inbound Telegram commands (/full, /update, /stop)
+REM Listen inbound Telegram commands (/full, /full-coinmap, /update, /stop)
 echo [%date% %time%] INFO: Starting coinmap-automation telegram-listen
 >> "%LOG_FILE%" echo [%date% %time%] INFO: Starting coinmap-automation telegram-listen
 coinmap-automation telegram-listen >> "%LOG_FILE%" 2>&1
