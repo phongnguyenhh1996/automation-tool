@@ -2531,9 +2531,10 @@ def _extend_payloads_with_footprint_json(
     charts_dir: Path,
     *,
     gocharting_cfg: dict | None = None,
+    enabled: bool = True,
 ) -> list[ChartOpenAIPayload]:
     extended = extend_openai_payloads_with_footprint_json(
-        payloads, charts_dir, gocharting_cfg=gocharting_cfg
+        payloads, charts_dir, gocharting_cfg=gocharting_cfg, enabled=enabled
     )
     added = len(extended) - len(payloads)
     if added:
@@ -2587,7 +2588,8 @@ def _all_flow_gocharting_openai_kw(
     gocharting_cfg_override: dict | None = None,
 ) -> dict[str, object]:
     """OpenAI payload options when ``all`` / ``update-scalp`` use GoCharting footprint WS."""
-    if not use_gocharting and footprint_source_for_stamp(charts_dir, stamp=stamp) != "gocharting":
+    _ = charts_dir, stamp  # reserved for callers; GC mode is explicit via use_gocharting
+    if not use_gocharting:
         return {}
     gc_cfg = gocharting_cfg_override or load_gocharting_yaml(gocharting_yaml)
     return {"gocharting_cfg": gc_cfg}
@@ -2599,6 +2601,7 @@ def _append_footprint_json_paths(
     *,
     gocharting_cfg: dict | None = None,
     intervals: tuple[str, ...] = ("15m", "5m"),
+    enabled: bool = True,
 ) -> list[Path]:
     before = len(paths)
     append_footprint_json_paths(
@@ -2606,6 +2609,7 @@ def _append_footprint_json_paths(
         charts_dir,
         gocharting_cfg=gocharting_cfg,
         intervals=intervals,
+        enabled=enabled,
     )
     added = len(paths) - before
     if added:
@@ -3468,7 +3472,7 @@ def cmd_all_2(args: argparse.Namespace) -> None:
         stamp=stamp,
     )
     payloads = ordered_chart_openai_payloads(charts_dir, stamp=stamp, **gc_openai_kw)
-    payloads = _extend_payloads_with_footprint_json(payloads, charts_dir)
+    payloads = _extend_payloads_with_footprint_json(payloads, charts_dir, enabled=False)
     _warn_if_incomplete_chart_payloads(charts_dir, payloads)
     if not payloads:
         raise SystemExit(
@@ -3932,6 +3936,7 @@ def cmd_all(args: argparse.Namespace) -> None:
         payloads,
         charts_dir,
         gocharting_cfg=(gc_cfg_override or load_gocharting_yaml(gc_yaml)) if use_gc else None,
+        enabled=use_gc,
     )
     _warn_if_incomplete_chart_payloads(charts_dir, payloads)
     if not payloads:
@@ -4638,7 +4643,7 @@ def cmd_update_scalp(args: argparse.Namespace) -> None:
             )
         require_valid_coinmap_exports_for_stamp(charts_dir, stamp or "")
         footprint_paths = [m15, m5]
-        footprint_paths = _append_footprint_json_paths(footprint_paths, charts_dir)
+        # Coinmap-only: do not append leftover GoCharting prepared/WS JSON.
         from automation_tool.images import coinmap_png_path_for_json
 
         m15_png = coinmap_png_path_for_json(m15)

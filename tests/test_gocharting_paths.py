@@ -15,6 +15,7 @@ from automation_tool.images import (
     GOCHARTING_DETAIL_PNG_PER_SLOT,
     append_footprint_json_paths,
     chart_image_order_for_main_symbol,
+    effective_chart_image_order,
     extend_openai_payloads_with_footprint_json,
     footprint_source_for_stamp,
     gocharting_detail_png_paths,
@@ -68,6 +69,37 @@ def test_footprint_source_detection(tmp_path: Path) -> None:
     )
     assert footprint_source_for_stamp(charts, stamp=stamp) == "gocharting"
     assert footprint_source_for_stamp(charts / "missing") == "coinmap"
+
+
+def test_footprint_source_prefers_coinmap_over_leftover_combined(tmp_path: Path) -> None:
+    """Leftover scalp WS JSON must not hijack a Coinmap ``all`` stamp."""
+    charts = tmp_path / "charts"
+    charts.mkdir()
+    (charts / ".main_chart_symbol").write_text("XAUUSD\n", encoding="utf-8")
+    stamp = "20260713_080000"
+    (charts / f"{stamp}_coinmap_XAUUSD_15m.json").write_text("{}", encoding="utf-8")
+    (charts / f"{stamp}_coinmap_XAUUSD_5m.json").write_text("{}", encoding="utf-8")
+    fp_dir = charts / "footprint_images"
+    fp_dir.mkdir()
+    (fp_dir / "footprint_combined_5m.json").write_text('{"candles":[]}\n', encoding="utf-8")
+    (charts / "footprint_XAUUSD_5m.json").write_text('{"candles":[]}\n', encoding="utf-8")
+
+    assert footprint_source_for_stamp(charts, stamp=stamp) == "coinmap"
+    order = effective_chart_image_order(charts, stamp=stamp)
+    assert order[-3:] == (
+        ("coinmap", "DXY", "15m"),
+        ("coinmap", "XAUUSD", "15m"),
+        ("coinmap", "XAUUSD", "5m"),
+    )
+    payloads = ordered_chart_openai_payloads(charts, stamp=stamp)
+    coinmap_names = [p.name for k, p in payloads if k == "json" and "_coinmap_" in p.name]
+    assert "20260713_080000_coinmap_XAUUSD_15m.json" in coinmap_names
+    assert "20260713_080000_coinmap_XAUUSD_5m.json" in coinmap_names
+    extended = extend_openai_payloads_with_footprint_json(payloads, charts, enabled=False)
+    assert extended == payloads
+    assert not any(
+        isinstance(p, Path) and p.name.startswith("footprint_") for _, p in extended
+    )
 
 
 def test_gocharting_path_helpers(tmp_path: Path) -> None:

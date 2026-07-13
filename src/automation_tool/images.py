@@ -195,8 +195,15 @@ def extend_openai_payloads_with_footprint_json(
     charts_dir: Path,
     *,
     gocharting_cfg: dict | None = None,
+    enabled: bool = True,
 ) -> list[ChartOpenAIPayload]:
-    """Append prepared or WS combined JSON when ``footprint_ws.enabled``."""
+    """Append prepared or WS combined JSON when ``footprint_ws.enabled``.
+
+    Pass ``enabled=False`` for Coinmap-only flows so leftover GoCharting WS/prepared
+    JSON is not attached alongside ``*_coinmap_*.json``.
+    """
+    if not enabled:
+        return payloads
     from automation_tool.gocharting_gc_spot_convert import gc_to_spot_enabled
 
     cfg = gocharting_cfg if gocharting_cfg is not None else _default_gocharting_cfg()
@@ -233,8 +240,11 @@ def append_footprint_json_paths(
     *,
     gocharting_cfg: dict | None = None,
     intervals: tuple[str, ...] = ("15m", "5m"),
+    enabled: bool = True,
 ) -> list[Path]:
     """Append prepared or WS combined footprint JSON paths when on disk."""
+    if not enabled:
+        return paths
     from automation_tool.gocharting_gc_spot_convert import gc_to_spot_enabled
 
     cfg = gocharting_cfg if gocharting_cfg is not None else _default_gocharting_cfg()
@@ -526,7 +536,13 @@ def clear_main_chart_symbol_marker(charts_dir: Path) -> None:
 
 
 def footprint_source_for_stamp(charts_dir: Path, stamp: Optional[str] = None) -> str:
-    """``gocharting`` when stamp has GoCharting CSV or footprint WS JSON exports."""
+    """
+    ``gocharting`` when this stamp has GoCharting CSV, else when only WS footprint
+    JSON remains; ``coinmap`` when the stamp has Coinmap API exports.
+
+    Prefer ``*_coinmap_*.json`` for the stamp over leftover ``footprint_combined_*.json``
+    (e.g. scalp watch) so ``all`` without ``--gocharting`` still attaches Coinmap files.
+    """
     if not charts_dir.is_dir():
         return "coinmap"
     st = stamp or latest_chart_stamp(charts_dir)
@@ -534,6 +550,8 @@ def footprint_source_for_stamp(charts_dir: Path, stamp: Optional[str] = None) ->
         return "gocharting"
     if any(charts_dir.glob(f"{st}_gocharting_*.csv")):
         return "gocharting"
+    if any(charts_dir.glob(f"{st}_coinmap_*.json")):
+        return "coinmap"
     fp_dir = charts_dir / "footprint_images"
     if fp_dir.is_dir() and any(fp_dir.glob("footprint_combined_*.json")):
         return "gocharting"

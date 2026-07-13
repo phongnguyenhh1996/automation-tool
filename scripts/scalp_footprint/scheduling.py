@@ -38,6 +38,42 @@ def seconds_until(dt: datetime, now: datetime) -> float:
     return max(0.0, (dt - now).total_seconds())
 
 
+# Extra slack after bar close + buffer before SCALP_EXEC is considered stale.
+EXEC_GRACE_AFTER_CLOSE_SEC = 30
+
+
+def interval_minutes(tf: str) -> int:
+    t = str(tf or "").strip().lower()
+    if t in ("5m", "5min"):
+        return 5
+    if t in ("15m", "15min"):
+        return 15
+    raise ValueError(f"unknown scalp interval: {tf!r}")
+
+
+def signal_bar_close_naive(sig: dict) -> datetime | None:
+    """When the signal bar closes (entry becomes actionable)."""
+    from automation_tool.gocharting_footprint_ocr import parse_footprint_candle_datetime
+
+    bar_open = parse_footprint_candle_datetime(str(sig.get("time_gmt7") or ""))
+    if bar_open is None:
+        return None
+    return bar_open + timedelta(minutes=interval_minutes(str(sig.get("timeframe") or "5m")))
+
+
+def signal_exec_deadline(sig: dict, *, buffer_sec: int) -> datetime | None:
+    """Latest wall-clock time to emit SCALP_EXEC for this signal."""
+    bar_close = signal_bar_close_naive(sig)
+    if bar_close is None:
+        return None
+    return bar_close + timedelta(seconds=int(buffer_sec) + EXEC_GRACE_AFTER_CLOSE_SEC)
+
+
+def is_signal_exec_fresh(sig: dict, now: datetime, *, buffer_sec: int) -> bool:
+    deadline = signal_exec_deadline(sig, buffer_sec=buffer_sec)
+    return deadline is not None and now <= deadline
+
+
 def intervals_due(
     now: datetime,
     *,

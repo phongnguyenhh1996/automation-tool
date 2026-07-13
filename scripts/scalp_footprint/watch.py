@@ -36,9 +36,11 @@ from signal_tracker import (  # noqa: E402
 )
 from scheduling import (  # noqa: E402
     intervals_due,
+    is_signal_exec_fresh,
     next_close_trigger,
     now_gmt7_naive,
     seconds_until,
+    signal_bar_close_naive,
 )
 from warm_session import WarmFootprintSession  # noqa: E402
 
@@ -271,13 +273,14 @@ def format_alert_message(
     *,
     interval: str,
     symbol: str = "XAUUSD",
-    include_exec: bool = True,
+    exec_signals: set[str] | None = None,
 ) -> str:
     lines = [f"📊 Scalp footprint {interval.upper()} — {len(signals)} signal(s)"]
     for sig in signals:
         lines.append("")
         lines.append(_format_signal_text(sig))
-        if include_exec:
+        key = _signal_key(sig)
+        if exec_signals is None or key in exec_signals:
             # EXEC line always XAUUSD — VPS maps to broker symbol; not GC futures label.
             lines.append(format_exec_line(sig, symbol="XAUUSD"))
     return "\n".join(lines)
@@ -296,6 +299,7 @@ def process_intervals(
     trades_path: Path,
     max_hold_bars: int,
     dry_run: bool,
+    buffer_sec: int = DEFAULT_BUFFER_SEC,
     captured_paths: list[Path] | None = None,
 ) -> None:
     from scheduling import latest_closed_candle_open
@@ -358,9 +362,23 @@ def process_intervals(
 
         signals = detect_latest_signals(json_path, interval=iv, confirmed=confirmed)
         new_signals = [s for s in signals if _signal_key(s) not in sent_keys]
+        exec_signals = [s for s in new_signals if is_signal_exec_fresh(s, now, buffer_sec=buffer_sec)]
+        stale_signals = [s for s in new_signals if s not in exec_signals]
 
-        if new_signals:
-            register_open_trades(trades_path, new_signals)
+        for sig in stale_signals:
+            bar_close = signal_bar_close_naive(sig)
+            age_s = (now - bar_close).total_seconds() if bar_close else -1.0
+            _log.warning(
+                "%s: stale signal skipped (no alert/EXEC) %s @ %s age_after_close=%.0fs",
+                iv,
+                sig.get("pattern_id"),
+                sig.get("time_gmt7"),
+                age_s,
+            )
+            sent_keys.add(_signal_key(sig))
+
+        if exec_signals:
+            register_open_trades(trades_path, exec_signals)
 
         minutes = 5 if iv == "5m" else 15
         closed_open = latest_closed_candle_open(now, minutes)
@@ -376,31 +394,34 @@ def process_intervals(
                 closed_open.isoformat(),
             )
         _log.info(
-            "%s: closed_bar=%s last_closed=%s fresh=%s signals=%d new=%d path=%s",
+            "%s: closed_bar=%s last_closed=%s fresh=%s signals=%d new=%d exec=%d path=%s",
             iv,
             closed_open.isoformat(),
             last_closed.isoformat() if last_closed else "?",
             file_fresh,
             len(signals),
             len(new_signals),
+            len(exec_signals),
             json_path.name,
         )
 
-        if new_signals:
+        if exec_signals:
             symbol = "XAUUSD"
             try:
                 doc = load_footprint_json(json_path)
                 symbol = str(doc.get("symbol") or symbol)
             except Exception:
                 pass
+            exec_keys = {_signal_key(s) for s in exec_signals}
             new_alerts.append(
                 format_alert_message(
-                    new_signals,
+                    exec_signals,
                     interval=iv,
                     symbol=symbol,
+                    exec_signals=exec_keys,
                 )
             )
-            for s in new_signals:
+            for s in exec_signals:
                 sent_keys.add(_signal_key(s))
 
     messages: list[str] = []
@@ -458,6 +479,7 @@ def run_once(args: argparse.Namespace) -> None:
         trades_path=args.trades_file,
         max_hold_bars=args.max_hold_bars,
         dry_run=args.dry_run,
+        buffer_sec=args.buffer_sec,
         captured_paths=captured_paths,
     )
 
@@ -508,6 +530,7 @@ def _run_due_cycle(
         trades_path=args.trades_file,
         max_hold_bars=args.max_hold_bars,
         dry_run=args.dry_run,
+        buffer_sec=args.buffer_sec,
         captured_paths=captured_paths,
     )
 

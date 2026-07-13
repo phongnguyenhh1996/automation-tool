@@ -10,8 +10,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts" / "scalp_
 from scheduling import (  # noqa: E402
     forming_candle_open,
     intervals_due,
+    is_signal_exec_fresh,
     latest_closed_candle_open,
     next_close_trigger,
+    signal_bar_close_naive,
+    signal_exec_deadline,
 )
 
 
@@ -290,3 +293,86 @@ def test_warm_alert_body_parseable_by_executor() -> None:
     lines = extract_exec_lines(body)
     assert len(lines) == 1
     assert lines[0].startswith("SCALP_EXEC|exhaustion_long|BUY|MARKET|")
+
+
+def test_signal_exec_fresh_within_grace_after_bar_close() -> None:
+    sig = {
+        "timeframe": "15m",
+        "time_gmt7": "Tue Jul 7 2026 09:30:00 GMT+0700",
+    }
+    assert signal_bar_close_naive(sig) == datetime(2026, 7, 7, 9, 45, 0)
+    deadline = signal_exec_deadline(sig, buffer_sec=5)
+    assert deadline == datetime(2026, 7, 7, 9, 47, 5)
+    assert is_signal_exec_fresh(sig, datetime(2026, 7, 7, 9, 46, 0), buffer_sec=5)
+    assert not is_signal_exec_fresh(sig, datetime(2026, 7, 7, 9, 59, 0), buffer_sec=5)
+
+
+def test_process_intervals_skips_stale_signal_exec(monkeypatch, tmp_path) -> None:
+    from watch import process_intervals
+
+    charts_dir = tmp_path / "charts"
+    fp_dir = charts_dir / "footprint_images"
+    fp_dir.mkdir(parents=True)
+    json_path = fp_dir / "footprint_combined_15m.json"
+    json_path.write_text(
+        '{"symbol":"XAUUSD","candles":[{"time_gmt7":"Tue Jul 7 2026 09:30:00 GMT+0700",'
+        '"ohlc":{"open":1,"high":2,"low":0.5,"close":1.5},"bar_flow":{}}]}',
+        encoding="utf-8",
+    )
+    state_path = charts_dir / "state.json"
+    trades_path = charts_dir / "trades.json"
+
+    stale_sig = {
+        "pattern_id": "sell_climax_short",
+        "timeframe": "15m",
+        "time_gmt7": "Tue Jul 7 2026 09:30:00 GMT+0700",
+        "bar_index": 0,
+        "direction": "short",
+        "side": "SELL",
+        "entry_price": 4154.95,
+        "entry_type": "limit",
+        "stop_loss": 4160.0,
+        "take_profit": [4149.0, 4145.0],
+    }
+
+    monkeypatch.setattr("watch.detect_latest_signals", lambda *_a, **_k: [stale_sig])
+    monkeypatch.setattr("watch.evaluate_open_trades", lambda *_a, **_k: [])
+    monkeypatch.setattr("watch.load_state", lambda _p: {"last_processed": {}, "sent_keys": []})
+    monkeypatch.setattr("watch.now_gmt7_naive", lambda: datetime(2026, 7, 7, 9, 59, 0))
+    register_calls: list[list] = []
+    monkeypatch.setattr(
+        "watch.register_open_trades",
+        lambda _path, signals: register_calls.append(list(signals)),
+    )
+    sent_alerts: list[str] = []
+
+    def _capture_alert(**kwargs):
+        sent_alerts.append(kwargs.get("text") or "")
+
+    monkeypatch.setattr("watch.send_telegram_alert", _capture_alert)
+    saved_state: dict = {}
+
+    def _save_state(_path, state):
+        saved_state.update(state)
+
+    monkeypatch.setattr("watch.save_state", _save_state)
+
+    process_intervals(
+        intervals=("15m",),
+        charts_dir=charts_dir,
+        gocharting_yaml=Path("config/gocharting.yaml"),
+        confirmed=True,
+        headless=True,
+        bot_token="token",
+        chat_id="1",
+        state_path=state_path,
+        trades_path=trades_path,
+        max_hold_bars=12,
+        dry_run=False,
+        buffer_sec=5,
+        captured_paths=[json_path],
+    )
+
+    assert register_calls == []
+    assert sent_alerts == []
+    assert "sell_climax_short" in "|".join(saved_state.get("sent_keys") or [])
