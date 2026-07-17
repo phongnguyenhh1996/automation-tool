@@ -27,7 +27,7 @@ _DEFAULT_DOWNLOAD_BUTTON = (
     'button:has(span div:text-is("Tải xuống"))'
 )
 _DEFAULT_DETAIL_HISTORY_STEPS = 3
-# ``update-scalp --gocharting``: detail zoom + one pan-back PNG per slot.
+# ``update-scalp --gocharting``: detail zoom + one pan-back PNG per slot (optional; default is Coinmap M5).
 GOCHARTING_UPDATE_SCALP_DETAIL_HISTORY_STEPS = 1
 # ``all --gocharting`` with footprint_ws: attach detail_zoom + one pan-back PNG per slot.
 GOCHARTING_ALL_FLOW_WS_DETAIL_BACK_STEPS = 1

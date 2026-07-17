@@ -47,10 +47,16 @@ cp .env.example .env
 
 #### GoCharting footprint (`--gocharting`)
 
-On **`all`** and **`update-scalp`**, pass **`--gocharting`** to replace the three Coinmap footprint slots (DXY M15 + main M15/M5) with GoCharting **PNG + CSV** exports via Playwright (`config/gocharting.yaml`). TradingView capture is unchanged. Artifacts: `{stamp}_gocharting_{SYMBOL}_{interval}.png` and `.csv`. Session cookies are stored in the shared **`data/storage_state.json`** (same as Coinmap/TV). When **`coinmap-automation browser up`** is running, GoCharting opens a tab in that Chrome via CDP. First login may require **`--headed`**.
+On **`all`**, pass **`--gocharting`** to replace the three Coinmap footprint slots (DXY M15 + main M15/M5) with GoCharting **PNG + CSV** exports via Playwright (`config/gocharting.yaml`). TradingView capture is unchanged. Artifacts: `{stamp}_gocharting_{SYMBOL}_{interval}.png` and `.csv`. Session cookies are stored in the shared **`data/storage_state.json`** (same as Coinmap/TV). When **`coinmap-automation browser up`** is running, GoCharting opens a tab in that Chrome via CDP. First login may require **`--headed`**.
 
 ```bash
 coinmap-automation all --gocharting
+```
+
+**`update-scalp`** defaults to **Coinmap M5** (plus TradingView 15m ICT + 5m). Pass **`--gocharting`** only if you want GoCharting M5 instead:
+
+```bash
+coinmap-automation update-scalp
 coinmap-automation update-scalp --gocharting
 ```
 

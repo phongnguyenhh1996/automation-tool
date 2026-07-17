@@ -1404,11 +1404,13 @@ def build_scalp_update_user_text(
     footprint_source: str = "gocharting",
 ) -> str:
     """
-    User message cho ``update-scalp``: tìm scalp đẹp nhất, label ``scalp_<id>`` (GoCharting footprint).
+    User message cho ``update-scalp``: tìm scalp đẹp nhất, label ``scalp_<id>``.
 
     ``coinmap_attachment_mode``: ``m5_only`` / ``merged_m5`` → chỉ M5; mặc định M15 + M5.
+    ``footprint_source``: ``coinmap`` hoặc ``gocharting`` (legacy; prompt text hiện dùng
+    tên file footprint prepared cho cả hai).
     """
-    _ = footprint_source  # legacy; prompts are GoCharting-only
+    _ = footprint_source  # legacy; attachment filenames still use prepared footprint naming
     time_line = format_intraday_update_time_line()
     mode = str(coinmap_attachment_mode or "merged").strip().lower()
     m5_only = mode in ("m5_only", "merged_m5", "merged_m5_only")
