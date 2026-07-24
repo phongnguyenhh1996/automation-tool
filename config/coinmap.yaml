@@ -216,9 +216,9 @@ tradingview_capture:
     symbol_exchanges:
       DXY: CAPITALCOM
       XAUUSD: OANDA
-  # Viewport: same as session `viewport_width` / `viewport_height` below (omit per-tab sizes).
-  viewport_width: 1440
-  viewport_height: 810
+  # Viewport for TradingView warm tabs (browser_service prewarm + capture).
+  viewport_width: 1920
+  viewport_height: 1080
   chart_url: "https://vn.tradingview.com/chart/?symbol=OANDA%3AXAUUSD"
   # Uses COINMAP_EMAIL + TRADINGVIEW_PASSWORD (.env). Opens top-left menu; if "Đăng nhập" is visible, logs in.
   login_enabled: true
