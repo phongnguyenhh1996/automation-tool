@@ -21,6 +21,7 @@ from automation_tool.mt5_accounts import (
     account_row_in_all2_subset,
     account_row_in_scalp_subset,
     compute_lot_override,
+    ensure_mt5_account_subsets_fresh,
     filter_mt5_accounts_for_entry_slot,
     filter_mt5_accounts_for_zone_entry,
     filter_mt5_accounts_for_zone_label,
@@ -28,6 +29,7 @@ from automation_tool.mt5_accounts import (
     is_plan_phu_family,
     is_scalp_family,
     load_mt5_accounts_from_path,
+    load_mt5_accounts_for_cli,
     load_mt5_accounts_for_zone_entry,
     resolve_account_entry_tp_price,
     resolve_trade_filter_key,
@@ -36,6 +38,7 @@ from automation_tool.mt5_accounts import (
     sync_accounts_all2_json,
     sync_accounts_scalp_json,
 )
+import automation_tool.mt5_accounts as mt5_accounts_mod
 from automation_tool.mt5_execute import resolve_mt5_trade_symbol
 from automation_tool.mt5_openai_parse import ParsedTrade
 
@@ -1458,3 +1461,177 @@ def test_apply_account_short_tp_skips_non_matching_label() -> None:
         short_scalp=True,
     )
     assert apply_account_short_tp(trade, acc, "plan_chinh") is trade
+
+
+def test_load_mt5_accounts_for_cli_picks_up_accounts_json_edit() -> None:
+    """Đổi lot/trade trong accounts.json được đọc lại ngay (không cache nội dung)."""
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "accounts.json"
+        _write_accounts(
+            p,
+            [
+                {
+                    "id": "a",
+                    "terminal_path": "C:/MT5/A/metatrader64.exe",
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                    "lot": {"mode": "fixed", "volume": 0.01},
+                },
+            ],
+        )
+        accs = load_mt5_accounts_for_cli(p)
+        assert accs is not None
+        assert isinstance(accs[0].lot, LotRuleFixed)
+        assert accs[0].lot.volume == pytest.approx(0.01)
+
+        _write_accounts(
+            p,
+            [
+                {
+                    "id": "a",
+                    "terminal_path": "C:/MT5/A/metatrader64.exe",
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                    "lot": {"mode": "fixed", "volume": 0.05},
+                    "trade": {"chinh": True, "phu": False},
+                },
+            ],
+        )
+        accs2 = load_mt5_accounts_for_cli(p)
+        assert accs2 is not None
+        assert isinstance(accs2[0].lot, LotRuleFixed)
+        assert accs2[0].lot.volume == pytest.approx(0.05)
+        assert accs2[0].trade == {"chinh": True, "phu": False}
+
+
+def test_ensure_subsets_fresh_resyncs_when_accounts_json_changes(monkeypatch) -> None:
+    """Sửa update-scalp / all-2 trên accounts.json → subset được ghi lại khi load zone."""
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "accounts.json"
+        _write_accounts(
+            p,
+            [
+                {
+                    "id": "a",
+                    "terminal_path": "C:/MT5/A/metatrader64.exe",
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                    "lot": {"mode": "fixed", "volume": 0.01},
+                    "update-scalp": True,
+                },
+            ],
+        )
+        mt5_accounts_mod._SUBSETS_FRESH_AT.clear()
+        sync_accounts_scalp_json(p)
+        dest = Path(td) / "accounts-scalp.json"
+        assert dest.is_file()
+        assert {r["id"] for r in json.loads(dest.read_text(encoding="utf-8"))} == {"a"}
+
+        # Làm subset "cũ" hơn accounts.json (mtime) rồi đổi nội dung nguồn.
+        older = dest.stat().st_mtime - 10
+        import os
+
+        os.utime(dest, (older, older))
+
+        _write_accounts(
+            p,
+            [
+                {
+                    "id": "a",
+                    "terminal_path": "C:/MT5/A/metatrader64.exe",
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                    "lot": {"mode": "fixed", "volume": 0.01},
+                    "update-scalp": True,
+                },
+                {
+                    "id": "b",
+                    "terminal_path": "C:/MT5/B/metatrader64.exe",
+                    "login": 2,
+                    "password": "y",
+                    "server": "S",
+                    "primary": False,
+                    "lot": {"mode": "fixed", "volume": 0.01},
+                    "update-scalp": True,
+                },
+            ],
+        )
+        newer = dest.stat().st_mtime + 20
+        os.utime(p, (newer, newer))
+        mt5_accounts_mod._SUBSETS_FRESH_AT.clear()
+
+        monkeypatch.delenv("MT5_ACCOUNTS_JSON", raising=False)
+        accs = load_mt5_accounts_for_zone_entry(
+            zone_source=SOURCE_UPDATE_SCALP, cli_path=p
+        )
+        assert accs is not None
+        assert {a.id for a in accs} == {"a", "b"}
+        rows = json.loads(dest.read_text(encoding="utf-8"))
+        assert {r["id"] for r in rows} == {"a", "b"}
+
+
+def test_ensure_subsets_fresh_from_subset_env_path() -> None:
+    """Khi MT5_ACCOUNTS_JSON trỏ accounts-scalp.json, vẫn sync từ sibling accounts.json."""
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "accounts.json"
+        scalp = Path(td) / "accounts-scalp.json"
+        _write_accounts(
+            p,
+            [
+                {
+                    "id": "a",
+                    "terminal_path": "C:/MT5/A/metatrader64.exe",
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                    "update-scalp": True,
+                },
+            ],
+        )
+        sync_accounts_scalp_json(p)
+        assert scalp.is_file()
+
+        import os
+
+        older = scalp.stat().st_mtime - 10
+        os.utime(scalp, (older, older))
+        _write_accounts(
+            p,
+            [
+                {
+                    "id": "a",
+                    "terminal_path": "C:/MT5/A/metatrader64.exe",
+                    "login": 1,
+                    "password": "x",
+                    "server": "S",
+                    "primary": True,
+                    "update-scalp": False,
+                },
+                {
+                    "id": "only_scalp",
+                    "terminal_path": "C:/MT5/B/metatrader64.exe",
+                    "login": 2,
+                    "password": "y",
+                    "server": "S",
+                    "primary": False,
+                    "update-scalp": True,
+                },
+            ],
+        )
+        newer = scalp.stat().st_mtime + 20
+        os.utime(p, (newer, newer))
+        mt5_accounts_mod._SUBSETS_FRESH_AT.clear()
+
+        assert ensure_mt5_account_subsets_fresh(scalp) is True
+        rows = json.loads(scalp.read_text(encoding="utf-8"))
+        assert len(rows) == 1
+        assert rows[0]["id"] == "only_scalp"

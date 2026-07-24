@@ -55,6 +55,11 @@ Key map từ zone: ``plan_chinh`` luồng 1 → ``chinh``; ``plan_chinh`` + lu�
 ``update-scalp`` / ``all-2`` cũ.
 
 **Bảo mật:** không commit file chứa mật khẩu; hạn chế quyền đọc (ví dụ ``chmod 600``).
+
+**Hot-reload:** tiến trình dài (daemon-plan, executor, …) đọc lại ``accounts.json`` mỗi lần
+vào lệnh / thao tác MT5. Subset ``accounts-scalp.json`` / ``accounts-all2.json`` được
+đồng bộ lại tự động khi file nguồn đổi (:func:`ensure_mt5_account_subsets_fresh`) — không
+cần restart tool sau khi sửa accounts.
 """
 
 from __future__ import annotations
@@ -894,11 +899,80 @@ def default_mt5_accounts_json_path() -> Optional[Path]:
     return Path(raw).expanduser()
 
 
+# Per-process: last ``accounts.json`` mtime đã sync subset — tránh ghi lại mỗi poll daemon.
+_SUBSETS_FRESH_AT: dict[str, float] = {}
+
+
+def resolve_accounts_json_source(path: Path) -> Optional[Path]:
+    """
+    File ``accounts.json`` nguồn để sync subset.
+
+    Nếu ``path`` là ``accounts-scalp.json`` / ``accounts-all2.json`` (env sau update-scalp),
+    trả về sibling ``accounts.json`` khi có; ngược lại trả về ``path`` nếu tồn tại.
+    """
+    p = path.expanduser()
+    name = p.name.lower()
+    if name in ("accounts-scalp.json", "accounts-all2.json"):
+        sibling = p.parent / "accounts.json"
+        return sibling if sibling.is_file() else None
+    return p if p.is_file() else None
+
+
+def ensure_mt5_account_subsets_fresh(cli_path: Optional[Path] = None) -> bool:
+    """
+    Đồng bộ lại ``accounts-scalp.json`` / ``accounts-all2.json`` khi ``accounts.json`` đổi.
+
+    Daemon / executor dài hạn gọi qua loader — chỉnh ``accounts.json`` có hiệu lực ngay,
+    không cần restart tool. Trả về ``True`` nếu đã chạy sync (ghi hoặc xoá subset).
+    """
+    resolved = resolve_mt5_accounts_path(cli_path)
+    if resolved is None:
+        return False
+    src = resolve_accounts_json_source(resolved)
+    if src is None:
+        return False
+    try:
+        src_key = str(src.resolve())
+        src_mtime = src.stat().st_mtime
+    except OSError:
+        return False
+    if _SUBSETS_FRESH_AT.get(src_key) == src_mtime:
+        return False
+
+    changed = False
+    for sync_fn, dest_name in (
+        (sync_accounts_scalp_json, "accounts-scalp.json"),
+        (sync_accounts_all2_json, "accounts-all2.json"),
+    ):
+        dest = src.parent / dest_name
+        try:
+            dest_mtime = dest.stat().st_mtime if dest.is_file() else None
+        except OSError:
+            dest_mtime = None
+        if dest_mtime is not None and dest_mtime >= src_mtime:
+            continue
+        try:
+            out = sync_fn(src)
+            changed = True
+            _log.info(
+                "accounts subsets: synced %s from %s (%s)",
+                dest_name,
+                src,
+                "wrote" if out is not None else "cleared",
+            )
+        except Exception as e:
+            _log.warning("accounts subsets: sync %s failed: %s", dest_name, e)
+
+    _SUBSETS_FRESH_AT[src_key] = src_mtime
+    return changed
+
+
 def load_mt5_accounts_optional(path: Optional[Path] = None) -> Optional[list[MT5AccountEntry]]:
     """Trả về ``None`` nếu không có file / không set env (single-account)."""
     p = path or default_mt5_accounts_json_path()
     if p is None or not p.is_file():
         return None
+    ensure_mt5_account_subsets_fresh(p)
     return load_mt5_accounts_from_path(p)
 
 
@@ -1028,7 +1102,11 @@ def load_mt5_accounts_for_zone_entry(
     - ``[]`` — zone subset nhưng không có hoặc không đọc được file cạnh accounts:
       **không** fallback sang full ``accounts.json``.
     - Danh sách khác rỗng — multi-account như cũ.
+
+    Trước khi đọc subset, :func:`ensure_mt5_account_subsets_fresh` đồng bộ lại từ
+    ``accounts.json`` nếu file nguồn đã đổi (hot-reload, không cần restart daemon).
     """
+    ensure_mt5_account_subsets_fresh(cli_path)
     base = resolve_mt5_accounts_path(cli_path)
     subset_name = subset_accounts_json_basename(zone_source)
     if subset_name is None:
