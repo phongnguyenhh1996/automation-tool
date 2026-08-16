@@ -20,7 +20,12 @@ from cloudinary.exceptions import Error as CloudinaryError
 from automation_tool.config import symbol_data_dir
 from automation_tool.mt5_openai_parse import ParsedTrade, parse_trade_line
 from automation_tool.state_files import _atomic_write_json
-from automation_tool.zones_paths import SessionSlot, session_slot_now_hcm, zone_id_for_shard
+from automation_tool.zones_paths import (
+    SessionSlot,
+    resolve_second_flow,
+    session_slot_now_hcm,
+    zone_id_for_shard,
+)
 from automation_tool.zones_state import Zone, ZonesState, read_manifest_last_write_slot, read_zones_state
 
 _log = logging.getLogger(__name__)
@@ -135,13 +140,21 @@ def build_neverdie_payload(
         return {"buy": buy, "sell": sell}
 
     slot = manifest_slot if manifest_slot is not None else _resolve_slot(zones_dir)
+    # Prefer all-2 / *-2 shards when both primary and second-flow plan_chinh exist.
     by_lab: dict[str, Zone] = {}
+    by_lab_second: dict[str, Zone] = {}
     for z in st.zones:
         if getattr(z, "session_slot", None) != slot:
             continue
         lab = (z.label or "").strip().lower()
-        if lab == "plan_chinh":
+        if lab != "plan_chinh":
+            continue
+        if resolve_second_flow(zone_id=z.id, source=getattr(z, "source", None)):
+            by_lab_second[lab] = z
+        else:
             by_lab[lab] = z
+    if by_lab_second:
+        by_lab = by_lab_second
 
     sym = symbol.strip().upper()
     for lab in _PLAN_LABELS:

@@ -66,21 +66,28 @@ def test_cmd_all_gocharting_calls_capture_gocharting(tmp_path: Path, monkeypatch
         max_images_per_call=20,
         gocharting=True,
         gocharting_config=None,
+        gc_only=False,
         model=None,
         mt5_accounts_json=None,
+        all_two_phase=False,
+        no_all_two_phase=False,
     )
 
     with patch("automation_tool.cli.list_invalid_chart_slots_for_stamp", return_value=[]):
         with patch("automation_tool.cli._persist_openai_footprint_json_debug"):
-            with patch("automation_tool.cli._run_openai_flow") as mock_openai:
-                mock_openai.return_value = MagicMock(
-                    full_text=lambda: "ok",
-                    final_response_id="r1",
-                    after_charts="",
-                )
-                with patch("automation_tool.cli._run_all_second_flow"):
-                    with patch("automation_tool.cli.send_capture_screenshots_to_log_chat", return_value=0):
-                        cmd_all(args)
+            with patch("automation_tool.cli.write_last_response_id"):
+                with patch("automation_tool.cli.write_last_all_response_id"):
+                    with patch("automation_tool.cli._run_all_second_flow") as mock_all2:
+                        mock_all2.return_value = MagicMock(
+                            final_response_id="r1",
+                            after_charts="",
+                        )
+                        with patch(
+                            "automation_tool.cli.send_capture_screenshots_to_log_chat",
+                            return_value=0,
+                        ):
+                            cmd_all(args)
+                        mock_all2.assert_called_once()
 
     assert gc_called is True
     assert gc_clear_before is True

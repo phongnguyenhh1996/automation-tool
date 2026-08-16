@@ -731,9 +731,9 @@ def _parser() -> argparse.ArgumentParser:
     al = sub.add_parser(
         "all",
         help=(
-            "full analysis: chỉ reset zones khi slot sáng (trừ --no-clear-zones-state) → capture → OpenAI → "
-            "ghi last_response_id + Telegram + zones_state.json "
-            "(không ghi morning_baseline / last_alert_prices)"
+            "full analysis: chỉ reset zones khi slot sáng (trừ --no-clear-zones-state) → capture → "
+            "OpenAI all-2 (vector/Telegram nhóm 2, shard *-2) → ghi last_response_id + morning + EA "
+            "(không chạy luồng all primary / shard không -2)"
         ),
     )
     al.add_argument("--config", type=Path, default=None)
@@ -3381,7 +3381,7 @@ def _persist_all_second_flow_zones(
         slot=session_slot,
         zones_dir=zones_dir,
         shard_suffix="-2",
-        update_manifest_slot=False,
+        update_manifest_slot=True,
     )
     _log.info(
         "all-2: đã ghi shard zones | slot=%s zones=%d | symbol=%s | suffix=-2",
@@ -3961,120 +3961,70 @@ def cmd_all(args: argparse.Namespace) -> None:
             phase2_sym,
         )
 
-    def _openai_all_work() -> PromptTwoStepResult:
-        return _run_openai_flow(
-            s,
-            charts_dir,
-            prompt_all,
-            max_images,
-            chart_payloads=payloads,
-            on_first_model_text=None,
-            model=openai_model,
-            reasoning_effort=ALL_FLOW_REASONING_EFFORT,
-            chart_stamp=stamp,
-            two_phase=two_phase,
-            structure_prompt=structure_prompt,
-            footprint_prompt=footprint_prompt,
-            gocharting_cfg=gc_cfg_override if use_gc else None,
-        )
-
-    try:
-        n_sent, out = _run_capture_telegram_log_parallel_with(
-            bot_token=s.telegram_bot_token,
-            telegram_log_chat_id=s.telegram_log_chat_id,
-            png_paths=capture_pngs,
-            header=f"all: capture screenshots | stamp={stamp} | {len(capture_pngs)} PNG",
-            work_fn=_openai_all_work,
-        )
-    except Exception as e:
-        re_raise_unless_openai(e)
-    _log.info(
-        "all: capture PNG (Telegram log) + OpenAI song song | stamp=%s | png_files=%s sent=%s",
-        stamp,
-        len(capture_pngs),
-        n_sent,
-    )
-    print(out.full_text())
-    _log.info("all: OpenAI xong | response_id=%s", out.final_response_id)
-
-    if not gc_only:
-        write_last_response_id(out.final_response_id)
-        write_last_all_response_id(out.final_response_id)
-    if not args.no_telegram and out.after_charts:
-        require_telegram(s)
-        send_openai_output_to_telegram(
-            bot_token=s.telegram_bot_token,
-            chat_id=s.telegram_chat_id,
-            raw=out.after_charts,
-            default_parse_mode=s.telegram_parse_mode,
-            summary_chat_id=s.telegram_output_ngan_gon_chat_id,
-        )
-
-    if out.after_charts:
-        morning_obj = extract_json_object(out.after_charts)
-        if morning_obj is not None:
-            morning_path = (
-                symbol_data_dir(GC1_MAIN_SYMBOL) / MORNING_FULL_ANALYSIS_FILENAME
-                if gc_only
-                else default_morning_full_analysis_path()
-            )
-            write_morning_full_analysis(morning_obj, path=morning_path)
-            _log.info(
-                "all: đã ghi %s",
-                morning_path.name if gc_only else default_morning_full_analysis_path().name,
-            )
-        else:
-            _log.warning(
-                "all: không extract được JSON object từ after_charts — không ghi %s",
-                MORNING_FULL_ANALYSIS_FILENAME,
+    if gc_only:
+        # --gc-only: single OpenAI (no zones / all-2); keep primary vector store path.
+        def _openai_gc_only_work() -> PromptTwoStepResult:
+            return _run_openai_flow(
+                s,
+                charts_dir,
+                prompt_all,
+                max_images,
+                chart_payloads=payloads,
+                on_first_model_text=None,
+                model=openai_model,
+                reasoning_effort=ALL_FLOW_REASONING_EFFORT,
+                chart_stamp=stamp,
+                two_phase=two_phase,
+                structure_prompt=structure_prompt,
+                footprint_prompt=footprint_prompt,
+                gocharting_cfg=gc_cfg_override if use_gc else None,
             )
 
-        if not gc_only:
-            payload = parse_analysis_from_openai_text(out.after_charts)
-            if payload is not None and payload.prices:
-                trip = triple_from_zone_prices(payload.prices)
-                if trip is not None:
-                    write_morning_baseline_prices(trip)
-                    _log.info(
-                        "all: đã ghi %s",
-                        default_morning_baseline_prices_path().name,
-                    )
-                from automation_tool.images import get_active_main_symbol
+        try:
+            n_sent, out = _run_capture_telegram_log_parallel_with(
+                bot_token=s.telegram_bot_token,
+                telegram_log_chat_id=s.telegram_log_chat_id,
+                png_paths=capture_pngs,
+                header=f"all: capture screenshots | stamp={stamp} | {len(capture_pngs)} PNG",
+                work_fn=_openai_gc_only_work,
+            )
+        except Exception as e:
+            re_raise_unless_openai(e)
+        _log.info(
+            "all: capture PNG (Telegram log) + OpenAI song song | stamp=%s | png_files=%s sent=%s",
+            stamp,
+            len(capture_pngs),
+            n_sent,
+        )
+        print(out.full_text())
+        _log.info("all: OpenAI xong | response_id=%s", out.final_response_id)
 
-                sym = get_active_main_symbol().strip().upper()
-                slot: SessionSlot = run_slot
-                zones = zones_from_analysis_payload(
-                    symbol=sym, payload=payload, source="all", session_slot=slot
+        if not args.no_telegram and out.after_charts:
+            require_telegram(s)
+            send_openai_output_to_telegram(
+                bot_token=s.telegram_bot_token,
+                chat_id=s.telegram_chat_id,
+                raw=out.after_charts,
+                default_parse_mode=s.telegram_parse_mode,
+                summary_chat_id=s.telegram_output_ngan_gon_chat_id,
+            )
+
+        if out.after_charts:
+            morning_obj = extract_json_object(out.after_charts)
+            if morning_obj is not None:
+                morning_path = symbol_data_dir(GC1_MAIN_SYMBOL) / MORNING_FULL_ANALYSIS_FILENAME
+                write_morning_full_analysis(morning_obj, path=morning_path)
+                _log.info("all: đã ghi %s", morning_path.name)
+            else:
+                _log.warning(
+                    "all: không extract được JSON object từ after_charts — không ghi %s",
+                    MORNING_FULL_ANALYSIS_FILENAME,
                 )
-                if zones:
-                    write_zones_for_slot(symbol=sym, zones=zones, slot=slot, zones_dir=zones_dir)
-                    _log.info(
-                        "all: đã ghi shard zones | slot=%s zones=%d | symbol=%s",
-                        slot,
-                        len(zones),
-                        sym,
-                    )
-                else:
-                    _log.warning("all: parse JSON có prices nhưng không tạo được zones — không ghi shard")
-            elif out.after_charts.strip():
-                print(
-                    "Warning: could not parse analysis JSON for zones (no `prices` or empty).",
-                    file=sys.stderr,
-                )
+        return
 
-            from automation_tool.ea_neverdie_zone_publish import maybe_publish_neverdie_after_cli
-            from automation_tool.images import get_active_main_symbol as _get_sym_publish
-
-            try:
-                maybe_publish_neverdie_after_cli(
-                    symbol=_get_sym_publish().strip().upper(),
-                    zones_dir=zones_dir,
-                )
-            except Exception as e:
-                _log.warning("all: ea-neverdie publish failed: %s", e)
-
-    if not gc_only:
-        _run_all_second_flow(
+    # Default ``all``: chỉ chạy all-2 (vector/Telegram nhóm 2, shard *-2); EA lấy data all-2.
+    def _openai_all2_work() -> PromptTwoStepResult:
+        return _run_all_second_flow(
             s,
             charts_dir=charts_dir,
             analysis_prompt=prompt_all,
@@ -4090,6 +4040,56 @@ def cmd_all(args: argparse.Namespace) -> None:
             structure_prompt=structure_prompt,
             footprint_prompt=footprint_prompt,
         )
+
+    try:
+        n_sent, out2 = _run_capture_telegram_log_parallel_with(
+            bot_token=s.telegram_bot_token,
+            telegram_log_chat_id=s.telegram_log_chat_id,
+            png_paths=capture_pngs,
+            header=f"all: capture screenshots | stamp={stamp} | {len(capture_pngs)} PNG",
+            work_fn=_openai_all2_work,
+        )
+    except Exception as e:
+        re_raise_unless_openai(e)
+    _log.info(
+        "all: capture PNG (Telegram log) + OpenAI all-2 song song | stamp=%s | png_files=%s sent=%s",
+        stamp,
+        len(capture_pngs),
+        n_sent,
+    )
+    write_last_response_id(out2.final_response_id)
+    write_last_all_response_id(out2.final_response_id)
+
+    if out2.after_charts:
+        morning_obj = extract_json_object(out2.after_charts)
+        if morning_obj is not None:
+            write_morning_full_analysis(morning_obj, path=default_morning_full_analysis_path())
+            _log.info("all: đã ghi %s (từ all-2)", default_morning_full_analysis_path().name)
+        else:
+            _log.warning(
+                "all: không extract được JSON object từ all-2 after_charts — không ghi %s",
+                MORNING_FULL_ANALYSIS_FILENAME,
+            )
+        payload = parse_analysis_from_openai_text(out2.after_charts)
+        if payload is not None and payload.prices:
+            trip = triple_from_zone_prices(payload.prices)
+            if trip is not None:
+                write_morning_baseline_prices(trip)
+                _log.info(
+                    "all: đã ghi %s (từ all-2)",
+                    default_morning_baseline_prices_path().name,
+                )
+
+    from automation_tool.ea_neverdie_zone_publish import maybe_publish_neverdie_after_cli
+    from automation_tool.images import get_active_main_symbol as _get_sym_publish
+
+    try:
+        maybe_publish_neverdie_after_cli(
+            symbol=_get_sym_publish().strip().upper(),
+            zones_dir=zones_dir,
+        )
+    except Exception as e:
+        _log.warning("all: ea-neverdie publish failed: %s", e)
 
 
 def cmd_tv_alerts(args: argparse.Namespace) -> None:

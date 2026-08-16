@@ -220,6 +220,7 @@ def test_cmd_all_chieu_calls_invalidate_prior_slots(
     args.config = None
     args.storage_state = None
     args.gocharting = False
+    args.gc_only = False
     args.no_tradingview = True
 
     with pytest.raises(SystemExit):

@@ -67,6 +67,38 @@ def test_plan_chinh_is_published_and_plan_phu_same_side_is_ignored() -> None:
     assert payload["sell"]["mode"] == "off"
 
 
+def test_prefer_all2_plan_chinh_over_primary() -> None:
+    primary = Zone(
+        id="plan_chinh__sang",
+        label="plan_chinh",
+        vung_cho="2600|2610",
+        side="BUY",
+        trade_line="BUY LIMIT 2650.0 | SL 2645.0 | TP1 2660.0 | Lot 0.01",
+        session_slot="sang",
+        source="all",
+    )
+    second = Zone(
+        id="plan_chinh__sang-2",
+        label="plan_chinh",
+        vung_cho="2700|2710",
+        side="BUY",
+        trade_line="BUY LIMIT 2700.0 | SL 2690.0 | TP1 2720.0 | TP2 2730.0 | Lot 0.01",
+        session_slot="sang",
+        source="all-2",
+    )
+    st = ZonesState(symbol="XAUUSD", zones=[primary, second])
+    payload = build_neverdie_payload(
+        zones_dir=Path("/tmp"),
+        symbol="XAUUSD",
+        state=st,
+        manifest_slot="sang",
+    )
+    assert payload["buy"]["mode"] == "trade"
+    assert payload["buy"]["low"] == 2700.0
+    assert payload["buy"]["high"] == 2730.0
+    assert payload["buy"]["label"] == "plan_chinh__sang-2"
+
+
 def test_plan_phu_sell_is_ignored_plan_chinh_buy_only() -> None:
     phu = _zone(
         label="plan_phu",
