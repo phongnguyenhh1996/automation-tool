@@ -405,8 +405,7 @@ def chart_image_order_for_main_symbol(
     """
     Filenames: ``{{stamp}}_tradingview_{{SYMBOL}}_{{interval}}`` or footprint ``coinmap`` / ``gocharting``.
 
-    **11 slots (default full-analysis set):** DXY TV H4/H1/M15 → main TV H4/H1/M15
-    → main TV M15 Session Liquidity Check / ICT Killzones → main TV M5
+    **10 slots (default full-analysis set):** DXY TV H4/H1/M15 → main TV H4/H1/M15/M5
     → footprint DXY M15 → main M15/M5 (Coinmap JSON or GoCharting CSV).
     """
     m = normalize_main_chart_symbol(main_sym)
@@ -421,7 +420,6 @@ def chart_image_order_for_main_symbol(
         ("tradingview", m, "4h"),
         ("tradingview", m, "1h"),
         ("tradingview", m, "15m"),
-        ("tradingview", m, "15m_ict"),
         ("tradingview", m, "5m"),
         (fp, "DXY", "15m"),
         (fp, footprint_sym, "15m"),

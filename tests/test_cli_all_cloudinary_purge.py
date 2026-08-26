@@ -41,7 +41,6 @@ def test_all_does_not_request_cloudinary_json_purge(monkeypatch, tmp_path: Path)
     monkeypatch.setattr(cli, "_extend_payloads_with_footprint_json", lambda p, _d, **_kw: p)
     monkeypatch.setattr(cli, "_warn_if_incomplete_chart_payloads", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "_run_openai_flow", fake_run_openai_flow)
-    monkeypatch.setattr(cli, "_run_all_second_flow", lambda *_args, **_kwargs: OpenAIResult())
     monkeypatch.setattr(cli, "write_last_response_id", lambda _response_id: None)
     monkeypatch.setattr(cli, "write_last_all_response_id", lambda _response_id: None)
     monkeypatch.setattr(cli, "resolved_openai_model", lambda _settings, model: model)
@@ -71,6 +70,7 @@ def test_all_does_not_request_cloudinary_json_purge(monkeypatch, tmp_path: Path)
     assert isinstance(openai, dict)
     assert openai.get("purge_json_attachment_storage", False) is False
     assert openai.get("two_phase") is False
+    assert openai.get("vector_store_ids") == ["vs_69fa9d55f3b48191b4aea51214b880d6"]
 
 
 def test_all_default_uses_single_phase_openai(monkeypatch, tmp_path: Path) -> None:
@@ -114,7 +114,6 @@ def test_all_default_uses_single_phase_openai(monkeypatch, tmp_path: Path) -> No
     monkeypatch.setattr(cli, "_extend_payloads_with_footprint_json", lambda p, _d, **_kw: p)
     monkeypatch.setattr(cli, "_warn_if_incomplete_chart_payloads", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "_run_openai_flow", fake_run_openai_flow)
-    monkeypatch.setattr(cli, "_run_all_second_flow", lambda *_args, **_kwargs: OpenAIResult())
     monkeypatch.setattr(cli, "write_last_response_id", lambda _response_id: None)
     monkeypatch.setattr(cli, "write_last_all_response_id", lambda _response_id: None)
     monkeypatch.setattr(cli, "resolved_openai_model", lambda _settings, model: model)
@@ -189,7 +188,6 @@ def test_all_all_two_phase_flag_uses_two_batch_openai(monkeypatch, tmp_path: Pat
     monkeypatch.setattr(cli, "_extend_payloads_with_footprint_json", lambda p, _d, **_kw: p)
     monkeypatch.setattr(cli, "_warn_if_incomplete_chart_payloads", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "_run_openai_flow", fake_run_openai_flow)
-    monkeypatch.setattr(cli, "_run_all_second_flow", lambda *_args, **_kwargs: OpenAIResult())
     monkeypatch.setattr(cli, "write_last_response_id", lambda _response_id: None)
     monkeypatch.setattr(cli, "write_last_all_response_id", lambda _response_id: None)
     monkeypatch.setattr(cli, "resolved_openai_model", lambda _settings, model: model)
@@ -266,7 +264,6 @@ def test_all_morning_clear_keeps_ea_neverdie_json(monkeypatch, tmp_path: Path) -
     monkeypatch.setattr(cli, "_extend_payloads_with_footprint_json", lambda p, _d, **_kw: p)
     monkeypatch.setattr(cli, "_warn_if_incomplete_chart_payloads", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "_run_openai_flow", lambda *_args, **_kwargs: OpenAIResult())
-    monkeypatch.setattr(cli, "_run_all_second_flow", lambda *_args, **_kwargs: OpenAIResult())
     monkeypatch.setattr(cli, "ordered_chart_images", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(cli, "_all_flow_gocharting_openai_kw", lambda **_kw: {})
     monkeypatch.setattr(cli, "_send_python_bot_job_started", lambda *_a, **_k: None)
@@ -294,7 +291,7 @@ def test_all_morning_clear_keeps_ea_neverdie_json(monkeypatch, tmp_path: Path) -
     assert calls["clear_neverdie"] == 0
 
 
-def test_all_runs_second_flow_with_dedicated_vector_channel_and_all2_shards(
+def test_all_uses_all2_vector_store_without_second_flow(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -418,13 +415,14 @@ def test_all_runs_second_flow_with_dedicated_vector_channel_and_all2_shards(
     )
     cli.cmd_all(args)
 
-    assert len(openai_calls) == 2
+    assert len(openai_calls) == 1
     assert openai_calls[0].get("two_phase") is False
-    assert openai_calls[1]["vector_store_ids"] == ["vs_69fa9d55f3b48191b4aea51214b880d6"]
-    assert telegram_calls[1]["chat_id"] == "-1003996623506"
-    assert (zones_dir / "vung_plan_chinh_sang-2.json").is_file()
-    shard = json.loads((zones_dir / "vung_plan_chinh_sang-2.json").read_text(encoding="utf-8"))
-    assert shard["zone"]["source"] == "all-2"
+    assert openai_calls[0]["vector_store_ids"] == ["vs_69fa9d55f3b48191b4aea51214b880d6"]
+    assert len(telegram_calls) == 1
+    assert telegram_calls[0]["chat_id"] == "-100111"
+    assert not (zones_dir / "vung_plan_chinh_sang-2.json").is_file()
+    shard = json.loads((zones_dir / "vung_plan_chinh_sang.json").read_text(encoding="utf-8"))
+    assert shard["zone"]["source"] == "all"
     assert response_ids == ["resp-1"]
 
 

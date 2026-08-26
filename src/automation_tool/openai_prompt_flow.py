@@ -197,7 +197,7 @@ def default_analysis_prompt(
     footprint_desc = (
         f"({CHART_SLOT_COUNT} slot chart):\n"
         "TradingView DXY (H4, H1, M15) → "
-        f"TradingView {sym} (H4, H1, M15, M15 Session Liquidity Check / ICT Killzones, M5) "
+        f"TradingView {sym} (H4, H1, M15, M5) "
         "(snapshot URL/PNG hoặc JSON OHLC tvdatafeed) → "
         "GoCharting DXY M15 (PNG overview) → "
         f"{_footprint_desc_for_main(sym, gc_native_footprint=gc_native_footprint)}"
@@ -244,7 +244,7 @@ def full_analysis_structure_prompt(
         f"{gc_hint}"
         "Đính kèm (theo thứ tự):\n"
         "- TradingView: DXY H4, H1, M15 → "
-        f"{sym} H4, H1, M15, M15 Session Liquidity Check / ICT Killzones, M5 "
+        f"{sym} H4, H1, M15, M5 "
         "(snapshot URL/PNG hoặc JSON OHLC tvdatafeed)\n"
         "- GoCharting DXY M15: **chỉ PNG overview** (orderflow chart macro — không có CSV)\n"
         "Nhiệm vụ: phân tích cấu trúc giá (DXY macro bias + trend/POI cặp chính) và liệt kê "

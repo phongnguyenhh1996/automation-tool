@@ -118,7 +118,7 @@ def test_tv_prewarm_login_check_runs_on_first_warm_tab_only(
 ) -> None:
     class _FakeContext:
         def __init__(self) -> None:
-            self.pages = [_FakeWarmPage("ict"), _FakeWarmPage("default")]
+            self.pages = [_FakeWarmPage("default")]
             self.index = 0
 
         async def new_page(self):
@@ -130,7 +130,7 @@ def test_tv_prewarm_login_check_runs_on_first_warm_tab_only(
         def __init__(self, name: str) -> None:
             self.name = name
 
-    calls: list[tuple[str, str, bool, Optional[str], Optional[str]]] = []
+    calls: list[tuple[str, bool, Optional[str], Optional[str]]] = []
     cfg = {
         "settle_ms": 1234,
         "tradingview_capture": {
@@ -139,9 +139,6 @@ def test_tv_prewarm_login_check_runs_on_first_warm_tab_only(
             "prewarm_skip_dark_mode": True,
         },
     }
-
-    def fake_apply_profile(tv: dict, profile: str) -> dict:
-        return {**tv, "_profile": profile}
 
     async def fake_warmup(
         page,
@@ -155,7 +152,7 @@ def test_tv_prewarm_login_check_runs_on_first_warm_tab_only(
         skip_login: bool = False,
         skip_dark_mode: bool = False,
     ) -> None:
-        calls.append((page.name, tv.get("_profile", "default"), skip_login, login_email, login_password))
+        calls.append((page.name, skip_login, login_email, login_password))
         assert symbol == "XAUUSD"
         assert interval_label == "15 phút"
         assert settle_ms == 1234
@@ -166,7 +163,6 @@ def test_tv_prewarm_login_check_runs_on_first_warm_tab_only(
     monkeypatch.setattr(browser_service_mod, "default_coinmap_config_path", lambda: tmp_path / "coinmap.yaml")
     monkeypatch.setattr(coinmap, "load_coinmap_yaml", lambda _path: cfg)
     monkeypatch.setattr(coinmap, "apply_main_chart_symbol_to_config", lambda cfg_in, _sym: cfg_in)
-    monkeypatch.setattr(coinmap, "_tv_apply_indicator_profile", fake_apply_profile)
     monkeypatch.setattr(images, "get_active_main_symbol", lambda: "XAUUSD")
     monkeypatch.setattr(coinmap_tradingview_async, "tv_warmup_tab_async", fake_warmup)
 
@@ -179,6 +175,5 @@ def test_tv_prewarm_login_check_runs_on_first_warm_tab_only(
     asyncio.run(run())
 
     assert calls == [
-        ("ict", "ict_killzones", False, "user@example.com", "secret"),
-        ("default", "default", True, "user@example.com", "secret"),
+        ("default", False, "user@example.com", "secret"),
     ]

@@ -30,7 +30,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-REM Run full Coinmap pipeline (headless by default; add --headed manually if needed)
+REM Full Coinmap pipeline; `all` uses all-2 vector store (no second all-2 flow)
 echo [%date% %time%] INFO: Starting coinmap-automation all
 >> "%LOG_FILE%" echo [%date% %time%] INFO: Starting coinmap-automation all
 coinmap-automation all %* >> "%LOG_FILE%" 2>&1

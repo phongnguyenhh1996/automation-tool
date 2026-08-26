@@ -84,7 +84,7 @@ Không được dùng logic của mode khác để trả output cho mode hiện 
 <analysis_inputs>
 - [FULL_ANALYSIS] payload multimodal (TradingView + GoCharting):
   + DXY (TradingView): H4, H1, M15 — snapshot/PNG hoặc JSON OHLC tvdatafeed
-  + Cặp chính (TradingView): H4, H1, M15, M15 Session Liquidity Check / ICT Killzones, M5 — snapshot hoặc JSON OHLC
+  + Cặp chính (TradingView): H4, H1, M15, M5 — snapshot hoặc JSON OHLC
   + Footprint DXY (GoCharting): M15 — CSV orderflow + PNG overview
   + Footprint cặp chính (spot XAUUSD): `footprint_XAUUSD_15m.json` và `footprint_XAUUSD_5m.json` — ohlc spot + `footprint[]` (buy/sell volume) + `bar_flow` {delta, cum_delta, vwap}
   + **Đọc dữ liệu:** footprint prepared JSON (giá spot broker); TradingView cho cấu trúc giá và session liquidity; DXY GoCharting PNG overview (batch 1)

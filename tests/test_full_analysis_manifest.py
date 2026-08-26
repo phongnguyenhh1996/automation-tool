@@ -20,7 +20,7 @@ def _write_full_gocharting_capture(charts: Path, stamp: str = "20260629_120000")
     write_main_chart_symbol_marker(charts, "XAUUSD")
     for sym, intervals in (
         ("DXY", ("4h", "1h", "15m")),
-        ("XAUUSD", ("4h", "1h", "15m", "15m_ict", "5m")),
+        ("XAUUSD", ("4h", "1h", "15m", "5m")),
     ):
         for iv in intervals:
             (charts / f"{stamp}_tradingview_{sym}_{iv}.png").write_bytes(b"\x89PNG\r\n\x1a\n")
@@ -44,7 +44,7 @@ def test_build_manifest_ready_for_analysis(tmp_path: Path) -> None:
     manifest = build_full_analysis_manifest(charts, stamp=stamp)
     assert manifest["stamp"] == stamp
     assert manifest["main_symbol"] == "XAUUSD"
-    assert len(manifest["slots"]) == 11
+    assert len(manifest["slots"]) == 10
     assert all(s["status"] == "ok" for s in manifest["slots"])
     assert len(manifest["footprint_json"]) == 2
     assert manifest["ready_for_analysis"] is True

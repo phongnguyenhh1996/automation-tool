@@ -78,9 +78,8 @@ def test_cmd_all_gocharting_calls_capture_gocharting(tmp_path: Path, monkeypatch
                     final_response_id="r1",
                     after_charts="",
                 )
-                with patch("automation_tool.cli._run_all_second_flow"):
-                    with patch("automation_tool.cli.send_capture_screenshots_to_log_chat", return_value=0):
-                        cmd_all(args)
+                with patch("automation_tool.cli.send_capture_screenshots_to_log_chat", return_value=0):
+                    cmd_all(args)
 
     assert gc_called is True
     assert gc_clear_before is True

@@ -845,7 +845,7 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         metavar="FILE",
-        help="accounts.json nguồn để tạo accounts-all2.json sau luồng 2 (mặc định MT5_ACCOUNTS_JSON)",
+        help="accounts.json cho huỷ pending / GoCharting (mặc định MT5_ACCOUNTS_JSON)",
     )
     al.add_argument("--model", default=None, metavar="ID", help=_OPENAI_MODEL_HELP)
     al.add_argument(
@@ -866,7 +866,7 @@ def _parser() -> argparse.ArgumentParser:
     al2 = sub.add_parser(
         "all-2",
         help=(
-            "Chạy riêng luồng OpenAI thứ hai của `all` (vector store + Telegram nhóm 2), "
+            "Chạy riêng luồng OpenAI all-2 (vector store + Telegram nhóm 2), "
             "dùng chart đã capture — ghi shard *-2.json source=all-2; không capture"
         ),
     )
@@ -3447,7 +3447,7 @@ def _run_all_second_flow(
 
 
 def cmd_all_2(args: argparse.Namespace) -> None:
-    """Chạy lại luồng 2 của ``all`` từ chart đã có (khi luồng 1 xong nhưng luồng 2 lỗi)."""
+    """Chạy riêng luồng all-2 từ chart đã capture (không capture lại)."""
     from automation_tool.images import set_active_main_symbol_file
 
     s = load_settings()
@@ -3970,6 +3970,7 @@ def cmd_all(args: argparse.Namespace) -> None:
             chart_payloads=payloads,
             on_first_model_text=None,
             model=openai_model,
+            vector_store_ids=[_ALL_SECOND_FLOW_VECTOR_STORE_ID],
             reasoning_effort=ALL_FLOW_REASONING_EFFORT,
             chart_stamp=stamp,
             two_phase=two_phase,
@@ -4072,24 +4073,6 @@ def cmd_all(args: argparse.Namespace) -> None:
                 )
             except Exception as e:
                 _log.warning("all: ea-neverdie publish failed: %s", e)
-
-    if not gc_only:
-        _run_all_second_flow(
-            s,
-            charts_dir=charts_dir,
-            analysis_prompt=prompt_all,
-            max_images_per_call=max_images,
-            chart_payloads=payloads,
-            no_telegram=args.no_telegram,
-            model=getattr(args, "model", None),
-            zones_dir=zones_dir,
-            session_slot=run_slot,
-            mt5_accounts_json=getattr(args, "mt5_accounts_json", None),
-            chart_stamp=stamp,
-            two_phase=two_phase,
-            structure_prompt=structure_prompt,
-            footprint_prompt=footprint_prompt,
-        )
 
 
 def cmd_tv_alerts(args: argparse.Namespace) -> None:

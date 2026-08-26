@@ -57,8 +57,8 @@ def test_apply_main_chart_symbol_to_config() -> None:
 
 def test_chart_image_order_for_main_symbol() -> None:
     o = chart_image_order_for_main_symbol("EURUSD")
-    assert len(o) == CHART_SLOT_COUNT == 11
-    assert openai_payload_max_for_order(o) == 14
+    assert len(o) == CHART_SLOT_COUNT == 10
+    assert openai_payload_max_for_order(o) == 13
     assert OPENAI_PAYLOAD_MAX == 100
     assert ("tradingview", "EURUSD", "5m") in o
     assert ("coinmap", "EURUSD", "5m") in o

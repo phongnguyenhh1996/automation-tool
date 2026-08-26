@@ -194,8 +194,8 @@ chart_download:
 tradingview_capture:
   enabled: true
   prewarm_enabled: true
-  # Hai tab warm (browser_service): tab đầu kiểm tra login và chỉ đăng nhập nếu menu còn "Đăng nhập";
-  # tab thứ hai dùng lại session trong cùng browser context. Đặt true nếu muốn bỏ hẳn bước kiểm tra login.
+  # Một tab warm (browser_service): kiểm tra login và chỉ đăng nhập nếu menu còn "Đăng nhập".
+  # Đặt true nếu muốn bỏ hẳn bước kiểm tra login.
   prewarm_skip_login: false
   prewarm_skip_dark_mode: true
   # data_source: browser | tvdatafeed — tvdatafeed = OHLC JSON (library tvdatafeed), không mở tab TradingView trong capture
@@ -287,9 +287,6 @@ tradingview_capture:
         - "1 giờ"
         - "15 phút"
         - "5 phút"
-        - label: "15 phút"
-          slug: "15m_ict"
-          indicator_profile: "ict_killzones"
   watchlist_button_aria_label: "Danh sách theo dõi, thông tin chi tiết và tin tức"
   # Khi giao diện TradingView tiếng Anh (aria khác); có thể ghi đè
   watchlist_button_aria_label_fallback: "Watchlist, details, and news"
